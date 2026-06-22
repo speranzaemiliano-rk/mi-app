@@ -3855,6 +3855,7 @@
                         <select id="cgFiltroMovTipo" onchange="renderCajaGeneral()" style="width:auto; padding:7px 10px; font-size:12px;">
                             <option value="">Todos los tipos</option>
                             <option value="Ingreso General">Ingreso General</option>
+                            <option value="Egreso de Caja">Egreso de Caja</option>
                             <option value="Cobro Venta UF">Cobro Venta UF</option>
                             <option value="Cobro Alquiler">Cobro Alquiler</option>
                             <option value="Cobro Servicio">Cobro Servicio</option>
@@ -4864,7 +4865,7 @@
         selProy.innerHTML = '';
         const emp = empresas.find(e => e.id === empresaActual.id);
         if (!emp) return;
-        emp.proyectos.forEach(p => {
+        (emp.proyectos||[]).forEach(p => {
             const o = document.createElement('option');
             o.value = p.id; o.textContent = p.nombre;
             if (proyectoActual && p.id === proyectoActual.id) o.selected = true;
@@ -5236,7 +5237,7 @@
         const totalPres  = datos.reduce((s, i) => s + (i.presupuesto || 0), 0);
         const totalPag   = datos.reduce((s, i) => s + (i.pagado || 0), 0);
         const totalPend  = totalPres - totalPag;
-        const promedio   = datos.length > 0 ? Math.round((totalPag / totalPres) * 100) : 0;
+        const promedio   = totalPres > 0 ? Math.round((totalPag / totalPres) * 100) : 0;
         document.getElementById('totalPresupuesto').textContent     = '$' + totalPres.toLocaleString('es-AR');
         document.getElementById('totalPresupuestoDolar').textContent = 'USD ' + (totalPres/exchangeRate).toLocaleString(undefined,{maximumFractionDigits:2});
         document.getElementById('totalPagado').textContent          = '$' + totalPag.toLocaleString('es-AR');
@@ -5250,7 +5251,9 @@
     function actualizarGraficos() {
         const totalPres = datos.reduce((s, i) => s + (i.presupuesto || 0), 0);
         const totalPag  = datos.reduce((s, i) => s + (i.pagado || 0), 0);
-        const ctxP = document.getElementById('paymentChart').getContext('2d');
+        const elPayment = document.getElementById('paymentChart');
+        if (!elPayment) return;
+        const ctxP = elPayment.getContext('2d');
         if (chartPayment) chartPayment.destroy();
         chartPayment = new Chart(ctxP, {
             type: 'doughnut',
@@ -5263,7 +5266,9 @@
         const provMap = {};
         datos.forEach(i => { provMap[i.proveedor] = (provMap[i.proveedor] || 0) + (i.presupuesto || 0); });
         const top5 = Object.entries(provMap).sort((a,b) => b[1]-a[1]).slice(0,5);
-        const ctxPv = document.getElementById('proveedoresChart').getContext('2d');
+        const elProv = document.getElementById('proveedoresChart');
+        if (!elProv) return;
+        const ctxPv = elProv.getContext('2d');
         if (chartProveedores) chartProveedores.destroy();
         chartProveedores = new Chart(ctxPv, {
             type: 'bar',
@@ -5373,7 +5378,7 @@
             concepto: document.getElementById('concepto').value,
             rubro: document.getElementById('rubro').value.trim(),
             subrubro: document.getElementById('subrubro').value.trim(),
-            presupuesto: parseFloat(document.getElementById('presupuesto').value),
+            presupuesto: parseFloat(document.getElementById('presupuesto').value) || 0,
             entrega: document.getElementById('entrega').value,
             modalidad: document.getElementById('modalidadPres').value || 'A',
             pagadoPresupuesto: capPagado,
@@ -5756,7 +5761,7 @@
             if(!f.pagosHistorial) f.pagosHistorial=[];
             f.pagosHistorial.push(entry);
             f.pagado=(f.pagado||0)+monto;
-            f.estado=f.pagado>=f.importe?'pagada':'parcial';
+            f.estado=(f.pagado>=(f.importe||0)&&(f.importe||0)>0)?'pagada':'parcial';
             persistirFacturas();
             sincronizarPagoPlan('factura',idx);
             itemImp={tipo:'fact',item:f,idx:idx};
@@ -5909,7 +5914,7 @@
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet);
-                datos = rows.map(row => ({ fecha: convertirFecha(row.Fecha||row.fecha), proveedor: row.Proveedor||row.proveedor, concepto: row.Concepto||row.concepto, rubro: row.Rubro||row.rubro||'', subrubro: row.Subrubro||row.subrubro||'', presupuesto: parseFloat(row.Presupuesto||row['Presupuesto (ARS)']||row.presupuesto), pagado: parseFloat(row.Pagado||row['Pagado (ARS)']||row.pagado), entrega: convertirFecha(row.Entrega||row.entrega) }));
+                datos = rows.map(row => ({ fecha: convertirFecha(row.Fecha||row.fecha), proveedor: row.Proveedor||row.proveedor, concepto: row.Concepto||row.concepto, rubro: row.Rubro||row.rubro||'', subrubro: row.Subrubro||row.subrubro||'', presupuesto: parseFloat(row.Presupuesto||row['Presupuesto (ARS)']||row.presupuesto) || 0, pagado: parseFloat(row.Pagado||row['Pagado (ARS)']||row.pagado) || 0, entrega: convertirFecha(row.Entrega||row.entrega) }));
                 persistir();
             };
             reader.readAsArrayBuffer(file);
@@ -7118,7 +7123,7 @@
     var GEMINI_API_KEY_LS = 'rk_gemini_api_key';
 
     function getGeminiKey() {
-        return localStorage.getItem(GEMINI_API_KEY_LS) || 'AQ.Ab8RN6KEsqsLdbz9AMi1YMG2UI0QEMcscP0Q1coWNlvR6dIYPA';
+        return localStorage.getItem(GEMINI_API_KEY_LS) || '';
     }
 
     function cargarGeminiKeyUI() {
@@ -7944,7 +7949,7 @@
             '</div></div>' +
             '<div class="firmas"><div class="fi">Recibí conforme — ' + (f.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
             '<div class="pie">Comprobante ' + nroDoc + ' · Generado el ' + emision + '</div>' +
-            '</div><scr' + 'ipt>window.print();</scr' + 'ipt></body></html>';
+            '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Bloqueaste las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -9479,9 +9484,18 @@
         document.getElementById('cvCuotaHint').textContent = '';
         document.getElementById('cvMontoHint').textContent = '';
         // Cambiar label del paso 2 para no confundir
-        var comp = v.modalidad === 'total_usd' ? 'usd' : 'usd';
-        document.getElementById('cobroVentaComponente').value = v.modalidad === 'total_usd' ? 'usd'
-            : v.modalidad === 'mixto' ? 'usd' : 'usd';
+        var grupoMixto = document.getElementById('grupoCompMixto');
+        if (v.modalidad === 'mixto') {
+            // Permitir elegir USD o ARS; sincronizar el componente oculto con el selector
+            var selMixto = document.getElementById('cobroVentaCompMixto');
+            if (selMixto) selMixto.value = 'usd';
+            document.getElementById('cobroVentaComponente').value = 'usd';
+            if (grupoMixto) grupoMixto.style.display = '';
+        } else {
+            // total_usd (u otras modalidades simples): siempre USD
+            document.getElementById('cobroVentaComponente').value = 'usd';
+            if (grupoMixto) grupoMixto.style.display = 'none';
+        }
         // Mostrar brevemente qué componente
         document.getElementById('cvMontoHint').textContent =
             v.modalidad === 'total_usd' ? 'En USD — precio total: USD '+(v.precioUSD||0).toLocaleString()
@@ -9765,7 +9779,7 @@
         ventas[idx].cobrosHistorial.push(registro);
         // Actualizar acumulados
         const v = ventas[idx];
-        if (comp === 'usd')             { v.cobradoUSD          = (v.cobradoUSD          || 0) + monto; if (v.modalidad==='cuotas_cac') v.terrenoCobrado = (v.terrenoCobrado||0)+monto; }
+        if (comp === 'usd')             { if (v.modalidad==='cuotas_cac') { v.terrenoCobrado = (v.terrenoCobrado||0)+monto; } else { v.cobradoUSD = (v.cobradoUSD||0)+monto; } }
         if (comp === 'ars_construccion'){ v.construccionCobrado = (v.construccionCobrado  || 0) + monto; if (cac>0) v.cacActual = cac; }
         if (comp === 'cuota')           { v.construccionCobrado = (v.construccionCobrado  || 0) + monto; if (cac>0) v.cacActual = cac; }
         if (comp === 'ars_general')     { v.cobradoARS          = (v.cobradoARS           || 0) + monto; }
@@ -9804,7 +9818,7 @@
         '</div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (v.comprador||'Comprador') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
         '<div class="pie">Recibo ' + nroRecibo + ' · Generado el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr' + 'ipt>window.print();</scr' + 'ipt></body></html>';
+        '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
         const w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(_html); w.document.close();
@@ -10493,7 +10507,7 @@
         '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmtN(monto,a.moneda) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (a.inquilino||'Inquilino') + '</div><div class="fi">Entregó — Locador / ' + emp.nombre + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -10524,7 +10538,7 @@
         '<tfoot><tr><td colspan="2"><strong>Total cobrado</strong></td><td class="tr"><strong>'+fmtN(totalCob,a.moneda)+'</strong></td></tr></tfoot></table>' +
         '<div class="firmas"><div class="fi">Inquilino</div><div class="fi">Locador / ' + emp.nombre + '</div></div>' +
         '<div class="pie">Generado el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -10735,7 +10749,7 @@
         '</div></div>' +
         '<div class="firmas"><div class="fi">Cliente</div><div class="fi">Firma y sello — ' + emp.nombre + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -10757,7 +10771,7 @@
         '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmt4(monto) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (s.cliente||'Cliente') + '</div><div class="fi">Firma y sello — ' + emp.nombre + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -10837,7 +10851,8 @@
         var igSnap = JSON.parse(JSON.stringify(nuevo));
         cerrarModalIngGeneral();
         persistirIngGeneral();
-        if (confirm('Ingreso guardado. ¿Emitir comprobante?')) imprimirComprobanteIngGeneral(igSnap);
+        var _esEgr = igSnap.esEgreso || igSnap.tipo==='mov_egreso_caja' || igSnap.tipo==='mov_banco_salida';
+        if (confirm((_esEgr?'Egreso':'Ingreso')+' guardado. ¿Emitir comprobante?')) imprimirComprobanteIngGeneral(igSnap);
     }
 
     function eliminarIngGeneral(idx) {
@@ -10913,7 +10928,7 @@
         '<div class="totales"><div class="tot-final"><span>Total ingresado</span><span>' + fmtI(ig.monto,ig.moneda) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Entregó</div><div class="fi">Recibió — ' + emp.nombre + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + emp.nombre + '</div>' +
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
@@ -10935,7 +10950,6 @@
         var montoBase  = v.construccionBase || 0;
         var cuotaMontos= v.cuotaMontos || [];
         var cobros     = (v.cobrosHistorial||[]).filter(function(c){ return c.comp==='cuota'; });
-        var cobrosUSD  = (v.cobrosHistorial||[]).filter(function(c){ return c.comp==='usd'; });
         var esUSD      = (v.cuotasMoneda === 'usd');
         var prefix     = esUSD ? 'USD ' : '$ ';
         var fmtN = function(n){ return prefix + Math.round(n||0).toLocaleString('es-AR'); };
@@ -11195,7 +11209,7 @@
         : '')+
         // Pie
         '<div class="pie">Estado de cuenta generado el '+emision+' · '+emp.nombre+'</div>'+
-        '</div><scr'+'ipt>window.print();</scr'+'ipt></body></html>';
+        '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
         var w = window.open('','_blank','width=820,height=1050');
         if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
@@ -11313,7 +11327,7 @@
             var esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             var esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
             var tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja'};
-            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:ig.origen||ig.referencia||'—',origen:tL[ig.tipo]||ig.tipo||'—',medio:'Efectivo',monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1});
+            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:ig.origen||ig.referencia||'—',origen:tL[ig.tipo]||ig.tipo||'—',medio:(ig.tipo==='mov_banco_salida'?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1});
         });
 
         // 2. Cobros de Ventas UF
@@ -11792,14 +11806,13 @@
         if (src === 'presup') {
             var d = datos[di];
             var p = d.pagosHistorial[pi];
-            var viejoCap = (p.capital||0)+(p.mayores||0)||p.montoPagado||0;
             p.fecha      = fecha;
             p.capital    = cap;
             p.mayores    = may;
             p.modalidad  = mod;
             if (cac > 0) p.indiceActual = cac;
             // Recalcular pagado total del presupuesto
-            d.pagado = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0)+(x.mayores||0)||s+(x.montoPagado||0); }, 0);
+            d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)); }, 0);
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
             persistir();
@@ -11905,7 +11918,7 @@
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
                     '<td>Factura</td>'+
-                    '<td>'+(f.numero?'N°'+f.numero+' — ':''+(f.descripcion||'—'))+'</td>'+
+                    '<td>'+(f.numero?'N°'+f.numero+' — ':'')+(f.descripcion||'—')+'</td>'+
                     '<td>'+modBadge+'</td>'+
                     '<td style="text-align:right;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;">—</td>'+
@@ -12302,7 +12315,7 @@
         selProy.innerHTML='';
         var emp=empresas.find(function(e){return e.nombre===empNombre;});
         if(emp){
-            emp.proyectos.forEach(function(p){
+            (emp.proyectos||[]).forEach(function(p){
                 selProy.innerHTML+='<option value="'+p.id+'" data-nombre="'+p.nombre+'">'+p.nombre+'</option>';
             });
         }
@@ -12637,8 +12650,9 @@
                     fecha + '  ' + (diff >= 0 ? '\u25b2 +' : '\u25bc ') + Math.abs(diff).toFixed(1) + ' pp vs ant.',
                     mes > 5 ? 'dn' : mes > 3 ? 'neu' : 'up');
                 if (a.length >= 12) {
-                    var acc = 0;
-                    for (var i = a.length - 12; i < a.length; i++) acc += (a[i].valor || 0);
+                    var factor = 1;
+                    for (var i = a.length - 12; i < a.length; i++) factor *= (1 + (a[i].valor || 0) / 100);
+                    var acc = (factor - 1) * 100;
                     _heKpi('heInflAnual', acc.toFixed(1) + '%', 'heInflAnualSub', 'acum. \xfaltimos 12 meses', 'dn');
                 }
             })
@@ -13554,6 +13568,15 @@
 
           <!-- Componente oculto (auto) -->
           <input type="hidden" id="cobroVentaComponente" value="cuota">
+
+          <!-- Selector de moneda (solo modalidad mixto) -->
+          <div class="form-group" id="grupoCompMixto" style="display:none;">
+            <label>Moneda de este cobro *</label>
+            <select id="cobroVentaCompMixto" onchange="document.getElementById('cobroVentaComponente').value=this.value;">
+              <option value="usd">USD (dólares)</option>
+              <option value="ars_general">ARS (pesos)</option>
+            </select>
+          </div>
 
           <!-- ¿Cobro parcial? -->
           <div id="cvParcialInfo" style="display:none;background:var(--blue-bg);border:1px solid rgba(26,58,107,.12);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--blue);">
