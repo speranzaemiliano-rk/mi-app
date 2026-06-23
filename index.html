@@ -20,6 +20,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
     <script>
         const firebaseConfig = {
             apiKey: "AIzaSyBfLKi3a6kZqkMKPQ8wRADQlUu3_NacXAA",
@@ -42,6 +43,7 @@
             firebase.initializeApp(firebaseConfig);
             auth = firebase.auth();
             db = firebase.database();
+            const storage = firebase.storage();
             REF_DATOS    = null;  // Se asigna en actualizarRefs() al elegir empresa/proyecto
             // Proveedores y grupos son GLOBALES (compartidos entre todas las empresas/proyectos)
             REF_PROV     = db.ref('global/proveedores');
@@ -2937,6 +2939,7 @@
                         <div style="display:flex;gap:8px;align-items:center;">
                         <button class="btn btn-primary btn-sm" id="btnAgregarFact" onclick="agregarFactura()">＋ Cargar Factura</button>
                         <button class="btn btn-outline btn-sm" onclick="abrirLeerFacturaPDF()" title="Subir PDF y extraer datos automáticamente">📎 Leer PDF con IA</button>
+                        <button class="btn btn-outline btn-sm" onclick="abrirImportarGmail()" title="Importar facturas recibidas por Gmail">📥 Gmail</button>
                         </div>
                     </div>
                     <div class="search-row">
@@ -3409,10 +3412,11 @@
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📧 EmailJS — Envío de facturas por mail</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
-                      Permite enviar facturas con PDF adjunto directamente desde el sistema. Creá tu cuenta gratis en
+                      Permite enviar facturas por mail con link de descarga del PDF. Creá tu cuenta gratis en
                       <a href="https://www.emailjs.com" target="_blank" style="color:var(--gold);">emailjs.com</a>
-                      (200 mails/mes gratis). Configurá un servicio de correo y una plantilla con las variables:
-                      <code>to_email</code>, <code>proveedor</code>, <code>numero</code>, <code>importe</code>, <code>descripcion</code>, <code>fecha</code>.
+                      (200 mails/mes gratis). La plantilla debe tener estas variables:<br>
+                      <code>to_email</code> · <code>proveedor</code> · <code>numero</code> · <code>importe</code> · <code>descripcion</code> · <code>fecha</code> · <code>pdf_url</code><br>
+                      Incluí <code>&lt;a href="{{pdf_url}}"&gt;Descargar PDF&lt;/a&gt;</code> en el cuerpo del mail.
                     </p>
                     <div class="form-group" style="margin-bottom:8px;">
                       <label>Service ID</label>
@@ -8315,6 +8319,210 @@
         document.getElementById('modalEnviarMail').classList.remove('active');
     }
 
+    // ══════════════════════════════════════════════════════════
+    // IMPORTAR FACTURAS DESDE GMAIL
+    // ══════════════════════════════════════════════════════════
+    var _gmailToken = '';
+
+    async function abrirImportarGmail() {
+        document.getElementById('modalGmail').classList.add('active');
+        document.getElementById('gmailEstado').textContent = 'Conectando con Google…';
+        document.getElementById('gmailLista').innerHTML = '';
+        document.getElementById('gmailBtnImportar').style.display = 'none';
+        try {
+            var provider = new firebase.auth.GoogleAuthProvider();
+            provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
+            var result = await auth.currentUser.reauthenticateWithPopup(provider);
+            _gmailToken = result.credential.accessToken;
+            document.getElementById('gmailEstado').textContent = 'Buscando mails con PDF adjunto…';
+            await buscarEmailsConPDF();
+        } catch(e) {
+            if (e.code === 'auth/popup-closed-by-user') {
+                document.getElementById('gmailEstado').textContent = 'Cancelado.';
+            } else if (e.code === 'auth/unauthorized-domain') {
+                document.getElementById('gmailEstado').innerHTML = '❌ Dominio no autorizado. Agregá este dominio en Firebase Auth → Settings → Authorized domains.';
+            } else {
+                document.getElementById('gmailEstado').textContent = '❌ Error: ' + (e.message || e);
+            }
+        }
+    }
+
+    async function buscarEmailsConPDF() {
+        var q = 'has:attachment filename:pdf newer_than:60d';
+        var url = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=30';
+        var resp = await fetch(url, { headers: { Authorization: 'Bearer ' + _gmailToken } });
+        if (!resp.ok) {
+            var err = await resp.json().catch(function() { return {}; });
+            if (resp.status === 403 || resp.status === 401) {
+                document.getElementById('gmailEstado').innerHTML =
+                    '❌ Sin acceso a Gmail. Asegurate de habilitar la <strong>Gmail API</strong> en Google Cloud Console para el proyecto Firebase.';
+            } else {
+                document.getElementById('gmailEstado').textContent = '❌ Error Gmail API: ' + (err.error && err.error.message || resp.status);
+            }
+            return;
+        }
+        var data = await resp.json();
+        var messages = data.messages || [];
+        if (messages.length === 0) {
+            document.getElementById('gmailEstado').textContent = 'No se encontraron mails con PDF en los últimos 60 días.';
+            return;
+        }
+        document.getElementById('gmailEstado').textContent = 'Cargando ' + messages.length + ' mails…';
+        var detalles = await Promise.all(messages.slice(0, 15).map(function(m) {
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + m.id + '?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date',
+                { headers: { Authorization: 'Bearer ' + _gmailToken } })
+                .then(function(r) { return r.json(); })
+                .then(function(msg) {
+                    var headers = msg.payload && msg.payload.headers || [];
+                    var getH = function(n) { var h = headers.find(function(h) { return h.name === n; }); return h ? h.value : ''; };
+                    var pdfs = [];
+                    function buscarParts(parts) {
+                        if (!parts) return;
+                        parts.forEach(function(p) {
+                            if (p.filename && p.filename.toLowerCase().endsWith('.pdf') && p.body && p.body.attachmentId) {
+                                pdfs.push({ nombre: p.filename, attachmentId: p.body.attachmentId });
+                            }
+                            if (p.parts) buscarParts(p.parts);
+                        });
+                    }
+                    buscarParts(msg.payload && msg.payload.parts);
+                    return { id: m.id, asunto: getH('Subject'), de: getH('From'), fecha: getH('Date'), pdfs: pdfs };
+                }).catch(function() { return null; });
+        }));
+        var validos = detalles.filter(function(d) { return d && d.pdfs.length > 0; });
+        if (validos.length === 0) {
+            document.getElementById('gmailEstado').textContent = 'No se encontraron mails con PDF adjunto en los últimos 60 días.';
+            return;
+        }
+        document.getElementById('gmailEstado').textContent = 'Encontrados ' + validos.length + ' mails con PDF. Seleccioná uno para importar:';
+        var lista = document.getElementById('gmailLista');
+        lista.innerHTML = '';
+        validos.forEach(function(msg) {
+            msg.pdfs.forEach(function(pdf) {
+                var div = document.createElement('div');
+                div.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer;transition:background .15s;';
+                div.innerHTML =
+                    '<div style="font-size:13px;font-weight:600;color:var(--text-1)">📄 ' + (pdf.nombre || 'factura.pdf') + '</div>' +
+                    '<div style="font-size:12px;color:var(--text-3);margin-top:4px;">De: ' + msg.de + '</div>' +
+                    '<div style="font-size:12px;color:var(--text-3);">Asunto: ' + msg.asunto + '</div>' +
+                    '<div style="font-size:11px;color:var(--text-3);">' + msg.fecha + '</div>';
+                div.onmouseenter = function() { div.style.background = 'var(--surface-2)'; };
+                div.onmouseleave = function() { div.style.background = ''; };
+                div.onclick = function() {
+                    lista.querySelectorAll('div').forEach(function(d) { d.style.outline = ''; });
+                    div.style.outline = '2px solid var(--gold)';
+                    document.getElementById('gmailBtnImportar').style.display = '';
+                    document.getElementById('gmailBtnImportar').onclick = function() {
+                        importarPDFdeGmail(msg.id, pdf.attachmentId, pdf.nombre);
+                    };
+                };
+                lista.appendChild(div);
+            });
+        });
+    }
+
+    async function importarPDFdeGmail(messageId, attachmentId, nombre) {
+        document.getElementById('gmailEstado').textContent = 'Descargando PDF…';
+        document.getElementById('gmailBtnImportar').disabled = true;
+        try {
+            var resp = await fetch(
+                'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + messageId + '/attachments/' + attachmentId,
+                { headers: { Authorization: 'Bearer ' + _gmailToken } }
+            );
+            var data = await resp.json();
+            // Gmail usa base64url — convertir a base64 estándar (sin prefijo data URL)
+            var base64 = (data.data || '').replace(/-/g,'+').replace(/_/g,'/');
+            cerrarGmail();
+            // Cargar en las variables globales del flujo de Leer Factura
+            _leerFactArchivoDB64 = base64;
+            _leerFactArchivoTipo = 'application/pdf';
+            // Abrir modal y mostrar paso 2 directamente (ya tenemos el archivo)
+            document.getElementById('modalLeerFactPDF').classList.add('active');
+            document.getElementById('leerFactTitle').textContent = '📎 ' + (nombre || 'Factura de Gmail');
+            document.getElementById('leerFactPaso1').style.display = 'none';
+            document.getElementById('leerFactPaso2').style.display = '';
+            document.getElementById('leerFactEstado').textContent = '';
+            // Procesar con Gemini usando el base64 ya cargado
+            await procesarFacturaPDFDesdeBase64();
+        } catch(e) {
+            alert('❌ Error al descargar PDF: ' + (e.message || e));
+            document.getElementById('gmailBtnImportar').disabled = false;
+        }
+    }
+
+    async function procesarFacturaPDFDesdeBase64() {
+        var b64     = _leerFactArchivoDB64;
+        var mime    = _leerFactArchivoTipo || 'application/pdf';
+        var apiKey  = getGeminiKey();
+        var estadoEl = document.getElementById('leerFactEstado');
+        if (!b64)    { if (estadoEl) estadoEl.textContent = '❌ No hay PDF cargado.'; return; }
+        if (!apiKey) { if (estadoEl) estadoEl.textContent = '❌ Configurá la API Key de Gemini en ⚙️ Ajustes.'; return; }
+        if (estadoEl) estadoEl.textContent = '🤖 Enviando a Gemini para análisis…';
+        var prompt = 'Analizá esta factura y extraé los siguientes datos en formato JSON puro (sin markdown, sin explicación extra, solo el objeto JSON):\n' +
+            '{\n' +
+            '  "proveedor": "nombre o razón social del emisor de la factura",\n' +
+            '  "cuit": "CUIT del emisor con guiones (ej: 20-12345678-9), o null",\n' +
+            '  "condicionIva": "condición frente al IVA del emisor, o null",\n' +
+            '  "direccion": "dirección del emisor, o null",\n' +
+            '  "tipoComprobante": "tipo de comprobante: A, B o C, o null",\n' +
+            '  "numero": "número de factura completo (ej: 0001-00012345)",\n' +
+            '  "fecha": "fecha de emisión en formato YYYY-MM-DD",\n' +
+            '  "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD, o null si no hay",\n' +
+            '  "cae": "número de CAE, o null",\n' +
+            '  "vencimientoCae": "fecha de vencimiento del CAE en formato YYYY-MM-DD, o null",\n' +
+            '  "importe": importe total numérico sin símbolo (ej: 15000.50),\n' +
+            '  "moneda": "ARS o USD",\n' +
+            '  "descripcion": "descripción breve del concepto facturado"\n' +
+            '}\nSi algún campo no está disponible usá null. Respondé SOLO el JSON.';
+        try {
+            var body = {
+                contents: [{ parts: [
+                    { inline_data: { mime_type: mime, data: b64 } },
+                    { text: prompt }
+                ]}],
+                generationConfig: { temperature: 0, maxOutputTokens: 2048 }
+            };
+            var resp = await fetch(
+                'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            );
+            if (!resp.ok) {
+                var errData = await resp.json().catch(function(){ return {}; });
+                throw new Error((errData.error && errData.error.message) || ('Error ' + resp.status));
+            }
+            var result  = await resp.json();
+            var rawText = result.candidates && result.candidates[0] && result.candidates[0].content &&
+                          result.candidates[0].content.parts && result.candidates[0].content.parts[0] &&
+                          result.candidates[0].content.parts[0].text || '';
+            var jsonStr = rawText.replace(/```json/gi,'').replace(/```/g,'').trim();
+            var datos_  = JSON.parse(jsonStr);
+            // Poblar el formulario del paso 2 (misma lógica que procesarFacturaPDF)
+            if (estadoEl) estadoEl.textContent = '✅ Datos extraídos. Revisá y guardá.';
+            document.getElementById('leerFactPaso1').style.display = 'none';
+            document.getElementById('leerFactPaso2').style.display = '';
+            var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null) el.value = v; };
+            setVal('leerFactProv',    datos_.proveedor);
+            setVal('leerFactCuit',    datos_.cuit);
+            setVal('leerFactCondIva', datos_.condicionIva);
+            setVal('leerFactDir',     datos_.direccion);
+            setVal('leerFactNumero',  datos_.numero);
+            setVal('leerFactFecha',   datos_.fecha);
+            setVal('leerFactVenc',    datos_.vencimiento);
+            setVal('leerFactCae',     datos_.cae);
+            setVal('leerFactVencCae', datos_.vencimientoCae);
+            setVal('leerFactImporte', datos_.importe);
+            if (datos_.moneda) { var ms = document.getElementById('leerFactMoneda'); if (ms) ms.value = datos_.moneda; }
+            setVal('leerFactDesc',    datos_.descripcion);
+            lfChequearProvNuevo();
+        } catch(e) {
+            if (estadoEl) estadoEl.textContent = '❌ Error al procesar con Gemini: ' + (e.message || e);
+        }
+    }
+
+    function cerrarGmail() {
+        document.getElementById('modalGmail').classList.remove('active');
+    }
+
     async function enviarFacturaMail() {
         var idx = parseInt(document.getElementById('mailFactIdx').value);
         var destEmail = (document.getElementById('mailFactDestinatario').value || '').trim();
@@ -8327,18 +8535,10 @@
         }
         var btn = document.getElementById('btnEnviarMail');
         btn.disabled = true;
-        btn.textContent = 'Enviando…';
+        btn.textContent = 'Subiendo PDF…';
         try {
-            var templateParams = {
-                to_email:    destEmail,
-                proveedor:   f.proveedor   || '—',
-                numero:      f.numero      || '—',
-                fecha:       f.fecha       ? formatearFecha(f.fecha) : '—',
-                importe:     (f.moneda === 'USD' ? 'USD ' : '$') + f.importe.toLocaleString('es-AR'),
-                descripcion: f.descripcion || '—',
-                estado:      f.estado      || 'pendiente'
-            };
-            var files = [];
+            // Subir PDF a Firebase Storage y obtener link de descarga
+            var pdfUrl = '';
             if (f.docId) {
                 try {
                     var snap = await REF_DOCS.child(f.docId).once('value');
@@ -8349,13 +8549,27 @@
                         var byteStr = atob(base64);
                         var arr     = new Uint8Array(byteStr.length);
                         for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-                        var blob = new Blob([arr], { type: d.tipo || 'application/pdf' });
-                        files = [new File([blob], d.nombre || 'factura.pdf', { type: d.tipo || 'application/pdf' })];
+                        var blob    = new Blob([arr], { type: d.tipo || 'application/pdf' });
+                        var nombre  = d.nombre || ('factura-' + (f.numero || f.docId) + '.pdf');
+                        var ref     = storage.ref('facturas-mail/' + f.docId + '.pdf');
+                        await ref.put(blob, { contentType: d.tipo || 'application/pdf', contentDisposition: 'inline; filename="' + nombre + '"' });
+                        pdfUrl = await ref.getDownloadURL();
                     }
-                } catch(e) { /* PDF no disponible, se envía sin adjunto */ }
+                } catch(e) { console.warn('No se pudo subir el PDF:', e); }
             }
-            await emailjs.send(cfg.serviceId, cfg.templateId, templateParams, { publicKey: cfg.publicKey, files: files });
-            alert('✅ Mail enviado correctamente a ' + destEmail);
+            btn.textContent = 'Enviando mail…';
+            var templateParams = {
+                to_email:    destEmail,
+                proveedor:   f.proveedor   || '—',
+                numero:      f.numero      || '—',
+                fecha:       f.fecha       ? formatearFecha(f.fecha) : '—',
+                importe:     (f.moneda === 'USD' ? 'USD ' : '$') + f.importe.toLocaleString('es-AR'),
+                descripcion: f.descripcion || '—',
+                estado:      f.estado      || 'pendiente',
+                pdf_url:     pdfUrl        || ''
+            };
+            await emailjs.send(cfg.serviceId, cfg.templateId, templateParams, { publicKey: cfg.publicKey });
+            alert('✅ Mail enviado correctamente a ' + destEmail + (pdfUrl ? '\n📎 El PDF está incluido como link de descarga.' : ''));
             cerrarEnviarMail();
         } catch(err) {
             alert('Error al enviar el mail: ' + (err.text || err.message || String(err)));
@@ -15144,6 +15358,25 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════════ MODAL: IMPORTAR FACTURA DESDE GMAIL ═══════════════ -->
+<div class="modal" id="modalGmail">
+  <div class="modal-box" style="max-width:560px;max-height:90vh;display:flex;flex-direction:column;">
+    <div class="modal-head">
+      <h2>📥 Importar Factura desde Gmail</h2>
+      <button class="modal-close" onclick="cerrarGmail()">✕</button>
+    </div>
+    <div class="modal-body" style="flex:1;overflow-y:auto;">
+      <div id="gmailEstado" style="font-size:13px;color:var(--text-2);margin-bottom:12px;line-height:1.6;"></div>
+      <div id="gmailLista"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="cerrarGmail()">Cerrar</button>
+      <button class="btn btn-gold" id="gmailBtnImportar" style="display:none;">📎 Importar este PDF con IA</button>
+    </div>
+  </div>
+</div>
+<!-- ═══════════════ FIN MODAL GMAIL ═══════════════ -->
 
 <!-- ═══════════════ MODAL: ENVIAR FACTURA POR MAIL ═══════════════ -->
 <div class="modal" id="modalEnviarMail">
