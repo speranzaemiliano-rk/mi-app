@@ -5057,9 +5057,8 @@
                 ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${item.docId}','${(item.docNombre||'documento').replace(/'/g,'')}')" title="Ver: ${(item.docNombre||'documento').replace(/"/g,'')}">📎 Doc</button>`
                 : '';
 
-            const botonesEdicion = puedeEditar ? `
-                <button class="btn btn-outline btn-sm" onclick="editarFila(${index})" title="Editar este presupuesto">✏</button>
-                <button class="btn btn-danger-sm" onclick="eliminarFila(${index})" title="Eliminar este presupuesto">✕</button>` : '';
+            const btnEditarFila = puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarFila(${index})" title="Editar este presupuesto">✏</button>` : '';
+            const botonesEdicion = btnEditarFila + btnElim('presupuesto', index);
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
@@ -6658,9 +6657,9 @@
             tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">Ningún proveedor coincide con la búsqueda.</td></tr>';
         } else {
             visibles.forEach(({p, i: index}) => {
-                const acciones = puedeEditar ? `
-                    <button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>
-                    <button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>` : '—';
+                const acciones = esSuperAdmin
+                    ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button><button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>`
+                    : puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>` : '—';
                 const regs = [
                     p.ret78         ? '<span class="pill" style="font-size:10px; background:#FEF2F2; color:#C0392B; border:1px solid #FCA5A5;">Reg.78</span>' : '',
                     p.ret94         ? '<span class="pill" style="font-size:10px; background:#FEF2F2; color:#C0392B; border:1px solid #FCA5A5;">Reg.94</span>' : '',
@@ -6968,10 +6967,187 @@
             ${acciones}
         </div>`;
     }
-    // Stubs — lógica completa en Fase 2/3
-    function aprobarSolicitud(id) { alert('Fase 3: aprobación no implementada aún.'); }
-    function rechazarSolicitud(id) { alert('Fase 3: rechazo no implementado aún.'); }
-    function cancelarSolicitud(id) { alert('Fase 4: cancelación no implementada aún.'); }
+    // ── Botón eliminar dinámico según rol ─────────────────────────
+    function btnElim(tipo, idx) {
+        if (esSuperAdmin) {
+            return '<button class="btn btn-danger-sm" onclick="pedirEliminar(\'' + tipo + '\',' + idx + ')" title="Eliminar">✕</button>';
+        }
+        if (esAdmin) {
+            return '<button onclick="pedirEliminar(\'' + tipo + '\',' + idx + ')" title="Solicitar borrado" style="background:transparent;color:#c0392b;border:1px solid #c0392b;padding:2px 8px;border-radius:3px;font-size:11px;cursor:pointer;line-height:1.4;">🗑</button>';
+        }
+        return '';
+    }
+
+    function pedirEliminar(tipo, idx) {
+        if (esSuperAdmin) {
+            var fns = {
+                presupuesto: function() { eliminarFila(idx); },
+                factura:     function() { eliminarFactura(idx); },
+                venta:       function() { eliminarVenta(idx); },
+                alquiler:    function() { eliminarAlquiler(idx); },
+                movcaja:     function() { eliminarMovCaja(idx); },
+                servicio:    function() { eliminarServicio(idx); },
+                inggeneral:  function() { eliminarIngGeneral(idx); },
+                prestamo:    function() { eliminarPrestamo(idx); }
+            };
+            if (fns[tipo]) fns[tipo]();
+            return;
+        }
+        var descripcion = '', itemData = {};
+        switch (tipo) {
+            case 'presupuesto': {
+                var d = datos[idx]; if (!d) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Presupuesto: ' + d.proveedor + ' — ' + d.concepto + ' ($' + Math.round(d.presupuesto||0).toLocaleString('es-AR') + ')';
+                itemData = { proveedor: d.proveedor, concepto: d.concepto, fecha: d.fecha, presupuesto: d.presupuesto };
+                break;
+            }
+            case 'factura': {
+                var f = facturas[idx]; if (!f) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Factura: ' + f.proveedor + (f.numero ? ' N°' + f.numero : '') + ' — $' + Math.round(f.importe||0).toLocaleString('es-AR');
+                itemData = { numero: f.numero, proveedor: f.proveedor, fecha: f.fecha, importe: f.importe };
+                break;
+            }
+            case 'venta': {
+                var v = ventas[idx]; if (!v) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Venta UF: ' + (v.uf||'?') + ' — ' + (v.comprador||'—');
+                itemData = { uf: v.uf, comprador: v.comprador };
+                break;
+            }
+            case 'alquiler': {
+                var a = alquileres[idx]; if (!a) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Alquiler: ' + (a.inquilino||'?') + ' — ' + (a.unidad||a.direccion||'?');
+                itemData = { inquilino: a.inquilino, unidad: a.unidad, inicio: a.inicio };
+                break;
+            }
+            case 'movcaja': {
+                var ig = ingGeneral[idx]; if (!ig) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Movimiento: ' + (ig.origen||ig.desc||'?') + ' — $' + Math.round(ig.monto||0).toLocaleString('es-AR') + ' (' + (ig.fecha||'—') + ')';
+                itemData = { fecha: ig.fecha, origen: ig.origen, monto: ig.monto, tipo: ig.tipo, igIdx: idx };
+                break;
+            }
+            case 'inggeneral': {
+                var ig2 = ingGeneral[idx]; if (!ig2) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Ingreso: ' + (ig2.origen||'?') + ' — $' + Math.round(ig2.monto||0).toLocaleString('es-AR');
+                itemData = { fecha: ig2.fecha, origen: ig2.origen, monto: ig2.monto, igIdx: idx };
+                break;
+            }
+            case 'servicio': {
+                var s = servicios[idx]; if (!s) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Servicio: ' + (s.descripcion||s.cliente||'?') + ' ($' + Math.round(s.base||0).toLocaleString('es-AR') + ')';
+                itemData = { descripcion: s.descripcion, cliente: s.cliente, fecha: s.fecha };
+                break;
+            }
+            case 'prestamo': {
+                var p = prestamos[idx]; if (!p) { alert('Ítem no encontrado.'); return; }
+                descripcion = 'Préstamo: ' + (p.de||'?') + ' → ' + (p.a||'?') + ' ($' + Math.round(p.monto||0).toLocaleString('es-AR') + ')';
+                itemData = { de: p.de, a: p.a, fecha: p.fecha, monto: p.monto };
+                break;
+            }
+            default: alert('Tipo no soportado: ' + tipo); return;
+        }
+        _crearSolicitudBorrado(tipo, descripcion, itemData);
+    }
+
+    function _crearSolicitudBorrado(tipo, descripcion, itemData) {
+        if (!confirm('Solicitar borrado de:\n"' + descripcion + '"\n\nEl Super Admin deberá aprobar antes de eliminarlo. ¿Continuar?')) return;
+        var uid   = auth.currentUser ? auth.currentUser.uid   : null;
+        var email = auth.currentUser ? auth.currentUser.email : '?';
+        REF_SOLICITUDES.push({
+            tipo:           tipo,
+            descripcion:    descripcion,
+            itemData:       itemData,
+            empresa:        empresaActual  ? empresaActual.id      : '',
+            empresaNombre:  empresaActual  ? empresaActual.nombre  : '',
+            proyecto:       proyectoActual ? proyectoActual.id     : '',
+            proyectoNombre: proyectoActual ? proyectoActual.nombre : '',
+            solicitadoPor:  email,
+            solicitadoUid:  uid,
+            solicitadoEn:   Date.now(),
+            estado:         'pendiente',
+            revisadoPor:    null,
+            revisadoEn:     null,
+            motivoRechazo:  null
+        }).then(function() {
+            alert('✓ Solicitud enviada. El Super Admin recibirá la notificación.');
+        }).catch(function(err) {
+            alert('No se pudo enviar la solicitud: ' + (err&&err.message ? err.message : 'error desconocido'));
+        });
+    }
+
+    async function aprobarSolicitud(id) {
+        var snap = await REF_SOLICITUDES.child(id).once('value');
+        var s = snap.val();
+        if (!s || s.estado !== 'pendiente') { alert('Esta solicitud ya no está pendiente.'); cargarSolicitudes(); return; }
+        if (s.empresa && empresaActual && s.empresa !== empresaActual.id) {
+            alert('Este ítem pertenece a la empresa "' + (s.empresaNombre||s.empresa) + '" / proyecto "' + (s.proyectoNombre||s.proyecto) + '".\nCambiá de empresa/proyecto para ejecutar este borrado.');
+            return;
+        }
+        if (s.proyecto && proyectoActual && s.proyecto !== proyectoActual.id) {
+            alert('Este ítem pertenece al proyecto "' + (s.proyectoNombre||s.proyecto) + '".\nCambiá de proyecto para ejecutar este borrado.');
+            return;
+        }
+        if (!confirm('¿APROBAR y EJECUTAR el borrado de:\n"' + s.descripcion + '"?\n\nEsta acción no se puede deshacer.')) return;
+        var deleted = false;
+        var D = s.itemData || {};
+        try {
+            switch (s.tipo) {
+                case 'presupuesto': {
+                    var i = datos.findIndex(function(d){ return d.proveedor===D.proveedor && d.concepto===D.concepto && d.fecha===D.fecha && d.presupuesto===D.presupuesto; });
+                    if (i !== -1) { datos.splice(i, 1); persistir(); deleted = true; } break;
+                }
+                case 'factura': {
+                    var i = facturas.findIndex(function(f){ return f.proveedor===D.proveedor && f.numero===D.numero && f.fecha===D.fecha && f.importe===D.importe; });
+                    if (i !== -1) { facturas.splice(i, 1); persistirFacturas(); deleted = true; } break;
+                }
+                case 'venta': {
+                    var i = ventas.findIndex(function(v){ return v.uf===D.uf && v.comprador===D.comprador; });
+                    if (i !== -1) { ventas.splice(i, 1); persistirVentas(); deleted = true; } break;
+                }
+                case 'alquiler': {
+                    var i = alquileres.findIndex(function(a){ return a.inquilino===D.inquilino && a.unidad===D.unidad && a.inicio===D.inicio; });
+                    if (i !== -1) { alquileres.splice(i, 1); persistirAlquileres(); deleted = true; } break;
+                }
+                case 'movcaja':
+                case 'inggeneral': {
+                    var i = -1;
+                    if (D.igIdx !== undefined && ingGeneral[D.igIdx] && ingGeneral[D.igIdx].fecha===D.fecha && Number(ingGeneral[D.igIdx].monto)===Number(D.monto)) {
+                        i = D.igIdx;
+                    } else {
+                        i = ingGeneral.findIndex(function(ig){ return ig.fecha===D.fecha && ig.origen===D.origen && Number(ig.monto)===Number(D.monto); });
+                    }
+                    if (i !== -1) { ingGeneral.splice(i, 1); persistirIngGeneral(); deleted = true; } break;
+                }
+                case 'servicio': {
+                    var i = servicios.findIndex(function(sv){ return sv.descripcion===D.descripcion && sv.cliente===D.cliente && sv.fecha===D.fecha; });
+                    if (i !== -1) { servicios.splice(i, 1); persistirServicios(); deleted = true; } break;
+                }
+                case 'prestamo': {
+                    var i = prestamos.findIndex(function(pr){ return pr.de===D.de && pr.a===D.a && pr.fecha===D.fecha && Number(pr.monto)===Number(D.monto); });
+                    if (i !== -1) { prestamos.splice(i, 1); if (REF_PRESTAMOS) REF_PRESTAMOS.set(prestamos); deleted = true; } break;
+                }
+            }
+        } catch(e) { console.error('aprobarSolicitud:', e); }
+        await REF_SOLICITUDES.child(id).update({ estado: 'aprobada', revisadoPor: auth.currentUser ? auth.currentUser.email : '?', revisadoEn: Date.now() });
+        cargarSolicitudes();
+        alert(deleted ? '✓ Ítem eliminado y solicitud aprobada.' : '✓ Solicitud aprobada, pero el ítem no se encontró (puede haber sido modificado o eliminado previamente).');
+    }
+
+    async function rechazarSolicitud(id) {
+        var snap = await REF_SOLICITUDES.child(id).once('value');
+        var s = snap.val();
+        if (!s || s.estado !== 'pendiente') { alert('Esta solicitud ya no está pendiente.'); cargarSolicitudes(); return; }
+        var motivo = prompt('Motivo del rechazo (opcional):');
+        if (motivo === null) return;
+        await REF_SOLICITUDES.child(id).update({ estado: 'rechazada', revisadoPor: auth.currentUser ? auth.currentUser.email : '?', revisadoEn: Date.now(), motivoRechazo: motivo || '' });
+        cargarSolicitudes();
+        alert('✓ Solicitud rechazada.');
+    }
+
+    async function cancelarSolicitud(id) {
+        if (!confirm('¿Cancelar esta solicitud de borrado?')) return;
+        await REF_SOLICITUDES.child(id).remove();
+        cargarSolicitudes();
+    }
 
     // ===================== AUTH =====================
     let authModo = 'login';
@@ -7993,7 +8169,7 @@
                     ${estado !== 'pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                     ${(f.pagosHistorial && f.pagosHistorial.length) ? `<button class="btn btn-outline btn-sm" title="Reimprimir recibo de pago anterior" onclick="abrirHistorialPagosFactura(${idx})">🖨️</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
-                    <button class="btn btn-danger-sm" onclick="eliminarFactura(${idx})">✕</button>` : '—';
+                    ` + btnElim('factura', idx) : '—';
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
@@ -8206,7 +8382,7 @@
                 var saldoAct=(cb.saldo||0)+ent-sal;
                 var monSym=cb.moneda==='USD'?'USD ':'$';
                 var empN=empresas&&empresas.find?((empresas.find(function(e){return e.id===cb.empresaId;})||{}).nombre||'—'):'—';
-                var acc=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="editarCuenta('+i+')">✏</button><button class="btn btn-danger-sm" onclick="eliminarCuenta('+i+')">✕</button>':'—';
+                var acc=esSuperAdmin?'<button class="btn btn-outline btn-sm" onclick="editarCuenta('+i+')">✏</button><button class="btn btn-danger-sm" onclick="eliminarCuenta('+i+')">✕</button>':puedeEditar?'<button class="btn btn-outline btn-sm" onclick="editarCuenta('+i+')">✏</button>':'—';
                 var tr=document.createElement('tr');
                 tr.innerHTML='<td><strong>'+(cb.banco||'—')+'</strong></td><td>'+(cb.tipo||'—')+'</td><td style="font-size:12px;color:var(--text-3);">'+(cb.alias||'')+(cb.cbu?' · '+cb.cbu.substring(0,10)+'…':'')+'</td><td>'+(cb.moneda||'ARS')+'</td><td>'+empN+'</td><td style="text-align:right;">'+monSym+(cb.saldo||0).toLocaleString('es-AR')+'</td><td style="text-align:right;font-weight:700;color:'+(saldoAct>=0?'var(--success)':'var(--danger)')+';">'+monSym+Math.round(saldoAct).toLocaleString('es-AR')+'</td><td><div class="action-btns">'+acc+'</div></td>';
                 tbody.appendChild(tr);
@@ -8405,7 +8581,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
-            const bEFP=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button><button class="btn-danger-sm" onclick="eliminarMovCaja('+m.igIdx+')">&#215;</button></div>':'';
+            const bEFP=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML = `
                 <td>${m.fecha ? formatearFecha(m.fecha) : '—'}</td>
                 <td><span class="pill ${m.ingreso>0?'badge-ok':'badge-err'}" style="font-size:10px;">${m.tipo}</span></td>
@@ -8505,7 +8681,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
-            const bEFU=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button><button class="btn-danger-sm" onclick="eliminarMovCaja('+m.igIdx+')">&#215;</button></div>':'';
+            const bEFU=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML =
                 '<td>'+(m.fecha ? formatearFecha(m.fecha) : '—')+'</td>'+
                 '<td><span class="pill '+(m.ingreso>0?'badge-ok':'badge-err')+'" style="font-size:10px;">'+m.tipo+'</span></td>'+
@@ -9883,7 +10059,7 @@
                       '<button class="btn btn-outline btn-sm" title="Estado de cuenta del inversor" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosVenta(' + idx + ')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Editar datos de esta UF" onclick="abrirModalVenta(' + idx + ')">✏</button> ' +
-                      '<button class="btn btn-danger-sm" title="Eliminar esta UF" onclick="eliminarVenta(' + idx + ')">✕</button>'
+                      btnElim('venta', idx)
                     : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button>';
                 const tr = document.createElement('tr');
                 tr.innerHTML =
@@ -10435,7 +10611,7 @@
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosAlquiler(' + idx + ')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalAlquiler(' + idx + ')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Ver contrato" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
-                      '<button class="btn btn-danger-sm" onclick="eliminarAlquiler(' + idx + ')">✕</button>'
+                      btnElim('alquiler', idx)
                     : '—';
                 var tr = document.createElement('tr');
                 tr.innerHTML =
@@ -10667,7 +10843,7 @@
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosServicio('+idx+')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalServicio('+idx+')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Ver presupuesto" onclick="imprimirPresupuestoServicio('+idx+')">📄</button> ' +
-                      '<button class="btn btn-danger-sm" onclick="eliminarServicio('+idx+')">✕</button>'
+                      btnElim('servicio', idx)
                     : '—';
                 var tr = document.createElement('tr');
                 tr.innerHTML =
@@ -10860,7 +11036,7 @@
                 var acc2 = puedeEditar
                     ? '<button class="btn btn-outline btn-sm" onclick="abrirModalIngGeneral('+idx+')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="imprimirComprobanteIngGeneral(ingGeneral['+idx+'])">🖨️</button> ' +
-                      '<button class="btn btn-danger-sm" onclick="eliminarIngGeneral('+idx+')">✕</button>'
+                      btnElim('inggeneral', idx)
                     : '—';
                 var tr = document.createElement('tr');
                 tr.innerHTML =
@@ -11454,7 +11630,8 @@
                     sldARS = '<td style="text-align:right;font-weight:700;color:'+(sc>=0?'var(--success)':'var(--danger)')+';">'+fmtA(sc)+'</td>';
                 }
 
-                var bAcc=m.igIdx>=0?'<button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button><button class="btn-danger-sm" onclick="eliminarMovCaja('+m.igIdx+')">&#215;</button>':'';
+                var bAcc=m.igIdx>=0?'<button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx):'';
+
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
                     '<td><span class="pill '+pillClass+'" style="font-size:10px;white-space:nowrap;">'+m.tipo+'</span></td>'+
@@ -12264,7 +12441,7 @@
                 :'<span class="badge-rol badge-warn">⏳ Pendiente</span>';
             var acciones=puedeEditar
                 ?'<button class="btn btn-outline btn-sm" onclick="marcarPrestamoDevuelto('+i+')"'+(pr.estado==='devuelto'?' disabled style="opacity:.5"':'')+'>✓ Devuelto</button> '+
-                 '<button class="btn btn-danger-sm" onclick="eliminarPrestamo('+i+')">✕</button>'
+                 btnElim('prestamo', i)
                 :'—';
             var tr=document.createElement('tr');
             tr.innerHTML='<td>'+(pr.fecha?formatearFecha(pr.fecha):'—')+'</td>'+
