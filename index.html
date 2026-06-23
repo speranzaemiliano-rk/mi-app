@@ -29,7 +29,7 @@
         };
         const ADMIN_EMAIL = "speranzaemiliano@gmail.com";
 
-        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO;
+        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES;
         let FIREBASE_OK = false;
         let FIREBASE_ERROR = '';
 
@@ -51,9 +51,10 @@
             REF_CAJA     = null;
             REF_INGRESOS = null;
             REF_BANCO    = null;
-            REF_ROLES    = db.ref('roles');
-            REF_USUARIOS = db.ref('usuarios');
-            FIREBASE_OK  = true;
+            REF_ROLES        = db.ref('roles');
+            REF_USUARIOS     = db.ref('usuarios');
+            REF_SOLICITUDES  = db.ref('solicitudesBorrado');
+            FIREBASE_OK      = true;
         } catch (err) {
             FIREBASE_ERROR = err && err.message ? err.message : 'No se pudo iniciar Firebase.';
             console.error('Firebase no se inició:', FIREBASE_ERROR);
@@ -2506,6 +2507,10 @@
                 <button class="nav-item nav-sub" id="btnUsuarios" onclick="abrirUsuarios()" style="display:none;" title="Administrar permisos de usuarios">
                     <span class="nav-icon">👥</span> Usuarios
                 </button>
+                <button class="nav-item nav-sub" id="btnSolicitudes" onclick="abrirSolicitudes()" style="display:none;" title="Solicitudes de borrado">
+                    <span class="nav-icon">📥</span> Solicitudes
+                    <span id="badgeSolicitudes" style="display:none;margin-left:auto;background:#E53935;color:#fff;border-radius:10px;font-size:10px;padding:1px 7px;font-weight:700;line-height:1.6;">0</span>
+                </button>
             </div>
         </div>
 
@@ -4248,18 +4253,32 @@
 
 <!-- ── MODAL: USUARIOS (solo admin) ── -->
 <div class="modal" id="modalUsuarios">
-    <div class="modal-box modal-box-wide">
+    <div class="modal-box" style="max-width:600px;">
         <div class="modal-head">
-            <h2>👥 Permisos de Usuarios</h2>
+            <h2>👥 Usuarios y Permisos</h2>
             <button class="modal-close" onclick="cerrarUsuarios()">✕</button>
         </div>
         <div class="modal-body">
-            <p style="font-size:13px; color:var(--text-2); margin-bottom:16px;">
-                <strong>Editor:</strong> puede ver y modificar. &nbsp; <strong>Solo lectura:</strong> solo puede ver y exportar.<br>
-                Los usuarios aparecen aquí tras iniciar sesión al menos una vez.
-            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);margin-bottom:4px;">⭐ Super Admin</div>
+                    <div style="font-size:12px;color:var(--text-2);">Control total. Aprueba borrados, gestiona empresa/proyecto y usuarios.</div>
+                </div>
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);margin-bottom:4px;">🔑 Admin</div>
+                    <div style="font-size:12px;color:var(--text-2);">Puede crear y editar. Puede solicitar borrado de movimientos.</div>
+                </div>
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);margin-bottom:4px;">✏ Editor</div>
+                    <div style="font-size:12px;color:var(--text-2);">Puede crear y editar movimientos. Sin acceso a borrado.</div>
+                </div>
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;">
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);margin-bottom:4px;">👁 Solo lectura</div>
+                    <div style="font-size:12px;color:var(--text-2);">Solo puede ver y exportar. No puede modificar nada.</div>
+                </div>
+            </div>
             <table>
-                <thead><tr><th>Correo</th><th>Permiso</th></tr></thead>
+                <thead><tr><th>Correo</th><th style="text-align:center">Último acceso</th><th>Rol</th></tr></thead>
                 <tbody id="usuariosBody"></tbody>
             </table>
         </div>
@@ -4516,8 +4535,9 @@
     let exchangeRate = 950;
     let tcInicializado = false;
     let datosInicializado = false;
-    let puedeEditar = false;
-    let esAdmin = false;
+    let puedeEditar   = false;
+    let esAdmin       = false;  // admin o superadmin
+    let esSuperAdmin  = false;
     let proveedores = [];
     let editandoProvIndex = -1;
     let grupos = [];
@@ -6802,7 +6822,11 @@
             const el = document.getElementById(id); if (el) el.style.display = show;
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
-        document.getElementById('btnUsuarios').style.display = esAdmin ? '' : 'none';
+        // Usuarios: solo superadmin; Solicitudes: admin y superadmin
+        const elU = document.getElementById('btnUsuarios');
+        const elS = document.getElementById('btnSolicitudes');
+        if (elU) elU.style.display = esSuperAdmin ? '' : 'none';
+        if (elS) elS.style.display = esAdmin ? '' : 'none';
         renderizar(); renderProveedores(); renderFacturas();
     }
 
@@ -6810,34 +6834,144 @@
     function abrirUsuarios() { document.getElementById('modalUsuarios').classList.add('active'); cargarListaUsuarios(); }
     function cerrarUsuarios() { document.getElementById('modalUsuarios').classList.remove('active'); }
 
+    const ROLES_LABELS = {
+        superadmin: '⭐ Super Admin',
+        admin:      '🔑 Admin',
+        editor:     '✏ Editor',
+        lector:     '👁 Solo lectura'
+    };
+
     function cargarListaUsuarios() {
         const tbody = document.getElementById('usuariosBody');
-        tbody.innerHTML = '<tr><td colspan="2" style="color:var(--text-3);">Cargando…</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-3);">Cargando…</td></tr>';
         Promise.all([REF_USUARIOS.once('value'), REF_ROLES.once('value')]).then(([usnap, rsnap]) => {
             const usuarios = usnap.val()||{}; const roles = rsnap.val()||{};
             tbody.innerHTML = '';
             const uids = Object.keys(usuarios);
-            if (uids.length === 0) { tbody.innerHTML = '<tr><td colspan="2" style="color:var(--text-3);">Todavía no hay usuarios.</td></tr>'; return; }
+            if (!uids.length) { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-3);">Todavía no hay usuarios.</td></tr>'; return; }
+
+            // Ordenar: superadmin primero
+            const orden = ['superadmin','admin','editor','lector'];
+            uids.sort((a,b) => {
+                const ra = roles[a]||'lector', rb = roles[b]||'lector';
+                return orden.indexOf(ra) - orden.indexOf(rb);
+            });
+
+            const miUid = auth.currentUser ? auth.currentUser.uid : null;
             uids.forEach(uid => {
-                const email = usuarios[uid].email||uid;
-                const esEsteAdmin = ADMIN_EMAIL && email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-                const rolActual = esEsteAdmin ? 'admin' : (roles[uid]==='editor' ? 'editor' : 'lector');
+                const email    = usuarios[uid].email || uid;
+                const rolActual = roles[uid] || 'lector';
+                const esMiCuenta = uid === miUid;
                 const tr = document.createElement('tr');
-                if (esEsteAdmin) {
-                    tr.innerHTML = `<td>${email}</td><td><span class="badge-rol badge-ok">👑 Administrador</span></td>`;
+                const acceso = usuarios[uid].ultimoAcceso
+                    ? new Date(usuarios[uid].ultimoAcceso).toLocaleDateString('es-AR')
+                    : '—';
+
+                if (esMiCuenta) {
+                    tr.innerHTML = `<td>${email}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><span class="badge-rol badge-ok">${ROLES_LABELS[rolActual]||rolActual} <span style="font-size:9px;opacity:.7;">(vos)</span></span></td>`;
                 } else {
-                    tr.innerHTML = `<td>${email}</td><td><select onchange="cambiarRol('${uid}',this.value)" style="width:auto; padding:6px 10px;"><option value="lector" ${rolActual==='lector'?'selected':''}>Solo lectura</option><option value="editor" ${rolActual==='editor'?'selected':''}>Editor</option></select></td>`;
+                    const opts = ['lector','editor','admin','superadmin']
+                        .map(v => `<option value="${v}" ${rolActual===v?'selected':''}>${ROLES_LABELS[v]}</option>`)
+                        .join('');
+                    tr.innerHTML = `<td>${email}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><select onchange="cambiarRol('${uid}',this.value)" style="width:auto;padding:6px 10px;">${opts}</select></td>`;
                 }
                 tbody.appendChild(tr);
             });
-        }).catch(() => { tbody.innerHTML = '<tr><td colspan="2" style="color:var(--danger);">No se pudo leer la lista.</td></tr>'; });
+        }).catch(() => { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--danger);">No se pudo leer la lista.</td></tr>'; });
     }
 
     function cambiarRol(uid, rol) {
         REF_ROLES.child(uid).set(rol).then(() => {
-            alert('✓ Permiso actualizado.');
+            cargarListaUsuarios();
         }).catch(err => { alert('No se pudo cambiar el permiso.\n' + (err&&err.message?err.message:'error desconocido')); });
     }
+
+    // ── Listener badge de solicitudes pendientes ──────────────────
+    let _solicitudesListener = null;
+    function escucharSolicitudes() {
+        if (!REF_SOLICITUDES || _solicitudesListener) return;
+        _solicitudesListener = REF_SOLICITUDES.on('value', snap => {
+            const todas = snap.val() || {};
+            let pendientes;
+            if (esSuperAdmin) {
+                pendientes = Object.values(todas).filter(s => s.estado === 'pendiente').length;
+            } else {
+                const uid = auth.currentUser ? auth.currentUser.uid : null;
+                pendientes = Object.values(todas).filter(s => s.estado === 'pendiente' && s.solicitadoUid === uid).length;
+            }
+            const badge = document.getElementById('badgeSolicitudes');
+            if (badge) {
+                badge.textContent = pendientes;
+                badge.style.display = pendientes > 0 ? '' : 'none';
+            }
+        });
+    }
+
+    let _solTab = 'pendientes';
+    function abrirSolicitudes() {
+        document.getElementById('modalSolicitudes').classList.add('active');
+        verSolicitudesTab('pendientes');
+    }
+    function cerrarSolicitudes() {
+        document.getElementById('modalSolicitudes').classList.remove('active');
+    }
+    function verSolicitudesTab(tab) {
+        _solTab = tab;
+        const tabP = document.getElementById('tabSolPend');
+        const tabH = document.getElementById('tabSolHist');
+        if (tabP) { tabP.style.background = tab==='pendientes'?'var(--ink)':'var(--surface)'; tabP.style.color = tab==='pendientes'?'#fff':'var(--text-2)'; }
+        if (tabH) { tabH.style.background = tab==='historial'?'var(--ink)':'var(--surface)'; tabH.style.color = tab==='historial'?'#fff':'var(--text-2)'; }
+        cargarSolicitudes();
+    }
+    function cargarSolicitudes() {
+        const lista = document.getElementById('solicitudesLista');
+        if (!lista || !REF_SOLICITUDES) return;
+        lista.innerHTML = '<div style="color:var(--text-3);padding:24px;text-align:center;">Cargando…</div>';
+        REF_SOLICITUDES.once('value').then(snap => {
+            const todas = snap.val() || {};
+            const uid = auth.currentUser ? auth.currentUser.uid : null;
+            let items = Object.entries(todas).map(([k,v]) => ({id:k,...v}));
+            if (!esSuperAdmin) items = items.filter(s => s.solicitadoUid === uid);
+            if (_solTab === 'pendientes') items = items.filter(s => s.estado === 'pendiente');
+            else items = items.filter(s => s.estado !== 'pendiente').sort((a,b)=>(b.revisadoEn||b.solicitadoEn||0)-(a.revisadoEn||a.solicitadoEn||0));
+            // badge pendientes
+            const pend = esSuperAdmin ? Object.values(todas).filter(s=>s.estado==='pendiente').length : items.filter(s=>s.estado==='pendiente').length;
+            const bp = document.getElementById('badgeSolPend');
+            if (bp) { bp.textContent = pend; bp.style.display = pend>0?'':'none'; }
+            if (!items.length) { lista.innerHTML = `<div style="color:var(--text-3);padding:32px;text-align:center;">${_solTab==='pendientes'?'No hay solicitudes pendientes.':'No hay solicitudes en el historial.'}</div>`; return; }
+            lista.innerHTML = items.map(s => renderSolicitudCard(s)).join('');
+        }).catch(() => { lista.innerHTML = '<div style="color:var(--danger);padding:24px;">No se pudo cargar.</div>'; });
+    }
+    function renderSolicitudCard(s) {
+        const fecha = s.solicitadoEn ? new Date(s.solicitadoEn).toLocaleString('es-AR') : '—';
+        const estadoColor = {pendiente:'#F9A825',aprobada:'#1E8E3E',rechazada:'#D93025'}[s.estado]||'#666';
+        const estadoLabel = {pendiente:'⏳ Pendiente',aprobada:'✓ Aprobada',rechazada:'✗ Rechazada'}[s.estado]||s.estado;
+        let acciones = '';
+        if (esSuperAdmin && s.estado === 'pendiente') {
+            acciones = `<div style="display:flex;gap:8px;margin-top:10px;">
+                <button class="btn btn-sm" onclick="aprobarSolicitud('${s.id}')" style="background:#1E8E3E;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✓ Aprobar</button>
+                <button class="btn btn-sm" onclick="rechazarSolicitud('${s.id}')" style="background:#D93025;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✗ Rechazar</button>
+            </div>`;
+        } else if (!esSuperAdmin && s.estado === 'pendiente') {
+            acciones = `<div style="margin-top:10px;"><button class="btn btn-sm" onclick="cancelarSolicitud('${s.id}')" style="background:transparent;color:var(--text-2);border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">Cancelar solicitud</button></div>`;
+        }
+        const rechazoNote = s.estado==='rechazada' && s.motivoRechazo ? `<div style="margin-top:6px;font-size:12px;color:#D93025;">Motivo: ${s.motivoRechazo}</div>` : '';
+        return `<div style="border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                <div style="flex:1;">
+                    <div style="font-size:13px;font-weight:600;color:var(--text-1);margin-bottom:4px;">${s.descripcion||'—'}</div>
+                    <div style="font-size:11px;color:var(--text-3);">Solicitado por <strong>${s.solicitadoPor||'—'}</strong> · ${fecha}</div>
+                    ${rechazoNote}
+                </div>
+                <span style="font-size:11px;font-weight:600;color:${estadoColor};white-space:nowrap;">${estadoLabel}</span>
+            </div>
+            ${acciones}
+        </div>`;
+    }
+    // Stubs — lógica completa en Fase 2/3
+    function aprobarSolicitud(id) { alert('Fase 3: aprobación no implementada aún.'); }
+    function rechazarSolicitud(id) { alert('Fase 3: rechazo no implementado aún.'); }
+    function cancelarSolicitud(id) { alert('Fase 4: cancelación no implementada aún.'); }
 
     // ===================== AUTH =====================
     let authModo = 'login';
@@ -6906,17 +7040,33 @@
 
                 const email = user.email || '';
                 const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
-                esAdmin = adminConfigurado && email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+                const esEmailSuperAdmin = adminConfigurado && email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
                 REF_USUARIOS.child(user.uid).set({ email, ultimoAcceso: Date.now() }).catch(()=>{});
 
                 if (!adminConfigurado) {
-                    puedeEditar = true; aplicarPermisos(); initEmpresas(); return;
+                    esSuperAdmin = false; esAdmin = false; puedeEditar = true;
+                    aplicarPermisos(); initEmpresas(); return;
                 }
                 REF_ROLES.child(user.uid).once('value').then(snap => {
-                    puedeEditar = esAdmin || snap.val() === 'editor';
+                    let rol = snap.val();
+                    // Migración automática: el email superadmin siempre tiene rol 'superadmin'
+                    if (esEmailSuperAdmin && rol !== 'superadmin') {
+                        rol = 'superadmin';
+                        REF_ROLES.child(user.uid).set('superadmin').catch(()=>{});
+                    }
+                    esSuperAdmin = (rol === 'superadmin');
+                    esAdmin      = esSuperAdmin || (rol === 'admin');
+                    puedeEditar  = esAdmin || (rol === 'editor');
+                    aplicarPermisos();
+                    initEmpresas();
+                    if (esAdmin) escucharSolicitudes();
+                }).catch(() => {
+                    esSuperAdmin = esEmailSuperAdmin;
+                    esAdmin      = esEmailSuperAdmin;
+                    puedeEditar  = esEmailSuperAdmin;
                     aplicarPermisos(); initEmpresas();
-                }).catch(() => { puedeEditar = esAdmin; aplicarPermisos(); initEmpresas(); });
+                });
             } else {
                 document.getElementById('app').classList.add('app-hidden');
                 document.getElementById('authOverlay').classList.remove('app-hidden');
@@ -14530,6 +14680,36 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════════ MODAL: SOLICITUDES DE BORRADO ═══════════════ -->
+<div class="modal" id="modalSolicitudes">
+  <div class="modal-box" style="max-width:780px;max-height:92vh;">
+    <div class="modal-head" style="background:var(--ink);color:#fff;margin:0;padding:18px 24px;border-radius:0;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div>
+          <div style="font-size:10px;letter-spacing:.22em;text-transform:uppercase;font-family:monospace;color:rgba(255,255,255,.45);margin-bottom:3px;">Control</div>
+          <h2 style="color:#fff;font-size:17px;font-weight:300;letter-spacing:.02em;">📥 Solicitudes de Borrado</h2>
+        </div>
+        <div style="margin-left:auto;">
+          <button class="modal-close" onclick="cerrarSolicitudes()" style="color:rgba(255,255,255,.6);">✕</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-body" style="padding:0;overflow-y:auto;max-height:calc(92vh - 80px);">
+      <!-- Tabs Pendientes / Historial -->
+      <div style="display:flex;border-bottom:1px solid var(--border);background:var(--surface);">
+        <button id="tabSolPend" onclick="verSolicitudesTab('pendientes')" style="flex:1;padding:12px;border:none;background:var(--ink);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">
+          Pendientes <span id="badgeSolPend" style="background:#E53935;color:#fff;border-radius:10px;font-size:10px;padding:1px 7px;margin-left:6px;display:none;">0</span>
+        </button>
+        <button id="tabSolHist" onclick="verSolicitudesTab('historial')" style="flex:1;padding:12px;border:none;background:var(--surface);color:var(--text-2);font-size:13px;cursor:pointer;">
+          Historial
+        </button>
+      </div>
+      <div id="solicitudesLista" style="padding:16px;"></div>
+    </div>
+  </div>
+</div>
+<!-- ═══════════════ FIN MODAL SOLICITUDES ═══════════════ -->
 
 </body>
 </html>
