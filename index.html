@@ -14,6 +14,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
     <!-- ===================== FIREBASE (SDK compat) ===================== -->
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -3405,6 +3406,33 @@
                     <button class="btn btn-outline btn-sm" onclick="borrarApiKey()">Borrar Anthropic Key</button>
                   </div>
 
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📧 EmailJS — Envío de facturas por mail</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Permite enviar facturas con PDF adjunto directamente desde el sistema. Creá tu cuenta gratis en
+                      <a href="https://www.emailjs.com" target="_blank" style="color:var(--gold);">emailjs.com</a>
+                      (200 mails/mes gratis). Configurá un servicio de correo y una plantilla con las variables:
+                      <code>to_email</code>, <code>proveedor</code>, <code>numero</code>, <code>importe</code>, <code>descripcion</code>, <code>fecha</code>.
+                    </p>
+                    <div class="form-group" style="margin-bottom:8px;">
+                      <label>Service ID</label>
+                      <input type="text" id="cfgEmailJsService" placeholder="service_xxxxxxx" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:8px;">
+                      <label>Template ID</label>
+                      <input type="text" id="cfgEmailJsTemplate" placeholder="template_xxxxxxx" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:12px;">
+                      <label>Public Key</label>
+                      <input type="text" id="cfgEmailJsKey" placeholder="xxxxxxxxxxxxxxx" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                      <button class="btn btn-gold btn-sm" onclick="guardarEmailJsConfig()">💾 Guardar</button>
+                      <button class="btn btn-outline btn-sm" onclick="borrarEmailJsConfig()">🗑️ Borrar</button>
+                    </div>
+                    <div id="cfgEmailJsStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                  </div>
+
                 </div>
               </div>
             </div><!-- /panelConfig -->
@@ -4311,6 +4339,10 @@
                 <div class="form-group">
                     <label>Dirección</label>
                     <input type="text" id="provDir" placeholder="Calle 123, Localidad">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="provEmail" placeholder="contacto@empresa.com">
                 </div>
                 <div class="form-group">
                     <label>Regímenes de retención aplicables</label>
@@ -6587,6 +6619,7 @@
         document.getElementById('provRubro').value   = p.rubro || '';
         document.getElementById('provTel').value     = p.telefono || '';
         document.getElementById('provDir').value     = p.direccion || '';
+        document.getElementById('provEmail').value   = p.email || '';
         document.getElementById('provRet78').checked         = !!p.ret78;
         document.getElementById('provRet94').checked         = !!p.ret94;
         document.getElementById('provRet119').checked        = !!p.ret119;
@@ -6616,6 +6649,7 @@
             rubro: document.getElementById('provRubro').value.trim(),
             telefono: document.getElementById('provTel').value.trim(),
             direccion: document.getElementById('provDir').value.trim(),
+            email: document.getElementById('provEmail').value.trim(),
             ret78:        document.getElementById('provRet78').checked,
             ret94:        document.getElementById('provRet94').checked,
             ret119:       document.getElementById('provRet119').checked,
@@ -7361,6 +7395,7 @@
         var st = document.getElementById('cfgApiKeyStatus');
         if (st) st.textContent = key ? '✅ API Key de Anthropic guardada.' : '⚠️ No hay API Key de Anthropic configurada.';
         cargarGeminiKeyUI();
+        cargarEmailJsConfigUI();
     }
 
     function guardarApiKey() {
@@ -7377,6 +7412,57 @@
         localStorage.removeItem(ANTHROPIC_API_KEY_LS);
         document.getElementById('cfgApiKey').value = '';
         document.getElementById('cfgApiKeyStatus').textContent = '⚠️ API Key eliminada.';
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // CONFIGURACIÓN — EMAILJS (localStorage)
+    // ══════════════════════════════════════════════════════════
+    var EMAILJS_LS_SERVICE  = 'rk_emailjs_service';
+    var EMAILJS_LS_TEMPLATE = 'rk_emailjs_template';
+    var EMAILJS_LS_KEY      = 'rk_emailjs_pubkey';
+
+    function getEmailJsConfig() {
+        return {
+            serviceId:  localStorage.getItem(EMAILJS_LS_SERVICE)  || '',
+            templateId: localStorage.getItem(EMAILJS_LS_TEMPLATE) || '',
+            publicKey:  localStorage.getItem(EMAILJS_LS_KEY)      || ''
+        };
+    }
+
+    function cargarEmailJsConfigUI() {
+        var cfg = getEmailJsConfig();
+        var elS = document.getElementById('cfgEmailJsService');
+        var elT = document.getElementById('cfgEmailJsTemplate');
+        var elK = document.getElementById('cfgEmailJsKey');
+        var st  = document.getElementById('cfgEmailJsStatus');
+        if (elS) elS.value = cfg.serviceId;
+        if (elT) elT.value = cfg.templateId;
+        if (elK) elK.value = cfg.publicKey;
+        if (st) st.textContent = (cfg.serviceId && cfg.templateId && cfg.publicKey)
+            ? '✅ EmailJS configurado correctamente.'
+            : '⚠️ EmailJS no configurado. Completá los tres campos para activar el envío de mails.';
+    }
+
+    function guardarEmailJsConfig() {
+        var s = (document.getElementById('cfgEmailJsService').value  || '').trim();
+        var t = (document.getElementById('cfgEmailJsTemplate').value || '').trim();
+        var k = (document.getElementById('cfgEmailJsKey').value      || '').trim();
+        if (!s || !t || !k) { alert('Completá los tres campos de EmailJS.'); return; }
+        localStorage.setItem(EMAILJS_LS_SERVICE,  s);
+        localStorage.setItem(EMAILJS_LS_TEMPLATE, t);
+        localStorage.setItem(EMAILJS_LS_KEY,      k);
+        document.getElementById('cfgEmailJsStatus').textContent = '✅ Configuración de EmailJS guardada.';
+    }
+
+    function borrarEmailJsConfig() {
+        if (!confirm('¿Borrar la configuración de EmailJS?')) return;
+        localStorage.removeItem(EMAILJS_LS_SERVICE);
+        localStorage.removeItem(EMAILJS_LS_TEMPLATE);
+        localStorage.removeItem(EMAILJS_LS_KEY);
+        ['cfgEmailJsService','cfgEmailJsTemplate','cfgEmailJsKey'].forEach(function(id) {
+            var el = document.getElementById(id); if (el) el.value = '';
+        });
+        document.getElementById('cfgEmailJsStatus').textContent = '⚠️ Configuración de EmailJS eliminada.';
     }
 
     // ══════════════════════════════════════════════════════════
@@ -8166,6 +8252,7 @@
                 const acciones = puedeEditar ? `
                     ${estado !== 'pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                     ${(f.pagosHistorial && f.pagosHistorial.length) ? `<button class="btn btn-outline btn-sm" title="Reimprimir recibo de pago anterior" onclick="abrirHistorialPagosFactura(${idx})">🖨️</button>` : ''}
+                    ${f.docId ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
                     ` + btnElim('factura', idx) : '—';
                 const tr = document.createElement('tr');
@@ -8191,6 +8278,90 @@
         if (el3) {
             const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + (f.importe - (f.pagado||0)), 0);
             el3.textContent = '$' + Math.round(total).toLocaleString('es-AR');
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ENVÍO DE FACTURA POR MAIL (EmailJS)
+    // ══════════════════════════════════════════════════════════
+    function abrirEnviarFacturaMail(idx) {
+        var f = facturas[idx];
+        var prov = proveedores.find(function(p) { return p.razonSocial === f.proveedor; });
+        var emailProv = prov ? (prov.email || '') : '';
+        document.getElementById('mailFactIdx').value = idx;
+        document.getElementById('mailFactDestinatario').value = emailProv;
+        var importe = (f.moneda === 'USD' ? 'USD ' : '$') + f.importe.toLocaleString('es-AR');
+        document.getElementById('mailFactResumen').innerHTML =
+            '<strong>Factura N°:</strong> ' + (f.numero || '—') + '<br>' +
+            '<strong>Proveedor:</strong> ' + (f.proveedor || '—') + '<br>' +
+            '<strong>Importe:</strong> ' + importe + '<br>' +
+            '<strong>Fecha:</strong> ' + (f.fecha ? formatearFecha(f.fecha) : '—') + '<br>' +
+            '<strong>Descripción:</strong> ' + (f.descripcion || '—') + '<br>' +
+            (f.docId ? '<span style="color:var(--success)">📎 PDF adjunto disponible</span>' : '<span style="color:var(--text-3)">Sin PDF adjunto</span>');
+        var cfg = getEmailJsConfig();
+        var st = document.getElementById('mailStatusEmailJs');
+        if (st) {
+            if (!cfg.serviceId || !cfg.templateId || !cfg.publicKey) {
+                st.innerHTML = '⚠️ EmailJS no configurado. Ir a <strong>Ajustes</strong> para configurarlo.';
+                st.style.color = 'var(--danger)';
+            } else {
+                st.textContent = '';
+            }
+        }
+        document.getElementById('modalEnviarMail').classList.add('active');
+    }
+
+    function cerrarEnviarMail() {
+        document.getElementById('modalEnviarMail').classList.remove('active');
+    }
+
+    async function enviarFacturaMail() {
+        var idx = parseInt(document.getElementById('mailFactIdx').value);
+        var destEmail = (document.getElementById('mailFactDestinatario').value || '').trim();
+        var f = facturas[idx];
+        if (!destEmail) { alert('Ingresá una dirección de mail.'); return; }
+        var cfg = getEmailJsConfig();
+        if (!cfg.serviceId || !cfg.templateId || !cfg.publicKey) {
+            alert('Configurá EmailJS en Ajustes antes de enviar por mail.');
+            return;
+        }
+        var btn = document.getElementById('btnEnviarMail');
+        btn.disabled = true;
+        btn.textContent = 'Enviando…';
+        try {
+            var templateParams = {
+                to_email:    destEmail,
+                proveedor:   f.proveedor   || '—',
+                numero:      f.numero      || '—',
+                fecha:       f.fecha       ? formatearFecha(f.fecha) : '—',
+                importe:     (f.moneda === 'USD' ? 'USD ' : '$') + f.importe.toLocaleString('es-AR'),
+                descripcion: f.descripcion || '—',
+                estado:      f.estado      || 'pendiente'
+            };
+            var files = [];
+            if (f.docId) {
+                try {
+                    var snap = await REF_DOCS.child(f.docId).once('value');
+                    var d = snap.val();
+                    if (d && d.contenido) {
+                        var dataUrl = d.contenido;
+                        var base64  = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+                        var byteStr = atob(base64);
+                        var arr     = new Uint8Array(byteStr.length);
+                        for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
+                        var blob = new Blob([arr], { type: d.tipo || 'application/pdf' });
+                        files = [new File([blob], d.nombre || 'factura.pdf', { type: d.tipo || 'application/pdf' })];
+                    }
+                } catch(e) { /* PDF no disponible, se envía sin adjunto */ }
+            }
+            await emailjs.send(cfg.serviceId, cfg.templateId, templateParams, { publicKey: cfg.publicKey, files: files });
+            alert('✅ Mail enviado correctamente a ' + destEmail);
+            cerrarEnviarMail();
+        } catch(err) {
+            alert('Error al enviar el mail: ' + (err.text || err.message || String(err)));
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '📧 Enviar';
         }
     }
 
@@ -14973,6 +15144,30 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════════ MODAL: ENVIAR FACTURA POR MAIL ═══════════════ -->
+<div class="modal" id="modalEnviarMail">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-head">
+      <h2>📧 Enviar Factura por Mail</h2>
+      <button class="modal-close" onclick="cerrarEnviarMail()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="mailFactIdx">
+      <div id="mailFactResumen" style="background:var(--surface-2);border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px;line-height:1.8;"></div>
+      <div class="form-group">
+        <label>Destinatario (mail)</label>
+        <input type="email" id="mailFactDestinatario" placeholder="destinatario@ejemplo.com">
+      </div>
+      <div id="mailStatusEmailJs" style="font-size:12px;margin-top:6px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="cerrarEnviarMail()">Cancelar</button>
+      <button class="btn btn-primary" id="btnEnviarMail" onclick="enviarFacturaMail()">📧 Enviar</button>
+    </div>
+  </div>
+</div>
+<!-- ═══════════════ FIN MODAL ENVIAR MAIL ═══════════════ -->
 
 <!-- ═══════════════ MODAL: SOLICITUDES DE BORRADO ═══════════════ -->
 <div class="modal" id="modalSolicitudes">
