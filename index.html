@@ -8676,17 +8676,24 @@
                         var blob    = new Blob([arr], { type: d.tipo || 'application/pdf' });
                         var nombre  = d.nombre || ('factura-' + (f.numero || f.docId) + '.pdf');
                         var ref     = storage.ref('facturas-mail/' + f.docId + '.pdf');
-                        await ref.put(blob, { contentType: d.tipo || 'application/pdf', contentDisposition: 'inline; filename="' + nombre + '"' });
+                        var TIMEOUT_MS = 30000;
+                        var uploadPromise = ref.put(blob, { contentType: d.tipo || 'application/pdf', contentDisposition: 'inline; filename="' + nombre + '"' });
+                        var timeoutPromise = new Promise(function(_, reject) {
+                            setTimeout(function() { reject(new Error('TIMEOUT: La subida tardó más de 30 segundos. Verificá que Firebase Storage esté habilitado en tu proyecto y que las Reglas de Storage permitan escritura a usuarios autenticados.') }, TIMEOUT_MS);
+                        });
+                        await Promise.race([uploadPromise, timeoutPromise]);
                         pdfUrl = await ref.getDownloadURL();
                     } else if (!confirm('No encontré el archivo PDF de esta factura.\n¿Enviar el mail igual, sin PDF?')) {
                         return;
                     }
                 } catch(e) {
                     // No mandamos un "enviado" engañoso: si falla la subida, avisamos y frenamos.
-                    var motivo = (e && e.code === 'storage/unauthorized')
-                        ? 'Firebase Storage rechazó la subida por permisos. Revisá las Reglas de Storage (deben permitir escritura a usuarios autenticados).'
+                    var motivo = (e && e.message && e.message.startsWith('TIMEOUT:'))
+                        ? e.message
+                        : (e && e.code === 'storage/unauthorized')
+                        ? 'Firebase Storage rechazó la subida por permisos.\n\nSolución: en la consola de Firebase → Storage → Rules, asegurate de que las reglas permitan escritura a usuarios autenticados:\n\nallow read, write: if request.auth != null;'
                         : (e && e.code === 'storage/unknown')
-                        ? 'Firebase Storage no está disponible. Puede que no esté habilitado en tu proyecto (hay que activar Storage en la consola de Firebase).'
+                        ? 'Firebase Storage no está disponible. Habilitalo en la consola de Firebase → Storage → Comenzar.'
                         : ((e && e.message) || String(e));
                     alert('❌ No se pudo subir el PDF, así que el mail NO se envió.\n\nMotivo: ' + motivo);
                     return;
