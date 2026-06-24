@@ -7874,20 +7874,22 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 2048 }
             };
 
-            var resp = await fetch(
-                'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+            var resp, data, lastErrMsg;
+            for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
+                if (_mi > 0) {
+                    estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
+                    await new Promise(function(r){ setTimeout(r, 2000); });
                 }
-            );
-
-            if (!resp.ok) {
-                var errData = await resp.json().catch(function(){ return {}; });
-                var errMsg = (errData.error && errData.error.message) || ('Error ' + resp.status);
-                throw new Error(errMsg);
+                resp = await fetch(
+                    'https://generativelanguage.googleapis.com/v1beta/models/' + MODELOS_PDF[_mi] + ':generateContent?key=' + apiKey,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                );
+                if (resp.ok) { lastErrMsg = null; break; }
+                var _ed = await resp.json().catch(function(){ return {}; });
+                lastErrMsg = (_ed.error && _ed.error.message) || ('Error ' + resp.status);
             }
+            if (lastErrMsg) throw new Error(lastErrMsg);
 
             var data = await resp.json();
 
@@ -8666,8 +8668,9 @@
                 { headers: { Authorization: 'Bearer ' + _gmailToken } }
             );
             var data = await resp.json();
-            // Gmail usa base64url — convertir a base64 estándar (sin prefijo data URL)
+            // Gmail usa base64url — convertir a base64 estándar con padding
             var base64 = (data.data || '').replace(/-/g,'+').replace(/_/g,'/');
+            while (base64.length % 4) base64 += '=';
             cerrarGmail();
             // Cargar en las variables globales del flujo de Leer Factura
             _leerFactArchivoDB64 = base64;
@@ -8718,19 +8721,29 @@
                 ]}],
                 generationConfig: { temperature: 0, maxOutputTokens: 2048 }
             };
-            var resp = await fetch(
-                'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey,
-                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-            );
-            if (!resp.ok) {
-                var errData = await resp.json().catch(function(){ return {}; });
-                throw new Error((errData.error && errData.error.message) || ('Error ' + resp.status));
+            var MODELOS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+            var resp, errData, lastErr;
+            for (var mi = 0; mi < MODELOS.length; mi++) {
+                if (mi > 0) {
+                    if (estadoEl) estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS[mi] + '…';
+                    await new Promise(function(r){ setTimeout(r, 2000); });
+                }
+                resp = await fetch(
+                    'https://generativelanguage.googleapis.com/v1beta/models/' + MODELOS[mi] + ':generateContent?key=' + apiKey,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                );
+                if (resp.ok) { lastErr = null; break; }
+                errData = await resp.json().catch(function(){ return {}; });
+                lastErr = new Error((errData.error && errData.error.message) || ('Error ' + resp.status));
             }
+            if (lastErr) throw lastErr;
             var result  = await resp.json();
             var rawText = result.candidates && result.candidates[0] && result.candidates[0].content &&
                           result.candidates[0].content.parts && result.candidates[0].content.parts[0] &&
                           result.candidates[0].content.parts[0].text || '';
-            var jsonStr = rawText.replace(/```json/gi,'').replace(/```/g,'').trim();
+            // Extraer JSON aunque venga con markdown o texto extra
+            var jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            var jsonStr = jsonMatch ? jsonMatch[0] : rawText.replace(/```json/gi,'').replace(/```/g,'').trim();
             var datos_  = JSON.parse(jsonStr);
             // Poblar el formulario del paso 2 (misma lógica que procesarFacturaPDF)
             if (estadoEl) estadoEl.textContent = '✅ Datos extraídos. Revisá y guardá.';
