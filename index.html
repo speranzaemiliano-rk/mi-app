@@ -8474,7 +8474,7 @@
             document.getElementById('gmailEstado').innerHTML = '🔍 La búsqueda en Gmail no devolvió <strong>ningún</strong> mail con PDF en los últimos 60 días.<br><br>Verificá que hayas elegido la <strong>cuenta correcta</strong> (la misma donde recibiste el PDF). Tocá 📥 Gmail de nuevo y, en el selector, elegí esa cuenta.';
             return;
         }
-        document.getElementById('gmailEstado').textContent = 'Cargando ' + messages.length + ' mails…';
+        document.getElementById('gmailEstado').textContent = '[v29] Cargando ' + messages.length + ' mails…';
         var detalles = await Promise.all(messages.slice(0, 15).map(function(m) {
             // format=full trae la estructura completa de partes/adjuntos
             // (nombre de archivo + attachmentId). Con format=metadata Gmail
@@ -8486,25 +8486,37 @@
                     var headers = msg.payload && msg.payload.headers || [];
                     var getH = function(n) { var h = headers.find(function(h) { return h.name === n; }); return h ? h.value : ''; };
                     var pdfs = [];
+                    var adjuntos = []; // diagnóstico: todo adjunto con nombre o attachmentId
                     function buscarParts(parts) {
                         if (!parts) return;
                         parts.forEach(function(p) {
-                            if (p.filename && p.filename.toLowerCase().endsWith('.pdf') && p.body && p.body.attachmentId) {
-                                pdfs.push({ nombre: p.filename, attachmentId: p.body.attachmentId });
+                            var fn    = (p.filename || '').trim();
+                            var attId = p.body && p.body.attachmentId;
+                            // Detecta PDF por nombre de archivo O por tipo MIME
+                            var esPdf = (fn && fn.toLowerCase().endsWith('.pdf')) || p.mimeType === 'application/pdf';
+                            if (fn || attId) {
+                                adjuntos.push((fn || '(sin nombre)') + ' [' + (p.mimeType || '?') + (attId ? '' : ', sin attachmentId') + ']');
+                            }
+                            if (esPdf && attId) {
+                                pdfs.push({ nombre: fn || 'factura.pdf', attachmentId: attId });
                             }
                             if (p.parts) buscarParts(p.parts);
                         });
                     }
                     buscarParts(msg.payload && msg.payload.parts);
-                    return { id: m.id, asunto: getH('Subject'), de: getH('From'), fecha: getH('Date'), pdfs: pdfs };
+                    return { id: m.id, asunto: getH('Subject'), de: getH('From'), fecha: getH('Date'), pdfs: pdfs, adjuntos: adjuntos };
                 }).catch(function() { return null; });
         }));
         var validos = detalles.filter(function(d) { return d && d.pdfs.length > 0; });
         if (validos.length === 0) {
-            document.getElementById('gmailEstado').innerHTML = '⚠️ Gmail encontró ' + messages.length + ' mail(s) con adjunto, pero ninguno tenía un <strong>PDF descargable</strong> detectable. Puede ser un PDF embebido o un formato distinto.';
+            var muestras = detalles.filter(Boolean).map(function(d) { return d.adjuntos.join(', '); }).filter(Boolean).slice(0, 6);
+            document.getElementById('gmailEstado').innerHTML =
+                '⚠️ <strong>[v29]</strong> Gmail devolvió ' + messages.length + ' mail(s) pero no detecté un PDF descargable.<br><br>' +
+                '<strong>Adjuntos que sí encontré:</strong><br>' +
+                (muestras.length ? muestras.map(function(s) { return '• ' + s; }).join('<br>') : '<em>(ningún adjunto con nombre ni attachmentId — Gmail no devolvió las partes)</em>');
             return;
         }
-        document.getElementById('gmailEstado').textContent = 'Encontrados ' + validos.length + ' mails con PDF. Seleccioná uno para importar:';
+        document.getElementById('gmailEstado').textContent = '[v29] Encontrados ' + validos.length + ' mails con PDF. Seleccioná uno para importar:';
         var lista = document.getElementById('gmailLista');
         lista.innerHTML = '';
         validos.forEach(function(msg) {
