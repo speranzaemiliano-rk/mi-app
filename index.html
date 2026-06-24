@@ -7317,6 +7317,7 @@
                 // Cargar API key de Gemini desde Firebase al iniciar sesión
                 cargarGeminiKeyDesdeFirebase();
                 cargarGoogleClientIdDesdeFirebase();
+                cargarEmailJsConfigDesdeFirebase();
 
                 const email = user.email || '';
                 const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
@@ -7496,7 +7497,9 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // CONFIGURACIÓN — EMAILJS (localStorage)
+    // CONFIGURACIÓN — EMAILJS (localStorage + Firebase)
+    // Se guarda en este dispositivo Y en la nube, así no se pierde
+    // al cambiar de navegador o limpiar el caché.
     // ══════════════════════════════════════════════════════════
     var EMAILJS_LS_SERVICE  = 'rk_emailjs_service';
     var EMAILJS_LS_TEMPLATE = 'rk_emailjs_template';
@@ -7519,9 +7522,28 @@
         if (elS) elS.value = cfg.serviceId;
         if (elT) elT.value = cfg.templateId;
         if (elK) elK.value = cfg.publicKey;
-        if (st) st.textContent = (cfg.serviceId && cfg.templateId && cfg.publicKey)
-            ? '✅ EmailJS configurado correctamente.'
-            : '⚠️ EmailJS no configurado. Completá los tres campos para activar el envío de mails.';
+        if (cfg.serviceId && cfg.templateId && cfg.publicKey) {
+            if (st) st.textContent = '✅ EmailJS configurado correctamente (guardado en nube y dispositivo).';
+            return;
+        }
+        // Falta config en este dispositivo: la traemos de la nube
+        if (st) st.textContent = '🔄 Buscando configuración de EmailJS en la nube…';
+        db.ref('global/config/emailjs').once('value').then(function(snap) {
+            var v = snap.val();
+            if (v && v.serviceId && v.templateId && v.publicKey) {
+                localStorage.setItem(EMAILJS_LS_SERVICE,  v.serviceId);
+                localStorage.setItem(EMAILJS_LS_TEMPLATE, v.templateId);
+                localStorage.setItem(EMAILJS_LS_KEY,      v.publicKey);
+                if (elS) elS.value = v.serviceId;
+                if (elT) elT.value = v.templateId;
+                if (elK) elK.value = v.publicKey;
+                if (st) st.textContent = '✅ EmailJS cargado desde la nube.';
+            } else {
+                if (st) st.textContent = '⚠️ EmailJS no configurado. Completá los tres campos para activar el envío de mails.';
+            }
+        }).catch(function() {
+            if (st) st.textContent = '⚠️ EmailJS no configurado. Completá los tres campos para activar el envío de mails.';
+        });
     }
 
     function guardarEmailJsConfig() {
@@ -7532,18 +7554,38 @@
         localStorage.setItem(EMAILJS_LS_SERVICE,  s);
         localStorage.setItem(EMAILJS_LS_TEMPLATE, t);
         localStorage.setItem(EMAILJS_LS_KEY,      k);
-        document.getElementById('cfgEmailJsStatus').textContent = '✅ Configuración de EmailJS guardada.';
+        // Guardar también en Firebase para no perderla al cambiar de navegador o limpiar caché
+        db.ref('global/config/emailjs').set({ serviceId: s, templateId: t, publicKey: k }).then(function() {
+            document.getElementById('cfgEmailJsStatus').textContent = '✅ Configuración de EmailJS guardada en este dispositivo y en la nube.';
+        }).catch(function() {
+            document.getElementById('cfgEmailJsStatus').textContent = '✅ Configuración de EmailJS guardada en este dispositivo (sin acceso a nube).';
+        });
     }
 
     function borrarEmailJsConfig() {
-        if (!confirm('¿Borrar la configuración de EmailJS?')) return;
+        if (!confirm('¿Borrar la configuración de EmailJS de todos los dispositivos?')) return;
         localStorage.removeItem(EMAILJS_LS_SERVICE);
         localStorage.removeItem(EMAILJS_LS_TEMPLATE);
         localStorage.removeItem(EMAILJS_LS_KEY);
+        db.ref('global/config/emailjs').remove();
         ['cfgEmailJsService','cfgEmailJsTemplate','cfgEmailJsKey'].forEach(function(id) {
             var el = document.getElementById(id); if (el) el.value = '';
         });
         document.getElementById('cfgEmailJsStatus').textContent = '⚠️ Configuración de EmailJS eliminada.';
+    }
+
+    function cargarEmailJsConfigDesdeFirebase() {
+        // Al iniciar sesión, si este dispositivo no tiene la config, la baja de la nube
+        if (localStorage.getItem(EMAILJS_LS_SERVICE) && localStorage.getItem(EMAILJS_LS_TEMPLATE) && localStorage.getItem(EMAILJS_LS_KEY)) return;
+        db.ref('global/config/emailjs').once('value').then(function(snap) {
+            var v = snap.val();
+            if (v && v.serviceId && v.templateId && v.publicKey) {
+                localStorage.setItem(EMAILJS_LS_SERVICE,  v.serviceId);
+                localStorage.setItem(EMAILJS_LS_TEMPLATE, v.templateId);
+                localStorage.setItem(EMAILJS_LS_KEY,      v.publicKey);
+                console.log('EmailJS config cargada desde Firebase.');
+            }
+        }).catch(function(){});
     }
 
     // ══════════════════════════════════════════════════════════
