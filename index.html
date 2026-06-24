@@ -8661,7 +8661,9 @@
         try {
             // Subir PDF a Firebase Storage y obtener link de descarga
             var pdfUrl = '';
-            if (f.docId) {
+            if (!f.docId) {
+                if (!confirm('Esta factura no tiene un PDF cargado.\n¿Enviar el mail igual, sin PDF?')) return;
+            } else {
                 try {
                     var snap = await REF_DOCS.child(f.docId).once('value');
                     var d = snap.val();
@@ -8676,8 +8678,19 @@
                         var ref     = storage.ref('facturas-mail/' + f.docId + '.pdf');
                         await ref.put(blob, { contentType: d.tipo || 'application/pdf', contentDisposition: 'inline; filename="' + nombre + '"' });
                         pdfUrl = await ref.getDownloadURL();
+                    } else if (!confirm('No encontré el archivo PDF de esta factura.\n¿Enviar el mail igual, sin PDF?')) {
+                        return;
                     }
-                } catch(e) { console.warn('No se pudo subir el PDF:', e); }
+                } catch(e) {
+                    // No mandamos un "enviado" engañoso: si falla la subida, avisamos y frenamos.
+                    var motivo = (e && e.code === 'storage/unauthorized')
+                        ? 'Firebase Storage rechazó la subida por permisos. Revisá las Reglas de Storage (deben permitir escritura a usuarios autenticados).'
+                        : (e && e.code === 'storage/unknown')
+                        ? 'Firebase Storage no está disponible. Puede que no esté habilitado en tu proyecto (hay que activar Storage en la consola de Firebase).'
+                        : ((e && e.message) || String(e));
+                    alert('❌ No se pudo subir el PDF, así que el mail NO se envió.\n\nMotivo: ' + motivo);
+                    return;
+                }
             }
             btn.textContent = 'Enviando mail…';
             var templateParams = {
@@ -8691,7 +8704,9 @@
                 pdf_url:     pdfUrl        || ''
             };
             await emailjs.send(cfg.serviceId, cfg.templateId, templateParams, { publicKey: cfg.publicKey });
-            alert('✅ Mail enviado correctamente a ' + destEmail + (pdfUrl ? '\n📎 El PDF está incluido como link de descarga.' : ''));
+            alert('✅ Mail enviado a ' + destEmail + (pdfUrl
+                ? '\n\n📎 Incluye el link de descarga del PDF.\nSi en el mail recibido NO ves el link, agregá la variable {{pdf_url}} en tu plantilla de EmailJS (ej: <a href="{{pdf_url}}">Descargar factura</a>).'
+                : '\n\n(Se envió sin PDF.)'));
             cerrarEnviarMail();
         } catch(err) {
             alert('Error al enviar el mail: ' + (err.text || err.message || String(err)));
