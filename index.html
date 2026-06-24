@@ -15,6 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 
     <!-- ===================== FIREBASE (SDK compat) ===================== -->
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -3435,6 +3436,25 @@
                       <button class="btn btn-outline btn-sm" onclick="borrarEmailJsConfig()">🗑️ Borrar</button>
                     </div>
                     <div id="cfgEmailJsStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📥 Lectura automática de Gmail</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Permite leer las facturas que te llegan por mail. Pegá el <strong>ID de cliente de OAuth</strong> de Google Cloud
+                      (termina en <code>.apps.googleusercontent.com</code>). Lo sacás en
+                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--gold);">Google Cloud → Credenciales</a>
+                      → "ID de cliente de OAuth 2.0" → Web client.
+                    </p>
+                    <div class="form-group" style="margin-bottom:12px;">
+                      <label>ID de cliente de Google (OAuth)</label>
+                      <input type="text" id="cfgGoogleClientId" placeholder="4436…-xxxx.apps.googleusercontent.com" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                      <button class="btn btn-gold btn-sm" onclick="guardarGoogleClientId()">💾 Guardar</button>
+                      <button class="btn btn-outline btn-sm" onclick="borrarGoogleClientId()">🗑️ Borrar</button>
+                    </div>
+                    <div id="cfgGoogleClientIdStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                   </div>
 
                 </div>
@@ -7249,6 +7269,7 @@
                 document.getElementById('userAvatar').textContent = initials;
                 // Cargar API key de Gemini desde Firebase al iniciar sesión
                 cargarGeminiKeyDesdeFirebase();
+                cargarGoogleClientIdDesdeFirebase();
 
                 const email = user.email || '';
                 const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
@@ -7392,6 +7413,14 @@
         }).catch(function(){});
     }
 
+    function cargarGoogleClientIdDesdeFirebase() {
+        if (localStorage.getItem(GOOGLE_CLIENT_ID_LS)) return;
+        db.ref('global/config/googleClientId').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val) localStorage.setItem(GOOGLE_CLIENT_ID_LS, val);
+        }).catch(function(){});
+    }
+
     function cargarApiKeyUI() {
         var key = getApiKey();
         var el = document.getElementById('cfgApiKey');
@@ -7400,6 +7429,7 @@
         if (st) st.textContent = key ? '✅ API Key de Anthropic guardada.' : '⚠️ No hay API Key de Anthropic configurada.';
         cargarGeminiKeyUI();
         cargarEmailJsConfigUI();
+        cargarGoogleClientIdUI();
     }
 
     function guardarApiKey() {
@@ -7467,6 +7497,62 @@
             var el = document.getElementById(id); if (el) el.value = '';
         });
         document.getElementById('cfgEmailJsStatus').textContent = '⚠️ Configuración de EmailJS eliminada.';
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // CONFIGURACIÓN — GOOGLE CLIENT ID (OAuth para Gmail)
+    // ══════════════════════════════════════════════════════════
+    var GOOGLE_CLIENT_ID_LS = 'rk_google_client_id';
+
+    function getGoogleClientId() {
+        return localStorage.getItem(GOOGLE_CLIENT_ID_LS) || '';
+    }
+
+    function cargarGoogleClientIdUI() {
+        var val = getGoogleClientId();
+        var el  = document.getElementById('cfgGoogleClientId');
+        var st  = document.getElementById('cfgGoogleClientIdStatus');
+        if (el) el.value = val || '';
+        if (!st) return;
+        if (val) {
+            st.textContent = '✅ ID de cliente de Google configurado.';
+        } else {
+            st.textContent = '🔄 Buscando en la nube…';
+            db.ref('global/config/googleClientId').once('value').then(function(snap) {
+                var v = snap.val();
+                if (v) {
+                    localStorage.setItem(GOOGLE_CLIENT_ID_LS, v);
+                    if (el) el.value = v;
+                    st.textContent = '✅ ID de cliente cargado desde la nube.';
+                } else {
+                    st.textContent = '⚠️ No hay ID de cliente configurado (necesario para leer Gmail).';
+                }
+            }).catch(function() {
+                st.textContent = '⚠️ No hay ID de cliente configurado.';
+            });
+        }
+    }
+
+    function guardarGoogleClientId() {
+        var val = (document.getElementById('cfgGoogleClientId').value || '').trim();
+        if (!val) { alert('Pegá el ID de cliente de Google.'); return; }
+        if (val.indexOf('.apps.googleusercontent.com') === -1) {
+            if (!confirm('El ID no termina en ".apps.googleusercontent.com". ¿Guardar igual?')) return;
+        }
+        localStorage.setItem(GOOGLE_CLIENT_ID_LS, val);
+        db.ref('global/config/googleClientId').set(val).then(function() {
+            document.getElementById('cfgGoogleClientIdStatus').textContent = '✅ Guardado en este dispositivo y en la nube.';
+        }).catch(function() {
+            document.getElementById('cfgGoogleClientIdStatus').textContent = '✅ Guardado en este dispositivo (sin acceso a nube).';
+        });
+    }
+
+    function borrarGoogleClientId() {
+        if (!confirm('¿Borrar el ID de cliente de Google?')) return;
+        localStorage.removeItem(GOOGLE_CLIENT_ID_LS);
+        db.ref('global/config/googleClientId').remove();
+        var el = document.getElementById('cfgGoogleClientId'); if (el) el.value = '';
+        document.getElementById('cfgGoogleClientIdStatus').textContent = '⚠️ ID de cliente eliminado.';
     }
 
     // ══════════════════════════════════════════════════════════
@@ -8320,34 +8406,49 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // IMPORTAR FACTURAS DESDE GMAIL
+    // IMPORTAR FACTURAS DESDE GMAIL (Google Identity Services)
     // ══════════════════════════════════════════════════════════
     var _gmailToken = '';
 
-    async function abrirImportarGmail() {
+    // Usa GIS (token client) para pedir SOLO permiso de Gmail, sin tocar
+    // la sesión de la app (que es por email/contraseña). Así no desloguea.
+    function abrirImportarGmail() {
         document.getElementById('modalGmail').classList.add('active');
-        document.getElementById('gmailEstado').textContent = 'Conectando con Google…';
         document.getElementById('gmailLista').innerHTML = '';
         document.getElementById('gmailBtnImportar').style.display = 'none';
+        var estado = document.getElementById('gmailEstado');
+
+        var clientId = getGoogleClientId();
+        if (!clientId) {
+            estado.innerHTML = '⚠️ Falta el <strong>ID de cliente de Google</strong>. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".';
+            return;
+        }
+        if (!window.google || !google.accounts || !google.accounts.oauth2) {
+            estado.textContent = '❌ La librería de Google todavía no cargó. Esperá unos segundos y volvé a tocar el botón.';
+            return;
+        }
+
+        estado.textContent = 'Esperando autorización de Google…';
         try {
-            var provider = new firebase.auth.GoogleAuthProvider();
-            provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
-            // Pre-seleccionar la cuenta actual para evitar user-mismatch
-            if (auth.currentUser && auth.currentUser.email) {
-                provider.setCustomParameters({ login_hint: auth.currentUser.email });
-            }
-            var result = await auth.signInWithPopup(provider);
-            _gmailToken = result.credential.accessToken;
-            document.getElementById('gmailEstado').textContent = 'Buscando mails con PDF adjunto…';
-            await buscarEmailsConPDF();
+            var tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: clientId,
+                scope: 'https://www.googleapis.com/auth/gmail.readonly',
+                callback: function(resp) {
+                    if (!resp || resp.error) {
+                        estado.textContent = '❌ Autorización rechazada o cancelada' + (resp && resp.error ? ': ' + resp.error : '.');
+                        return;
+                    }
+                    _gmailToken = resp.access_token;
+                    estado.textContent = 'Buscando mails con PDF adjunto…';
+                    buscarEmailsConPDF().catch(function(e) {
+                        estado.textContent = '❌ Error al leer Gmail: ' + (e.message || e);
+                    });
+                }
+            });
+            // Dispara el popup de Google (selección de cuenta + permiso de Gmail)
+            tokenClient.requestAccessToken({ prompt: '' });
         } catch(e) {
-            if (e.code === 'auth/popup-closed-by-user') {
-                document.getElementById('gmailEstado').textContent = 'Cancelado.';
-            } else if (e.code === 'auth/unauthorized-domain') {
-                document.getElementById('gmailEstado').innerHTML = '❌ Dominio no autorizado. Agregá este dominio en Firebase Auth → Settings → Authorized domains.';
-            } else {
-                document.getElementById('gmailEstado').textContent = '❌ Error: ' + (e.message || e);
-            }
+            estado.textContent = '❌ No se pudo iniciar la autorización: ' + (e.message || e);
         }
     }
 
