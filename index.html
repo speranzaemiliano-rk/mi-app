@@ -21,7 +21,6 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
     <script>
         const firebaseConfig = {
             apiKey: "AIzaSyBfLKi3a6kZqkMKPQ8wRADQlUu3_NacXAA",
@@ -34,7 +33,7 @@
         };
         const ADMIN_EMAIL = "speranzaemiliano@gmail.com";
 
-        let auth, db, storage, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES;
+        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES;
         let FIREBASE_OK = false;
         let FIREBASE_ERROR = '';
 
@@ -44,7 +43,6 @@
             firebase.initializeApp(firebaseConfig);
             auth = firebase.auth();
             db = firebase.database();
-            storage = firebase.storage();
             REF_DATOS    = null;  // Se asigna en actualizarRefs() al elegir empresa/proyecto
             // Proveedores y grupos son GLOBALES (compartidos entre todas las empresas/proyectos)
             REF_PROV     = db.ref('global/proveedores');
@@ -4564,6 +4562,55 @@
 </div>
 
 <script>
+    // Handler para links de descarga de PDF enviados por mail (?pdf=ID)
+    (function() {
+        var pdfId = new URLSearchParams(window.location.search).get('pdf');
+        if (!pdfId) return;
+        function mostrarDescargaPDF() {
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:#f0f4f8;display:flex;align-items:center;justify-content:center;z-index:9999;font-family:sans-serif;';
+            overlay.innerHTML = '<div style="background:#fff;padding:48px 40px;border-radius:16px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.12);max-width:380px;width:90%;">' +
+                '<div style="font-size:56px;margin-bottom:20px;">📄</div>' +
+                '<h2 style="margin:0 0 10px;color:#1a73e8;font-size:22px;">Descargando factura…</h2>' +
+                '<p id="pdfDlMsg" style="color:#555;margin:0;font-size:15px;">Obteniendo el archivo, un momento…</p>' +
+                '</div>';
+            document.body.appendChild(overlay);
+            fetch('https://modo-prueba-bb8c2-default-rtdb.firebaseio.com/temp-pdf/' + encodeURIComponent(pdfId) + '.json')
+                .then(function(r) {
+                    if (r.status === 401 || r.status === 403) throw new Error('PERMISO');
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function(data) {
+                    if (!data || !data.b64) {
+                        document.getElementById('pdfDlMsg').textContent = '❌ Este link ya expiró o no es válido.';
+                        return;
+                    }
+                    var byteStr = atob(data.b64);
+                    var arr = new Uint8Array(byteStr.length);
+                    for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
+                    var blob = new Blob([arr], { type: data.tipo || 'application/pdf' });
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url; a.download = data.nombre || 'factura.pdf';
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+                    document.getElementById('pdfDlMsg').innerHTML = '✅ ¡Descarga iniciada! Podés cerrar esta página.';
+                })
+                .catch(function(e) {
+                    var m = e && e.message ? e.message : String(e);
+                    document.getElementById('pdfDlMsg').innerHTML = m === 'PERMISO'
+                        ? '❌ Sin permiso de descarga.<br><small>El administrador debe configurar las reglas de Firebase Database.</small>'
+                        : '❌ No se pudo descargar: ' + m;
+                });
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', mostrarDescargaPDF);
+        } else {
+            mostrarDescargaPDF();
+        }
+    })();
+
     // ===================== ESTADO =====================
     let datos = [];
     let editandoIndex = -1;
@@ -8657,9 +8704,10 @@
         }
         var btn = document.getElementById('btnEnviarMail');
         btn.disabled = true;
-        btn.textContent = 'Subiendo PDF…';
+        btn.textContent = 'Guardando PDF…';
         try {
-            // Subir PDF a Firebase Storage y obtener link de descarga
+            // Guardar PDF temporalmente en Firebase Database (gratis, sin Storage)
+            // y generar link de descarga válido 7 días.
             var pdfUrl = '';
             if (!f.docId) {
                 if (!confirm('Esta factura no tiene un PDF cargado.\n¿Enviar el mail igual, sin PDF?')) return;
@@ -8670,32 +8718,23 @@
                     if (d && d.contenido) {
                         var dataUrl = d.contenido;
                         var base64  = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
-                        var byteStr = atob(base64);
-                        var arr     = new Uint8Array(byteStr.length);
-                        for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-                        var blob    = new Blob([arr], { type: d.tipo || 'application/pdf' });
                         var nombre  = d.nombre || ('factura-' + (f.numero || f.docId) + '.pdf');
-                        var ref     = storage.ref('facturas-mail/' + f.docId + '.pdf');
                         var TIMEOUT_MS = 30000;
-                        var uploadPromise = ref.put(blob, { contentType: d.tipo || 'application/pdf', contentDisposition: 'inline; filename="' + nombre + '"' });
-                        var timeoutPromise = new Promise(function(_, reject) {
-                            setTimeout(function() { reject(new Error('TIMEOUT: La subida tardó más de 30 segundos. Verificá que Firebase Storage esté habilitado en tu proyecto y que las Reglas de Storage permitan escritura a usuarios autenticados.') }, TIMEOUT_MS);
+                        var writePromise = db.ref('temp-pdf/' + f.docId).set({
+                            b64: base64, nombre: nombre,
+                            tipo: d.tipo || 'application/pdf',
+                            exp: Date.now() + (7 * 24 * 60 * 60 * 1000)
                         });
-                        await Promise.race([uploadPromise, timeoutPromise]);
-                        pdfUrl = await ref.getDownloadURL();
+                        var timeoutPromise = new Promise(function(_, reject) {
+                            setTimeout(function() { reject(new Error('Timeout: no se pudo guardar el PDF. Verificá tu conexión a internet.')) }, TIMEOUT_MS);
+                        });
+                        await Promise.race([writePromise, timeoutPromise]);
+                        pdfUrl = 'https://speranzaemiliano-rk.github.io/mi-app/?pdf=' + encodeURIComponent(f.docId);
                     } else if (!confirm('No encontré el archivo PDF de esta factura.\n¿Enviar el mail igual, sin PDF?')) {
                         return;
                     }
                 } catch(e) {
-                    // No mandamos un "enviado" engañoso: si falla la subida, avisamos y frenamos.
-                    var motivo = (e && e.message && e.message.startsWith('TIMEOUT:'))
-                        ? e.message
-                        : (e && e.code === 'storage/unauthorized')
-                        ? 'Firebase Storage rechazó la subida por permisos.\n\nSolución: en la consola de Firebase → Storage → Rules, asegurate de que las reglas permitan escritura a usuarios autenticados:\n\nallow read, write: if request.auth != null;'
-                        : (e && e.code === 'storage/unknown')
-                        ? 'Firebase Storage no está disponible. Habilitalo en la consola de Firebase → Storage → Comenzar.'
-                        : ((e && e.message) || String(e));
-                    alert('❌ No se pudo subir el PDF, así que el mail NO se envió.\n\nMotivo: ' + motivo);
+                    alert('❌ No se pudo preparar el PDF para el mail.\n\n' + ((e && e.message) || String(e)));
                     return;
                 }
             }
