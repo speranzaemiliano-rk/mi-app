@@ -84,7 +84,17 @@ app.post('/afip', async (req, res) => {
 
     } catch (e) {
         console.error('AFIP Error:', e);
-        return res.status(500).json({ error: e.message || String(e) });
+        // Intentar extraer el detalle real que devuelve AFIP / AFIP SDK
+        var detalle = '';
+        if (e.response && e.response.data) {
+            detalle = typeof e.response.data === 'string'
+                ? e.response.data
+                : JSON.stringify(e.response.data);
+        }
+        return res.status(500).json({
+            error: e.message || String(e),
+            detalle: detalle
+        });
     }
 });
 
