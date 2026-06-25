@@ -1,7 +1,7 @@
 const functions = require('firebase-functions');
 const admin     = require('firebase-admin');
 const cors      = require('cors')({ origin: true });
-const Afip      = require('afip.js');
+const Afip      = require('@afipsdk/afip.js');
 
 admin.initializeApp();
 
