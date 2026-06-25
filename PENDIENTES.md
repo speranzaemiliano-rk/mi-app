@@ -1,5 +1,25 @@
 # Pendientes
 
+## ✅ HECHO: Facturación electrónica ARCA (funcionando)
+
+- Backend Express en Railway (`functions/server.js`) con `@afipsdk/afip.js`.
+- Certificado generado y autorizado para wsfe; emite CAE real (punto de venta **3**, RI).
+- Variables en Railway: `AFIP_CUIT`, `AFIP_CERT` (base64), `AFIP_KEY` (base64), `AFIP_ENV=production`, `AFIP_ACCESS_TOKEN`.
+- URL backend conectada en la app: `localStorage rk_afip_function_url`.
+- En **Ingresos → Resumen Ingresos**: botón "📄 Emitir Factura ARCA" y "📒 Facturas emitidas" (lista + comprobante imprimible con "🔍 Ver").
+- Diagnóstico: `GET <url>/diag` muestra puntos de venta y estado de ARCA.
+
+## 🧹 Para revisar mañana: limpieza de código (pre-existente, no urgente)
+
+- **IDs duplicados:** `srvCobrado` está en una tarjeta (línea ~3300) y en un input
+  (línea ~15542). `getElementById` toma el primero → posible bug al leer el monto
+  cobrado de un servicio. Renombrar uno de los dos.
+- **Funciones duplicadas** (gana la última, las primeras son código muerto de
+  refactors viejos): `agregarEmpresa`, `agregarProyecto`, `pagarFactura`,
+  `abrirHistorialPagosPresupuesto`, `abrirHistorialPagosFactura`. Borrar las versiones
+  viejas para evitar confusión.
+
+
 ## 🔜 Para mañana: Módulo de facturación electrónica con ARCA
 
 Crear un módulo para **emitir facturas electrónicas** conectándose directo a ARCA (ex-AFIP).
