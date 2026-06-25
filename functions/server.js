@@ -87,6 +87,7 @@ app.post('/afip', async (req, res) => {
             ImpTrib:    0,
             MonId:      moneda,
             MonCotiz:   1,
+            CondicionIVAReceptorId: parseInt(condIva) || 5, // obligatorio desde RG 5616 (1=RI,4=Exento,5=CF,6=Monotributo)
             Iva: alicuotas.length ? { AlicIva: alicuotas } : null
         };
 
