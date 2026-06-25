@@ -13111,15 +13111,40 @@
     var REF_FACTURAS_ARCA = db ? db.ref('global/facturasARCA') : null;
     var facturasARCA = [];
 
-    // Sincronizar URL del backend ARCA con Firebase para que funcione en todos los dispositivos
+    // URLs de backend ARCA por empresa { empresaId: url }
+    var _afipUrlsPorEmpresa = {};
+
+    // Migrar URL global vieja a FEKOMP si existe
     if (db) {
-        var _refAfipUrl = db.ref('global/config/afipFunctionUrl');
-        var _localAfipUrl = localStorage.getItem('rk_afip_function_url');
-        if (_localAfipUrl) _refAfipUrl.set(_localAfipUrl); // propagar desde este dispositivo
-        _refAfipUrl.on('value', function(snap) {
-            var v = snap.val();
-            if (v) { AFIP_FUNCTION_URL = v; localStorage.setItem('rk_afip_function_url', v); }
+        db.ref('global/config/afipFunctionUrl').once('value', function(snap) {
+            var urlVieja = snap.val();
+            if (urlVieja) {
+                // Buscar empresa FEKOMP y migrar
+                db.ref('empresas').once('value', function(s) {
+                    var emps = s.val() || {};
+                    Object.keys(emps).forEach(function(eid) {
+                        var n = (emps[eid].nombre || '').toUpperCase();
+                        if (n.indexOf('FEKOMP') !== -1) {
+                            db.ref('global/config/afipConfig/' + eid + '/url').once('value', function(s2) {
+                                if (!s2.val()) db.ref('global/config/afipConfig/' + eid + '/url').set(urlVieja);
+                            });
+                        }
+                    });
+                });
+            }
         });
+        // Cargar todas las configs de empresa
+        db.ref('global/config/afipConfig').on('value', function(snap) {
+            var v = snap.val() || {};
+            _afipUrlsPorEmpresa = {};
+            Object.keys(v).forEach(function(eid) { if (v[eid].url) _afipUrlsPorEmpresa[eid] = v[eid].url; });
+        });
+    }
+
+    function _afipUrlEmpresaActual() {
+        var eid = empresaActual ? empresaActual.id : null;
+        if (!eid) return '';
+        return _afipUrlsPorEmpresa[eid] || '';
     }
 
     if (REF_FACTURAS_ARCA) {
@@ -13142,8 +13167,8 @@
     }
 
     async function importarDesdeARCA() {
-        var url = localStorage.getItem('rk_afip_function_url') || AFIP_FUNCTION_URL;
-        if (!url) { alert('Primero configurá la URL del backend ARCA.'); return; }
+        var url = _afipUrlEmpresaActual();
+        if (!url) { alert('Esta empresa no tiene backend ARCA configurado.'); return; }
         var baseUrl = url.replace(/\/afip$/, '');
         var btn = document.getElementById('btnImportarARCA');
         var st  = document.getElementById('importarARCAStatus');
@@ -13311,10 +13336,9 @@
     // ══════════════════════════════════════════════════════════
     // EMISIÓN DE FACTURAS ELECTRÓNICAS ARCA/AFIP
     // ══════════════════════════════════════════════════════════
-    var AFIP_FUNCTION_URL = 'https://mi-app-production-e1cd.up.railway.app/afip'; // Backend Railway por defecto (todos los dispositivos)
+    var AFIP_FUNCTION_URL = ''; // legacy — ahora se usa _afipUrlEmpresaActual()
 
     function abrirEmitirFacturaAFIP() {
-        // Setear fecha de hoy
         document.getElementById('afipFecha').valueAsDate = new Date();
         document.getElementById('afipResultado').style.display = 'none';
         document.getElementById('afipImpNeto').value = '';
@@ -13326,15 +13350,19 @@
         document.getElementById('afipTipoComp').value = '1';
         document.getElementById('afipCbtesAsocSection').style.display = 'none';
         document.getElementById('afipAsocNro').value = '';
-        // Verificar si hay URL de la función configurada
-        var url = localStorage.getItem('rk_afip_function_url') || AFIP_FUNCTION_URL;
+        var empNombre = empresaActual ? empresaActual.nombre : '(sin empresa)';
+        var url = _afipUrlEmpresaActual();
         var st = document.getElementById('afipConfigStatus');
         if (!url) {
             st.style.background = '#FFF3CD'; st.style.color = '#856404'; st.style.borderColor = '#FFC107';
-            st.innerHTML = '⚠️ <strong>Backend ARCA no configurado.</strong> Pegá la URL de Railway para conectarte:<br><div style="display:flex;gap:6px;margin-top:8px;"><input id="afipUrlInput" type="text" placeholder="https://...up.railway.app/afip" style="flex:1;padding:6px 10px;border:1px solid #FFC107;border-radius:6px;font-size:13px;"><button onclick="afipGuardarUrl()" style="padding:6px 12px;background:#856404;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Guardar</button></div>';
+            st.innerHTML = '⚠️ <strong>' + empNombre + '</strong> no tiene backend ARCA configurado.<br>'
+                + '<span style="font-size:12px;">Pegá la URL de Railway para esta empresa:</span>'
+                + '<div style="display:flex;gap:6px;margin-top:8px;">'
+                + '<input id="afipUrlInput" type="text" placeholder="https://...up.railway.app/afip" style="flex:1;padding:6px 10px;border:1px solid #FFC107;border-radius:6px;font-size:13px;">'
+                + '<button onclick="afipGuardarUrl()" style="padding:6px 12px;background:#856404;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Guardar</button></div>';
         } else {
             st.style.background = '#D1FAE5'; st.style.color = '#065F46'; st.style.borderColor = '#6EE7B7';
-            st.innerHTML = '✅ Conectado al backend ARCA. Completá los datos y emití la factura. <span style="font-size:11px;opacity:.7;">' + url.replace('/afip','') + '</span>';
+            st.innerHTML = '✅ <strong>' + empNombre + '</strong> — Conectado al backend ARCA. <span style="font-size:11px;opacity:.7;">' + url.replace('/afip','') + '</span>';
         }
         document.getElementById('modalEmitirAFIP').classList.add('active');
     }
@@ -13344,16 +13372,16 @@
     }
 
     function afipGuardarUrl() {
+        if (!empresaActual) { alert('Seleccioná una empresa primero.'); return; }
         var val = (document.getElementById('afipUrlInput').value || '').trim().replace(/\/$/, '');
         if (!val || !val.startsWith('http')) { alert('Pegá una URL válida (debe empezar con https://)'); return; }
         if (!val.endsWith('/afip')) val = val + '/afip';
-        localStorage.setItem('rk_afip_function_url', val);
-        AFIP_FUNCTION_URL = val;
-        if (db) db.ref('global/config/afipFunctionUrl').set(val);
-        // Recargar estado del modal
+        var eid = empresaActual.id;
+        _afipUrlsPorEmpresa[eid] = val;
+        if (db) db.ref('global/config/afipConfig/' + eid + '/url').set(val);
         var st = document.getElementById('afipConfigStatus');
         st.style.background = '#D1FAE5'; st.style.color = '#065F46'; st.style.borderColor = '#6EE7B7';
-        st.innerHTML = '✅ Conectado al backend ARCA. Completá los datos y emití la factura. <span style="font-size:11px;opacity:.7;">' + val.replace('/afip','') + '</span>';
+        st.innerHTML = '✅ <strong>' + empresaActual.nombre + '</strong> — Conectado al backend ARCA. <span style="font-size:11px;opacity:.7;">' + val.replace('/afip','') + '</span>';
     }
 
     var _afipAlicuotas = { '5': 0.21, '4': 0.105, '6': 0.27, '3': 0, '9': 0.025 };
@@ -13380,9 +13408,9 @@
     }
 
     async function emitirFacturaAFIP() {
-        var url = localStorage.getItem('rk_afip_function_url') || AFIP_FUNCTION_URL;
+        var url = _afipUrlEmpresaActual();
         if (!url) {
-            alert('⚠️ El backend ARCA todavía no está configurado.\n\nCuando tengas el certificado de AFIP y deployemos Firebase Functions, este botón va a funcionar.\n\nPor ahora podés completar el formulario como borrador.');
+            alert('⚠️ ' + (empresaActual ? empresaActual.nombre : 'Esta empresa') + ' no tiene backend ARCA configurado.\n\nPegá la URL del servidor Railway en el campo de configuración.');
             return;
         }
         var tipoComp   = parseInt(document.getElementById('afipTipoComp').value);
