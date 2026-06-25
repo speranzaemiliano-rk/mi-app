@@ -118,7 +118,8 @@ app.post('/afip', async (req, res) => {
             MonId:      moneda,
             MonCotiz:   1,
             CondicionIVAReceptorId: parseInt(condIva) || 5, // obligatorio desde RG 5616 (1=RI,4=Exento,5=CF,6=Monotributo)
-            Iva: alicuotas.length ? { AlicIva: alicuotas } : null
+            // afip.js envuelve este array en {AlicIva:...} internamente; pasar el array pelado
+            Iva: alicuotas.length ? alicuotas : null
         };
 
         const result = await afip.ElectronicBilling.createVoucher(data);
