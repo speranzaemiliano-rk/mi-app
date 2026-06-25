@@ -59,6 +59,48 @@ function detalleError(e) {
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }));
 
+// Importa todos los comprobantes emitidos para un punto de venta + tipo
+// GET /afip/importar?ptoVta=3&tipoComp=1
+app.get('/afip/importar', async (req, res) => {
+    try {
+        const afip   = crearAfip();
+        const ptoVta  = parseInt(req.query.ptoVta)  || 1;
+        const tipoComp = parseInt(req.query.tipoComp) || 1;
+        const ultimo  = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComp);
+        if (!ultimo) return res.json([]);
+        const lista = [];
+        for (let nro = 1; nro <= ultimo; nro++) {
+            try {
+                const v = await afip.ElectronicBilling.getVoucherInfo(nro, ptoVta, tipoComp);
+                if (v && v.CodAutorizacion) {
+                    lista.push({
+                        tipoComp,
+                        ptoVta,
+                        nro,
+                        fecha:    String(v.CbteFch || ''),
+                        moneda:   v.MonId || 'PES',
+                        cuitRecep: String(v.DocNro || ''),
+                        condIva:  v.CondicionIVAReceptorId || 5,
+                        razon:    '',
+                        dom:      '',
+                        impNeto:  v.ImpNeto || 0,
+                        impIVA:   v.ImpIVA  || 0,
+                        impTotal: v.ImpTotal || 0,
+                        descripcion: '',
+                        cae:    v.CodAutorizacion,
+                        caeVto: v.FchVto || '',
+                        emitidaEn: 0,
+                        importada: true
+                    });
+                }
+            } catch (_) { /* comprobante sin info, saltar */ }
+        }
+        return res.json(lista);
+    } catch (e) {
+        return res.status(500).json({ error: e.message, detalle: detalleError(e) });
+    }
+});
+
 // Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
 // tenés habilitados y si la conexión con ARCA funciona.
 app.get('/diag', async (req, res) => {

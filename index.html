@@ -13137,6 +13137,50 @@
     function cerrarFacturasARCA() {
         document.getElementById('modalFacturasARCA').classList.remove('active');
     }
+
+    async function importarDesdeARCA() {
+        var url = localStorage.getItem('rk_afip_function_url') || AFIP_FUNCTION_URL;
+        if (!url) { alert('Primero configurá la URL del backend ARCA.'); return; }
+        var baseUrl = url.replace(/\/afip$/, '');
+        var btn = document.getElementById('btnImportarARCA');
+        var st  = document.getElementById('importarARCAStatus');
+        btn.disabled = true; btn.textContent = 'Importando…';
+        st.style.display = '';
+        st.style.background = '#EFF6FF'; st.style.color = '#1D4ED8'; st.style.border = '1px solid #BFDBFE';
+        st.textContent = 'Consultando comprobantes en ARCA… puede tardar unos segundos.';
+        try {
+            // Tipos principales: Fact A/B/C + NC A/B/C + ND A/B/C
+            var tipos = [1, 6, 11, 3, 8, 13, 2, 7, 12];
+            // Obtener puntos de venta disponibles para saber cuáles consultar
+            var ptoVta = parseInt(document.getElementById('afipPtoVta') ? document.getElementById('afipPtoVta').value : '3') || 3;
+            var nuevos = 0;
+            var caeExistentes = new Set(facturasARCA.map(function(f){ return String(f.cae); }));
+            for (var i = 0; i < tipos.length; i++) {
+                var tipo = tipos[i];
+                try {
+                    var resp = await fetch(baseUrl + '/afip/importar?ptoVta=' + ptoVta + '&tipoComp=' + tipo);
+                    if (!resp.ok) continue;
+                    var lista = await resp.json();
+                    if (!Array.isArray(lista)) continue;
+                    lista.forEach(function(v) {
+                        if (!caeExistentes.has(String(v.cae))) {
+                            facturasARCA.push(v);
+                            caeExistentes.add(String(v.cae));
+                            nuevos++;
+                        }
+                    });
+                } catch (_) {}
+            }
+            if (nuevos > 0 && REF_FACTURAS_ARCA) REF_FACTURAS_ARCA.set(facturasARCA);
+            renderFacturasARCA();
+            st.style.background = '#D1FAE5'; st.style.color = '#065F46'; st.style.border = '1px solid #6EE7B7';
+            st.textContent = nuevos > 0 ? ('✅ Se importaron ' + nuevos + ' comprobante(s) nuevos desde ARCA.') : 'Ya tenés todos los comprobantes actualizados.';
+        } catch(e) {
+            st.style.background = '#FEE2E2'; st.style.color = '#991B1B'; st.style.border = '1px solid #FECACA';
+            st.textContent = '❌ Error al importar: ' + (e.message || String(e));
+        }
+        btn.disabled = false; btn.textContent = '🔄 Importar desde ARCA';
+    }
     function _fmtFechaAfip(f) {
         // f viene como YYYYMMDD
         if (!f || String(f).length !== 8) return f || '—';
@@ -16393,10 +16437,16 @@
       <button class="modal-close" onclick="cerrarFacturasARCA()">✕</button>
     </div>
     <div class="modal-body">
-      <p style="font-size:12px;color:#5F6368;margin-bottom:12px;">
-        Comprobantes emitidos desde la app. También podés verlos en AFIP →
-        <strong>Comprobantes en línea / Mis Comprobantes</strong>.
-      </p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+        <p style="font-size:12px;color:#5F6368;margin:0;flex:1;">
+          Comprobantes emitidos desde la app. También podés verlos en AFIP →
+          <strong>Comprobantes en línea / Mis Comprobantes</strong>.
+        </p>
+        <button class="btn btn-outline btn-sm" id="btnImportarARCA" onclick="importarDesdeARCA()" title="Trae comprobantes emitidos antes de usar esta app">
+          🔄 Importar desde ARCA
+        </button>
+      </div>
+      <div id="importarARCAStatus" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:6px;font-size:12px;"></div>
       <div style="overflow-x:auto;">
         <table style="width:100%;font-size:13px;border-collapse:collapse;">
           <thead>
