@@ -84,13 +84,13 @@ app.post('/afip', async (req, res) => {
 
     } catch (e) {
         console.error('AFIP Error:', e);
-        // Intentar extraer el detalle real que devuelve AFIP / AFIP SDK
+        // afip.js guarda el detalle real en e.data y e.status (ver interceptor de Afip.js)
         var detalle = '';
-        if (e.response && e.response.data) {
-            detalle = typeof e.response.data === 'string'
-                ? e.response.data
-                : JSON.stringify(e.response.data);
+        var fuente = e.data || (e.response && e.response.data);
+        if (fuente) {
+            detalle = typeof fuente === 'string' ? fuente : JSON.stringify(fuente);
         }
+        if (e.status) detalle = '[HTTP ' + e.status + '] ' + detalle;
         return res.status(500).json({
             error: e.message || String(e),
             detalle: detalle
