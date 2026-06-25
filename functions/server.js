@@ -17,9 +17,27 @@ app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }
 
 app.post('/afip', async (req, res) => {
     try {
+        // Lee un PEM de una env var. Acepta 3 formatos:
+        //  1) PEM con saltos de línea reales
+        //  2) PEM con \n literales (Railway/Firebase a veces los guarda así)
+        //  3) base64 del archivo completo (lo más robusto, sin problemas de saltos)
+        function leerPem(valor) {
+            if (!valor) return '';
+            var v = valor.trim();
+            if (v.indexOf('-----BEGIN') !== -1) {
+                return v.replace(/\\n/g, '\n');
+            }
+            // No tiene cabecera PEM → asumir base64 y decodificar
+            try {
+                return Buffer.from(v, 'base64').toString('utf8');
+            } catch (_) {
+                return v;
+            }
+        }
+
         const cuit = process.env.AFIP_CUIT;
-        const cert = (process.env.AFIP_CERT || '').replace(/\\n/g, '\n');
-        const key  = (process.env.AFIP_KEY  || '').replace(/\\n/g, '\n');
+        const cert = leerPem(process.env.AFIP_CERT);
+        const key  = leerPem(process.env.AFIP_KEY);
         const env  = process.env.AFIP_ENV || 'testing';
         const token = process.env.AFIP_ACCESS_TOKEN || '';
 
