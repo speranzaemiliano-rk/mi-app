@@ -84,7 +84,8 @@ app.post('/afip', async (req, res) => {
         const {
             tipoComp, ptoVta, concepto, fecha, moneda,
             cuitRecep, condIva, razon, dom,
-            impNeto, impIVA, impTotal, alicId, descripcion
+            impNeto, impIVA, impTotal, alicId, descripcion,
+            cbtesAsoc
         } = req.body;
 
         const ultimoCbte = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComp);
@@ -121,6 +122,11 @@ app.post('/afip', async (req, res) => {
             // afip.js envuelve este array en {AlicIva:...} internamente; pasar el array pelado
             Iva: alicuotas.length ? alicuotas : null
         };
+
+        // Notas de crédito y débito requieren CbtesAsoc (comprobante original)
+        if (cbtesAsoc && cbtesAsoc.length) {
+            data.CbtesAsoc = cbtesAsoc;
+        }
 
         // Concepto 2 (Servicios) o 3 (Productos y Servicios) exige fechas de servicio.
         // Si el frontend no las manda, usamos la fecha del comprobante como período.
