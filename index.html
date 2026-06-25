@@ -3129,6 +3129,7 @@
                             <h3>📋 Detalle de cobros / ingresos</h3>
                             <div style="display:flex;gap:8px;align-items:center;">
                                 <span class="results-count" id="riContador"></span>
+                                <button class="btn btn-outline btn-sm" onclick="abrirFacturasARCA()">📒 Facturas emitidas</button>
                                 <button class="btn btn-gold btn-sm" onclick="abrirEmitirFacturaAFIP()">📄 Emitir Factura ARCA</button>
                             </div>
                         </div>
@@ -13102,6 +13103,59 @@
 
     // ══════════════════════════════════════════════════════════
     // ══════════════════════════════════════════════════════════
+    // FACTURAS ARCA EMITIDAS
+    // ══════════════════════════════════════════════════════════
+    var REF_FACTURAS_ARCA = db ? db.ref('global/facturasARCA') : null;
+    var facturasARCA = [];
+    if (REF_FACTURAS_ARCA) {
+        REF_FACTURAS_ARCA.on('value', function(snap) {
+            facturasARCA = [];
+            var v = snap.val();
+            if (v) { if (Array.isArray(v)) { facturasARCA = v.filter(Boolean); } else { Object.keys(v).forEach(function(k){ facturasARCA.push(v[k]); }); } }
+            if (document.getElementById('modalFacturasARCA').classList.contains('active')) renderFacturasARCA();
+        });
+    }
+
+    var _afipTiposNombre = { 1:'Factura A', 6:'Factura B', 11:'Factura C', 3:'N. Crédito A', 8:'N. Crédito B', 13:'N. Crédito C', 2:'N. Débito A', 7:'N. Débito B', 12:'N. Débito C' };
+
+    function abrirFacturasARCA() {
+        document.getElementById('modalFacturasARCA').classList.add('active');
+        renderFacturasARCA();
+    }
+    function cerrarFacturasARCA() {
+        document.getElementById('modalFacturasARCA').classList.remove('active');
+    }
+    function _fmtFechaAfip(f) {
+        // f viene como YYYYMMDD
+        if (!f || String(f).length !== 8) return f || '—';
+        var s = String(f);
+        return s.slice(6,8) + '/' + s.slice(4,6) + '/' + s.slice(0,4);
+    }
+    function renderFacturasARCA() {
+        var body = document.getElementById('facturasARCABody');
+        if (!facturasARCA.length) {
+            body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#5F6368;padding:20px;">Todavía no emitiste facturas desde la app.</td></tr>';
+            return;
+        }
+        var lista = facturasARCA.slice().sort(function(a,b){ return (b.emitidaEn||0) - (a.emitidaEn||0); });
+        body.innerHTML = lista.map(function(f){
+            var tipo = _afipTiposNombre[f.tipoComp] || ('Tipo ' + f.tipoComp);
+            var total = (f.moneda === 'DOL' ? 'US$ ' : '$ ') + (Number(f.impTotal)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+            return '<tr style="border-bottom:1px solid #EEE;">' +
+                '<td style="padding:8px 6px;">' + _fmtFechaAfip(f.fecha) + '</td>' +
+                '<td style="padding:8px 6px;">' + tipo + '</td>' +
+                '<td style="padding:8px 6px;">' + (f.ptoVta||'—') + '</td>' +
+                '<td style="padding:8px 6px;font-weight:600;">' + (f.nro||'—') + '</td>' +
+                '<td style="padding:8px 6px;">' + (f.razon || '—') + '</td>' +
+                '<td style="padding:8px 6px;">' + (f.cuitRecep||'—') + '</td>' +
+                '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + total + '</td>' +
+                '<td style="padding:8px 6px;font-family:monospace;font-size:12px;">' + (f.cae||'—') + '</td>' +
+                '<td style="padding:8px 6px;">' + (f.caeVto||'—') + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    // ══════════════════════════════════════════════════════════
     // PIZARRÓN DE TAREAS
     // ══════════════════════════════════════════════════════════
     var REF_TAREAS = db ? db.ref('global/tareas') : null;
@@ -13248,7 +13302,19 @@
             document.getElementById('afipCAEVenc').textContent = data.caeFchVto || '—';
             document.getElementById('afipNroFactura').textContent = data.cbteDesde || '—';
             document.getElementById('afipResultado').style.display = '';
-            // Guardar como ingreso
+            // Guardar la factura emitida en Firebase
+            if (REF_FACTURAS_ARCA) {
+                var registro = {
+                    tipoComp: tipoComp, ptoVta: ptoVta, nro: data.cbteDesde,
+                    fecha: fecha, moneda: moneda, cuitRecep: cuitRecep,
+                    condIva: condIva, razon: razon, dom: dom,
+                    impNeto: impNeto, impIVA: impIVA, impTotal: impTotal,
+                    descripcion: descripcion, cae: data.cae, caeVto: data.caeFchVto,
+                    emitidaEn: Date.now()
+                };
+                facturasARCA.push(registro);
+                REF_FACTURAS_ARCA.set(facturasARCA);
+            }
             alert('✅ Factura N°' + data.cbteDesde + ' emitida. CAE: ' + data.cae);
         } catch(e) {
             alert('❌ Error al emitir: ' + (e.message || String(e)));
@@ -16196,6 +16262,41 @@
         <button class="btn btn-outline" onclick="cerrarEmitirAFIP()">Cancelar</button>
         <button class="btn btn-gold" id="btnEmitirAFIP" onclick="emitirFacturaAFIP()">📄 Emitir en ARCA</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: LISTADO DE FACTURAS ARCA EMITIDAS -->
+<div class="modal" id="modalFacturasARCA">
+  <div class="modal-box" style="max-width:880px;">
+    <div class="modal-head">
+      <h2>📒 Facturas emitidas (ARCA)</h2>
+      <button class="modal-close" onclick="cerrarFacturasARCA()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:#5F6368;margin-bottom:12px;">
+        Comprobantes emitidos desde la app. También podés verlos en AFIP →
+        <strong>Comprobantes en línea / Mis Comprobantes</strong>.
+      </p>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <thead>
+            <tr style="text-align:left;border-bottom:2px solid #E0E0E0;color:#5F6368;">
+              <th style="padding:8px 6px;">Fecha</th><th style="padding:8px 6px;">Tipo</th>
+              <th style="padding:8px 6px;">Pto Vta</th><th style="padding:8px 6px;">Nro</th>
+              <th style="padding:8px 6px;">Receptor</th><th style="padding:8px 6px;">CUIT</th>
+              <th style="padding:8px 6px;text-align:right;">Total</th>
+              <th style="padding:8px 6px;">CAE</th><th style="padding:8px 6px;">Vto CAE</th>
+            </tr>
+          </thead>
+          <tbody id="facturasARCABody">
+            <tr><td colspan="9" style="text-align:center;color:#5F6368;padding:20px;">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+      <button class="btn btn-outline" onclick="cerrarFacturasARCA()">Cerrar</button>
     </div>
   </div>
 </div>
