@@ -21,6 +21,7 @@ app.post('/afip', async (req, res) => {
         const cert = (process.env.AFIP_CERT || '').replace(/\\n/g, '\n');
         const key  = (process.env.AFIP_KEY  || '').replace(/\\n/g, '\n');
         const env  = process.env.AFIP_ENV || 'testing';
+        const token = process.env.AFIP_ACCESS_TOKEN || '';
 
         if (!cuit || !cert || !key) {
             return res.status(500).json({
@@ -28,7 +29,9 @@ app.post('/afip', async (req, res) => {
             });
         }
 
-        const afip = new Afip({ CUIT: cuit, cert, key, production: env === 'production' });
+        const afipOpts = { CUIT: cuit, cert, key, production: env === 'production' };
+        if (token) afipOpts.access_token = token;
+        const afip = new Afip(afipOpts);
 
         const {
             tipoComp, ptoVta, concepto, fecha, moneda,
