@@ -122,6 +122,14 @@ app.post('/afip', async (req, res) => {
             Iva: alicuotas.length ? alicuotas : null
         };
 
+        // Concepto 2 (Servicios) o 3 (Productos y Servicios) exige fechas de servicio.
+        // Si el frontend no las manda, usamos la fecha del comprobante como período.
+        if (parseInt(concepto) === 2 || parseInt(concepto) === 3) {
+            data.FchServDesde = req.body.fchServDesde || fecha;
+            data.FchServHasta = req.body.fchServHasta || fecha;
+            data.FchVtoPago   = req.body.fchVtoPago   || fecha;
+        }
+
         const result = await afip.ElectronicBilling.createVoucher(data);
 
         return res.json({
