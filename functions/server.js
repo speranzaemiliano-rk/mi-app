@@ -13,43 +13,73 @@ app.use(express.json());
 //   AFIP_ENV    → "production" o "testing" (default: testing)
 //   PORT        → puerto (Railway/Render lo inyectan automático)
 
+// Lee un PEM de una env var. Acepta 3 formatos:
+//  1) PEM con saltos de línea reales
+//  2) PEM con \n literales (Railway/Firebase a veces los guarda así)
+//  3) base64 del archivo completo (lo más robusto, sin problemas de saltos)
+function leerPem(valor) {
+    if (!valor) return '';
+    var v = valor.trim();
+    if (v.indexOf('-----BEGIN') !== -1) {
+        return v.replace(/\\n/g, '\n');
+    }
+    try {
+        return Buffer.from(v, 'base64').toString('utf8');
+    } catch (_) {
+        return v;
+    }
+}
+
+// Crea la instancia de Afip con las credenciales de entorno. Lanza si faltan.
+function crearAfip() {
+    const cuit = process.env.AFIP_CUIT;
+    const cert = leerPem(process.env.AFIP_CERT);
+    const key  = leerPem(process.env.AFIP_KEY);
+    const env  = process.env.AFIP_ENV || 'testing';
+    const token = process.env.AFIP_ACCESS_TOKEN || '';
+    if (!cuit || !cert || !key) {
+        const err = new Error('Faltan credenciales. Configurá AFIP_CUIT, AFIP_CERT y AFIP_KEY.');
+        err.faltanCreds = true;
+        throw err;
+    }
+    const afipOpts = { CUIT: cuit, cert, key, production: env === 'production' };
+    if (token) afipOpts.access_token = token;
+    return new Afip(afipOpts);
+}
+
+function detalleError(e) {
+    var detalle = '';
+    var fuente = e.data || (e.response && e.response.data);
+    if (fuente) {
+        detalle = typeof fuente === 'string' ? fuente : JSON.stringify(fuente);
+    }
+    if (e.status) detalle = '[HTTP ' + e.status + '] ' + detalle;
+    return detalle;
+}
+
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }));
+
+// Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
+// tenés habilitados y si la conexión con ARCA funciona.
+app.get('/diag', async (req, res) => {
+    try {
+        const afip = crearAfip();
+        const out = {};
+        try {
+            out.serverStatus = await afip.ElectronicBilling.getServerStatus();
+        } catch (e) { out.serverStatusError = e.message + ' ' + detalleError(e); }
+        try {
+            out.puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
+        } catch (e) { out.puntosDeVentaError = e.message + ' ' + detalleError(e); }
+        return res.json(out);
+    } catch (e) {
+        return res.status(500).json({ error: e.message, detalle: detalleError(e) });
+    }
+});
 
 app.post('/afip', async (req, res) => {
     try {
-        // Lee un PEM de una env var. Acepta 3 formatos:
-        //  1) PEM con saltos de línea reales
-        //  2) PEM con \n literales (Railway/Firebase a veces los guarda así)
-        //  3) base64 del archivo completo (lo más robusto, sin problemas de saltos)
-        function leerPem(valor) {
-            if (!valor) return '';
-            var v = valor.trim();
-            if (v.indexOf('-----BEGIN') !== -1) {
-                return v.replace(/\\n/g, '\n');
-            }
-            // No tiene cabecera PEM → asumir base64 y decodificar
-            try {
-                return Buffer.from(v, 'base64').toString('utf8');
-            } catch (_) {
-                return v;
-            }
-        }
-
-        const cuit = process.env.AFIP_CUIT;
-        const cert = leerPem(process.env.AFIP_CERT);
-        const key  = leerPem(process.env.AFIP_KEY);
-        const env  = process.env.AFIP_ENV || 'testing';
-        const token = process.env.AFIP_ACCESS_TOKEN || '';
-
-        if (!cuit || !cert || !key) {
-            return res.status(500).json({
-                error: 'Faltan credenciales. Configurá AFIP_CUIT, AFIP_CERT y AFIP_KEY como variables de entorno.'
-            });
-        }
-
-        const afipOpts = { CUIT: cuit, cert, key, production: env === 'production' };
-        if (token) afipOpts.access_token = token;
-        const afip = new Afip(afipOpts);
+        const afip = crearAfip();
 
         const {
             tipoComp, ptoVta, concepto, fecha, moneda,
@@ -103,16 +133,12 @@ app.post('/afip', async (req, res) => {
 
     } catch (e) {
         console.error('AFIP Error:', e);
-        // afip.js guarda el detalle real en e.data y e.status (ver interceptor de Afip.js)
-        var detalle = '';
-        var fuente = e.data || (e.response && e.response.data);
-        if (fuente) {
-            detalle = typeof fuente === 'string' ? fuente : JSON.stringify(fuente);
+        if (e.faltanCreds) {
+            return res.status(500).json({ error: e.message });
         }
-        if (e.status) detalle = '[HTTP ' + e.status + '] ' + detalle;
         return res.status(500).json({
             error: e.message || String(e),
-            detalle: detalle
+            detalle: detalleError(e)
         });
     }
 });
