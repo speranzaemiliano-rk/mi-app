@@ -200,5 +200,115 @@ app.post('/afip', async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  BELVO — Open Banking (conexión automática a bancos, ej: Santander AR)
+//  Variables de entorno:
+//    BELVO_SECRET_ID        → Secret Key ID del dashboard de Belvo
+//    BELVO_SECRET_PASSWORD  → Secret Key Password (se muestra una sola vez)
+//    BELVO_ENV              → "sandbox" (default), "development" o "production"
+// ═══════════════════════════════════════════════════════════════════
+function belvoBase() {
+    var env = (process.env.BELVO_ENV || 'sandbox').toLowerCase();
+    if (env === 'production')  return 'https://api.belvo.com';
+    if (env === 'development') return 'https://development.belvo.com';
+    return 'https://sandbox.belvo.com';
+}
+
+function belvoCreds() {
+    var id = process.env.BELVO_SECRET_ID;
+    var pw = process.env.BELVO_SECRET_PASSWORD;
+    if (!id || !pw) {
+        var err = new Error('Faltan credenciales de Belvo. Configurá BELVO_SECRET_ID y BELVO_SECRET_PASSWORD en Railway.');
+        err.faltanCreds = true;
+        throw err;
+    }
+    return { id: id, pw: pw, auth: 'Basic ' + Buffer.from(id + ':' + pw).toString('base64') };
+}
+
+// Llama a la API de Belvo con autenticación Basic (Node 22 trae fetch nativo).
+async function belvoFetch(path, opts) {
+    opts = opts || {};
+    var c = belvoCreds();
+    var resp = await fetch(belvoBase() + path, {
+        method: opts.method || 'GET',
+        headers: Object.assign({ 'Authorization': c.auth, 'Content-Type': 'application/json' }, opts.headers || {}),
+        body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    var text = await resp.text();
+    var json;
+    try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+    if (!resp.ok) {
+        var err = new Error('Belvo respondió HTTP ' + resp.status);
+        err.status = resp.status;
+        err.data = json;
+        throw err;
+    }
+    return json;
+}
+
+// Diagnóstico: confirma que las credenciales están cargadas.
+app.get('/belvo/diag', (req, res) => {
+    try {
+        belvoCreds();
+        res.json({ ok: true, env: (process.env.BELVO_ENV || 'sandbox'), base: belvoBase() });
+    } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Token de acceso para abrir el Widget de conexión (Belvo Connect).
+// El endpoint /api/token/ recibe id+password en el cuerpo (no usa Basic).
+app.post('/belvo/widget-token', async (req, res) => {
+    try {
+        var c = belvoCreds();
+        var resp = await fetch(belvoBase() + '/api/token/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: c.id,
+                password: c.pw,
+                scopes: 'read_institutions,write_links',
+                fetch_resources: ['ACCOUNTS', 'TRANSACTIONS']
+            })
+        });
+        var json = await resp.json().catch(function () { return null; });
+        if (!resp.ok) return res.status(resp.status).json({ error: 'No se pudo generar el token de Belvo', detalle: json });
+        res.json({ access: json.access, refresh: json.refresh });
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(500).json({ error: e.message || String(e) });
+    }
+});
+
+// Cuentas asociadas a un link (POST trae la info fresca del banco).
+// GET /belvo/accounts?link=<id>
+app.get('/belvo/accounts', async (req, res) => {
+    try {
+        var link = req.query.link;
+        if (!link) return res.status(400).json({ error: 'Falta el parámetro link.' });
+        var data = await belvoFetch('/api/accounts/', { method: 'POST', body: { link: link } });
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
+// Movimientos de un link. GET /belvo/transactions?link=<id>&date_from=&date_to=
+app.get('/belvo/transactions', async (req, res) => {
+    try {
+        var link = req.query.link;
+        if (!link) return res.status(400).json({ error: 'Falta el parámetro link.' });
+        var body = { link: link };
+        if (req.query.date_from) body.date_from = req.query.date_from;
+        if (req.query.date_to)   body.date_to   = req.query.date_to;
+        var data = await belvoFetch('/api/transactions/', { method: 'POST', body: body });
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`RK AFIP Backend corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo) corriendo en puerto ${PORT}`));

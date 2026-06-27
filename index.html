@@ -17,6 +17,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.belvo.io/belvo-widget-1-stable.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 
@@ -4190,6 +4191,8 @@
                         <h3>📒 Extracto Bancario</h3>
                         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                             <span id="cbSaldoPill" class="cb-saldo-pill">Saldo: $0</span>
+                            <button class="btn btn-outline btn-sm" onclick="belvoConectar()" title="Conectar el banco online (Belvo) para traer los movimientos automáticamente">🔗 Conectar banco</button>
+                            <button class="btn btn-outline btn-sm" onclick="belvoSincronizar()" title="Traer los movimientos nuevos del banco conectado">🔄 Sincronizar</button>
                             <button class="btn btn-outline btn-sm" onclick="abrirImportarExtracto()" title="Importar extracto del banco (Santander) en CSV o Excel">📥 Importar extracto</button>
                             <button class="btn-mov-ing" onclick="abrirMovBanco('entrada')">＋ Entrada</button>
                             <button class="btn-mov-egr" onclick="abrirMovBanco('salida')">− Salida</button>
@@ -5916,6 +5919,100 @@
         document.getElementById('modalImportExtracto').classList.remove('active');
         renderCuentasBancarias();
         alert('✓ Se importaron '+aImportar.length+' movimientos al extracto.');
+    }
+
+    // ── Conexión automática con el banco (Belvo) ────────────────────────
+    // URL del backend de Belvo (mismo servicio de Railway que ARCA).
+    function _belvoUrl(){
+        var u = localStorage.getItem('rk_belvo_function_url') || '';
+        if(!u){
+            u = (prompt('Pegá la URL del backend (Railway), ej: https://tuservicio.up.railway.app')||'').trim().replace(/\/+$/,'');
+            if(u) localStorage.setItem('rk_belvo_function_url', u);
+        }
+        return u;
+    }
+
+    function _belvoCuentaSeleccionada(){
+        var cId = (document.getElementById('cbCuentaFiltro')||{}).value || '';
+        if(!cId){ alert('Elegí primero una cuenta en el filtro "Cuenta" del extracto.'); return null; }
+        var cb = cuentasBancarias.find(function(x){ return (x.id||x.banco)===cId; });
+        if(!cb){ alert('No encontré la cuenta seleccionada.'); return null; }
+        return cb;
+    }
+
+    async function belvoConectar(){
+        var cb = _belvoCuentaSeleccionada(); if(!cb) return;
+        if(typeof belvoSDK==='undefined'){ alert('No se pudo cargar el widget de Belvo. Revisá tu conexión a internet.'); return; }
+        var url = _belvoUrl(); if(!url) return;
+        var token;
+        try {
+            var r = await fetch(url + '/belvo/widget-token', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+            var j = await r.json();
+            if(!r.ok || !j.access){ alert('No se pudo obtener el token de Belvo.\n' + (j.error||'') + '\n' + (j.detalle?JSON.stringify(j.detalle):'')); return; }
+            token = j.access;
+        } catch(e){ alert('No se pudo conectar con el backend de Belvo.\n' + (e.message||e)); return; }
+
+        var config = {
+            locale: 'es',
+            country_codes: ['AR'],
+            callback: function(link, institution){
+                // Guarda el link en la cuenta para poder sincronizar después
+                var i = cuentasBancarias.findIndex(function(x){ return (x.id||x.banco)===(cb.id||cb.banco); });
+                if(i>=0){ cuentasBancarias[i].belvoLink = link; cuentasBancarias[i].belvoInstitucion = institution||''; persistirBanco(); }
+                alert('✓ Banco conectado. Ahora tocá "🔄 Sincronizar" para traer los movimientos.');
+            },
+            onExit: function(){},
+            onEvent: function(){}
+        };
+        belvoSDK.createWidget(token, config).build();
+    }
+
+    async function belvoSincronizar(){
+        var cb = _belvoCuentaSeleccionada(); if(!cb) return;
+        if(!cb.belvoLink){ alert('Esta cuenta todavía no está conectada. Tocá primero "🔗 Conectar banco".'); return; }
+        var url = _belvoUrl(); if(!url) return;
+        // Trae los últimos 90 días por defecto
+        var hasta = new Date().toISOString().substring(0,10);
+        var d = new Date(); d.setDate(d.getDate()-90);
+        var desde = d.toISOString().substring(0,10);
+        var data;
+        try {
+            var r = await fetch(url + '/belvo/transactions?link=' + encodeURIComponent(cb.belvoLink) + '&date_from=' + desde + '&date_to=' + hasta);
+            data = await r.json();
+            if(!r.ok){ alert('Belvo devolvió un error al traer movimientos.\n' + (data.error||'') ); return; }
+        } catch(e){ alert('No se pudo conectar con el backend.\n' + (e.message||e)); return; }
+
+        var lista = Array.isArray(data) ? data : (data && data.results) ? data.results : [];
+        if(!lista.length){ alert('No vinieron movimientos nuevos del banco para los últimos 90 días.'); return; }
+
+        var cuentaId = cb.id || cb.banco;
+        // Set de claves ya existentes para no duplicar
+        var existentes = {};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')] = true;
+        });
+        var nuevos = 0;
+        lista.forEach(function(t){
+            var fecha = String(t.value_date || t.accounting_date || '').substring(0,10);
+            if(!fecha) return;
+            var esEgreso = (t.type || '').toUpperCase() === 'OUTFLOW';
+            var monto = Math.abs(parseFloat(t.amount) || 0);
+            if(!monto) return;
+            var concepto = (t.description || t.merchant && t.merchant.name || 'Movimiento').toString().trim();
+            var clave = impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+            if(existentes[clave]) return;
+            existentes[clave] = true;
+            ingGeneral.push({
+                tipo: esEgreso?'mov_banco_salida':'mov_banco_entrada',
+                fecha: fecha, cuentaId: cuentaId, origen: concepto, referencia: t.reference||t.id||'',
+                moneda: cb.moneda || (t.currency==='USD'?'USD':'ARS'), monto: monto, medio:'Belvo',
+                origenDest:'', esEgreso: esEgreso, esBancario:true, origenImport:'belvo'
+            });
+            nuevos++;
+        });
+        if(nuevos){ persistirIngGeneral(); renderCuentasBancarias(); }
+        alert(nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.');
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────

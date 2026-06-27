@@ -1,5 +1,25 @@
 # Pendientes
 
+## 🟡 EN CURSO: Conexión automática con el banco (Belvo) — falta cargar keys
+
+El **código ya está listo** (backend + app). Solo falta que el titular cree la cuenta
+en Belvo y cargue las credenciales en Railway. Pasos:
+
+1. Registrarse en https://dashboard.belvo.com/ (arranca en modo **sandbox**, gratis).
+2. En **Settings → API Keys** generar una key. Copiar el **Secret Key ID** y el
+   **Secret Key Password** (el password se muestra una sola vez).
+3. En Railway (mismo servicio que ARCA) cargar las variables:
+   - `BELVO_SECRET_ID`
+   - `BELVO_SECRET_PASSWORD`
+   - `BELVO_ENV=sandbox`  (después `production`)
+4. En la app, en **Cuentas Bancarias → Extracto**, elegir la cuenta en el filtro y tocar
+   **🔗 Conectar banco** (la primera vez pide la URL del backend de Railway). Luego
+   **🔄 Sincronizar** trae los movimientos (con anti-duplicados).
+
+Backend: endpoints `/belvo/diag`, `/belvo/widget-token`, `/belvo/accounts`,
+`/belvo/transactions` en `functions/server.js`. App: widget `cdn.belvo.io`, funciones
+`belvoConectar()` / `belvoSincronizar()`.
+
 ## ✅ HECHO: Facturación electrónica ARCA (funcionando)
 
 - Backend Express en Railway (`functions/server.js`) con `@afipsdk/afip.js`.
