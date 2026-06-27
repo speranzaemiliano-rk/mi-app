@@ -59,41 +59,72 @@ function detalleError(e) {
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }));
 
-// Importa todos los comprobantes emitidos para un punto de venta + tipo
+// Importa todos los comprobantes emitidos.
+// Si se pasan ptoVta y tipoComp como query params, filtra por ellos.
+// Sin parámetros: trae TODOS los puntos de venta activos y todos los tipos habituales.
+// GET /afip/importar
 // GET /afip/importar?ptoVta=3&tipoComp=1
+const TIPOS_COMP_HABITUALES = [1, 2, 3, 6, 7, 8, 11, 12, 13]; // FA, NDA, NCA, FB, NDB, NCB, FC, NDC, NCC
+
+async function importarComprobantes(afip, ptoVta, tipoComp) {
+    const lista = [];
+    const ultimo = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComp);
+    if (!ultimo) return lista;
+    for (let nro = 1; nro <= ultimo; nro++) {
+        try {
+            const v = await afip.ElectronicBilling.getVoucherInfo(nro, ptoVta, tipoComp);
+            if (v && v.CodAutorizacion) {
+                lista.push({
+                    tipoComp, ptoVta, nro,
+                    fecha:     String(v.CbteFch || ''),
+                    moneda:    v.MonId || 'PES',
+                    cuitRecep: String(v.DocNro || ''),
+                    condIva:   v.CondicionIVAReceptorId || 5,
+                    razon: '', dom: '',
+                    impNeto:  v.ImpNeto  || 0,
+                    impIVA:   v.ImpIVA   || 0,
+                    impTotal: v.ImpTotal || 0,
+                    descripcion: '',
+                    cae:    v.CodAutorizacion,
+                    caeVto: v.FchVto || '',
+                    emitidaEn: 0,
+                    importada: true
+                });
+            }
+        } catch (_) { /* comprobante sin info, saltar */ }
+    }
+    return lista;
+}
+
 app.get('/afip/importar', async (req, res) => {
     try {
-        const afip   = crearAfip();
-        const ptoVta  = parseInt(req.query.ptoVta)  || 1;
-        const tipoComp = parseInt(req.query.tipoComp) || 1;
-        const ultimo  = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComp);
-        if (!ultimo) return res.json([]);
+        const afip = crearAfip();
+        const ptoVtaParam  = parseInt(req.query.ptoVta)  || 0;
+        const tipoCompParam = parseInt(req.query.tipoComp) || 0;
+
+        // Si se especificó punto de venta y tipo, importar solo eso
+        if (ptoVtaParam && tipoCompParam) {
+            const lista = await importarComprobantes(afip, ptoVtaParam, tipoCompParam);
+            return res.json(lista);
+        }
+
+        // Sin parámetros: traer todos los puntos de venta activos
+        const puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
+        const ptosActivos = (puntosDeVenta || [])
+            .filter(p => p.Bloqueado === 'N' && p.FchBaja === 'NULL')
+            .map(p => p.Nro);
+
+        if (!ptosActivos.length) return res.json([]);
+
+        const tipos = tipoCompParam ? [tipoCompParam] : TIPOS_COMP_HABITUALES;
         const lista = [];
-        for (let nro = 1; nro <= ultimo; nro++) {
-            try {
-                const v = await afip.ElectronicBilling.getVoucherInfo(nro, ptoVta, tipoComp);
-                if (v && v.CodAutorizacion) {
-                    lista.push({
-                        tipoComp,
-                        ptoVta,
-                        nro,
-                        fecha:    String(v.CbteFch || ''),
-                        moneda:   v.MonId || 'PES',
-                        cuitRecep: String(v.DocNro || ''),
-                        condIva:  v.CondicionIVAReceptorId || 5,
-                        razon:    '',
-                        dom:      '',
-                        impNeto:  v.ImpNeto || 0,
-                        impIVA:   v.ImpIVA  || 0,
-                        impTotal: v.ImpTotal || 0,
-                        descripcion: '',
-                        cae:    v.CodAutorizacion,
-                        caeVto: v.FchVto || '',
-                        emitidaEn: 0,
-                        importada: true
-                    });
-                }
-            } catch (_) { /* comprobante sin info, saltar */ }
+        for (const pto of ptosActivos) {
+            for (const tipo of tipos) {
+                try {
+                    const parcial = await importarComprobantes(afip, pto, tipo);
+                    lista.push(...parcial);
+                } catch (_) { /* tipo sin comprobantes, ignorar */ }
+            }
         }
         return res.json(lista);
     } catch (e) {
