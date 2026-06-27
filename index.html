@@ -17,6 +17,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdn.belvo.io/belvo-widget-1-stable.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -2089,7 +2090,6 @@
         }
     </style>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs" type="module" id="pdfjs-main"></script>
 </head>
 <body>
 
@@ -5779,9 +5779,10 @@
 
     function impExtLeerArchivo(event){
         var file=event.target.files[0]; if(!file) return;
-        if(typeof XLSX==='undefined'){ alert('No se pudo cargar la librería de Excel. Revisá tu conexión.'); return; }
         var cuentaId=document.getElementById('impExtCuenta').value;
         if(!cuentaId){ alert('Primero elegí la cuenta destino.'); event.target.value=''; return; }
+        if(file.name.toLowerCase().endsWith('.pdf')){ impExtLeerPDF(file, cuentaId); return; }
+        if(typeof XLSX==='undefined'){ alert('No se pudo cargar la librería de Excel. Revisá tu conexión.'); return; }
         var reader=new FileReader();
         reader.onload=function(e){
             try{
@@ -5792,10 +5793,107 @@
                 impExtRenderPreview();
             }catch(err){
                 console.error(err);
-                alert('No pude leer el archivo. Verificá que sea el extracto exportado del banco (CSV o Excel).');
+                alert('No pude leer el archivo. Verificá que sea el extracto exportado del banco (CSV, Excel o PDF).');
             }
         };
         reader.readAsArrayBuffer(file);
+    }
+
+    function impExtLeerPDF(file, cuentaId){
+        if(typeof pdfjsLib==='undefined'){ alert('No se pudo cargar el lector de PDF. Revisá tu conexión.'); return; }
+        pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        var url=URL.createObjectURL(file);
+        pdfjsLib.getDocument({url:url}).promise.then(function(pdf){
+            var ps=[];
+            for(var p=1;p<=pdf.numPages;p++) ps.push(pdf.getPage(p));
+            return Promise.all(ps);
+        }).then(function(pages){
+            return Promise.all(pages.map(function(page){
+                return page.getTextContent({normalizeWhitespace:true}).then(function(tc){
+                    var rows={};
+                    tc.items.forEach(function(item){
+                        var y=Math.round(item.transform[5]/2)*2;
+                        if(!rows[y]) rows[y]=[];
+                        rows[y].push({x:item.transform[4], t:item.str});
+                    });
+                    return Object.keys(rows).map(Number).sort(function(a,b){return b-a;}).map(function(y){
+                        return rows[y].sort(function(a,b){return a.x-b.x;}).map(function(i){return i.t;}).join(' ');
+                    }).join('\n');
+                });
+            }));
+        }).then(function(pageTexts){
+            URL.revokeObjectURL(url);
+            _impExtCandidatos=impExtParsePDFSantander(pageTexts.join('\n'), cuentaId);
+            impExtRenderPreview();
+        }).catch(function(err){
+            URL.revokeObjectURL(url);
+            console.error('PDF parse error:', err);
+            alert('No pude leer el PDF. Verificá que sea el Resumen de Cuenta de Santander.');
+        });
+    }
+
+    function impExtParsePDFSantander(text, cuentaId){
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+        function parseAmt(s){
+            var neg=s.charAt(0)==='-';
+            s=s.replace(/[^0-9.,]/g,'');
+            if(s.indexOf(',')>-1){ s=s.replace(/\./g,'').replace(',','.'); }
+            var n=parseFloat(s)||0;
+            return neg?-n:n;
+        }
+        var lines=text.split('\n').map(function(l){return l.trim();}).filter(Boolean);
+        var dateRe=/^(\d{1,2}\/\d{1,2}\/\d{2,4})/;
+        var acctRe=/cuenta corriente.*n[°ºº]\s*[\d\-]+/i;
+        var amountRe=/-?\$\s*[\d.,]+/g;
+        var out=[], prevSaldo=null, i=0;
+        while(i<lines.length){
+            var line=lines[i];
+            if(acctRe.test(line)){ prevSaldo=null; i++; continue; }
+            var dm=line.match(dateRe);
+            if(!dm){ i++; continue; }
+            var fecha=impExtParseFecha(dm[1]);
+            if(!fecha){ i++; continue; }
+            // Merge continuation description lines (no date, no $)
+            var fullLine=line;
+            while(i+1<lines.length){
+                var nx=lines[i+1].trim();
+                if(!nx||dateRe.test(nx)||acctRe.test(nx)||/\$/.test(nx)) break;
+                fullLine+=' '+nx;
+                i++;
+            }
+            var rawAmounts=fullLine.match(amountRe)||[];
+            if(!rawAmounts.length){ i++; continue; }
+            var amounts=rawAmounts.map(parseAmt);
+            var saldo=amounts[amounts.length-1];
+            if(amounts.length===1||/saldo inicial/i.test(fullLine)){ prevSaldo=saldo; i++; continue; }
+            var monto, esEgreso;
+            if(prevSaldo!==null){
+                var delta=Math.round((saldo-prevSaldo)*100)/100;
+                esEgreso=delta<0;
+                monto=Math.abs(delta);
+            } else {
+                monto=Math.abs(amounts[0]);
+                esEgreso=amounts[0]<0;
+            }
+            prevSaldo=saldo;
+            if(monto<0.01){ i++; continue; }
+            var concepto=fullLine
+                .replace(/^(\d{1,2}\/\d{1,2}\/\d{2,4})\s*/,'')
+                .replace(/^\d{4,10}\s+/,'')
+                .replace(/-?\$\s*[\d.,]+/g,'')
+                .trim().replace(/\s+/g,' ');
+            var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            out.push({fecha:fecha,concepto:concepto||(esEgreso?'Débito':'Crédito'),
+                      monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
+                      dup:!!existentes[clave],usar:!existentes[clave]});
+            existentes[clave]=true;
+            i++;
+        }
+        return out;
     }
 
     function impExtParseFilas(aoa, cuentaId){
@@ -16911,12 +17009,11 @@
     <div class="modal-body">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="form-group"><label>Cuenta destino *</label><select id="impExtCuenta" style="width:100%;"><option value="">— Seleccionar —</option></select></div>
-        <div class="form-group"><label>Archivo del extracto *</label><input type="file" id="impExtFile" accept=".csv,.xlsx,.xls,.txt" onchange="impExtLeerArchivo(event)"></div>
+        <div class="form-group"><label>Archivo del extracto *</label><input type="file" id="impExtFile" accept=".csv,.xlsx,.xls,.txt,.pdf" onchange="impExtLeerArchivo(event)"></div>
       </div>
       <div class="form-hint" style="margin-bottom:8px;">
-        Descargá el extracto desde el Online Banking de Santander (Movimientos → Exportar a Excel o CSV) y subilo acá.
-        Se detectan automáticamente las columnas de Fecha, Concepto, Débito/Crédito (o Importe) y Saldo. Los movimientos ya
-        importados no se duplican.
+        Subí el <strong>Resumen de Cuenta en PDF</strong> de Santander (se descarga desde Online Banking → Cuentas → Resumen de cuenta)
+        o bien exportá a Excel/CSV. Se detectan automáticamente débitos, créditos y concepto. Los movimientos ya importados no se duplican.
       </div>
       <div id="impExtResumen" style="display:none;font-size:13px;color:var(--text-2);margin-bottom:8px;"></div>
       <div id="impExtPreviewWrap" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);">
