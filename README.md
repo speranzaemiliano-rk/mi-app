@@ -17,11 +17,13 @@ PWA (Progressive Web App) de gestión administrativa y contable para **múltiple
 5. [Modelo de datos (Firebase Realtime Database)](#-modelo-de-datos-firebase-realtime-database)
 6. [Autenticación, roles y permisos](#-autenticación-roles-y-permisos)
 7. [Módulos funcionales](#-módulos-funcionales)
-8. [Integraciones externas](#-integraciones-externas)
-9. [PWA y modo offline](#-pwa-y-modo-offline)
-10. [Despliegue (deploy)](#-despliegue-deploy)
-11. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
-12. [Trabajo pendiente](#-trabajo-pendiente)
+8. [Flujo de facturación ARCA](#-flujo-de-facturación-arca)
+9. [Integraciones externas](#-integraciones-externas)
+10. [PWA y modo offline](#-pwa-y-modo-offline)
+11. [Despliegue (deploy)](#-despliegue-deploy)
+12. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
+13. [Guía rápida de uso](#-guía-rápida-de-uso)
+14. [Trabajo pendiente](#-trabajo-pendiente)
 
 ---
 
@@ -209,6 +211,51 @@ getBasePath()  →  empresas/<empresaId>/proyectos/<proyectoId>
 
 ---
 
+## 🧾 Flujo de facturación ARCA
+
+Así viaja una factura desde que se emite hasta que llega por mail. La pieza clave es que la **clave privada del certificado nunca toca el navegador**: vive solo en el backend de Railway.
+
+```
+  Usuario                 Frontend (PWA)            Backend (Railway)            ARCA / AFIP
+    │                          │                          │                          │
+    │  "Emitir Factura"        │                          │                          │
+    ├─────────────────────────►│                          │                          │
+    │   completa datos         │   POST /afip             │                          │
+    │   (cliente, importes)    ├─────────────────────────►│                          │
+    │                          │                          │  getLastVoucher()        │
+    │                          │                          ├─────────────────────────►│
+    │                          │                          │◄─────────────────────────┤
+    │                          │                          │  nro = último + 1        │
+    │                          │                          │  createVoucher(data)     │
+    │                          │                          ├─────────────────────────►│
+    │                          │                          │◄─────────────────────────┤
+    │                          │   { cae, caeFchVto,      │   CAE real               │
+    │                          │     cbteDesde, ... }     │                          │
+    │                          │◄─────────────────────────┤                          │
+    │                          │                          │                          │
+    │                          ├── guarda en Firebase ───►  empresas/.../facturas    │
+    │   ve comprobante         │                          │                          │
+    │◄─────────────────────────┤                          │                          │
+    │                          │                          │                          │
+    │  "Enviar por mail"       │   sube PDF → Firebase     │                          │
+    ├─────────────────────────►│   (temp-pdf) + EmailJS   │                          │
+    │   cliente recibe mail     │   con link al PDF        │                          │
+    │◄─────────────────────────┤                          │                          │
+```
+
+**Pasos en detalle:**
+
+1. El usuario abre *Ingresos → Resumen Ingresos → 📄 Emitir Factura ARCA* y completa cliente e importes.
+2. El frontend hace `POST /afip` al backend con tipo de comprobante, punto de venta, importes, IVA y condición del receptor.
+3. El backend pide a ARCA el último número (`getLastVoucher`), calcula el siguiente y emite el comprobante (`createVoucher`).
+4. ARCA devuelve el **CAE** (Código de Autorización Electrónico) y su vencimiento.
+5. El frontend guarda la factura en Firebase (`…/facturas`) y muestra el comprobante imprimible.
+6. Opcional: *Enviar por mail* sube el PDF a Firebase (`temp-pdf`) y dispara EmailJS con el link de descarga.
+
+> **Diagnóstico:** abrir `<url-backend>/diag` en el navegador muestra el estado de ARCA y los puntos de venta habilitados. `GET /afip/importar?ptoVta=3&tipoComp=1` reimporta comprobantes ya emitidos.
+
+---
+
 ## 🔌 Integraciones externas
 
 | Servicio | Para qué | Dónde se configura |
@@ -273,6 +320,26 @@ npm start          # node server.js — escucha en process.env.PORT || 3000
 - `localStorage rk_afip_function_url` — URL del backend de Railway.
 - `localStorage rk_belvo_function_url` — URL del backend para Belvo.
 - Claves de **Gemini** y **EmailJS**: en `global/config/*` de Firebase (con respaldo en `localStorage`).
+
+---
+
+## 🧭 Guía rápida de uso
+
+**Para el usuario final (operar la app):**
+
+1. **Entrar:** abrir la app e iniciar sesión con email/contraseña o con Google.
+2. **Elegir contexto:** seleccionar la **empresa** y el **proyecto** con los que vas a trabajar (el sidebar muestra cuál está activo).
+3. **Cargar movimientos:** usar *Caja y Bancos* para efectivo/banco, e *Ingresos*/*Egresos* para ventas, alquileres, servicios, proveedores y pagos.
+4. **Facturar:** en *Ingresos → Resumen Ingresos*, tocar *📄 Emitir Factura ARCA*; ver el listado en *📒 Facturas emitidas*.
+5. **Exportar:** desde *Reportes/Config* se exporta a Excel, JSON, CSV o SQL.
+
+**Para el administrador (puesta en marcha):**
+
+1. **Backend:** desplegar `functions/server.js` en Railway con las variables `AFIP_*` (y opcionalmente `BELVO_*` / `PROMETEO_*`). Verificar con `GET <url>/diag`.
+2. **Conectar la app al backend:** en la app, la primera emisión pide la **URL del backend** (se guarda en `localStorage rk_afip_function_url`).
+3. **Firebase:** revisar que `firebaseConfig` esté completo y publicar las reglas de la base (incluida la de `temp-pdf` para los PDF por mail).
+4. **Integraciones opcionales:** cargar la **Gemini API Key** (leer facturas PDF) y las credenciales de **EmailJS** (enviar por mail) en *Config*.
+5. **Usuarios:** el primer usuario queda como **Super Admin** automáticamente; desde *Config → Usuarios* se asignan los roles del resto.
 
 ---
 
