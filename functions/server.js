@@ -104,16 +104,39 @@ app.get('/afip/importar', async (req, res) => {
 // Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
 // tenés habilitados y si la conexión con ARCA funciona.
 app.get('/diag', async (req, res) => {
+    const env  = process.env.AFIP_ENV || 'testing';
+    const cuit = process.env.AFIP_CUIT || '(no configurado)';
+    const out  = {
+        modo:            env === 'production' ? 'PRODUCCION' : 'TESTING/HOMOLOGACION',
+        cuit,
+        afipEnvVar:      env,
+        certCargado:     !!(process.env.AFIP_CERT),
+        keyCargada:      !!(process.env.AFIP_KEY),
+        advertencia:     env !== 'production' ? 'ATENCION: estás en modo TESTING. Las facturas NO aparecen en AFIP real.' : null
+    };
     try {
         const afip = crearAfip();
-        const out = {};
         try {
             out.serverStatus = await afip.ElectronicBilling.getServerStatus();
         } catch (e) { out.serverStatusError = e.message + ' ' + detalleError(e); }
         try {
             out.puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
         } catch (e) { out.puntosDeVentaError = e.message + ' ' + detalleError(e); }
-        return res.json(out);
+    } catch (e) {
+        out.errorCredenciales = e.message;
+    }
+    return res.json(out);
+});
+
+// Verifica el último comprobante emitido para un punto de venta y tipo
+// GET /afip/ultimo?ptoVta=3&tipoComp=1
+app.get('/afip/ultimo', async (req, res) => {
+    try {
+        const afip    = crearAfip();
+        const ptoVta  = parseInt(req.query.ptoVta)  || 1;
+        const tipoComp = parseInt(req.query.tipoComp) || 1;
+        const ultimo  = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComp);
+        return res.json({ ptoVta, tipoComp, ultimoNro: ultimo });
     } catch (e) {
         return res.status(500).json({ error: e.message, detalle: detalleError(e) });
     }
