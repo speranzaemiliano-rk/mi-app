@@ -1,5 +1,19 @@
 # Pendientes
 
+## 🔜 PRÓXIMO: Leer movimientos del banco desde Gmail (gratis + automático)
+
+Idea elegida para tener los movimientos del Santander real **sin costo** (Belvo
+producción cuesta). La app YA lee Gmail (scope `gmail.readonly`, ver
+`abrirImportarGmail` / `buscarEmailsConPDF` ~línea 9288). Plan: botón
+"📧 Leer movimientos del banco" que busca los mails de aviso de Santander,
+parsea fecha/monto/ingreso-egreso/concepto y carga los movimientos con el mismo
+anti-duplicados del importador de extracto (`impExtClave`).
+
+**FALTA para programarlo:** el usuario va a pasar **1-2 mails de ejemplo** del
+Santander (uno de ingreso y uno de egreso) — remitente, asunto y cuerpo — para
+escribir el parser a medida. Sin el ejemplo real no se puede hacer fiable.
+
+
 ## 🟡 EN CURSO: Conexión automática con el banco (Belvo) — falta cargar keys
 
 El **código ya está listo** (backend + app). Solo falta que el titular cree la cuenta
