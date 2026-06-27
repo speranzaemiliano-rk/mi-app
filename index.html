@@ -4234,6 +4234,7 @@
                             <th class="sortable" onclick="sortTable('cbExtBody',6,this)" style="text-align:right;color:var(--success);">Entrada<i class="si">⇅</i></th>
                             <th class="sortable" onclick="sortTable('cbExtBody',7,this)" style="text-align:right;color:var(--danger);">Salida<i class="si">⇅</i></th>
                             <th style="text-align:right;font-weight:700;">Saldo acum.</th>
+                            <th style="width:70px;"></th>
                         </tr></thead>
                         <tbody id="cbExtBody"></tbody>
                     </table></div>
@@ -5682,8 +5683,10 @@
 
     // ── Movimiento bancario manual ─────────────────────────────────
     var _movBancoTipo = 'entrada';
+    var _movBancoEditIdx = null;
     function abrirMovBanco(tipo) {
         _movBancoTipo = tipo;
+        _movBancoEditIdx = null;
         var modal = document.getElementById('modalMovBanco');
         if (!modal) return;
         document.getElementById('movBancoH2').textContent = tipo==='entrada' ? '🏦 Nueva Entrada Bancaria' : '🏦 Nueva Salida Bancaria';
@@ -5695,6 +5698,32 @@
         cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o); });
         modal.classList.add('active');
     }
+    function editarMovBanco(igIdx) {
+        var m = ingGeneral[igIdx]; if (!m) return;
+        _movBancoEditIdx = igIdx;
+        _movBancoTipo = m.esEgreso ? 'salida' : 'entrada';
+        var modal = document.getElementById('modalMovBanco'); if (!modal) return;
+        document.getElementById('movBancoH2').textContent = m.esEgreso ? '✏️ Editar Salida Bancaria' : '✏️ Editar Entrada Bancaria';
+        document.getElementById('movBancoGuardarBtn').textContent = '💾 Guardar cambios';
+        document.getElementById('movBancoFecha').value = m.fecha||'';
+        document.getElementById('movBancoDesc').value = m.origen||'';
+        document.getElementById('movBancoMonto').value = m.monto||'';
+        var orEl=document.getElementById('movBancoOrigen'); if(orEl) orEl.value=m.origenDest||'';
+        var refEl=document.getElementById('movBancoRef'); if(refEl) refEl.value=m.referencia||'';
+        var medioEl=document.getElementById('movBancoMedio'); if(medioEl) medioEl.value=m.medio||'Transferencia';
+        var sel=document.getElementById('movBancoCuenta');
+        sel.innerHTML='<option value="">— Seleccionar cuenta —</option>';
+        cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o); });
+        sel.value=m.cuentaId||'';
+        modal.classList.add('active');
+    }
+    function borrarMovBanco(igIdx) {
+        var m = ingGeneral[igIdx]; if (!m) return;
+        if (!confirm('¿Borrar el movimiento "' + (m.origen||m.tipo||'') + '" por $' + Math.round(m.monto||0).toLocaleString('es-AR') + '?')) return;
+        ingGeneral.splice(igIdx, 1);
+        persistirIngGeneral();
+        renderCuentasBancarias();
+    }
     function guardarMovBanco() {
         var cuentaId=document.getElementById('movBancoCuenta').value;
         var desc=document.getElementById('movBancoDesc').value.trim();
@@ -5705,14 +5734,15 @@
         var ref=document.getElementById('movBancoRef').value.trim();
         if(!fecha||!cuentaId||!desc||isNaN(monto)||monto<=0){alert('Completá Fecha, Cuenta, Descripción y Monto.');return;}
         var cb=cuentasBancarias.find(function(cu){return (cu.id||cu.banco)===cuentaId;})||{};
-        var nuevo={tipo:_movBancoTipo==='entrada'?'mov_banco_entrada':'mov_banco_salida',fecha:fecha,cuentaId:cuentaId,
+        var obj={tipo:_movBancoTipo==='entrada'?'mov_banco_entrada':'mov_banco_salida',fecha:fecha,cuentaId:cuentaId,
             origen:desc,referencia:ref||'',moneda:cb.moneda||'ARS',monto:monto,medio:medio,origenDest:origen||'',
             esEgreso:_movBancoTipo==='salida',esBancario:true};
-        ingGeneral.push(nuevo);
+        if(_movBancoEditIdx!==null){ ingGeneral[_movBancoEditIdx]=obj; _movBancoEditIdx=null; }
+        else { ingGeneral.push(obj); }
         persistirIngGeneral();
         document.getElementById('modalMovBanco').classList.remove('active');
         renderCuentasBancarias();
-        alert('✓ Movimiento bancario registrado.');
+        alert('✓ Movimiento bancario guardado.');
     }
     function cbFiltrosLimpiar(){
         ['cbDesde','cbHasta','cbFiltroBusq','cbFiltroOrigen'].forEach(function(id){
@@ -9932,12 +9962,12 @@
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0 });
         }); });
-        ingGeneral.forEach(function(ig){
+        ingGeneral.forEach(function(ig, igIdx){
             if (!ig.esBancario) return;
             var cId = ig.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             var esS = ig.esEgreso || ig.tipo === 'mov_banco_salida';
-            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: ig.origen||'—', origen: ig.origenDest||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0 });
+            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: ig.origen||'—', origen: ig.origenDest||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx });
         });
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
@@ -9971,13 +10001,16 @@
         var tbody = document.getElementById('cbExtBody'); if (!tbody) return;
         tbody.innerHTML = '';
         if (!filtrados.length) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
             return;
         }
         filtrados.slice().reverse().forEach(function(m){
             var s = m.saldoAcum;
             var tipoBadge = m.entrada>0 ? '<span class="badge-rol badge-ok" style="font-size:10px;">Entrada</span>' : '<span class="badge-rol badge-err" style="font-size:10px;">Salida</span>';
             var tr = document.createElement('tr');
+            var acciones = m.igIdx!==undefined
+                ? '<button class="btn-icon" title="Editar" onclick="editarMovBanco('+m.igIdx+')">✏️</button> <button class="btn-icon" title="Borrar" onclick="borrarMovBanco('+m.igIdx+')" style="color:var(--danger);">🗑️</button>'
+                : '';
             tr.innerHTML = '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
                 '<td>'+tipoBadge+' <span style="font-size:11px;color:var(--text-2);">'+m.tipo+'</span></td>'+
                 '<td>'+m.desc+'</td>'+
@@ -9986,7 +10019,8 @@
                 '<td><span class="pill" style="font-size:10px;">'+m.medio+'</span></td>'+
                 '<td style="text-align:right;color:var(--success);font-weight:600;">'+(m.entrada>0?'$'+Math.round(m.entrada).toLocaleString('es-AR'):'—')+'</td>'+
                 '<td style="text-align:right;color:var(--danger);">'+(m.salida>0?'$'+Math.round(m.salida).toLocaleString('es-AR'):'—')+'</td>'+
-                '<td style="text-align:right;font-weight:700;color:'+(s>=0?'var(--success)':'var(--danger)')+';">$'+Math.round(s).toLocaleString('es-AR')+'</td>';
+                '<td style="text-align:right;font-weight:700;color:'+(s>=0?'var(--success)':'var(--danger)')+';">$'+Math.round(s).toLocaleString('es-AR')+'</td>'+
+                '<td style="text-align:center;white-space:nowrap;">'+acciones+'</td>';
             tbody.appendChild(tr);
         });
     }
