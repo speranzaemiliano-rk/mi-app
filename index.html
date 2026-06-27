@@ -2789,8 +2789,23 @@
                   </div>
                 </div><!-- /hpRow4 -->
 
-                <!-- Fila 5 reservada para widgets futuros -->
-                <div id="hpRow5" style="display:none;"></div>
+                <!-- Fila 5: indicador Pesos vs Dólar -->
+                <div class="hp-row5" id="hpRow5" style="margin-top:0;">
+                  <div class="hpw" style="padding:0;overflow:hidden;">
+                    <div class="hp-eco-hdr" style="padding:10px 14px;">
+                      <span class="hp-eco-ttl">💱 ¿Conviene pesos o dólares?</span>
+                      <button class="btn btn-outline btn-sm" onclick="_hePesoVsDolar()" title="Recalcular">🔄</button>
+                    </div>
+                    <div style="padding:14px;">
+                      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                        <div id="pvdVeredicto" style="font-size:22px;font-weight:700;line-height:1.1;">Calculando…</div>
+                        <div id="pvdRazon" style="font-size:13px;color:var(--text-2);flex:1;min-width:220px;"></div>
+                      </div>
+                      <div id="pvdChips" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
+                      <div style="font-size:10px;color:var(--text-3);margin-top:10px;line-height:1.5;">⚠️ Indicador orientativo automático — no es asesoramiento financiero. Fuentes: argentinadatos.com y dolarapi.com.</div>
+                    </div>
+                  </div>
+                </div>
 
               </div><!-- /hp-wrap -->
 
@@ -14807,6 +14822,74 @@
             .catch(function() { _heKpi('heTasa', 'N/D', 'heTasaSub', 'sin datos', 'neu'); });
     }
 
+    // ── Indicador orientativo: ¿conviene pesos o dólares? ───────────────
+    function _hePesoVsDolar() {
+        var elVer = document.getElementById('pvdVeredicto');
+        var elRaz = document.getElementById('pvdRazon');
+        var elChips = document.getElementById('pvdChips');
+        if (!elVer) return;
+        elVer.textContent = 'Calculando…'; elVer.style.color = 'var(--text-1)';
+        if (elRaz) elRaz.textContent = '';
+        var P = function(u) { return fetch(u).then(function(r){ return r.json(); }).catch(function(){ return null; }); };
+        Promise.all([
+            P('https://api.argentinadatos.com/v1/finanzas/tasas/plazoFijo'),
+            P('https://api.argentinadatos.com/v1/finanzas/indices/inflacion'),
+            P('https://dolarapi.com/v1/dolares/oficial'),
+            P('https://dolarapi.com/v1/dolares/blue'),
+            P('https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais')
+        ]).then(function(res) {
+            var pf = res[0], inf = res[1], ofi = res[2], blue = res[3], rp = res[4];
+            var tna = null;
+            if (Array.isArray(pf) && pf.length) { var l = pf[pf.length-1]; tna = l.tnaClientes || l.tna || l.valor || null; }
+            var inflMes = (Array.isArray(inf) && inf.length) ? inf[inf.length-1].valor : null;
+            var oficial = (ofi && ofi.venta) ? ofi.venta : null;
+            var blueV   = (blue && blue.venta) ? blue.venta : null;
+            var riesgo  = (Array.isArray(rp) && rp.length) ? rp[rp.length-1].valor : null;
+
+            if (tna == null || inflMes == null) {
+                elVer.textContent = 'Datos insuficientes'; elVer.style.color = 'var(--text-3)';
+                if (elRaz) elRaz.textContent = 'No pude obtener la tasa de plazo fijo o la inflación. Probá 🔄 en un rato.';
+                if (elChips) elChips.innerHTML = '';
+                return;
+            }
+            var tem = tna / 12;            // tasa mensual del plazo fijo (%)
+            var spread = tem - inflMes;    // tasa real mensual (%)
+            var brecha = (oficial && blueV) ? ((blueV - oficial) / oficial * 100) : null;
+
+            var score = 0;
+            if (spread >= 1) score += 2; else if (spread >= 0) score += 1; else if (spread > -1) score -= 1; else score -= 2;
+            if (brecha != null) { if (brecha < 10) score += 1; else if (brecha >= 40) score -= 2; else if (brecha >= 25) score -= 1; }
+            if (riesgo != null) { if (riesgo < 700) score += 1; else if (riesgo >= 1200) score -= 1; }
+
+            var ver, color;
+            if (score >= 2) { ver = '🟢 Conviene quedarse en PESOS'; color = 'var(--success)'; }
+            else if (score <= -2) { ver = '🔴 Conviene comprar DÓLARES'; color = 'var(--danger)'; }
+            else { ver = '🟡 Equilibrado / Neutro'; color = 'var(--warn)'; }
+
+            var motivo = (spread >= 0)
+                ? 'El plazo fijo (' + tem.toFixed(1) + '%/mes) le gana a la inflación (' + inflMes.toFixed(1) + '%/mes)'
+                : 'La inflación (' + inflMes.toFixed(1) + '%/mes) le gana al plazo fijo (' + tem.toFixed(1) + '%/mes)';
+            if (brecha != null) motivo += ' · brecha blue ' + brecha.toFixed(0) + '%';
+            if (riesgo != null) motivo += ' · riesgo país ' + Math.round(riesgo) + ' pb';
+            motivo += '.';
+
+            elVer.textContent = ver; elVer.style.color = color;
+            if (elRaz) elRaz.textContent = motivo;
+
+            var chip = function(lbl, val, fav) {
+                var c = fav > 0 ? 'var(--success)' : (fav < 0 ? 'var(--danger)' : 'var(--text-3)');
+                return '<span style="border:1px solid var(--border);border-left:3px solid ' + c + ';padding:6px 10px;font-size:11px;border-radius:4px;line-height:1.4;">' +
+                    '<span style="color:var(--text-3)">' + lbl + '</span><br><strong>' + val + '</strong></span>';
+            };
+            var chips = '';
+            chips += chip('Plazo fijo (mensual)', tem.toFixed(1) + '%', spread >= 0 ? 1 : -1);
+            chips += chip('Inflación (mensual)', inflMes.toFixed(1) + '%', spread >= 0 ? 1 : -1);
+            if (brecha != null) chips += chip('Brecha blue', brecha.toFixed(0) + '%', brecha < 25 ? 1 : -1);
+            if (riesgo != null) chips += chip('Riesgo país', Math.round(riesgo) + ' pb', riesgo < 800 ? 1 : (riesgo >= 1200 ? -1 : 0));
+            if (elChips) elChips.innerHTML = chips;
+        });
+    }
+
     // Noticias eco (Construcción + Legal/AFIP)
     var _heFeeds = {
         const: ['https://news.google.com/rss/search?q=construccion+argentina+costos+indice+CAC&hl=es-419&gl=AR&ceid=AR:es-419',
@@ -14944,7 +15027,7 @@
         if (!_hRInterval) _hRInterval=setInterval(_hReloj,1000);
         if (_hYaCargo) return;
         _hYaCargo=true;
-        _hDolares(); _hClima(); _hMercado(); _hNoticias(); _hBolsas(); _hNoticiasInt(); _heEconomia();
+        _hDolares(); _hClima(); _hMercado(); _hNoticias(); _hBolsas(); _hNoticiasInt(); _heEconomia(); _hePesoVsDolar();
         // Init drag-and-drop on widget rows
         setTimeout(function(){
             var opts = { animation: 180, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen', delay: 80, delayOnTouchOnly: true, filter: 'input,select,button,a', preventOnFilter: false };
