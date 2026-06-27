@@ -4175,6 +4175,7 @@
                         <h3>📒 Extracto Bancario</h3>
                         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                             <span id="cbSaldoPill" class="cb-saldo-pill">Saldo: $0</span>
+                            <button class="btn btn-outline btn-sm" onclick="abrirImportarExtracto()" title="Importar extracto del banco (Santander) en CSV o Excel">📥 Importar extracto</button>
                             <button class="btn-mov-ing" onclick="abrirMovBanco('entrada')">＋ Entrada</button>
                             <button class="btn-mov-egr" onclick="abrirMovBanco('salida')">− Salida</button>
                         </div>
@@ -5702,6 +5703,204 @@
             var el=document.getElementById(id); if(el) el.value='';
         });
         renderExtractoBancario();
+    }
+
+    // ── Importar extracto bancario (Santander: CSV / Excel) ─────────────
+    var _impExtCandidatos = [];
+
+    function abrirImportarExtracto(){
+        var modal=document.getElementById('modalImportExtracto'); if(!modal) return;
+        var sel=document.getElementById('impExtCuenta');
+        sel.innerHTML='<option value="">— Seleccionar —</option>';
+        cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o); });
+        // Preseleccionar la cuenta que esté filtrada en el extracto, si hay
+        var filtro=document.getElementById('cbCuentaFiltro'); if(filtro && filtro.value) sel.value=filtro.value;
+        _impExtCandidatos=[];
+        document.getElementById('impExtFile').value='';
+        document.getElementById('impExtPreviewWrap').style.display='none';
+        document.getElementById('impExtResumen').style.display='none';
+        document.getElementById('impExtBtnImportar').disabled=true;
+        modal.classList.add('active');
+    }
+
+    // Convierte "1.234,56" / "1234.56" / "(1.234,56)" / "-1.234,56" a número
+    function impExtParseNum(v){
+        if(v===null||v===undefined||v==='') return 0;
+        if(typeof v==='number') return v;
+        var s=String(v).trim().replace(/\s/g,'');
+        if(!s) return 0;
+        var neg=/^\(.*\)$/.test(s)||/^-/.test(s);
+        s=s.replace(/[()$ ]/g,'').replace(/[A-Za-z]/g,'').replace(/^-/,'');
+        // Si tiene coma decimal (formato AR): los puntos son miles
+        if(s.indexOf(',')>-1){ s=s.replace(/\./g,'').replace(',', '.'); }
+        var n=parseFloat(s);
+        if(isNaN(n)) return 0;
+        return neg ? -n : n;
+    }
+
+    // Devuelve fecha en formato YYYY-MM-DD a partir de varios formatos / serial de Excel
+    function impExtParseFecha(v){
+        if(v===null||v===undefined||v==='') return '';
+        if(typeof v==='number'){ // serial de Excel
+            var d=new Date(Math.round((v-25569)*86400*1000));
+            if(isNaN(d.getTime())) return '';
+            return d.toISOString().substring(0,10);
+        }
+        var s=String(v).trim();
+        var m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);          // ya viene ISO
+        if(m) return m[1]+'-'+m[2]+'-'+m[3];
+        m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); // dd/mm/aaaa
+        if(m){
+            var dd=('0'+m[1]).slice(-2), mm=('0'+m[2]).slice(-2), yy=m[3];
+            if(yy.length===2) yy='20'+yy;
+            return yy+'-'+mm+'-'+dd;
+        }
+        return '';
+    }
+
+    function impExtLeerArchivo(event){
+        var file=event.target.files[0]; if(!file) return;
+        if(typeof XLSX==='undefined'){ alert('No se pudo cargar la librería de Excel. Revisá tu conexión.'); return; }
+        var cuentaId=document.getElementById('impExtCuenta').value;
+        if(!cuentaId){ alert('Primero elegí la cuenta destino.'); event.target.value=''; return; }
+        var reader=new FileReader();
+        reader.onload=function(e){
+            try{
+                var wb=XLSX.read(e.target.result,{type:'array',cellDates:false});
+                var ws=wb.Sheets[wb.SheetNames[0]];
+                var aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+                _impExtCandidatos=impExtParseFilas(aoa, cuentaId);
+                impExtRenderPreview();
+            }catch(err){
+                console.error(err);
+                alert('No pude leer el archivo. Verificá que sea el extracto exportado del banco (CSV o Excel).');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function impExtParseFilas(aoa, cuentaId){
+        // 1) Buscar la fila de encabezados
+        var headerIdx=-1, cols={};
+        for(var i=0;i<aoa.length && i<40;i++){
+            var row=aoa[i].map(function(c){return String(c).toLowerCase().trim();});
+            var hasFecha=row.some(function(c){return /fecha/.test(c);});
+            var hasMonto=row.some(function(c){return /d[eé]bito|cr[eé]dito|importe|debe|haber|monto/.test(c);});
+            if(hasFecha && hasMonto){
+                headerIdx=i;
+                row.forEach(function(c,idx){
+                    if(/fecha/.test(c) && cols.fecha===undefined) cols.fecha=idx;
+                    else if(/d[eé]bito|debe/.test(c)) cols.debito=idx;
+                    else if(/cr[eé]dito|haber/.test(c)) cols.credito=idx;
+                    else if(/importe|monto/.test(c) && cols.importe===undefined) cols.importe=idx;
+                    else if(/saldo/.test(c)) cols.saldo=idx;
+                    else if(/concepto|descrip|detalle|movimiento|referencia/.test(c) && cols.concepto===undefined) cols.concepto=idx;
+                    else if(/comprob|n[º°ro\.]/.test(c) && cols.comprob===undefined) cols.comprob=idx;
+                });
+                break;
+            }
+        }
+        if(headerIdx===-1) throw new Error('No encontré la fila de encabezados (Fecha / Débito / Crédito / Importe).');
+        if(cols.concepto===undefined){ // tomar la primera columna de texto que no sea fecha/monto/saldo
+            cols.concepto=cols.fecha+1;
+        }
+
+        // 2) Set de claves ya existentes para no duplicar
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')]=true;
+        });
+
+        // 3) Parsear cada fila de datos
+        var out=[];
+        for(var r=headerIdx+1;r<aoa.length;r++){
+            var row=aoa[r]; if(!row) continue;
+            var fecha=impExtParseFecha(row[cols.fecha]);
+            if(!fecha) continue; // fila vacía / pie de página
+            var concepto=String(row[cols.concepto]!==undefined?row[cols.concepto]:'').trim();
+            var entrada=0, salida=0;
+            if(cols.debito!==undefined || cols.credito!==undefined){
+                salida=Math.abs(impExtParseNum(cols.debito!==undefined?row[cols.debito]:0));
+                entrada=Math.abs(impExtParseNum(cols.credito!==undefined?row[cols.credito]:0));
+            } else if(cols.importe!==undefined){
+                var imp=impExtParseNum(row[cols.importe]);
+                if(imp>=0) entrada=imp; else salida=Math.abs(imp);
+            }
+            if(entrada===0 && salida===0) continue; // sin monto, no es un movimiento
+            var esEgreso=salida>0;
+            var monto=esEgreso?salida:entrada;
+            var ref=cols.comprob!==undefined?String(row[cols.comprob]||'').trim():'';
+            var clave=impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+            out.push({fecha:fecha, concepto:concepto||(esEgreso?'Débito':'Crédito'), monto:monto, esEgreso:esEgreso,
+                ref:ref, cuentaId:cuentaId, dup:!!existentes[clave], usar:!existentes[clave]});
+            existentes[clave]=true; // evita duplicar dentro del mismo archivo
+        }
+        return out;
+    }
+
+    function impExtClave(cuentaId, fecha, montoConSigno, desc){
+        return [cuentaId, fecha, Math.round(montoConSigno*100), (desc||'').toLowerCase().replace(/\s+/g,' ').trim().substring(0,40)].join('|');
+    }
+
+    function impExtRenderPreview(){
+        var fmt=function(n){return n?'$'+Math.round(n).toLocaleString('es-AR'):'';};
+        var body=document.getElementById('impExtPreviewBody');
+        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup;}).length;
+        var dups=_impExtCandidatos.length-nuevos;
+        var resumen=document.getElementById('impExtResumen');
+        resumen.style.display='';
+        resumen.innerHTML='Se encontraron <strong>'+_impExtCandidatos.length+'</strong> movimientos · '+
+            '<strong style="color:var(--success)">'+nuevos+'</strong> nuevos · '+
+            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten).';
+        if(!_impExtCandidatos.length){
+            document.getElementById('impExtPreviewWrap').style.display='none';
+            document.getElementById('impExtBtnImportar').disabled=true;
+            return;
+        }
+        body.innerHTML=_impExtCandidatos.map(function(c,i){
+            return '<tr style="'+(c.dup?'opacity:.5;':'')+'">'+
+                '<td><input type="checkbox" '+(c.usar?'checked':'')+' '+(c.dup?'disabled':'')+' onchange="_impExtCandidatos['+i+'].usar=this.checked;impExtRefreshBtn()"></td>'+
+                '<td>'+c.fecha+'</td>'+
+                '<td>'+(c.concepto||'').replace(/</g,'&lt;')+'</td>'+
+                '<td style="text-align:right;color:var(--success)">'+(!c.esEgreso?fmt(c.monto):'')+'</td>'+
+                '<td style="text-align:right;color:var(--danger)">'+(c.esEgreso?fmt(c.monto):'')+'</td>'+
+                '<td>'+(c.dup?'<span style="color:var(--text-3)">ya importado</span>':'<span style="color:var(--success)">nuevo</span>')+'</td>'+
+            '</tr>';
+        }).join('');
+        document.getElementById('impExtPreviewWrap').style.display='';
+        impExtRefreshBtn();
+    }
+
+    function impExtRefreshBtn(){
+        var n=_impExtCandidatos.filter(function(c){return c.usar && !c.dup;}).length;
+        var btn=document.getElementById('impExtBtnImportar');
+        btn.disabled=n===0;
+        btn.textContent='💾 Importar '+(n||'')+' movimiento'+(n===1?'':'s');
+    }
+
+    function impExtToggleAll(chk){
+        _impExtCandidatos.forEach(function(c){ if(!c.dup) c.usar=chk.checked; });
+        impExtRenderPreview();
+        document.getElementById('impExtCheckAll').checked=chk.checked;
+    }
+
+    function impExtImportar(){
+        var aImportar=_impExtCandidatos.filter(function(c){return c.usar && !c.dup;});
+        if(!aImportar.length){ alert('No hay movimientos nuevos seleccionados.'); return; }
+        var cb=cuentasBancarias.find(function(cu){return (cu.id||cu.banco)===aImportar[0].cuentaId;})||{};
+        aImportar.forEach(function(c){
+            ingGeneral.push({
+                tipo:c.esEgreso?'mov_banco_salida':'mov_banco_entrada',
+                fecha:c.fecha, cuentaId:c.cuentaId, origen:c.concepto, referencia:c.ref||'',
+                moneda:cb.moneda||'ARS', monto:c.monto, medio:'Importado',
+                origenDest:'', esEgreso:c.esEgreso, esBancario:true, origenImport:'santander'
+            });
+        });
+        persistirIngGeneral();
+        document.getElementById('modalImportExtracto').classList.remove('active');
+        renderCuentasBancarias();
+        alert('✓ Se importaron '+aImportar.length+' movimientos al extracto.');
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────
@@ -16406,6 +16605,38 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="document.getElementById('modalMovBanco').classList.remove('active')">Cancelar</button>
         <button type="button" id="movBancoGuardarBtn" class="btn btn-gold" onclick="guardarMovBanco()">💾 Guardar Entrada</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Importar extracto bancario (Santander) -->
+<div class="modal" id="modalImportExtracto">
+  <div class="modal-box" style="max-width:760px;">
+    <div class="modal-head">
+      <h2>📥 Importar extracto bancario</h2>
+      <button class="modal-close" onclick="document.getElementById('modalImportExtracto').classList.remove('active')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group"><label>Cuenta destino *</label><select id="impExtCuenta" style="width:100%;"><option value="">— Seleccionar —</option></select></div>
+        <div class="form-group"><label>Archivo del extracto *</label><input type="file" id="impExtFile" accept=".csv,.xlsx,.xls,.txt" onchange="impExtLeerArchivo(event)"></div>
+      </div>
+      <div class="form-hint" style="margin-bottom:8px;">
+        Descargá el extracto desde el Online Banking de Santander (Movimientos → Exportar a Excel o CSV) y subilo acá.
+        Se detectan automáticamente las columnas de Fecha, Concepto, Débito/Crédito (o Importe) y Saldo. Los movimientos ya
+        importados no se duplican.
+      </div>
+      <div id="impExtResumen" style="display:none;font-size:13px;color:var(--text-2);margin-bottom:8px;"></div>
+      <div id="impExtPreviewWrap" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);">
+        <table style="font-size:12px;"><thead><tr>
+          <th style="width:30px;"><input type="checkbox" id="impExtCheckAll" checked onchange="impExtToggleAll(this)"></th>
+          <th>Fecha</th><th>Concepto</th><th style="text-align:right;">Entrada</th><th style="text-align:right;">Salida</th><th>Estado</th>
+        </tr></thead><tbody id="impExtPreviewBody"></tbody></table>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="document.getElementById('modalImportExtracto').classList.remove('active')">Cancelar</button>
+        <button type="button" id="impExtBtnImportar" class="btn btn-gold" onclick="impExtImportar()" disabled>💾 Importar seleccionados</button>
       </div>
     </div>
   </div>
