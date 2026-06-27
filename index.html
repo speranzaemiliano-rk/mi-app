@@ -10837,6 +10837,7 @@
             document.getElementById('ventaComprador').value  = v.comprador || '';
             document.getElementById('ventaFecha').value      = v.fecha || '';
             document.getElementById('ventaObs').value        = v.obs || '';
+            document.getElementById('ventaAcuerdo').value     = v.acuerdo || '';
             if (v.modalidad === 'total_usd') {
                 document.getElementById('ventaPrecioUSD').value  = v.precioUSD || '';
                 document.getElementById('ventaCobradoUSD').value = v.cobradoUSD || '';
@@ -10883,12 +10884,55 @@
         } else {
             document.getElementById('ventaFecha').valueAsDate = new Date();
         }
+        // Adjuntos (boleto / plano): guardo las referencias actuales y las muestro
+        _ventaDocs = {
+            boleto: v && v.boletoDocId ? { docId: v.boletoDocId, nombre: v.boletoNombre, tipo: v.boletoTipo } : null,
+            plano:  v && v.planoDocId  ? { docId: v.planoDocId,  nombre: v.planoNombre,  tipo: v.planoTipo  } : null
+        };
+        ['ventaBoletoFile','ventaPlanoFile'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+        ventaRenderAdjunto('boleto');
+        ventaRenderAdjunto('plano');
         document.getElementById('modalVenta').classList.add('active');
+    }
+
+    var _ventaDocs = { boleto:null, plano:null };
+
+    function ventaRenderAdjunto(tipo){
+        var cont = document.getElementById(tipo==='boleto' ? 'ventaBoletoActual' : 'ventaPlanoActual');
+        if(!cont) return;
+        var d = _ventaDocs[tipo];
+        if(d && d.docId){
+            var nom = (d.nombre||'archivo').replace(/'/g,'').replace(/</g,'&lt;');
+            cont.innerHTML = '<span style="color:var(--success)">✓ '+nom+'</span> '+
+                '<a href="javascript:void(0)" onclick="descargarDoc(\''+d.docId+'\',\''+nom+'\')" style="color:var(--gold);">Ver</a> · '+
+                '<a href="javascript:void(0)" onclick="ventaQuitarAdjunto(\''+tipo+'\')" style="color:var(--danger);">Quitar</a>';
+        } else {
+            cont.innerHTML = '<span style="color:var(--text-3)">Sin adjuntar</span>';
+        }
+    }
+
+    function ventaArchivoElegido(tipo){
+        var inp = document.getElementById(tipo==='boleto' ? 'ventaBoletoFile' : 'ventaPlanoFile');
+        var cont = document.getElementById(tipo==='boleto' ? 'ventaBoletoActual' : 'ventaPlanoActual');
+        var f = inp && inp.files && inp.files[0];
+        if(!f){ ventaRenderAdjunto(tipo); return; }
+        if(f.size > MAX_DOC_MB*1024*1024){
+            alert('El archivo supera los '+MAX_DOC_MB+' MB. Elegí uno más liviano.');
+            inp.value=''; ventaRenderAdjunto(tipo); return;
+        }
+        if(cont) cont.innerHTML = '<span style="color:var(--gold)">Nuevo: '+f.name.replace(/</g,'&lt;')+' (se sube al guardar)</span>';
+    }
+
+    function ventaQuitarAdjunto(tipo){
+        _ventaDocs[tipo] = null;
+        var inp = document.getElementById(tipo==='boleto' ? 'ventaBoletoFile' : 'ventaPlanoFile');
+        if(inp) inp.value='';
+        ventaRenderAdjunto(tipo);
     }
 
     function cerrarModalVenta() { document.getElementById('modalVenta').classList.remove('active'); }
 
-    function guardarVenta() {
+    async function guardarVenta() {
         const uf = document.getElementById('ventaUF').value.trim().toUpperCase();
         if (!uf) { alert('El código de UF es obligatorio.'); return; }
         const mod = document.getElementById('ventaModalidad').value;
@@ -10899,6 +10943,7 @@
             modalidad: mod,
             fecha:     document.getElementById('ventaFecha').value,
             obs:       document.getElementById('ventaObs').value.trim(),
+            acuerdo:   document.getElementById('ventaAcuerdo').value.trim(),
             cobrosHistorial: (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].cobrosHistorial) || []
         };
         if (mod === 'total_usd') {
@@ -10928,6 +10973,32 @@
                 if (fechas.some(function(f){ return f; })) nuevo.cuotaFechas = fechas;
             }
         }
+        // ── Adjuntos: subir boleto / plano nuevos y conservar referencias ──
+        const btn = document.getElementById('ventaGuardarBtn');
+        try {
+            for (const tipo of ['boleto','plano']) {
+                const inp = document.getElementById(tipo==='boleto' ? 'ventaBoletoFile' : 'ventaPlanoFile');
+                const file = inp && inp.files && inp.files[0];
+                if (file) {
+                    if (file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
+                    if (btn) { btn.disabled = true; btn.textContent = 'Subiendo '+tipo+'…'; }
+                    const base64 = await leerArchivoBase64(file);
+                    const docId = 'VENTA-'+tipo.toUpperCase()+'-'+Date.now()+'-'+Math.floor(Math.random()*1000);
+                    await REF_DOCS.child(docId).set({ nombre: file.name, tipo: file.type, contenido: base64 });
+                    _ventaDocs[tipo] = { docId: docId, nombre: file.name, tipo: file.type };
+                }
+            }
+        } catch(err) {
+            console.error(err);
+            alert('No se pudo subir el archivo adjunto. Revisá la conexión e intentá de nuevo.');
+            if (btn) { btn.disabled = false; btn.textContent = 'Guardar UF'; }
+            return;
+        }
+        if (btn) { btn.disabled = false; btn.textContent = 'Guardar UF'; }
+        // Referencias finales (pueden quedar vacías si se quitó el adjunto)
+        if (_ventaDocs.boleto) { nuevo.boletoDocId = _ventaDocs.boleto.docId; nuevo.boletoNombre = _ventaDocs.boleto.nombre; nuevo.boletoTipo = _ventaDocs.boleto.tipo; }
+        if (_ventaDocs.plano)  { nuevo.planoDocId  = _ventaDocs.plano.docId;  nuevo.planoNombre  = _ventaDocs.plano.nombre;  nuevo.planoTipo  = _ventaDocs.plano.tipo;  }
+
         if (editandoVentaIdx >= 0) { ventas[editandoVentaIdx] = nuevo; }
         else { ventas.push(nuevo); }
         cerrarModalVenta();
@@ -11377,13 +11448,17 @@
                 const cuotasCell = v.modalidad === 'cuotas_cac' && v.nroCuotas
                     ? '<span class="pill" style="font-size:10px;">' + v.nroCuotas + ' cuotas</span>'
                     : '—';
+                var docsBtns = '';
+                if (v.boletoDocId) docsBtns += '<button class="btn btn-outline btn-sm" title="Ver boleto de compraventa" onclick="descargarDoc(\'' + v.boletoDocId + '\',\'' + (v.boletoNombre||'boleto').replace(/'/g,'') + '\')">📄</button> ';
+                if (v.planoDocId)  docsBtns += '<button class="btn btn-outline btn-sm" title="Ver plano" onclick="descargarDoc(\'' + v.planoDocId + '\',\'' + (v.planoNombre||'plano').replace(/'/g,'') + '\')">📐</button> ';
                 const acciones = puedeEditar
                     ? '<button class="btn btn-gold btn-sm" title="Registrar cobro de esta UF" onclick="abrirCobroVenta(' + idx + ')">💵 Cobrar</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Estado de cuenta del inversor" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' +
+                      docsBtns +
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosVenta(' + idx + ')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Editar datos de esta UF" onclick="abrirModalVenta(' + idx + ')">✏</button> ' +
                       btnElim('venta', idx)
-                    : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button>';
+                    : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' + docsBtns;
                 const tr = document.createElement('tr');
                 tr.innerHTML =
                     '<td><strong>' + (v.uf||'—') + '</strong></td>' +
@@ -15535,9 +15610,28 @@
           <div class="form-group"><label>Fecha escritura / boleto</label><input type="date" id="ventaFecha"></div>
           <div class="form-group"><label>Observaciones</label><input type="text" id="ventaObs" placeholder="Opcional"></div>
         </div>
+        <div style="border-top:1px solid var(--border); margin-top:4px; padding-top:12px;">
+          <div class="form-group">
+            <label>🤝 Acuerdo / condiciones particulares con el comprador</label>
+            <textarea id="ventaAcuerdo" rows="2" style="width:100%;resize:vertical;" placeholder="Ej: descuento por pago anticipado, cochera incluida, plazo especial, etc."></textarea>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+              <label>📄 Boleto de compraventa</label>
+              <input type="file" id="ventaBoletoFile" accept=".pdf,.jpg,.jpeg,.png" onchange="ventaArchivoElegido('boleto')">
+              <div id="ventaBoletoActual" class="form-hint" style="margin-top:6px;"></div>
+            </div>
+            <div class="form-group">
+              <label>📐 Plano</label>
+              <input type="file" id="ventaPlanoFile" accept=".pdf,.jpg,.jpeg,.png" onchange="ventaArchivoElegido('plano')">
+              <div id="ventaPlanoActual" class="form-hint" style="margin-top:6px;"></div>
+            </div>
+          </div>
+          <div class="form-hint" style="color:var(--text-3);">Archivos hasta 4 MB (PDF o imagen).</div>
+        </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline" onclick="cerrarModalVenta()">Cancelar</button>
-          <button type="button" class="btn btn-gold" onclick="guardarVenta()">Guardar UF</button>
+          <button type="button" id="ventaGuardarBtn" class="btn btn-gold" onclick="guardarVenta()">Guardar UF</button>
         </div>
       </form>
     </div>
