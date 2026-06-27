@@ -310,5 +310,141 @@ app.get('/belvo/transactions', async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  PROMETEO — Open Banking (plan B). Login directo con usuario/clave del
+//  banco (no usa widget). Las credenciales del banco NO se guardan: viajan
+//  una sola vez para abrir la sesión y se obtiene una "key" de sesión.
+//  Variables de entorno:
+//    PROMETEO_API_KEY  → API key del panel de Prometeo
+//    PROMETEO_ENV      → "sandbox" (default) o "production"
+// ═══════════════════════════════════════════════════════════════════
+function prometeoBase() {
+    var env = (process.env.PROMETEO_ENV || 'sandbox').toLowerCase();
+    return env === 'production'
+        ? 'https://banking.prometeoapi.net'
+        : 'https://banking.sandbox.prometeoapi.net';
+}
+
+function prometeoApiKey() {
+    var k = process.env.PROMETEO_API_KEY;
+    if (!k) {
+        var err = new Error('Falta la credencial de Prometeo. Configurá PROMETEO_API_KEY en Railway.');
+        err.faltanCreds = true;
+        throw err;
+    }
+    return k;
+}
+
+// Llama a la API de Prometeo. Para login usa form-urlencoded; el resto, query.
+async function prometeoFetch(path, opts) {
+    opts = opts || {};
+    var resp = await fetch(prometeoBase() + path, {
+        method: opts.method || 'GET',
+        headers: Object.assign({ 'X-API-Key': prometeoApiKey() }, opts.headers || {}),
+        body: opts.body || undefined
+    });
+    var text = await resp.text();
+    var json;
+    try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+    if (!resp.ok) {
+        var err = new Error('Prometeo respondió HTTP ' + resp.status);
+        err.status = resp.status;
+        err.data = json;
+        throw err;
+    }
+    return json;
+}
+
+// Diagnóstico
+app.get('/prometeo/diag', (req, res) => {
+    try {
+        prometeoApiKey();
+        res.json({ ok: true, env: (process.env.PROMETEO_ENV || 'sandbox'), base: prometeoBase() });
+    } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Lista de bancos disponibles
+app.get('/prometeo/providers', async (req, res) => {
+    try {
+        var data = await prometeoFetch('/provider/');
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
+// Login al banco. body JSON { provider, username, password }
+// Devuelve { status, key }. status puede pedir interacción (OTP) en algunos bancos.
+app.post('/prometeo/login', async (req, res) => {
+    try {
+        var b = req.body || {};
+        if (!b.provider || !b.username || !b.password) {
+            return res.status(400).json({ error: 'Faltan provider, username o password.' });
+        }
+        var params = new URLSearchParams();
+        params.set('provider', b.provider);
+        params.set('username', b.username);
+        params.set('password', b.password);
+        if (b.type) params.set('type', b.type);
+        if (b.otp)  params.set('otp', b.otp);
+        var data = await prometeoFetch('/login/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+        });
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
+// Cuentas de la sesión. GET /prometeo/accounts?key=<session>
+app.get('/prometeo/accounts', async (req, res) => {
+    try {
+        var key = req.query.key;
+        if (!key) return res.status(400).json({ error: 'Falta el parámetro key (sesión).' });
+        var data = await prometeoFetch('/account/?key=' + encodeURIComponent(key));
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
+// Movimientos. GET /prometeo/movements?key=&account=&currency=&date_start=&date_end=
+// Fechas en formato DD/MM/YYYY (lo que pide Prometeo).
+app.get('/prometeo/movements', async (req, res) => {
+    try {
+        var key = req.query.key, account = req.query.account;
+        if (!key || !account) return res.status(400).json({ error: 'Faltan key y/o account.' });
+        var qs = '?key=' + encodeURIComponent(key) +
+            '&currency=' + encodeURIComponent(req.query.currency || 'ARS') +
+            '&date_start=' + encodeURIComponent(req.query.date_start || '') +
+            '&date_end=' + encodeURIComponent(req.query.date_end || '');
+        var data = await prometeoFetch('/account/' + encodeURIComponent(account) + '/movement/' + qs);
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
+// Cierra la sesión del banco. GET /prometeo/logout?key=<session>
+app.get('/prometeo/logout', async (req, res) => {
+    try {
+        var key = req.query.key;
+        if (!key) return res.status(400).json({ error: 'Falta el parámetro key.' });
+        var data = await prometeoFetch('/logout/?key=' + encodeURIComponent(key));
+        res.json(data);
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(e.status || 500).json({ error: e.message, detalle: e.data });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo) corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo) corriendo en puerto ${PORT}`));

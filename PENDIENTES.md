@@ -20,6 +20,13 @@ Backend: endpoints `/belvo/diag`, `/belvo/widget-token`, `/belvo/accounts`,
 `/belvo/transactions` en `functions/server.js`. App: widget `cdn.belvo.io`, funciones
 `belvoConectar()` / `belvoSincronizar()`.
 
+**Plan B — Prometeo (backend listo, falta UI):** alternativa por si Belvo pide requisitos
+de empresa. Endpoints en `functions/server.js`: `/prometeo/diag`, `/prometeo/providers`,
+`/prometeo/login`, `/prometeo/accounts`, `/prometeo/movements`, `/prometeo/logout`.
+Variables: `PROMETEO_API_KEY`, `PROMETEO_ENV=sandbox`. Prometeo usa login directo
+(usuario/clave del banco) en vez de widget, así que falta sumar un formulario en la app
+si se decide usar este camino (se hace cuando se elija proveedor).
+
 ## ✅ HECHO: Facturación electrónica ARCA (funcionando)
 
 - Backend Express en Railway (`functions/server.js`) con `@afipsdk/afip.js`.
