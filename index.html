@@ -13675,32 +13675,100 @@
     function imprimirFacturaARCA(idx) {
         var f = facturasARCA[idx];
         if (!f) return;
+        var emp = getEmpresaParaRecibo();
         var tipo = _afipTiposNombre[f.tipoComp] || ('Comprobante tipo ' + f.tipoComp);
         var letra = (f.tipoComp===1||f.tipoComp===2||f.tipoComp===3) ? 'A' : (f.tipoComp===6||f.tipoComp===7||f.tipoComp===8) ? 'B' : (f.tipoComp===11||f.tipoComp===12||f.tipoComp===13) ? 'C' : '';
         var monSym = f.moneda === 'DOL' ? 'US$ ' : '$ ';
         function num(n){ return monSym + (Number(n)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
         var nroFmt = String(f.ptoVta||0).padStart(5,'0') + '-' + String(f.nro||0).padStart(8,'0');
         var condRecep = ({1:'IVA Responsable Inscripto',4:'IVA Sujeto Exento',5:'Consumidor Final',6:'Responsable Monotributo'})[f.condIva] || '—';
-        var empActNombre = (empresaActual && empresaActual.nombre) || 'FEKOMP SA';
-        var css = '<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;}.pg{max-width:720px;margin:0 auto;padding:40px 48px;}.cab{display:flex;border:2px solid #111;margin-bottom:4px;}.cab-l,.cab-r{flex:1;padding:16px 20px;}.cab-l{border-right:2px solid #111;}.cab-letra{width:70px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-left:2px solid #111;border-right:2px solid #111;}.letra-big{font-size:38px;font-weight:900;line-height:1;}.letra-cod{font-size:9px;color:#555;margin-top:4px;}.emp-nom{font-size:20px;font-weight:900;}.muted{font-size:11px;color:#555;line-height:1.7;}.tit-comp{font-size:17px;font-weight:900;}.nro{font-size:15px;font-weight:700;margin-top:6px;}.box{border:1px solid #bbb;border-radius:6px;padding:12px 16px;margin:16px 0;font-size:12px;line-height:1.8;}.box b{color:#111;}.row2{display:flex;gap:16px;}.row2>div{flex:1;}table{width:100%;border-collapse:collapse;margin-top:14px;}thead th{background:#111;color:#fff;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:9px 12px;text-align:left;}tbody td{padding:11px 12px;font-size:13px;border-bottom:1px solid #eee;}.tot{margin-top:16px;margin-left:auto;width:260px;font-size:13px;}.tot div{display:flex;justify-content:space-between;padding:5px 0;}.tot .grand{border-top:2px solid #111;margin-top:6px;padding-top:10px;font-size:18px;font-weight:900;}.cae{margin-top:24px;border-top:1px dashed #999;padding-top:14px;display:flex;justify-content:space-between;font-size:13px;}.cae b{font-size:15px;}.pie{margin-top:20px;text-align:center;font-size:10px;color:#bbb;}@media print{.pg{padding:20px;}}</style>';
-        var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + tipo + ' ' + nroFmt + '</title>' + css + '</head><body><div class="pg">' +
-            '<div class="cab">' +
-                '<div class="cab-l"><div class="emp-nom">' + empActNombre + '</div><div class="muted">CUIT: 30716812452<br>Responsable Inscripto</div></div>' +
-                '<div class="cab-letra"><div class="letra-big">' + (letra||'X') + '</div><div class="letra-cod">COD. ' + (f.tipoComp||'') + '</div></div>' +
-                '<div class="cab-r"><div class="tit-comp">' + tipo + '</div><div class="nro">N° ' + nroFmt + '</div><div class="muted">Fecha: ' + _fmtFechaAfip(f.fecha) + '</div></div>' +
-            '</div>' +
-            '<div class="box"><div class="row2"><div><b>Receptor:</b> ' + (f.razon||'—') + '<br><b>CUIT/Doc:</b> ' + (f.cuitRecep||'—') + '</div><div><b>Cond. IVA:</b> ' + condRecep + '<br><b>Domicilio:</b> ' + (f.dom||'—') + '</div></div></div>' +
-            '<table><thead><tr><th>Descripción</th><th style="text-align:right;width:140px;">Importe Neto</th></tr></thead>' +
-            '<tbody><tr><td>' + (f.descripcion||'Venta / Servicio') + '</td><td style="text-align:right;">' + num(f.impNeto) + '</td></tr></tbody></table>' +
-            '<div class="tot">' +
-                '<div><span>Neto Gravado</span><span>' + num(f.impNeto) + '</span></div>' +
-                '<div><span>IVA</span><span>' + num(f.impIVA) + '</span></div>' +
-                '<div class="grand"><span>TOTAL</span><span>' + num(f.impTotal) + '</span></div>' +
-            '</div>' +
-            '<div class="cae"><div>Comprobante autorizado por ARCA (AFIP)</div><div style="text-align:right;"><b>CAE: ' + (f.cae||'—') + '</b><br>Vto. CAE: ' + (f.caeVto||'—') + '</div></div>' +
-            '<div class="pie">' + empActNombre + ' · Generado por Sistema de Gestión RK · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
-            '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
-        var win = window.open('', '_blank', 'width=820,height=920');
+        var empNombre  = emp.nombre || (empresaActual && empresaActual.nombre) || 'Empresa';
+        var empCuitNum = parseInt((emp.cuit||'').replace(/\D/g,''),10) || 0;
+        var recepNum   = parseInt(String(f.cuitRecep||'').replace(/\D/g,''),10) || 0;
+
+        // Datos fiscales del emisor (línea bajo el nombre)
+        var emisorDatos = [];
+        if (emp.cuit)      emisorDatos.push('CUIT ' + emp.cuit);
+        emisorDatos.push(emp.condIva || 'Responsable Inscripto');
+        if (emp.iibb)      emisorDatos.push('IIBB ' + emp.iibb);
+        if (emp.inicioAct) emisorDatos.push('Inicio act. ' + _fmtFechaAfip(emp.inicioAct));
+        var emisorExtra = [emp.direccion, [emp.telefono, emp.email].filter(Boolean).join(' · ')].filter(Boolean);
+
+        // QR oficial AFIP/ARCA (RG 4892)
+        var fechaQR = (function(s){ var d=String(s||'').replace(/\D/g,''); return d.length>=8 ? d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8) : String(s||''); })(f.fecha);
+        var qrObj = {
+            ver:1, fecha:fechaQR, cuit:empCuitNum, ptoVta:Number(f.ptoVta)||0,
+            tipoCmp:Number(f.tipoComp)||0, nroCmp:Number(f.nro)||0,
+            importe:Number(f.impTotal)||0, moneda:(f.moneda==='DOL'?'DOL':'PES'),
+            ctz:Number(f.ctz)||1, tipoDocRec:80, nroDocRec:recepNum,
+            tipoCodAut:'E', codAut:Number(f.cae)||0
+        };
+        var qrUrl = 'https://www.afip.gob.ar/fe/qr/?p=' + btoa(unescape(encodeURIComponent(JSON.stringify(qrObj))));
+
+        var css = '<style>*{box-sizing:border-box;margin:0;padding:0;}'
+            +'body{font-family:"Helvetica Neue",Arial,Helvetica,sans-serif;color:#1a1a1a;background:#f3f4f6;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            +'.pg{max-width:740px;margin:24px auto;padding:40px 44px 30px;background:#fff;box-shadow:0 2px 18px rgba(0,0,0,.08);}'
+            +'.cab{display:flex;border:1.5px solid #111;}'
+            +'.cab-l,.cab-r{flex:1;padding:16px 18px;}'
+            +'.cab-l{border-right:1.5px solid #111;}'
+            +'.cab-letra{width:78px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#111;color:#fff;}'
+            +'.letra-big{font-size:40px;font-weight:800;line-height:1;}'
+            +'.letra-cod{font-size:8.5px;color:#C9A84C;margin-top:5px;letter-spacing:.05em;}'
+            +'.emp-top{display:flex;gap:12px;align-items:center;margin-bottom:8px;}'
+            +'.emp-logo{width:46px;height:46px;flex-shrink:0;}.emp-logo svg{width:100%;height:100%;display:block;}'
+            +'.emp-nom{font-size:18px;font-weight:800;line-height:1.1;}'
+            +'.muted{font-size:10.5px;color:#555;line-height:1.65;}'
+            +'.tit-comp{font-size:16px;font-weight:800;text-transform:uppercase;letter-spacing:.02em;}'
+            +'.nro{font-size:15px;font-weight:700;margin-top:6px;}'
+            +'.cab-rule{height:3px;background:#C9A84C;margin:0 0 16px;}'
+            +'.box{border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin-bottom:16px;font-size:11.5px;line-height:1.8;}'
+            +'.box b{color:#111;}.row2{display:flex;gap:16px;}.row2>div{flex:1;}'
+            +'table{width:100%;border-collapse:collapse;margin-bottom:8px;}'
+            +'thead th{background:#111;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:10px 13px;text-align:left;}'
+            +'thead th.r{text-align:right;}'
+            +'tbody td{padding:12px 13px;font-size:13px;border-bottom:1px solid #eee;vertical-align:top;}'
+            +'tbody td.r{text-align:right;}'
+            +'.tot{margin-top:14px;margin-left:auto;width:280px;font-size:13px;}'
+            +'.tot div{display:flex;justify-content:space-between;padding:6px 0;color:#555;}'
+            +'.tot div span:last-child{font-weight:600;color:#111;}'
+            +'.tot .grand{border-top:2px solid #C9A84C;margin-top:6px;padding-top:11px;font-size:19px;font-weight:800;color:#111;}'
+            +'.tot .grand span:last-child{color:#111;}'
+            +'.cae{margin-top:22px;border-top:1px dashed #bbb;padding-top:16px;display:flex;gap:20px;align-items:center;justify-content:space-between;}'
+            +'.cae-qr{width:120px;height:120px;flex-shrink:0;}.cae-qr svg{width:100%;height:100%;display:block;}'
+            +'.cae-info{font-size:12px;line-height:1.9;text-align:right;flex:1;}'
+            +'.cae-info b{font-size:15px;}.cae-arca{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;}'
+            +'.pie{margin-top:18px;padding-top:12px;border-top:1px solid #eee;text-align:center;font-size:9.5px;color:#aaa;letter-spacing:.03em;}'
+            +'@media print{body{background:#fff;}.pg{margin:0;box-shadow:none;padding:20px;}}'
+            +'</style>';
+
+        var emisorDatosHtml = emisorDatos.join(' · ') + emisorExtra.map(function(x){ return '<br>' + x; }).join('');
+
+        var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + tipo + ' ' + nroFmt + '</title>' + css
+            + '<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></scr' + 'ipt></head><body><div class="pg">'
+            + '<div class="cab">'
+                + '<div class="cab-l"><div class="emp-top"><div class="emp-logo">' + _rMonograma(empNombre, 46) + '</div><div class="emp-nom">' + empNombre + '</div></div>'
+                    + '<div class="muted">' + emisorDatosHtml + '</div></div>'
+                + '<div class="cab-letra"><div class="letra-big">' + (letra||'X') + '</div><div class="letra-cod">COD. ' + (f.tipoComp||'') + '</div></div>'
+                + '<div class="cab-r"><div class="tit-comp">' + tipo + '</div><div class="nro">N° ' + nroFmt + '</div><div class="muted" style="margin-top:6px;">Fecha de emisión: ' + _fmtFechaAfip(f.fecha) + '<br>Pto. Venta: ' + String(f.ptoVta||0).padStart(5,'0') + '</div></div>'
+            + '</div>'
+            + '<div class="cab-rule"></div>'
+            + '<div class="box"><div class="row2"><div><b>Receptor:</b> ' + (f.razon||'—') + '<br><b>CUIT/Doc:</b> ' + (f.cuitRecep||'—') + '</div><div><b>Cond. IVA:</b> ' + condRecep + '<br><b>Domicilio:</b> ' + (f.dom||'—') + '</div></div></div>'
+            + '<table><thead><tr><th>Descripción</th><th class="r" style="width:160px;">Importe Neto</th></tr></thead>'
+            + '<tbody><tr><td>' + (f.descripcion||'Venta / Servicio') + '</td><td class="r">' + num(f.impNeto) + '</td></tr></tbody></table>'
+            + '<div class="tot">'
+                + '<div><span>Neto Gravado</span><span>' + num(f.impNeto) + '</span></div>'
+                + '<div><span>IVA</span><span>' + num(f.impIVA) + '</span></div>'
+                + '<div class="grand"><span>TOTAL</span><span>' + num(f.impTotal) + '</span></div>'
+            + '</div>'
+            + '<div class="cae"><div class="cae-qr" id="afipqr"></div>'
+                + '<div class="cae-info"><div class="cae-arca">Comprobante autorizado por ARCA (AFIP)</div>'
+                + '<b>CAE: ' + (f.cae||'—') + '</b><br>Vto. CAE: ' + (f.caeVto||'—') + '</div></div>'
+            + '<div class="pie">' + empNombre + ' · Generado por Sistema de Gestión RK · ' + new Date().toLocaleDateString('es-AR') + '</div>'
+            + '</div>'
+            + '<scr' + 'ipt>window.onload=function(){try{var q=qrcode(0,"M");q.addData(' + JSON.stringify(qrUrl) + ');q.make();document.getElementById("afipqr").innerHTML=q.createSvgTag({cellSize:3,margin:1});}catch(e){}setTimeout(function(){window.print();},400);};</scr' + 'ipt>'
+            + '</body></html>';
+
+        var win = window.open('', '_blank', 'width=820,height=960');
         if (!win) { alert('Bloqueaste las ventanas emergentes. Permitilas para ver el comprobante.'); return; }
         win.document.write(html);
         win.document.close();
