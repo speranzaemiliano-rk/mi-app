@@ -9,15 +9,16 @@
 - En **Ingresos → Resumen Ingresos**: botón "📄 Emitir Factura ARCA" y "📒 Facturas emitidas" (lista + comprobante imprimible con "🔍 Ver").
 - Diagnóstico: `GET <url>/diag` muestra puntos de venta y estado de ARCA.
 
-## 🧹 Para revisar mañana: limpieza de código (pre-existente, no urgente)
+## ✅ HECHO: limpieza de código
 
-- **IDs duplicados:** `srvCobrado` está en una tarjeta (línea ~3300) y en un input
-  (línea ~15542). `getElementById` toma el primero → posible bug al leer el monto
-  cobrado de un servicio. Renombrar uno de los dos.
-- **Funciones duplicadas** (gana la última, las primeras son código muerto de
-  refactors viejos): `agregarEmpresa`, `agregarProyecto`, `pagarFactura`,
-  `abrirHistorialPagosPresupuesto`, `abrirHistorialPagosFactura`. Borrar las versiones
-  viejas para evitar confusión.
+- **IDs duplicados:** el input de "Cobrado hasta ahora" se renombró a `srvCobradoInput`;
+  la tarjeta de display conserva `id="srvCobrado"`. Antes `getElementById` tomaba el div
+  (primero en el DOM) y las lecturas de `.value` devolvían `undefined`, por lo que el
+  monto cobrado de un servicio se guardaba como 0. Corregido.
+- **Funciones duplicadas:** se borraron las versiones viejas (código muerto de refactors
+  previos) de `agregarEmpresa`, `agregarProyecto`, `pagarFactura`,
+  `abrirHistorialPagosPresupuesto` y `abrirHistorialPagosFactura`. Quedan solo las versiones
+  activas (más abajo en el archivo).
 
 
 ## 🔜 Para mañana: Módulo de facturación electrónica con ARCA
