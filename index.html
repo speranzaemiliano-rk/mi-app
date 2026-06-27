@@ -4193,11 +4193,14 @@
                             <span id="cbSaldoPill" class="cb-saldo-pill">Saldo: $0</span>
                             <button class="btn btn-outline btn-sm" onclick="belvoConectar()" title="Conectar el banco online (Belvo) para traer los movimientos automáticamente">🔗 Conectar banco</button>
                             <button class="btn btn-outline btn-sm" onclick="belvoSincronizar()" title="Traer los movimientos nuevos del banco conectado">🔄 Sincronizar</button>
+                            <button class="btn btn-outline btn-sm" onclick="prometeoConectar()" title="Conectar banco argentino (Prometeo) — Santander, Galicia, BBVA, Macro, etc.">🏦 Prometeo AR</button>
+                            <button class="btn btn-outline btn-sm" id="btnPrometeoSync" onclick="prometeoSincronizar()" title="Traer movimientos del banco conectado via Prometeo" style="display:none">📊 Sync Prometeo</button>
                             <button class="btn btn-outline btn-sm" onclick="abrirImportarExtracto()" title="Importar extracto del banco (Santander) en CSV o Excel">📥 Importar extracto</button>
                             <button class="btn-mov-ing" onclick="abrirMovBanco('entrada')">＋ Entrada</button>
                             <button class="btn-mov-egr" onclick="abrirMovBanco('salida')">− Salida</button>
                         </div>
                         <div id="belvoStatus" style="width:100%;font-size:12px;margin-top:6px;color:var(--text-2);"></div>
+                        <div id="prometeoStatus" style="width:100%;font-size:12px;margin-top:2px;color:var(--text-2);"></div>
                     </div>
                     <div class="filters-bar" style="margin-bottom:12px; flex-wrap:wrap; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border-soft);">
                         <label style="font-size:11px;font-weight:600;color:var(--text-3);">Cuenta</label>
@@ -6030,6 +6033,279 @@
         });
         if(nuevos){ persistirIngGeneral(); renderCuentasBancarias(); }
         alert(nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.');
+    }
+
+    // ── Prometeo — Open Banking Argentina ─────────────────────────
+    var _prometeoKey = localStorage.getItem('rk_prometeo_key') || '';
+    var _prometeoProviders = [];
+
+    function _prometeoMsg(txt, color) {
+        var el = document.getElementById('prometeoStatus');
+        if (el) { el.textContent = txt; el.style.color = color || 'var(--text-2)'; }
+        var el2 = document.getElementById('prometeoModalStatus');
+        if (el2) { el2.textContent = txt; el2.style.color = color || 'var(--text-2)'; }
+    }
+
+    function cerrarModalPrometeo() {
+        document.getElementById('modalPrometeo').classList.remove('active');
+    }
+
+    async function prometeoConectar() {
+        var url = _belvoUrl();
+        if (!url) return;
+        // Resetear al paso 1
+        document.getElementById('prometeoFormLogin').style.display = '';
+        document.getElementById('prometeoFormOtp').style.display = 'none';
+        document.getElementById('prometeoFormCuentas').style.display = 'none';
+        document.getElementById('prometeoModalStatus').textContent = '';
+        document.getElementById('prometeoUsername').value = '';
+        document.getElementById('prometeoPassword').value = '';
+        document.getElementById('prometeoOtp').value = '';
+        // Llenar selector de cuentas RK
+        var selRK = document.getElementById('prometeoCuentaRK');
+        selRK.innerHTML = '';
+        cuentasBancarias.forEach(function(cb) {
+            var o = document.createElement('option');
+            o.value = cb.id || cb.banco;
+            o.textContent = cb.banco + ' · ' + (cb.tipo||'') + ' (' + (cb.moneda||'ARS') + ')';
+            selRK.appendChild(o);
+        });
+        document.getElementById('modalPrometeo').classList.add('active');
+        // Cargar lista de bancos si todavía no se cargó
+        if (!_prometeoProviders.length) {
+            _prometeoMsg('⏳ Cargando lista de bancos…', 'var(--gold)');
+            try {
+                var r = await fetch(url + '/prometeo/providers', { headers: _appHeaders() });
+                var data = await r.json();
+                if (!r.ok) throw new Error(data.error || 'Error al cargar bancos');
+                _prometeoProviders = Array.isArray(data) ? data : (data.providers || data.data || []);
+                var sel = document.getElementById('prometeoProvider');
+                sel.innerHTML = '<option value="">— Seleccioná el banco —</option>';
+                // Preferir providers de Argentina; si no hay filtro por país, mostrar todos
+                var providers = _prometeoProviders.filter(function(p) {
+                    return !p.country || p.country === 'AR' || p.country === 'Argentina';
+                });
+                if (!providers.length) providers = _prometeoProviders;
+                providers.forEach(function(p) {
+                    var o = document.createElement('option');
+                    o.value = p.code || p.name;
+                    o.textContent = (p.name || p.code) + (p.country ? ' (' + p.country + ')' : '');
+                    sel.appendChild(o);
+                });
+                _prometeoMsg('', '');
+            } catch(e) {
+                _prometeoMsg('❌ No se pudo cargar la lista de bancos: ' + (e.message||e), 'var(--danger)');
+            }
+        } else {
+            // Ya cargados: repoblar dropdown
+            var sel = document.getElementById('prometeoProvider');
+            sel.innerHTML = '<option value="">— Seleccioná el banco —</option>';
+            var providers = _prometeoProviders.filter(function(p) {
+                return !p.country || p.country === 'AR' || p.country === 'Argentina';
+            });
+            if (!providers.length) providers = _prometeoProviders;
+            providers.forEach(function(p) {
+                var o = document.createElement('option');
+                o.value = p.code || p.name;
+                o.textContent = (p.name || p.code) + (p.country ? ' (' + p.country + ')' : '');
+                sel.appendChild(o);
+            });
+        }
+    }
+
+    async function prometeoLogin() {
+        var url = _belvoUrl(); if (!url) return;
+        var provider = document.getElementById('prometeoProvider').value;
+        var username = document.getElementById('prometeoUsername').value.trim();
+        var password = document.getElementById('prometeoPassword').value;
+        if (!provider || !username || !password) {
+            _prometeoMsg('Completá todos los campos.', 'var(--danger)'); return;
+        }
+        _prometeoMsg('⏳ Conectando con el banco…', 'var(--gold)');
+        var btn = document.querySelector('#prometeoBtnLogin button');
+        if (btn) btn.disabled = true;
+        try {
+            var r = await fetch(url + '/prometeo/login', {
+                method: 'POST',
+                headers: _appHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ provider: provider, username: username, password: password })
+            });
+            var data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Error de login');
+            _prometeoKey = data.key || '';
+            if (data.status === 'logged_in') {
+                localStorage.setItem('rk_prometeo_key', _prometeoKey);
+                await _prometeoPedirCuentas(url);
+            } else if (data.status === 'interaction_required') {
+                document.getElementById('prometeoFormLogin').style.display = 'none';
+                document.getElementById('prometeoFormOtp').style.display = '';
+                _prometeoMsg('El banco requiere un código OTP o token de seguridad.', 'var(--gold)');
+            } else {
+                throw new Error('Respuesta inesperada del banco: ' + (data.status || JSON.stringify(data)));
+            }
+        } catch(e) {
+            _prometeoMsg('❌ ' + (e.message||e), 'var(--danger)');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function prometeoLoginOtp() {
+        var url = _belvoUrl(); if (!url) return;
+        var otp = document.getElementById('prometeoOtp').value.trim();
+        if (!otp) { _prometeoMsg('Ingresá el código OTP.', 'var(--danger)'); return; }
+        var provider = document.getElementById('prometeoProvider').value;
+        var username = document.getElementById('prometeoUsername').value.trim();
+        var password = document.getElementById('prometeoPassword').value;
+        _prometeoMsg('⏳ Verificando OTP…', 'var(--gold)');
+        try {
+            var r = await fetch(url + '/prometeo/login', {
+                method: 'POST',
+                headers: _appHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ provider: provider, username: username, password: password, otp: otp })
+            });
+            var data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Error de OTP');
+            _prometeoKey = data.key || '';
+            if (data.status === 'logged_in') {
+                localStorage.setItem('rk_prometeo_key', _prometeoKey);
+                document.getElementById('prometeoFormOtp').style.display = 'none';
+                await _prometeoPedirCuentas(url);
+            } else {
+                throw new Error('OTP incorrecto o respuesta inesperada: ' + (data.status || JSON.stringify(data)));
+            }
+        } catch(e) {
+            _prometeoMsg('❌ ' + (e.message||e), 'var(--danger)');
+        }
+    }
+
+    async function _prometeoPedirCuentas(url) {
+        _prometeoMsg('⏳ Obteniendo cuentas del banco…', 'var(--gold)');
+        var r = await fetch(url + '/prometeo/accounts?key=' + encodeURIComponent(_prometeoKey), { headers: _appHeaders() });
+        var data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Error al obtener cuentas');
+        var cuentas = Array.isArray(data) ? data : (data.accounts || data.data || []);
+        var sel = document.getElementById('prometeoCuentaBanco');
+        sel.innerHTML = '<option value="">— Seleccioná la cuenta del banco —</option>';
+        cuentas.forEach(function(c) {
+            var o = document.createElement('option');
+            o.value = c.id || c.number;
+            o.setAttribute('data-currency', c.currency || 'ARS');
+            o.textContent = (c.name || c.type || 'Cuenta') + ' · ' + (c.number || c.id || '') + ' (' + (c.currency || 'ARS') + ')';
+            sel.appendChild(o);
+        });
+        document.getElementById('prometeoFormCuentas').style.display = '';
+        _prometeoMsg('✓ Login exitoso. Elegí la cuenta a sincronizar.', 'var(--success)');
+    }
+
+    function prometeoGuardarConexion() {
+        var cuentaRKId     = document.getElementById('prometeoCuentaRK').value;
+        var prometeoCuentaId = document.getElementById('prometeoCuentaBanco').value;
+        if (!cuentaRKId || !prometeoCuentaId) {
+            _prometeoMsg('Seleccioná ambas cuentas.', 'var(--danger)'); return;
+        }
+        var provider = document.getElementById('prometeoProvider').value;
+        var optSel   = document.getElementById('prometeoCuentaBanco').selectedOptions[0];
+        var currency = optSel ? (optSel.getAttribute('data-currency') || 'ARS') : 'ARS';
+        var idx = cuentasBancarias.findIndex(function(cb) { return (cb.id||cb.banco) === cuentaRKId; });
+        if (idx >= 0) {
+            cuentasBancarias[idx].prometeoAccount  = prometeoCuentaId;
+            cuentasBancarias[idx].prometeoProvider = provider;
+            cuentasBancarias[idx].prometeoCurrency = currency;
+            persistirBanco();
+        }
+        cerrarModalPrometeo();
+        _prometeoMsg('✓ Banco conectado. Usá "📊 Sync Prometeo" para traer movimientos.', 'var(--success)');
+        var btnSync = document.getElementById('btnPrometeoSync');
+        if (btnSync) btnSync.style.display = '';
+        renderCuentasBancarias();
+    }
+
+    async function prometeoSincronizar() {
+        var url = _belvoUrl(); if (!url) { alert('Configurá primero la URL del backend.'); return; }
+        var cbConectadas = cuentasBancarias.filter(function(cb) { return cb.prometeoAccount; });
+        if (!cbConectadas.length) {
+            alert('No hay ninguna cuenta conectada con Prometeo. Hacé clic en "🏦 Prometeo AR" para conectar.'); return;
+        }
+        if (!_prometeoKey) {
+            _prometeoMsg('La sesión expiró. Volvé a conectar el banco.', 'var(--danger)');
+            prometeoConectar();
+            return;
+        }
+        var hasta = new Date();
+        var desde = new Date(); desde.setDate(desde.getDate() - 90);
+        function ddmmyyyy(d) {
+            return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear();
+        }
+        var dateStart = ddmmyyyy(desde);
+        var dateEnd   = ddmmyyyy(hasta);
+        var totalNuevos = 0;
+        _prometeoMsg('⏳ Sincronizando movimientos…', 'var(--gold)');
+        for (var i = 0; i < cbConectadas.length; i++) {
+            var cb = cbConectadas[i];
+            var cuentaId = cb.id || cb.banco;
+            var currency = cb.prometeoCurrency || cb.moneda || 'ARS';
+            var qs = '?key=' + encodeURIComponent(_prometeoKey) +
+                '&account='    + encodeURIComponent(cb.prometeoAccount) +
+                '&currency='   + encodeURIComponent(currency) +
+                '&date_start=' + encodeURIComponent(dateStart) +
+                '&date_end='   + encodeURIComponent(dateEnd);
+            try {
+                var r = await fetch(url + '/prometeo/movements' + qs, { headers: _appHeaders() });
+                var data = await r.json();
+                if (!r.ok) {
+                    if (r.status === 401 || (data && data.status === 'error' && /session|expired/i.test(data.message||''))) {
+                        _prometeoMsg('Sesión expirada. Volvé a conectar el banco.', 'var(--danger)');
+                        localStorage.removeItem('rk_prometeo_key'); _prometeoKey = '';
+                        return;
+                    }
+                    throw new Error(data.error || 'Error al traer movimientos');
+                }
+                var lista = Array.isArray(data) ? data : (data.movements || data.data || []);
+                // Construir set de claves existentes para no duplicar
+                var existentes = {};
+                ingGeneral.forEach(function(g) {
+                    if (!g.esBancario) return;
+                    existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')] = true;
+                });
+                lista.forEach(function(m) {
+                    // Prometeo: date en DD/MM/YYYY, credit/debit, detail/description
+                    var fechaRaw = m.date || '';
+                    var fecha = '';
+                    if (fechaRaw.indexOf('/') !== -1) {
+                        var parts = fechaRaw.split('/');
+                        if (parts.length === 3) fecha = parts[2] + '-' + parts[1] + '-' + parts[0];
+                    } else {
+                        fecha = fechaRaw.substring(0, 10);
+                    }
+                    if (!fecha) return;
+                    var credit = parseFloat(m.credit || 0);
+                    var debit  = parseFloat(m.debit  || 0);
+                    var monto  = Math.max(credit, debit);
+                    if (!monto) return;
+                    var esEgreso = debit > 0;
+                    var concepto = (m.detail || m.description || m.reference || 'Movimiento').toString().trim();
+                    var clave = impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+                    if (existentes[clave]) return;
+                    existentes[clave] = true;
+                    ingGeneral.push({
+                        tipo: esEgreso ? 'mov_banco_salida' : 'mov_banco_entrada',
+                        fecha: fecha, cuentaId: cuentaId, origen: concepto,
+                        referencia: m.reference || m.id || '',
+                        moneda: currency, monto: monto, medio: 'Prometeo',
+                        origenDest: '', esEgreso: esEgreso, esBancario: true, origenImport: 'prometeo'
+                    });
+                    totalNuevos++;
+                });
+            } catch(e) {
+                _prometeoMsg('❌ Error en ' + (cb.banco||cuentaId) + ': ' + (e.message||e), 'var(--danger)');
+            }
+        }
+        if (totalNuevos) { persistirIngGeneral(); renderCuentasBancarias(); }
+        _prometeoMsg(
+            totalNuevos ? ('✓ ' + totalNuevos + ' movimientos nuevos importados.') : 'Todo al día: no había movimientos nuevos.',
+            totalNuevos ? 'var(--success)' : 'var(--text-2)'
+        );
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────
@@ -9808,6 +10084,9 @@
         }
         var csel=document.getElementById('cbCuentaFiltro');
         if(csel){var prev=csel.value;csel.innerHTML='<option value="">— Todas las cuentas —</option>';cuentasBancarias.forEach(function(cb){var o=document.createElement('option');o.value=cb.id||cb.banco;o.textContent=cb.banco+(cb.tipo?' — '+cb.tipo:'')+(cb.moneda?' ('+cb.moneda+')':'');if(o.value===prev)o.selected=true;csel.appendChild(o);});}
+        // Mostrar botón de sync Prometeo si hay al menos una cuenta conectada
+        var btnPS = document.getElementById('btnPrometeoSync');
+        if (btnPS) btnPS.style.display = cuentasBancarias.some(function(cb){ return cb.prometeoAccount; }) ? '' : 'none';
         renderExtractoBancario();
     }
 
@@ -16966,6 +17245,60 @@
         <button type="button" class="btn btn-outline" onclick="document.getElementById('modalImportExtracto').classList.remove('active')">Cancelar</button>
         <button type="button" id="impExtBtnImportar" class="btn btn-gold" onclick="impExtImportar()" disabled>💾 Importar seleccionados</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Conectar banco con Prometeo (Open Banking Argentina) -->
+<div class="modal" id="modalPrometeo">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-head">
+      <h2>🏦 Conectar banco — Prometeo</h2>
+      <button class="modal-close" onclick="cerrarModalPrometeo()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Paso 1: selección de banco y credenciales -->
+      <div id="prometeoFormLogin">
+        <div class="form-group">
+          <label>Banco *</label>
+          <select id="prometeoProvider" style="width:100%;"><option value="">Cargando bancos…</option></select>
+        </div>
+        <div class="form-group">
+          <label>Cuenta en RK *</label>
+          <select id="prometeoCuentaRK" style="width:100%;"></select>
+        </div>
+        <div class="form-group">
+          <label>Usuario del banco online *</label>
+          <input type="text" id="prometeoUsername" placeholder="Ej: 12345678" autocomplete="off" style="width:100%;">
+        </div>
+        <div class="form-group">
+          <label>Contraseña *</label>
+          <input type="password" id="prometeoPassword" autocomplete="off" style="width:100%;">
+        </div>
+        <div class="form-hint" style="margin-bottom:12px;">Las credenciales <strong>no se guardan</strong>: solo se usan para abrir la sesión y se descarta inmediatamente.</div>
+        <div id="prometeoBtnLogin">
+          <button class="btn btn-primary" onclick="prometeoLogin()" style="width:100%;">Conectar</button>
+        </div>
+      </div>
+      <!-- Paso 2: OTP (aparece si el banco lo requiere) -->
+      <div id="prometeoFormOtp" style="display:none;">
+        <p style="margin-bottom:12px;color:var(--text-2);">El banco requiere un código de un solo uso (OTP / token de seguridad).</p>
+        <div class="form-group">
+          <label>OTP / Token *</label>
+          <input type="text" id="prometeoOtp" placeholder="Ingresá el código" autocomplete="off" style="width:100%;">
+        </div>
+        <button class="btn btn-primary" onclick="prometeoLoginOtp()" style="width:100%;">Verificar</button>
+      </div>
+      <!-- Paso 3: mapeo de cuenta (aparece tras login exitoso) -->
+      <div id="prometeoFormCuentas" style="display:none;">
+        <p style="margin-bottom:12px;color:var(--success);">✓ Login exitoso. Elegí qué cuenta del banco online corresponde a la cuenta de RK seleccionada.</p>
+        <div class="form-group">
+          <label>Cuenta bancaria (online) *</label>
+          <select id="prometeoCuentaBanco" style="width:100%;"></select>
+        </div>
+        <button class="btn btn-primary" onclick="prometeoGuardarConexion()" style="width:100%;">💾 Guardar conexión</button>
+      </div>
+      <div id="prometeoModalStatus" style="margin-top:12px;font-size:13px;min-height:18px;"></div>
     </div>
   </div>
 </div>
