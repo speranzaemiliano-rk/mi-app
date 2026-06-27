@@ -5955,7 +5955,7 @@
         var token;
         try {
             _belvoMsg('⏳ Pidiendo token al backend…', 'var(--gold)');
-            var r = await fetch(url + '/belvo/widget-token', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+            var r = await fetch(url + '/belvo/widget-token', { method:'POST', headers:_appHeaders({'Content-Type':'application/json'}), body:'{}' });
             var j = await r.json();
             if(!r.ok || !j.access){ _belvoMsg('❌ El backend no devolvió token. ' + (j.error||'') + ' ' + (j.detalle?JSON.stringify(j.detalle):''), 'var(--danger)'); return; }
             token = j.access;
@@ -5994,7 +5994,7 @@
         var desde = d.toISOString().substring(0,10);
         var data;
         try {
-            var r = await fetch(url + '/belvo/transactions?link=' + encodeURIComponent(cb.belvoLink) + '&date_from=' + desde + '&date_to=' + hasta);
+            var r = await fetch(url + '/belvo/transactions?link=' + encodeURIComponent(cb.belvoLink) + '&date_from=' + desde + '&date_to=' + hasta, { headers:_appHeaders() });
             data = await r.json();
             if(!r.ok){ alert('Belvo devolvió un error al traer movimientos.\n' + (data.error||'') ); return; }
         } catch(e){ alert('No se pudo conectar con el backend.\n' + (e.message||e)); return; }
@@ -13898,6 +13898,26 @@
             _afipUrlsPorEmpresa = {};
             Object.keys(v).forEach(function(eid) { if (v[eid].url) _afipUrlsPorEmpresa[eid] = v[eid].url; });
         });
+        // Token de acceso al backend (compartido, una sola pieza). Se sincroniza
+        // en la nube para que valga en todos los dispositivos.
+        db.ref('global/config/appToken').on('value', function(snap) {
+            _appTokenRemoto = snap.val() || '';
+        });
+    }
+
+    // ── TOKEN DEL BACKEND ──
+    // El backend de Railway exige el header X-App-Token. Sin este token, las
+    // llamadas a /afip y /belvo devuelven 401. Se guarda en el dispositivo
+    // (localStorage) y se respalda en Firebase (global/config/appToken).
+    var _appTokenRemoto = '';
+    function _appToken() {
+        return (localStorage.getItem('rk_app_token') || _appTokenRemoto || '').trim();
+    }
+    function _appHeaders(extra) {
+        var h = extra || {};
+        var t = _appToken();
+        if (t) h['X-App-Token'] = t;
+        return h;
     }
 
     function _afipUrlEmpresaActual() {
@@ -13951,7 +13971,7 @@
             for (var i = 0; i < tipos.length; i++) {
                 var tipo = tipos[i];
                 try {
-                    var resp = await fetch(baseUrl + '/afip/importar?ptoVta=' + ptoVta + '&tipoComp=' + tipo);
+                    var resp = await fetch(baseUrl + '/afip/importar?ptoVta=' + ptoVta + '&tipoComp=' + tipo, { headers:_appHeaders() });
                     if (!resp.ok) continue;
                     var lista = await resp.json();
                     if (!Array.isArray(lista)) continue;
@@ -14129,6 +14149,13 @@
             st.style.background = '#D1FAE5'; st.style.color = '#065F46'; st.style.borderColor = '#6EE7B7';
             st.innerHTML = '✅ <strong>' + empNombre + '</strong> — Conectado al backend ARCA. <span style="font-size:11px;opacity:.7;">' + url.replace('/afip','') + '</span>';
         }
+        // Token de acceso al backend (compartido). Sin esto, el backend rechaza las llamadas (401).
+        var tokOk = !!_appToken();
+        st.innerHTML += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,.1);">'
+            + '<div style="font-size:12px;margin-bottom:6px;">' + (tokOk ? '🔑 Token del backend configurado.' : '🔓 Falta el <strong>token del backend</strong> (X-App-Token). Pegalo para poder facturar:') + '</div>'
+            + '<div style="display:flex;gap:6px;">'
+            + '<input id="afipTokenInput" type="password" placeholder="' + (tokOk ? '•••••••• (dejar vacío = sin cambios)' : 'Token de Railway (APP_API_TOKEN)') + '" autocomplete="off" style="flex:1;padding:6px 10px;border:1px solid #94A3B8;border-radius:6px;font-size:13px;">'
+            + '<button onclick="afipGuardarToken()" style="padding:6px 12px;background:#334155;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Guardar token</button></div></div>';
         document.getElementById('modalEmitirAFIP').classList.add('active');
     }
 
@@ -14144,9 +14171,19 @@
         var eid = empresaActual.id;
         _afipUrlsPorEmpresa[eid] = val;
         if (db) db.ref('global/config/afipConfig/' + eid + '/url').set(val);
-        var st = document.getElementById('afipConfigStatus');
-        st.style.background = '#D1FAE5'; st.style.color = '#065F46'; st.style.borderColor = '#6EE7B7';
-        st.innerHTML = '✅ <strong>' + empresaActual.nombre + '</strong> — Conectado al backend ARCA. <span style="font-size:11px;opacity:.7;">' + val.replace('/afip','') + '</span>';
+        // Reabrir el modal para refrescar el estado (incluye la fila del token).
+        abrirEmitirFacturaAFIP();
+    }
+
+    // Guarda el token del backend en el dispositivo (localStorage) y lo respalda
+    // en Firebase para que valga en todos los dispositivos. Vacío = no cambia.
+    function afipGuardarToken() {
+        var el = document.getElementById('afipTokenInput');
+        var val = (el && el.value || '').trim();
+        if (!val) { alert('Pegá el token (o dejá el campo vacío si ya estaba guardado).'); return; }
+        localStorage.setItem('rk_app_token', val);
+        if (db) db.ref('global/config/appToken').set(val).catch(function(){});
+        abrirEmitirFacturaAFIP();
     }
 
     var _afipAlicuotas = { '5': 0.21, '4': 0.105, '6': 0.27, '3': 0, '9': 0.025 };
@@ -14216,7 +14253,7 @@
         try {
             var resp = await fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _appHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     tipoComp, ptoVta, concepto, fecha, moneda,
                     cuitRecep, condIva, razon, dom,

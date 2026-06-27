@@ -3,8 +3,33 @@ const cors    = require('cors');
 const Afip    = require('@afipsdk/afip.js');
 
 const app  = express();
-app.use(cors({ origin: true }));
+
+// CORS: si ALLOWED_ORIGINS está definido (orígenes separados por coma), solo
+// esos dominios pueden llamar desde un navegador. Si no, refleja el origen
+// (compatibilidad). El token es la protección real; CORS es defensa en capas.
+const _origins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({ origin: _origins.length ? _origins : true }));
 app.use(express.json());
+
+// ── AUTENTICACIÓN: token compartido ──
+// El frontend manda el header X-App-Token (o ?token= para abrir /diag en el
+// navegador). Sin un token válido se rechaza con 401. Configurar en Railway:
+//   APP_API_TOKEN = <una cadena larga y secreta>
+// Si APP_API_TOKEN no está definido, NO se exige token (modo compatibilidad,
+// con aviso en consola) para no romper despliegues existentes.
+app.use((req, res, next) => {
+    if (req.path === '/') return next(); // health check público
+    const esperado = process.env.APP_API_TOKEN;
+    if (!esperado) {
+        console.warn('⚠️  APP_API_TOKEN no configurado: el backend está ABIERTO. Configuralo en Railway.');
+        return next();
+    }
+    const recibido = req.get('X-App-Token') || req.query.token || '';
+    if (recibido !== esperado) {
+        return res.status(401).json({ error: 'No autorizado: falta o no coincide el token (X-App-Token).' });
+    }
+    next();
+});
 
 // Variables de entorno:
 //   AFIP_CUIT   → tu CUIT sin guiones

@@ -8,12 +8,24 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 
 | # | Severidad | Problema | Estado |
 |---|---|---|---|
-| 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | Pendiente |
-| 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | Pendiente |
+| 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | ✅ Código listo — falta deploy (ver abajo) |
+| 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | ✅ Reglas listas — falta publicar |
 | 3 | 🟠 ALTO | PDFs de facturas con lectura pública (`temp-pdf`, `.read: true`) | Pendiente |
 | 4 | 🟡 MEDIO | Sin validación de inputs ni rate limiting en el backend | Pendiente |
 | 5 | 🟡 MEDIO | Datos compartidos globalmente entre empresas (proveedores, grupos) | A evaluar |
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
+
+> ### ✅ Mitigaciones aplicadas en código (faltan los pasos de despliegue)
+>
+> **#1 — Token del backend (API token compartido):**
+> - `functions/server.js` ahora exige el header `X-App-Token` en todos los endpoints (menos `/`). Sin token válido → `401`. Acepta `?token=` para abrir `/diag` en el navegador. CORS configurable con `ALLOWED_ORIGINS`.
+> - El frontend envía el token en las 4 llamadas al backend; se configura en el modal de ARCA (campo "token del backend"), se guarda en el dispositivo y se respalda en `global/config/appToken`.
+> - **Falta (vos):** en Railway, crear la variable `APP_API_TOKEN` con una cadena larga y secreta (y opcional `ALLOWED_ORIGINS=https://speranzaemiliano-rk.github.io`). Luego, en la app, pegar ese mismo token en el modal de ARCA. *Mientras `APP_API_TOKEN` no exista, el backend sigue abierto (modo compatibilidad, con aviso en el log).*
+>
+> **#2 — Reglas de Firebase (`database.rules.json`):**
+> - Default `deny`; el nodo `roles` solo lo escribe un superadmin (con bootstrap del primer usuario); las escrituras de datos exigen rol `editor`/`admin`/`superadmin`.
+> - **Falta (vos):** publicar las reglas — `firebase deploy --only database`, o copiar el contenido de `database.rules.json` en la consola de Firebase → Realtime Database → Reglas → Publicar.
+> - ⚠️ **Antes de publicar:** confirmá que tu usuario tenga rol `superadmin` en `roles/<tu-uid>` (si ya sos super admin en la app, lo tenés). Tras publicar, los usuarios con rol `editor`/`admin`/`superadmin` siguen editando; los de solo lectura (o sin rol) quedan en lectura — igual que hoy en la interfaz.
 
 ---
 
