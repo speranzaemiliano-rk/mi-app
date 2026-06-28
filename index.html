@@ -14243,8 +14243,86 @@
             st.style.background = '#FEE2E2'; st.style.color = '#991B1B'; st.style.border = '1px solid #FECACA';
             st.textContent = '❌ Error al importar: ' + (e.message || String(e));
         }
-        btn.disabled = false; btn.textContent = '🔄 Importar desde ARCA';
+        btn.disabled = false; btn.textContent = '🔄 Importar (web service)';
     }
+
+    // Convierte texto de tipo de comprobante de ARCA a código numérico
+    function _tipoCompDesdeTexto(txt) {
+        var s = String(txt||'').toLowerCase();
+        var m = s.match(/^\s*(\d+)\s*[-–]/); // "1 - Factura A"
+        if (m) return parseInt(m[1]);
+        var esNC = s.indexOf('cr') !== -1; // crédito
+        var esND = s.indexOf('déb') !== -1 || s.indexOf('deb') !== -1; // débito
+        var letra = /\ba\b/.test(s) || s.indexOf(' a') !== -1 ? 'A' : (/\bb\b/.test(s) || s.indexOf(' b') !== -1) ? 'B' : 'C';
+        var base = { A: {f:1, nd:2, nc:3}, B: {f:6, nd:7, nc:8}, C: {f:11, nd:12, nc:13} }[letra];
+        return esNC ? base.nc : esND ? base.nd : base.f;
+    }
+
+    // Mapea un emitido crudo de ARCA (portal) a nuestro esquema facturasARCA
+    function _mapearEmitidoARCA(row) {
+        var keys = Object.keys(row || {});
+        function find(pred) { for (var i=0;i<keys.length;i++){ if (pred(keys[i].toLowerCase().trim())) return row[keys[i]]; } return ''; }
+        function n(v){ var s=String(v||'').replace(/\s/g,''); if(s.indexOf(',')!==-1) s=s.replace(/\./g,'').replace(',','.'); s=s.replace(/[^\d.\-]/g,''); return parseFloat(s)||0; }
+        function fechaYMD(v){ var s=String(v||'').trim(); var m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/); if(m) return m[3]+m[2].padStart(2,'0')+m[1].padStart(2,'0'); var m2=s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/); if(m2) return m2[1]+m2[2].padStart(2,'0')+m2[3].padStart(2,'0'); return s.replace(/\D/g,''); }
+        var moneda = String(find(function(k){ return k.indexOf('moneda')!==-1; })).toUpperCase();
+        return {
+            tipoComp:  _tipoCompDesdeTexto(find(function(k){ return k.indexOf('tipo')!==-1 && k.indexOf('comprob')!==-1; }) || find(function(k){ return k.indexOf('tipo')!==-1 && k.indexOf('doc')===-1; })),
+            ptoVta:    parseInt(n(find(function(k){ return k.indexOf('punto')!==-1 || k==='pto. de venta'; }))) || '',
+            nro:       parseInt(n(find(function(k){ return (k.indexOf('número')!==-1 || k.indexOf('numero')!==-1) && k.indexOf('hasta')===-1; }))) || '',
+            fecha:     fechaYMD(find(function(k){ return k.indexOf('fecha')!==-1; })),
+            razon:     String(find(function(k){ return k.indexOf('denominaci')!==-1; })).trim(),
+            cuitRecep: String(find(function(k){ return (k.indexOf('nro')!==-1 && k.indexOf('doc')!==-1) || k.indexOf('cuit')!==-1; })).trim(),
+            impNeto:   n(find(function(k){ return k.indexOf('neto')!==-1 && k.indexOf('grav')!==-1 && k.indexOf('no ')===-1; })),
+            impIVA:    n(find(function(k){ return k==='iva' || (k.indexOf('iva')!==-1 && k.indexOf('no')===-1); })),
+            impTotal:  n(find(function(k){ return k.indexOf('total')!==-1; })),
+            cae:       String(find(function(k){ return k.indexOf('autoriza')!==-1 || k.indexOf('cae')!==-1; })).trim(),
+            moneda:    (moneda.indexOf('DOL')!==-1 || moneda.indexOf('US')!==-1) ? 'DOL' : 'PES',
+            emitidaEn: Date.now()
+        };
+    }
+
+    async function importarEmitidosAuto() {
+        var url = _afipUrlEmpresaActual();
+        if (!url) { alert('Esta empresa no tiene backend ARCA configurado.'); return; }
+        var baseUrl = url.replace(/\/afip$/, '');
+        var btn = document.getElementById('btnEmitidosAuto');
+        var st  = document.getElementById('importarARCAStatus');
+        var desde = (document.getElementById('arcaFiltroDesde')||{}).value || '';
+        var hasta = (document.getElementById('arcaFiltroHasta')||{}).value || '';
+        btn.disabled = true; var btnTxt = btn.textContent; btn.textContent = 'Importando…';
+        st.style.display=''; st.style.background='#EFF6FF'; st.style.color='#1D4ED8'; st.style.border='1px solid #BFDBFE';
+        st.textContent = 'Conectando con ARCA y descargando TODOS los emitidos (incluidos los del portal)… puede tardar 1-3 minutos.';
+        try {
+            var qs = [];
+            if (desde) qs.push('desde=' + encodeURIComponent(desde));
+            if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
+            var resp = await fetch(baseUrl + '/afip/emitidos' + (qs.length ? ('?' + qs.join('&')) : ''));
+            var json = await resp.json();
+            if (!resp.ok) {
+                if (json && json.faltanCreds) throw new Error('Falta configurar las credenciales en el servidor (Railway): AFIP_SDK_TOKEN, ARCA_USER y ARCA_PASS. ' + (json.detalle||''));
+                throw new Error((json && (json.error||json.detalle)) || ('Error HTTP ' + resp.status));
+            }
+            if (!Array.isArray(json)) throw new Error('Respuesta inesperada del servidor.');
+            var mapeados = json.map(_mapearEmitidoARCA).filter(function(f){ return f.fecha || f.nro; });
+            var claves = new Set(facturasARCA.map(function(f){ return f.cae ? ('cae:'+f.cae) : (f.tipoComp+'|'+f.ptoVta+'|'+f.nro); }));
+            var nuevos = 0;
+            mapeados.forEach(function(f) {
+                var k = f.cae ? ('cae:'+f.cae) : (f.tipoComp+'|'+f.ptoVta+'|'+f.nro);
+                if (!claves.has(k)) { facturasARCA.push(f); claves.add(k); nuevos++; }
+            });
+            if (nuevos > 0 && REF_FACTURAS_ARCA) REF_FACTURAS_ARCA.set(facturasARCA);
+            renderFacturasARCA();
+            st.style.background='#D1FAE5'; st.style.color='#065F46'; st.style.border='1px solid #6EE7B7';
+            st.textContent = nuevos > 0
+                ? ('✅ Se importaron ' + nuevos + ' comprobante(s) emitidos nuevos (de ' + mapeados.length + ' encontrados).')
+                : 'No hay comprobantes emitidos nuevos en el rango seleccionado.';
+        } catch(e) {
+            st.style.background='#FEE2E2'; st.style.color='#991B1B'; st.style.border='1px solid #FECACA';
+            st.textContent = '❌ ' + (e.message || String(e));
+        }
+        btn.disabled = false; btn.textContent = btnTxt;
+    }
+
     function _fmtFechaAfip(f) {
         // f viene como YYYYMMDD
         if (!f || String(f).length !== 8) return f || '—';
@@ -18050,8 +18128,11 @@
           <input type="date" id="arcaFiltroDesde" onchange="renderFacturasARCA()" style="padding:5px 8px;font-size:12px;border:1px solid #DDD;border-radius:6px;">
           <label style="font-size:12px;color:#5F6368;white-space:nowrap;">Hasta:</label>
           <input type="date" id="arcaFiltroHasta" onchange="renderFacturasARCA()" style="padding:5px 8px;font-size:12px;border:1px solid #DDD;border-radius:6px;">
-          <button class="btn btn-outline btn-sm" id="btnImportarARCA" onclick="importarDesdeARCA()" title="Trae comprobantes emitidos antes de usar esta app">
-            🔄 Importar desde ARCA
+          <button class="btn btn-primary btn-sm" id="btnEmitidosAuto" onclick="importarEmitidosAuto()" title="Trae TODOS los emitidos desde ARCA, incluidos los hechos en el portal (requiere credenciales en el servidor)">
+            ⚡ Importar automático
+          </button>
+          <button class="btn btn-outline btn-sm" id="btnImportarARCA" onclick="importarDesdeARCA()" title="Trae los emitidos por web service (certificado, gratis)">
+            🔄 Importar (web service)
           </button>
           <button class="btn btn-outline btn-sm" onclick="exportarFacturasARCA()" title="Exporta a Excel los comprobantes según el filtro de fechas">
             ⬇️ Exportar Excel
