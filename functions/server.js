@@ -153,74 +153,85 @@ function fechaDMY(iso) {
     return p.length === 3 ? (p[2] + '/' + p[1] + '/' + p[0]) : iso;
 }
 
-// GET /afip/recibidos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
-app.get('/afip/recibidos', async (req, res) => {
-    try {
-        const token = process.env.AFIP_SDK_TOKEN || process.env.AFIP_ACCESS_TOKEN || '';
-        const cuit  = process.env.AFIP_CUIT || '';
-        const user  = process.env.ARCA_USER || cuit;
-        const pass  = process.env.ARCA_PASS || '';
-        if (!token || !cuit || !pass) {
-            return res.status(400).json({
-                error: 'Faltan credenciales para comprobantes recibidos.',
-                detalle: 'Configurá en Railway: AFIP_SDK_TOKEN (o AFIP_ACCESS_TOKEN), ARCA_USER (o se usa AFIP_CUIT) y ARCA_PASS (contraseña de clave fiscal).',
-                faltanCreds: true
-            });
-        }
-
-        // Rango de fechas: default último mes si no se especifica
-        let desde = req.query.desde || '';
-        let hasta = req.query.hasta || '';
-        const filters = { t: 'R' };
-        if (desde || hasta) {
-            filters.fechaEmision = (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '');
-        }
-
-        const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
-
-        // 1) Crear la automatización
-        const crear = await fetch(AFIPSDK_BASE + '/automations', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit, username: user, password: pass, filters } })
-        });
-        const crearJson = await crear.json().catch(() => ({}));
-        if (!crear.ok) {
-            return res.status(crear.status).json({ error: 'AFIP SDK rechazó la solicitud.', detalle: JSON.stringify(crearJson) });
-        }
-        const id = crearJson.id || crearJson._id || (crearJson.data && crearJson.data.id);
-        if (!id) return res.status(502).json({ error: 'AFIP SDK no devolvió un id de automatización.', detalle: JSON.stringify(crearJson) });
-
-        // 2) Poll hasta que termine (máx ~3 min)
-        let resultado = null;
-        for (let intento = 0; intento < 36; intento++) {
-            await sleep(5000);
-            const r = await fetch(AFIPSDK_BASE + '/automations/' + id, { headers });
-            const j = await r.json().catch(() => ({}));
-            const status = (j.status || (j.data && j.data.status) || '').toLowerCase();
-            if (status && status !== 'in_process' && status !== 'pending' && status !== 'processing') {
-                resultado = j;
-                break;
-            }
-        }
-        if (!resultado) return res.status(504).json({ error: 'La automatización tardó demasiado. Probá de nuevo o reducí el rango de fechas.' });
-
-        const status = (resultado.status || (resultado.data && resultado.data.status) || '').toLowerCase();
-        if (status === 'error' || status === 'failed') {
-            return res.status(502).json({ error: 'La automatización falló (¿usuario/contraseña de ARCA correctos?).', detalle: JSON.stringify(resultado) });
-        }
-
-        // 3) Extraer el array de comprobantes (la forma exacta puede variar)
-        let data = resultado.data;
-        if (data && !Array.isArray(data) && Array.isArray(data.data)) data = data.data;
-        if (!Array.isArray(data)) data = resultado.result || resultado.comprobantes || [];
-        if (!Array.isArray(data)) data = [];
-
-        return res.json(data);
-    } catch (e) {
-        return res.status(500).json({ error: e.message, detalle: detalleError(e) });
+// Ejecuta la automatización "mis-comprobantes" para un tipo ('R' recibidos /
+// 'E' emitidos) y un rango de fechas. Devuelve el array crudo de comprobantes.
+// Lanza un Error con .httpStatus y .faltanCreds según corresponda.
+async function misComprobantes(tipo, desde, hasta) {
+    const token = process.env.AFIP_SDK_TOKEN || process.env.AFIP_ACCESS_TOKEN || '';
+    const cuit  = process.env.AFIP_CUIT || '';
+    const user  = process.env.ARCA_USER || cuit;
+    const pass  = process.env.ARCA_PASS || '';
+    if (!token || !cuit || !pass) {
+        const err = new Error('Configurá en Railway: AFIP_SDK_TOKEN (o AFIP_ACCESS_TOKEN), ARCA_USER (o se usa AFIP_CUIT) y ARCA_PASS (contraseña de clave fiscal).');
+        err.httpStatus = 400; err.faltanCreds = true;
+        throw err;
     }
-});
+
+    const filters = { t: tipo };
+    if (desde || hasta) {
+        filters.fechaEmision = (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '');
+    }
+    const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+
+    // 1) Crear la automatización
+    const crear = await fetch(AFIPSDK_BASE + '/automations', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit, username: user, password: pass, filters } })
+    });
+    const crearJson = await crear.json().catch(() => ({}));
+    if (!crear.ok) {
+        const err = new Error('AFIP SDK rechazó la solicitud: ' + JSON.stringify(crearJson));
+        err.httpStatus = crear.status;
+        throw err;
+    }
+    const id = crearJson.id || crearJson._id || (crearJson.data && crearJson.data.id);
+    if (!id) { const err = new Error('AFIP SDK no devolvió un id de automatización: ' + JSON.stringify(crearJson)); err.httpStatus = 502; throw err; }
+
+    // 2) Poll hasta que termine (máx ~3 min)
+    let resultado = null;
+    for (let intento = 0; intento < 36; intento++) {
+        await sleep(5000);
+        const r = await fetch(AFIPSDK_BASE + '/automations/' + id, { headers });
+        const j = await r.json().catch(() => ({}));
+        const status = (j.status || (j.data && j.data.status) || '').toLowerCase();
+        if (status && status !== 'in_process' && status !== 'pending' && status !== 'processing') {
+            resultado = j;
+            break;
+        }
+    }
+    if (!resultado) { const err = new Error('La automatización tardó demasiado. Probá de nuevo o reducí el rango de fechas.'); err.httpStatus = 504; throw err; }
+
+    const status = (resultado.status || (resultado.data && resultado.data.status) || '').toLowerCase();
+    if (status === 'error' || status === 'failed') {
+        const err = new Error('La automatización falló (¿usuario/contraseña de ARCA correctos?): ' + JSON.stringify(resultado));
+        err.httpStatus = 502;
+        throw err;
+    }
+
+    // 3) Extraer el array de comprobantes (la forma exacta puede variar)
+    let data = resultado.data;
+    if (data && !Array.isArray(data) && Array.isArray(data.data)) data = data.data;
+    if (!Array.isArray(data)) data = resultado.result || resultado.comprobantes || [];
+    if (!Array.isArray(data)) data = [];
+    return data;
+}
+
+function handlerMisComprobantes(tipo) {
+    return async (req, res) => {
+        try {
+            const data = await misComprobantes(tipo, req.query.desde || '', req.query.hasta || '');
+            return res.json(data);
+        } catch (e) {
+            return res.status(e.httpStatus || 500).json({ error: e.message, faltanCreds: !!e.faltanCreds });
+        }
+    };
+}
+
+// GET /afip/recibidos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD  (comprobantes recibidos)
+app.get('/afip/recibidos', handlerMisComprobantes('R'));
+// GET /afip/emitidos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD   (emitidos, incluye los del portal)
+app.get('/afip/emitidos', handlerMisComprobantes('E'));
 
 // Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
 // tenés habilitados y si la conexión con ARCA funciona.
