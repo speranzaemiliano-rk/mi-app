@@ -3679,6 +3679,7 @@
                 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
                   <h2 style="margin:0;font-size:18px;">📊 Reportes Contables</h2>
                   <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap;">
+                    <button class="btn btn-outline btn-sm" onclick="rptExportar('todo')" title="Exportar los 3 reportes en un solo Excel con 3 hojas">⬇️ Exportar Todo (Excel)</button>
                     <select id="rptAnio" onchange="rptActualizar()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text-1);font-size:13px;"></select>
                     <select id="rptMes" onchange="rptActualizar()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text-1);font-size:13px;">
                       <option value="0">Enero</option><option value="1">Febrero</option><option value="2">Marzo</option>
@@ -3704,7 +3705,10 @@
                   <div class="table-card">
                     <div class="table-card-head">
                       <h3>📤 IVA Ventas — Facturas Emitidas ARCA</h3>
-                      <button class="btn btn-outline btn-sm" onclick="rptImprimir('ventas')">🖨️ Imprimir</button>
+                      <div style="display:flex;gap:6px;">
+                        <button class="btn btn-outline btn-sm" onclick="rptExportar('ventas')">⬇️ Excel</button>
+                        <button class="btn btn-outline btn-sm" onclick="rptImprimir('ventas')">🖨️ Imprimir</button>
+                      </div>
                     </div>
                     <div style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
@@ -3731,7 +3735,10 @@
                   <div class="table-card">
                     <div class="table-card-head">
                       <h3>📥 IVA Compras — Facturas de Proveedores</h3>
-                      <button class="btn btn-outline btn-sm" onclick="rptImprimir('compras')">🖨️ Imprimir</button>
+                      <div style="display:flex;gap:6px;">
+                        <button class="btn btn-outline btn-sm" onclick="rptExportar('compras')">⬇️ Excel</button>
+                        <button class="btn btn-outline btn-sm" onclick="rptImprimir('compras')">🖨️ Imprimir</button>
+                      </div>
                     </div>
                     <div style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
@@ -3756,7 +3763,10 @@
                   <div class="table-card">
                     <div class="table-card-head">
                       <h3>🏛️ Retenciones AFIP/ARCA</h3>
-                      <button class="btn btn-outline btn-sm" onclick="rptImprimir('retenciones')">🖨️ Imprimir</button>
+                      <div style="display:flex;gap:6px;">
+                        <button class="btn btn-outline btn-sm" onclick="rptExportar('retenciones')">⬇️ Excel</button>
+                        <button class="btn btn-outline btn-sm" onclick="rptImprimir('retenciones')">🖨️ Imprimir</button>
+                      </div>
                     </div>
                     <div style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
@@ -7448,6 +7458,64 @@
         var w = window.open('','_blank');
         w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Reporte</title>'+css+'</head><body>'+content+'<button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🖨️ Imprimir / Guardar PDF</button></body></html>');
         w.document.close();
+    }
+
+    function rptExportar(tipo) {
+        if (typeof XLSX === 'undefined') { alert('No se pudo cargar la librería Excel. Verificá tu conexión.'); return; }
+        var f = rptFiltro();
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        var quins = ['','1raQ','2daQ'];
+        var periodoTag = meses[f.mes] + f.anio + (quins[f.quin] ? '_' + quins[f.quin] : '');
+        var empresa = empresaActual ? empresaActual.nombre.replace(/\s+/g,'_') : 'RK';
+
+        function _sheetVentas() {
+            var items = (facturasARCA||[]).filter(function(v){ return rptEnPeriodo(v.fecha.length===8 ? v.fecha.slice(0,4)+'-'+v.fecha.slice(4,6)+'-'+v.fecha.slice(6,8) : v.fecha, f); });
+            return items.map(function(v) {
+                var alicPct = v.impNeto > 0 ? Math.round((v.impIVA / v.impNeto)*100) : 0;
+                var fecha = v.fecha.length===8 ? rptFechaAfip(v.fecha) : v.fecha;
+                return { 'Fecha': fecha, 'Tipo': (_afipTiposNombreRpt[v.tipoComp]||v.tipoComp),
+                         'Número': String(v.ptoVta||'').padStart(4,'0')+'-'+String(v.nro||'').padStart(8,'0'),
+                         'Receptor': v.razon||'', 'CUIT': v.cuitRecep||'',
+                         'Neto Gravado': v.impNeto||0, 'IVA %': alicPct, 'IVA $': v.impIVA||0, 'Total': v.impTotal||0 };
+            });
+        }
+
+        function _sheetCompras() {
+            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+            return items.map(function(v) {
+                return { 'Fecha': v.fecha||'', 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
+                         'Concepto': v.descripcion||'', 'Importe': v.importe||0,
+                         'Pagado': v.pagado||0, 'Estado': v.estado||'' };
+            });
+        }
+
+        function _sheetRetenciones() {
+            var rows = [];
+            (datos||[]).forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:d.proveedor||'',cbte:d.recibo||'',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:(p.capital||p.montoPagado||0)+(p.mayores||0),retencion:r.monto}); }); }); });
+            (facturas||[]).forEach(function(fa){ (fa.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:fa.proveedor||'',cbte:fa.numero||'',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:p.monto||0,retencion:r.monto}); }); }); });
+            rows.sort(function(a,b){ return a.fecha<b.fecha?-1:1; });
+            return rows.map(function(r) {
+                return { 'Fecha': r.fecha, 'Proveedor': r.proveedor, 'Comprobante': r.cbte,
+                         'Régimen': r.codigo, 'Descripción': r.desc,
+                         'Monto Pago': r.montoPago, 'Retención': r.retencion };
+            });
+        }
+
+        var wb = XLSX.utils.book_new();
+
+        function addSheet(nombre, data) {
+            if (!data.length) data = [{ '(sin datos en el período)': '' }];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), nombre);
+        }
+
+        if (tipo === 'ventas' || tipo === 'todo') addSheet('IVA Ventas', _sheetVentas());
+        if (tipo === 'compras' || tipo === 'todo') addSheet('IVA Compras', _sheetCompras());
+        if (tipo === 'retenciones' || tipo === 'todo') addSheet('Retenciones', _sheetRetenciones());
+
+        var nombre = tipo === 'todo'
+            ? empresa + '_Reportes_' + periodoTag + '.xlsx'
+            : empresa + '_' + (tipo === 'ventas' ? 'IVA-Ventas' : tipo === 'compras' ? 'IVA-Compras' : 'Retenciones') + '_' + periodoTag + '.xlsx';
+        XLSX.writeFile(wb, nombre);
     }
 
     function togglePrincipalMenu() {
