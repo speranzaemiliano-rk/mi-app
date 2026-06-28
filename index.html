@@ -3939,14 +3939,16 @@
                             <input type="date" id="compRecDesde" onchange="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;" title="Desde">
                             <input type="date" id="compRecHasta" onchange="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;" title="Hasta">
                             <input type="text" id="compRecBuscador" placeholder="Buscar proveedor, tipo…" oninput="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;width:200px;">
-                            <button class="btn btn-outline btn-sm" onclick="abrirImportarCompRecibidos()">📂 Importar desde ARCA</button>
+                            <button class="btn btn-primary btn-sm" id="btnRecibidosAuto" onclick="importarRecibidosAuto()" title="Trae los comprobantes recibidos automáticamente desde ARCA (usa el rango de fechas de arriba)">⚡ Importar automático</button>
+                            <button class="btn btn-outline btn-sm" onclick="abrirImportarCompRecibidos()" title="Subir el Excel exportado de ARCA">📂 Importar Excel</button>
                             <button class="btn btn-outline btn-sm" onclick="exportarCompRecibidos()">⬇️ Exportar Excel</button>
                             <span class="results-count" id="compRecContador"></span>
                         </div>
                     </div>
+                    <div id="compRecAutoStatus" style="display:none;margin:0 18px 10px;padding:8px 12px;border-radius:6px;font-size:12px;"></div>
                     <p style="font-size:12px;color:#5F6368;padding:0 18px 10px;margin:0;">
-                        Importá los comprobantes recibidos exportándolos desde
-                        <strong>ARCA → Mis Comprobantes → Recibidos → Exportar (Excel)</strong> y subiendo el archivo acá.
+                        <strong>⚡ Importar automático</strong>: trae los recibidos directo desde ARCA (según el rango de fechas de arriba). Requiere las credenciales configuradas en el servidor.
+                        También podés usar <strong>📂 Importar Excel</strong> exportando desde ARCA → Mis Comprobantes → Recibidos → Exportar.
                     </p>
                     <div class="table-wrap">
                         <table style="font-size:13px;">
@@ -14545,6 +14547,85 @@
         });
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'CompRecibidos');
         XLSX.writeFile(wb, 'RK-CompRecibidos.xlsx');
+    }
+
+    // Mapea un comprobante crudo devuelto por ARCA (claves en español) a nuestro esquema
+    function _mapearRecibidoARCA(row) {
+        var keys = Object.keys(row || {});
+        function find(pred) {
+            for (var i=0;i<keys.length;i++){ if (pred(keys[i].toLowerCase().trim())) return row[keys[i]]; }
+            return '';
+        }
+        function fechaISO(v) {
+            var s = String(v||'').trim();
+            var m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+            if (m) return m[3] + '-' + m[2].padStart(2,'0') + '-' + m[1].padStart(2,'0');
+            var m2 = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+            if (m2) return m2[1] + '-' + m2[2].padStart(2,'0') + '-' + m2[3].padStart(2,'0');
+            return s;
+        }
+        function n(v) {
+            var s = String(v||'').replace(/\s/g,'');
+            if (s.indexOf(',') !== -1) s = s.replace(/\./g,'').replace(',','.'); // formato es-AR
+            s = s.replace(/[^\d.\-]/g,'');
+            return parseFloat(s) || 0;
+        }
+        return {
+            fecha:       fechaISO(find(function(k){ return k.indexOf('fecha')!==-1; })),
+            tipo:        String(find(function(k){ return k.indexOf('tipo')!==-1 && k.indexOf('comprob')!==-1; }) || find(function(k){ return k.indexOf('tipo')!==-1 && k.indexOf('doc')===-1 && k.indexOf('cambio')===-1; })).trim(),
+            ptoVta:      String(find(function(k){ return (k.indexOf('punto')!==-1 || k==='pto. de venta') && k.indexOf('doc')===-1; })).trim(),
+            numero:      String(find(function(k){ return (k.indexOf('número')!==-1 || k.indexOf('numero')!==-1) && k.indexOf('hasta')===-1; })).trim(),
+            cuit:        String(find(function(k){ return (k.indexOf('nro')!==-1 && k.indexOf('doc')!==-1) || k.indexOf('cuit')!==-1; })).trim(),
+            proveedor:   String(find(function(k){ return k.indexOf('denominaci')!==-1; })).trim(),
+            netoGravado: n(find(function(k){ return k.indexOf('neto')!==-1 && k.indexOf('grav')!==-1 && k.indexOf('no ')===-1; })),
+            iva:         n(find(function(k){ return k==='iva' || (k.indexOf('iva')!==-1 && k.indexOf('no')===-1 && k.indexOf('cat')===-1); })),
+            total:       n(find(function(k){ return k.indexOf('total')!==-1; })),
+            importadoEn: Date.now()
+        };
+    }
+
+    async function importarRecibidosAuto() {
+        var url = _afipUrlEmpresaActual();
+        if (!url) { alert('Esta empresa no tiene backend ARCA configurado.'); return; }
+        var baseUrl = url.replace(/\/afip$/, '');
+        var btn = document.getElementById('btnRecibidosAuto');
+        var st  = document.getElementById('compRecAutoStatus');
+        var desde = (document.getElementById('compRecDesde')||{}).value || '';
+        var hasta = (document.getElementById('compRecHasta')||{}).value || '';
+        btn.disabled = true; var btnTxt = btn.textContent; btn.textContent = 'Importando…';
+        st.style.display=''; st.style.background='#EFF6FF'; st.style.color='#1D4ED8'; st.style.border='1px solid #BFDBFE';
+        st.textContent = 'Conectando con ARCA y descargando comprobantes recibidos… esto puede tardar hasta 2-3 minutos.';
+        try {
+            var qs = [];
+            if (desde) qs.push('desde=' + encodeURIComponent(desde));
+            if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
+            var resp = await fetch(baseUrl + '/afip/recibidos' + (qs.length ? ('?' + qs.join('&')) : ''));
+            var json = await resp.json();
+            if (!resp.ok) {
+                if (json && json.faltanCreds) {
+                    throw new Error('Falta configurar las credenciales en el servidor (Railway): AFIP_SDK_TOKEN, ARCA_USER y ARCA_PASS. ' + (json.detalle||''));
+                }
+                throw new Error((json && (json.error||json.detalle)) || ('Error HTTP ' + resp.status));
+            }
+            if (!Array.isArray(json)) throw new Error('Respuesta inesperada del servidor.');
+            var mapeados = json.map(_mapearRecibidoARCA).filter(function(c){ return c.fecha || c.numero || c.proveedor; });
+            var existentes = new Set(compRecibidos.map(function(c){ return [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|'); }));
+            var nuevos = 0;
+            mapeados.forEach(function(c) {
+                var k = [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|');
+                if (!existentes.has(k)) { compRecibidos.push(c); existentes.add(k); nuevos++; }
+            });
+            if (nuevos > 0 && REF_COMP_RECIBIDOS) REF_COMP_RECIBIDOS.set(compRecibidos);
+            renderCompRecibidos();
+            st.style.background='#D1FAE5'; st.style.color='#065F46'; st.style.border='1px solid #6EE7B7';
+            st.textContent = nuevos > 0
+                ? ('✅ Se importaron ' + nuevos + ' comprobante(s) recibidos nuevos (de ' + mapeados.length + ' encontrados).')
+                : 'No hay comprobantes recibidos nuevos en el rango seleccionado.';
+        } catch(e) {
+            st.style.background='#FEE2E2'; st.style.color='#991B1B'; st.style.border='1px solid #FECACA';
+            st.textContent = '❌ ' + (e.message || String(e));
+        }
+        btn.disabled = false; btn.textContent = btnTxt;
     }
 
     function importarCompRecibidosArchivo(event) {

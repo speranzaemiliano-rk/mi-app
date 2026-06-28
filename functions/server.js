@@ -132,6 +132,96 @@ app.get('/afip/importar', async (req, res) => {
     }
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// COMPROBANTES RECIBIDOS — automatización "mis-comprobantes" de AFIP SDK
+// ──────────────────────────────────────────────────────────────────────
+// A diferencia de los emitidos (web service con certificado), los recibidos
+// se obtienen automatizando el portal "Mis Comprobantes" de ARCA. Eso requiere:
+//   AFIP_SDK_TOKEN   → access token de tu cuenta AFIP SDK (o reutiliza AFIP_ACCESS_TOKEN)
+//   ARCA_USER        → usuario de clave fiscal (default: AFIP_CUIT)
+//   ARCA_PASS        → contraseña de clave fiscal
+// La automatización es asíncrona: se crea con POST y se consulta con GET hasta
+// que deja de estar "in_process".
+const AFIPSDK_BASE = 'https://app.afipsdk.com/api/v1';
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function fechaDMY(iso) {
+    // 'YYYY-MM-DD' → 'DD/MM/YYYY'
+    if (!iso) return '';
+    const p = String(iso).split('-');
+    return p.length === 3 ? (p[2] + '/' + p[1] + '/' + p[0]) : iso;
+}
+
+// GET /afip/recibidos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
+app.get('/afip/recibidos', async (req, res) => {
+    try {
+        const token = process.env.AFIP_SDK_TOKEN || process.env.AFIP_ACCESS_TOKEN || '';
+        const cuit  = process.env.AFIP_CUIT || '';
+        const user  = process.env.ARCA_USER || cuit;
+        const pass  = process.env.ARCA_PASS || '';
+        if (!token || !cuit || !pass) {
+            return res.status(400).json({
+                error: 'Faltan credenciales para comprobantes recibidos.',
+                detalle: 'Configurá en Railway: AFIP_SDK_TOKEN (o AFIP_ACCESS_TOKEN), ARCA_USER (o se usa AFIP_CUIT) y ARCA_PASS (contraseña de clave fiscal).',
+                faltanCreds: true
+            });
+        }
+
+        // Rango de fechas: default último mes si no se especifica
+        let desde = req.query.desde || '';
+        let hasta = req.query.hasta || '';
+        const filters = { t: 'R' };
+        if (desde || hasta) {
+            filters.fechaEmision = (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '');
+        }
+
+        const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+
+        // 1) Crear la automatización
+        const crear = await fetch(AFIPSDK_BASE + '/automations', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit, username: user, password: pass, filters } })
+        });
+        const crearJson = await crear.json().catch(() => ({}));
+        if (!crear.ok) {
+            return res.status(crear.status).json({ error: 'AFIP SDK rechazó la solicitud.', detalle: JSON.stringify(crearJson) });
+        }
+        const id = crearJson.id || crearJson._id || (crearJson.data && crearJson.data.id);
+        if (!id) return res.status(502).json({ error: 'AFIP SDK no devolvió un id de automatización.', detalle: JSON.stringify(crearJson) });
+
+        // 2) Poll hasta que termine (máx ~3 min)
+        let resultado = null;
+        for (let intento = 0; intento < 36; intento++) {
+            await sleep(5000);
+            const r = await fetch(AFIPSDK_BASE + '/automations/' + id, { headers });
+            const j = await r.json().catch(() => ({}));
+            const status = (j.status || (j.data && j.data.status) || '').toLowerCase();
+            if (status && status !== 'in_process' && status !== 'pending' && status !== 'processing') {
+                resultado = j;
+                break;
+            }
+        }
+        if (!resultado) return res.status(504).json({ error: 'La automatización tardó demasiado. Probá de nuevo o reducí el rango de fechas.' });
+
+        const status = (resultado.status || (resultado.data && resultado.data.status) || '').toLowerCase();
+        if (status === 'error' || status === 'failed') {
+            return res.status(502).json({ error: 'La automatización falló (¿usuario/contraseña de ARCA correctos?).', detalle: JSON.stringify(resultado) });
+        }
+
+        // 3) Extraer el array de comprobantes (la forma exacta puede variar)
+        let data = resultado.data;
+        if (data && !Array.isArray(data) && Array.isArray(data.data)) data = data.data;
+        if (!Array.isArray(data)) data = resultado.result || resultado.comprobantes || [];
+        if (!Array.isArray(data)) data = [];
+
+        return res.json(data);
+    } catch (e) {
+        return res.status(500).json({ error: e.message, detalle: detalleError(e) });
+    }
+});
+
 // Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
 // tenés habilitados y si la conexión con ARCA funciona.
 app.get('/diag', async (req, res) => {
@@ -143,7 +233,13 @@ app.get('/diag', async (req, res) => {
         afipEnvVar:      env,
         certCargado:     !!(process.env.AFIP_CERT),
         keyCargada:      !!(process.env.AFIP_KEY),
-        advertencia:     env !== 'production' ? 'ATENCION: estás en modo TESTING. Las facturas NO aparecen en AFIP real.' : null
+        advertencia:     env !== 'production' ? 'ATENCION: estás en modo TESTING. Las facturas NO aparecen en AFIP real.' : null,
+        recibidos: {
+            sdkTokenCargado: !!(process.env.AFIP_SDK_TOKEN || process.env.AFIP_ACCESS_TOKEN),
+            arcaUserCargado: !!(process.env.ARCA_USER || process.env.AFIP_CUIT),
+            arcaPassCargada: !!(process.env.ARCA_PASS),
+            listoParaUsar:   !!((process.env.AFIP_SDK_TOKEN || process.env.AFIP_ACCESS_TOKEN) && (process.env.ARCA_USER || process.env.AFIP_CUIT) && process.env.ARCA_PASS)
+        }
     };
     try {
         const afip = crearAfip();
