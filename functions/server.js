@@ -111,7 +111,7 @@ app.get('/afip/importar', async (req, res) => {
         // Sin parámetros: traer todos los puntos de venta activos
         const puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
         const ptosActivos = (puntosDeVenta || [])
-            .filter(p => p.Bloqueado === 'N' && p.FchBaja === 'NULL')
+            .filter(p => p.Bloqueado === 'N')
             .map(p => p.Nro);
 
         if (!ptosActivos.length) return res.json([]);
