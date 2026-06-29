@@ -167,10 +167,15 @@ async function misComprobantes(tipo, desde, hasta) {
         throw err;
     }
 
-    const filters = { t: tipo };
-    if (desde || hasta) {
-        filters.fechaEmision = (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '');
+    // fechaEmision es obligatorio para el SDK — si no viene, usar el último mes
+    if (!desde && !hasta) {
+        const hoy = new Date();
+        const hace30 = new Date(hoy); hace30.setDate(hoy.getDate() - 30);
+        const pad = n => String(n).padStart(2,'0');
+        desde = hace30.getFullYear() + '-' + pad(hace30.getMonth()+1) + '-' + pad(hace30.getDate());
+        hasta = hoy.getFullYear() + '-' + pad(hoy.getMonth()+1) + '-' + pad(hoy.getDate());
     }
+    const filters = { t: tipo, fechaEmision: (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '') };
     const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
 
     // 1) Crear la automatización
