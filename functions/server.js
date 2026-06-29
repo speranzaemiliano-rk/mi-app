@@ -182,7 +182,7 @@ async function misComprobantes(tipo, desde, hasta) {
     const crear = await fetch(AFIPSDK_BASE + '/automations', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit, username: user, password: pass, filters } })
+        body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit: user, username: user, password: pass, filters } })
     });
     const crearJson = await crear.json().catch(() => ({}));
     if (!crear.ok) {
