@@ -16188,6 +16188,8 @@
         var d = emp.datos || {};
         var cuitNum = (d.cuit || '').replace(/\D/g,'');
 
+        var provinciasAR = ['Buenos Aires','CABA','Catamarca','Chaco','Chubut','Córdoba','Corrientes','Entre Ríos','Formosa','Jujuy','La Pampa','La Rioja','Mendoza','Misiones','Neuquén','Río Negro','Salta','San Juan','San Luis','Santa Cruz','Santa Fe','Santiago del Estero','Tierra del Fuego','Tucumán'];
+
         var campos = [
             { key:'_nombre', icon:'🏢', label:'Razón social', val: emp.nombre },
             { key:'cuit', icon:'🔢', label:'CUIT', val: d.cuit },
@@ -16196,8 +16198,8 @@
             { key:'iibb', icon:'📋', label:'Nro. IIBB', val: d.iibb },
             { key:'inicioAct', icon:'📅', label:'Inicio actividad', tipo:'date', val: d.inicioAct },
             { key:'direccion', icon:'📍', label:'Dirección', val: d.direccion },
-            { key:'ciudad', icon:'🏙️', label:'Ciudad', val: d.ciudad },
-            { key:'provincia', icon:'🗺️', label:'Provincia', val: d.provincia },
+            { key:'provincia', icon:'🗺️', label:'Provincia', tipo:'provinciaAR', val: d.provincia },
+            { key:'ciudad', icon:'🏙️', label:'Ciudad / Localidad', tipo:'ciudadAR', val: d.ciudad },
             { key:'cp', icon:'📮', label:'Código postal', val: d.cp },
             { key:'telefono', icon:'📞', label:'Teléfono', val: d.telefono },
             { key:'email', icon:'✉️', label:'Email', tipo:'email', val: d.email },
@@ -16206,7 +16208,7 @@
         ];
 
         var inputStyle = 'width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;background:var(--surface,#fff);color:inherit;box-sizing:border-box;';
-        var html = '<div id="dbEditForm">';
+        var html = '<div id="dbEditForm"><datalist id="dbCiudadList"></datalist>';
         campos.forEach(function(c) {
             html += '<div style="margin-bottom:12px;">'
                 + '<label style="display:block;font-size:11px;color:var(--text-2,#888);margin-bottom:4px;">' + c.icon + ' ' + c.label + '</label>';
@@ -16217,6 +16219,15 @@
                     html += '<option value="' + k + '"' + (c.val === k ? ' selected' : '') + '>' + c.opciones[k] + '</option>';
                 });
                 html += '</select>';
+            } else if (c.tipo === 'provinciaAR') {
+                html += '<select data-key="' + c.key + '" id="dbProvSelect" onchange="dbCargarCiudades()" style="' + inputStyle + '">'
+                    + '<option value="">— Seleccionar —</option>';
+                provinciasAR.forEach(function(p) {
+                    html += '<option value="' + p + '"' + (c.val === p ? ' selected' : '') + '>' + p + '</option>';
+                });
+                html += '</select>';
+            } else if (c.tipo === 'ciudadAR') {
+                html += '<input type="text" data-key="' + c.key + '" id="dbCiudadInput" value="' + (c.val || '').replace(/"/g, '&quot;') + '" placeholder="Escribí para buscar..." list="dbCiudadList" autocomplete="off" oninput="dbBuscarCiudad()" style="' + inputStyle + '">';
             } else {
                 var tipo = c.tipo || 'text';
                 html += '<input type="' + tipo + '" data-key="' + c.key + '" value="' + (c.val || '').replace(/"/g, '&quot;') + '" placeholder="Sin datos" style="' + inputStyle + '">';
@@ -16274,6 +16285,56 @@
             renderDashboard();
             setTimeout(function() { var m = document.getElementById('modalGenerico'); if (m) m.remove(); }, 800);
         });
+    }
+
+    var _dbCiudadTimer = null;
+    var _dbCiudadesCache = {};
+
+    function dbCargarCiudades() {
+        var prov = document.getElementById('dbProvSelect');
+        var dl = document.getElementById('dbCiudadList');
+        if (!prov || !dl) return;
+        dl.innerHTML = '';
+        var provNombre = prov.value;
+        if (!provNombre) return;
+        if (_dbCiudadesCache[provNombre]) {
+            _dbCiudadesCache[provNombre].forEach(function(m) {
+                dl.innerHTML += '<option value="' + m.nombre + '">';
+            });
+            return;
+        }
+        fetch('https://apis.datos.gob.ar/georef/api/municipios?provincia=' + encodeURIComponent(provNombre) + '&max=200&orden=nombre&aplanar=true')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var munis = (data.municipios || []);
+                _dbCiudadesCache[provNombre] = munis;
+                munis.forEach(function(m) {
+                    dl.innerHTML += '<option value="' + m.nombre + '">';
+                });
+            }).catch(function() {});
+    }
+
+    function dbBuscarCiudad() {
+        clearTimeout(_dbCiudadTimer);
+        _dbCiudadTimer = setTimeout(function() {
+            var input = document.getElementById('dbCiudadInput');
+            var prov = document.getElementById('dbProvSelect');
+            var dl = document.getElementById('dbCiudadList');
+            if (!input || !dl) return;
+            var q = input.value.trim();
+            if (q.length < 2) return;
+            var provParam = prov && prov.value ? '&provincia=' + encodeURIComponent(prov.value) : '';
+            fetch('https://apis.datos.gob.ar/georef/api/localidades?nombre=' + encodeURIComponent(q) + provParam + '&max=10&aplanar=true')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    dl.innerHTML = '';
+                    (data.localidades || []).forEach(function(loc) {
+                        var label = loc.nombre;
+                        if (loc.provincia_nombre && !prov.value) label += ', ' + loc.provincia_nombre;
+                        dl.innerHTML += '<option value="' + label + '" data-prov="' + (loc.provincia_nombre || '') + '">';
+                    });
+                }).catch(function() {});
+        }, 300);
     }
 
     function dbSelEmpresa(empId) {
