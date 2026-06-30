@@ -18995,15 +18995,54 @@
     return { tab: tab, desc: desc };
   }
 
-  function rkMensajeBot(texto) {
+  function rkMensajeBot(texto, factDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
     div.textContent = texto;
+    if (factDatos && factDatos.esFactura) {
+      var btn = document.createElement('button');
+      btn.textContent = '📥 Cargar en Facturas';
+      btn.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btn.onclick = function() { rkCargarFactura(factDatos); btn.textContent = '✓ Abriendo formulario…'; btn.disabled = true; };
+      div.appendChild(btn);
+    }
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
     return div;
   }
+
+  window.rkCargarFactura = function(f) {
+    // Abrir tab Facturas y pre-cargar formulario
+    if (typeof mostrarTab === 'function') mostrarTab('Facturas');
+    setTimeout(function() {
+      if (typeof agregarFactura === 'function') agregarFactura();
+      setTimeout(function() {
+        var setVal = function(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; };
+        setVal('factProveedor', f.proveedor || '');
+        setVal('factNumero', f.numero || '');
+        setVal('factFecha', f.fecha || '');
+        setVal('factVencimiento', f.vencimiento || '');
+        setVal('factDescripcion', f.descripcion || '');
+        setVal('factImporte', f.importe || '');
+        setVal('factMoneda', f.moneda || 'ARS');
+        // Si el proveedor no está en el select, lo agregamos como opción
+        var sel = document.getElementById('factProveedor');
+        if (sel && f.proveedor) {
+          var existe = Array.from(sel.options).some(function(o){ return o.value === f.proveedor; });
+          if (!existe) {
+            var opt = document.createElement('option');
+            opt.value = opt.textContent = f.proveedor;
+            opt.selected = true;
+            sel.appendChild(opt);
+          } else { sel.value = f.proveedor; }
+        }
+      }, 200);
+    }, 300);
+    // Cerrar el panel del asistente
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+  };
 
   function rkMensajeUser(texto) {
     var cont = document.getElementById('rk-agente-mensajes');
@@ -19083,11 +19122,14 @@
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.';
 
+    var esPdf = !!_rkPdfData;
+    var pdfNombre = esPdf ? _rkPdfData.nombre : '';
+    var pdfBase64 = esPdf ? _rkPdfData.base64 : null;
     var parts = [];
-    if (_rkPdfData) {
-      parts.push({ inlineData: { mimeType: 'application/pdf', data: _rkPdfData.base64 } });
+    if (esPdf) {
+      parts.push({ inlineData: { mimeType: 'application/pdf', data: pdfBase64 } });
       parts.push({ text: texto });
-      rkMensajeUser('📄 ' + _rkPdfData.nombre + '\n' + texto);
+      rkMensajeUser('📄 ' + pdfNombre + '\n' + texto);
       rkAgentePdfLimpiar();
     } else {
       parts.push({ text: texto });
@@ -19100,14 +19142,29 @@
     document.getElementById('rk-agente-estado').textContent = 'Pensando…';
     var typing = rkTyping();
 
+    var MODELOS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    var mi = 0;
+
+    // Si es PDF, primero extraemos datos estructurados de factura en paralelo
+    var promesaFactura = null;
+    if (esPdf) {
+      var extractPayload = {
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+          { text: 'Analizá este documento. Si es una factura o comprobante comercial, extraé los datos y respondé SOLO con un JSON válido con esta estructura exacta:\n{"esFactura":true,"proveedor":"...","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\nSi NO es una factura, respondé solo: {"esFactura":false}\nNo agregues texto fuera del JSON.' }
+        ]}],
+        generationConfig: { maxOutputTokens: 300, temperature: 0 }
+      };
+      promesaFactura = fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(extractPayload)
+      }).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    }
+
     var payload = {
       system_instruction: { parts: [{ text: sistemaPrompt }] },
       contents: _rkHistorial,
       generationConfig: { maxOutputTokens: 800, temperature: 0.7 }
     };
-
-    var MODELOS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-    var mi = 0;
 
     function intentar() {
       fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODELOS[mi] + ':generateContent?key=' + apiKey, {
@@ -19122,7 +19179,23 @@
           ? data.candidates[0].content.parts[0].text
           : 'No pude obtener una respuesta. Intentá de nuevo.';
         _rkHistorial.push({ role: 'model', parts: [{ text: respuesta }] });
-        rkMensajeBot(respuesta);
+
+        // Si había PDF, esperamos el resultado de extracción y mostramos botón si es factura
+        if (promesaFactura) {
+          promesaFactura.then(function(extData) {
+            var jsonStr = extData && extData.candidates && extData.candidates[0] && extData.candidates[0].content && extData.candidates[0].content.parts && extData.candidates[0].content.parts[0]
+              ? extData.candidates[0].content.parts[0].text.trim() : '';
+            var factDatos = null;
+            try {
+              var m = jsonStr.match(/\{[\s\S]*\}/);
+              if (m) factDatos = JSON.parse(m[0]);
+            } catch(e) {}
+            rkMensajeBot(respuesta, factDatos && factDatos.esFactura ? factDatos : null);
+          });
+        } else {
+          rkMensajeBot(respuesta, null);
+        }
+
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
         document.getElementById('rk-agente-enviar').disabled = false;
         _rkEsperando = false;
@@ -19131,7 +19204,7 @@
         mi++;
         if (mi < MODELOS.length) { intentar(); return; }
         typing.remove();
-        rkMensajeBot('Error al conectar con Gemini. Verificá tu API key y conexión.');
+        rkMensajeBot('Error al conectar con Gemini. Verificá tu API key y conexión.', null);
         document.getElementById('rk-agente-estado').textContent = 'Error';
         document.getElementById('rk-agente-enviar').disabled = false;
         _rkEsperando = false;
