@@ -18252,6 +18252,446 @@
 </script>
 <!-- Contenedor donde el widget de Belvo se monta (lo necesita para abrirse) -->
 <div id="belvo"></div>
+
+<!-- ==================== AGENTE DE AYUDA RK ==================== -->
+<style>
+  /* Robot flotante */
+  #rk-agente-btn {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    width: 64px;
+    height: 64px;
+    cursor: pointer;
+    z-index: 9998;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.35));
+    transition: transform 0.2s ease;
+    user-select: none;
+  }
+  #rk-agente-btn:hover { transform: scale(1.1) translateY(-3px); }
+  #rk-agente-btn:active { transform: scale(0.95); }
+
+  /* Cabeza del robot SVG - animación de ojos */
+  @keyframes rkBlink {
+    0%, 90%, 100% { transform: scaleY(1); }
+    95% { transform: scaleY(0.1); }
+  }
+  .rk-robot-ojo { animation: rkBlink 3.5s infinite; transform-origin: center; }
+  .rk-robot-ojo:nth-child(2) { animation-delay: 0.15s; }
+
+  @keyframes rkAntena {
+    0%, 100% { transform: rotate(-8deg); }
+    50% { transform: rotate(8deg); }
+  }
+  .rk-robot-antena { animation: rkAntena 2s ease-in-out infinite; transform-origin: bottom center; }
+
+  /* Burbuja de notificación */
+  #rk-agente-badge {
+    position: fixed;
+    bottom: 80px;
+    right: 24px;
+    background: #e53935;
+    color: #fff;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    display: none;
+  }
+
+  /* Panel de chat */
+  #rk-agente-panel {
+    position: fixed;
+    bottom: 104px;
+    right: 28px;
+    width: 340px;
+    max-height: 520px;
+    background: #1e1e2e;
+    border: 1.5px solid #3d3d5c;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    z-index: 9997;
+    overflow: hidden;
+    transform: scale(0.85) translateY(20px);
+    transform-origin: bottom right;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.22s cubic-bezier(.4,0,.2,1);
+  }
+  #rk-agente-panel.abierto {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  /* Header del panel */
+  #rk-agente-header {
+    background: linear-gradient(135deg, #2d2b55, #1a1a3e);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid #3d3d5c;
+    flex-shrink: 0;
+  }
+  #rk-agente-header .rk-avatar {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+  #rk-agente-header-texto { flex: 1; }
+  #rk-agente-header-texto strong { color: #e0e0ff; font-size: 13px; display: block; }
+  #rk-agente-header-texto span { color: #8888aa; font-size: 11px; }
+  #rk-agente-cerrar {
+    background: none;
+    border: none;
+    color: #8888aa;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+  #rk-agente-cerrar:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+  /* Mensajes */
+  #rk-agente-mensajes {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: #3d3d5c transparent;
+  }
+  .rk-msg {
+    max-width: 88%;
+    padding: 9px 13px;
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .rk-msg-bot {
+    background: #2d2b55;
+    color: #e0e0ff;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+  .rk-msg-user {
+    background: #4a4aff;
+    color: #fff;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+  .rk-msg-typing {
+    background: #2d2b55;
+    color: #8888aa;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+    font-style: italic;
+    font-size: 12px;
+  }
+
+  /* Input área */
+  #rk-agente-footer {
+    padding: 10px 12px;
+    border-top: 1px solid #3d3d5c;
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    background: #1e1e2e;
+  }
+  #rk-agente-input {
+    flex: 1;
+    background: #2d2b55;
+    border: 1px solid #3d3d5c;
+    border-radius: 10px;
+    color: #e0e0ff;
+    padding: 8px 12px;
+    font-size: 13px;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+  #rk-agente-input::placeholder { color: #5555aa; }
+  #rk-agente-input:focus { border-color: #4a4aff; }
+  #rk-agente-enviar {
+    background: #4a4aff;
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    width: 38px;
+    height: 38px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    align-self: flex-end;
+  }
+  #rk-agente-enviar:hover { background: #3333dd; }
+  #rk-agente-enviar:disabled { background: #333355; cursor: default; }
+
+  /* Chip de contexto */
+  #rk-agente-contexto {
+    padding: 6px 14px;
+    font-size: 11px;
+    color: #6666aa;
+    background: #191928;
+    border-bottom: 1px solid #2a2a44;
+    flex-shrink: 0;
+  }
+  #rk-agente-contexto span { color: #7777cc; font-weight: 600; }
+
+  @media (max-width: 480px) {
+    #rk-agente-panel { width: calc(100vw - 24px); right: 12px; bottom: 90px; }
+    #rk-agente-btn { bottom: 16px; right: 16px; }
+  }
+</style>
+
+<!-- Robot SVG flotante -->
+<div id="rk-agente-btn" onclick="rkAgenteToggle()" title="Agente de ayuda RK">
+  <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <!-- Antena -->
+    <g class="rk-robot-antena">
+      <line x1="32" y1="6" x2="32" y2="14" stroke="#4a4aff" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="32" cy="5" r="3" fill="#4a4aff"/>
+    </g>
+    <!-- Cuerpo cabeza -->
+    <rect x="12" y="14" width="40" height="34" rx="8" fill="#2d2b55" stroke="#4a4aff" stroke-width="2"/>
+    <!-- Cara interior -->
+    <rect x="16" y="18" width="32" height="22" rx="5" fill="#1a1a3e"/>
+    <!-- Ojo izquierdo -->
+    <g class="rk-robot-ojo">
+      <rect x="20" y="23" width="10" height="10" rx="3" fill="#4a4aff"/>
+      <rect x="22" y="25" width="3" height="3" rx="1" fill="#aaaaff" opacity="0.7"/>
+    </g>
+    <!-- Ojo derecho -->
+    <g class="rk-robot-ojo">
+      <rect x="34" y="23" width="10" height="10" rx="3" fill="#4a4aff"/>
+      <rect x="36" y="25" width="3" height="3" rx="1" fill="#aaaaff" opacity="0.7"/>
+    </g>
+    <!-- Boca -->
+    <rect x="22" y="36" width="20" height="3" rx="1.5" fill="#3d3d8f"/>
+    <rect x="24" y="36" width="4" height="3" rx="1" fill="#4a4aff" opacity="0.6"/>
+    <rect x="30" y="36" width="4" height="3" rx="1" fill="#4a4aff" opacity="0.6"/>
+    <rect x="36" y="36" width="4" height="3" rx="1" fill="#4a4aff" opacity="0.6"/>
+    <!-- Orejeras -->
+    <rect x="8" y="22" width="5" height="10" rx="2.5" fill="#2d2b55" stroke="#4a4aff" stroke-width="1.5"/>
+    <rect x="51" y="22" width="5" height="10" rx="2.5" fill="#2d2b55" stroke="#4a4aff" stroke-width="1.5"/>
+    <!-- Cuello -->
+    <rect x="27" y="48" width="10" height="5" rx="2" fill="#2d2b55"/>
+    <!-- Base cuello -->
+    <rect x="20" y="52" width="24" height="5" rx="3" fill="#2d2b55" stroke="#4a4aff" stroke-width="1.5"/>
+  </svg>
+</div>
+
+<!-- Panel de chat -->
+<div id="rk-agente-panel">
+  <div id="rk-agente-header">
+    <svg class="rk-avatar" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="6" width="24" height="20" rx="5" fill="#2d2b55" stroke="#4a4aff" stroke-width="1.5"/>
+      <rect x="7" y="9" width="18" height="13" rx="3" fill="#1a1a3e"/>
+      <rect x="9" y="11" width="6" height="6" rx="2" fill="#4a4aff"/>
+      <rect x="17" y="11" width="6" height="6" rx="2" fill="#4a4aff"/>
+      <rect x="11" y="19" width="10" height="2" rx="1" fill="#3d3d8f"/>
+      <circle cx="16" cy="4" r="2" fill="#4a4aff"/>
+      <line x1="16" y1="4" x2="16" y2="6" stroke="#4a4aff" stroke-width="1.5"/>
+    </svg>
+    <div id="rk-agente-header-texto">
+      <strong>Asistente RK</strong>
+      <span id="rk-agente-estado">Listo para ayudar</span>
+    </div>
+    <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
+  </div>
+  <div id="rk-agente-contexto">Sección activa: <span id="rk-agente-tab-nombre">—</span></div>
+  <div id="rk-agente-mensajes"></div>
+  <div id="rk-agente-footer">
+    <textarea id="rk-agente-input" placeholder="Preguntame algo sobre RK..." rows="1"
+      onkeydown="rkAgenteKeydown(event)"></textarea>
+    <button id="rk-agente-enviar" onclick="rkAgenteEnviar()" title="Enviar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M22 2L11 13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<script>
+(function() {
+  var _rkAbierto = false;
+  var _rkHistorial = []; // {role, parts}
+  var _rkEsperando = false;
+
+  var CONTEXTOS_TABS = {
+    'Home': 'página de inicio con resumen de empresas y proyectos',
+    'Dashboard': 'panel con gráficos y métricas del proyecto',
+    'CajaGeneral': 'gestión de caja general en pesos',
+    'EfectivoPesos': 'movimientos de efectivo en pesos',
+    'EfectivoUSD': 'movimientos de efectivo en dólares',
+    'CuentasBancarias': 'cuentas bancarias y transferencias',
+    'Ventas': 'registro de ventas',
+    'Alquileres': 'gestión de alquileres',
+    'Servicios': 'facturación de servicios',
+    'IngGeneral': 'ingresos generales',
+    'ResumenIngresos': 'resumen y totales de ingresos',
+    'Facturas': 'facturas electrónicas ARCA/AFIP',
+    'Proveedores': 'gestión de proveedores',
+    'Presupuestos': 'presupuestos y cotizaciones',
+    'Pagos': 'registro de pagos',
+    'Egresos': 'egresos y gastos',
+    'Tesoreria': 'vista de tesorería consolidada',
+    'Documentos': 'documentos adjuntos',
+    'Reportes': 'reportes y exportaciones',
+    'PlanTrabajo': 'plan de trabajo y tareas',
+    'Config': 'configuración del sistema',
+    'CompRecibidos': 'comprobantes recibidos',
+    'Caja': 'movimientos de caja'
+  };
+
+  window.rkAgenteToggle = function() {
+    _rkAbierto = !_rkAbierto;
+    var panel = document.getElementById('rk-agente-panel');
+    panel.classList.toggle('abierto', _rkAbierto);
+    if (_rkAbierto) {
+      rkActualizarContexto();
+      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, explicarte secciones, o responder preguntas sobre gestión contable. ¿En qué te ayudo?');
+      setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
+    }
+  };
+
+  function rkActualizarContexto() {
+    var tab = (typeof _tabActivo !== 'undefined' ? _tabActivo : null) || 'la aplicación';
+    var desc = CONTEXTOS_TABS[tab] || tab;
+    var el = document.getElementById('rk-agente-tab-nombre');
+    if (el) el.textContent = desc;
+    return { tab: tab, desc: desc };
+  }
+
+  function rkMensajeBot(texto) {
+    var cont = document.getElementById('rk-agente-mensajes');
+    var div = document.createElement('div');
+    div.className = 'rk-msg rk-msg-bot';
+    div.textContent = texto;
+    cont.appendChild(div);
+    cont.scrollTop = cont.scrollHeight;
+    return div;
+  }
+
+  function rkMensajeUser(texto) {
+    var cont = document.getElementById('rk-agente-mensajes');
+    var div = document.createElement('div');
+    div.className = 'rk-msg rk-msg-user';
+    div.textContent = texto;
+    cont.appendChild(div);
+    cont.scrollTop = cont.scrollHeight;
+  }
+
+  function rkTyping() {
+    var cont = document.getElementById('rk-agente-mensajes');
+    var div = document.createElement('div');
+    div.className = 'rk-msg rk-msg-typing';
+    div.id = 'rk-typing';
+    div.textContent = 'Escribiendo…';
+    cont.appendChild(div);
+    cont.scrollTop = cont.scrollHeight;
+    return div;
+  }
+
+  window.rkAgenteKeydown = function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      rkAgenteEnviar();
+    }
+  };
+
+  window.rkAgenteEnviar = function() {
+    if (_rkEsperando) return;
+    var input = document.getElementById('rk-agente-input');
+    var texto = input.value.trim();
+    if (!texto) return;
+
+    var apiKey = (typeof getGeminiKey === 'function') ? getGeminiKey() : null;
+    if (!apiKey) {
+      rkMensajeBot('⚠️ No hay una API key de Gemini configurada. Andá a Config → Gemini para agregarla.');
+      return;
+    }
+
+    input.value = '';
+    input.style.height = 'auto';
+    rkMensajeUser(texto);
+
+    var ctx = rkActualizarContexto();
+    var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
+      + 'Ayudás a los usuarios a usar la app, entender secciones y resolver dudas sobre gestión administrativa. '
+      + 'Respondés en español argentino, de forma concisa y amigable. '
+      + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
+      + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.';
+
+    _rkHistorial.push({ role: 'user', parts: [{ text: texto }] });
+    _rkEsperando = true;
+
+    document.getElementById('rk-agente-enviar').disabled = true;
+    document.getElementById('rk-agente-estado').textContent = 'Pensando…';
+    var typing = rkTyping();
+
+    var payload = {
+      system_instruction: { parts: [{ text: sistemaPrompt }] },
+      contents: _rkHistorial,
+      generationConfig: { maxOutputTokens: 800, temperature: 0.7 }
+    };
+
+    var MODELOS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    var mi = 0;
+
+    function intentar() {
+      fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODELOS[mi] + ':generateContent?key=' + apiKey, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        typing.remove();
+        var respuesta = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0])
+          ? data.candidates[0].content.parts[0].text
+          : 'No pude obtener una respuesta. Intentá de nuevo.';
+        _rkHistorial.push({ role: 'model', parts: [{ text: respuesta }] });
+        rkMensajeBot(respuesta);
+        document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
+        document.getElementById('rk-agente-enviar').disabled = false;
+        _rkEsperando = false;
+      })
+      .catch(function(err) {
+        mi++;
+        if (mi < MODELOS.length) { intentar(); return; }
+        typing.remove();
+        rkMensajeBot('Error al conectar con Gemini. Verificá tu API key y conexión.');
+        document.getElementById('rk-agente-estado').textContent = 'Error';
+        document.getElementById('rk-agente-enviar').disabled = false;
+        _rkEsperando = false;
+      });
+    }
+
+    intentar();
+  };
+})();
+</script>
+<!-- ==================== FIN AGENTE DE AYUDA ==================== -->
+
 </body>
 </html>
 
