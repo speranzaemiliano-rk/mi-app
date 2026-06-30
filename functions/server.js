@@ -111,7 +111,7 @@ app.get('/afip/importar', async (req, res) => {
         // Sin parámetros: traer todos los puntos de venta activos
         const puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
         const ptosActivos = (puntosDeVenta || [])
-            .filter(p => p.Bloqueado === 'N' && p.FchBaja === 'NULL')
+            .filter(p => p.Bloqueado === 'N')
             .map(p => p.Nro);
 
         if (!ptosActivos.length) return res.json([]);
@@ -167,17 +167,22 @@ async function misComprobantes(tipo, desde, hasta) {
         throw err;
     }
 
-    const filters = { t: tipo };
-    if (desde || hasta) {
-        filters.fechaEmision = (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '');
+    // fechaEmision es obligatorio para el SDK — si no viene, usar el último mes
+    if (!desde && !hasta) {
+        const hoy = new Date();
+        const hace30 = new Date(hoy); hace30.setDate(hoy.getDate() - 30);
+        const pad = n => String(n).padStart(2,'0');
+        desde = hace30.getFullYear() + '-' + pad(hace30.getMonth()+1) + '-' + pad(hace30.getDate());
+        hasta = hoy.getFullYear() + '-' + pad(hoy.getMonth()+1) + '-' + pad(hoy.getDate());
     }
+    const filters = { t: tipo, fechaEmision: (fechaDMY(desde) || '') + ' - ' + (fechaDMY(hasta) || '') };
     const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
 
     // 1) Crear la automatización
     const crear = await fetch(AFIPSDK_BASE + '/automations', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit, username: user, password: pass, filters } })
+        body: JSON.stringify({ automation: 'mis-comprobantes', params: { cuit: user, username: user, password: pass, filters } })
     });
     const crearJson = await crear.json().catch(() => ({}));
     if (!crear.ok) {
