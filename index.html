@@ -18924,6 +18924,10 @@
   <div id="rk-agente-contexto">Sección activa: <span id="rk-agente-tab-nombre">—</span></div>
   <div id="rk-agente-mensajes"></div>
   <div id="rk-agente-footer">
+    <label id="rk-agente-pdf-btn" title="Adjuntar PDF" style="cursor:pointer;display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:rgba(100,100,200,.12);flex-shrink:0;transition:background .2s;" onmouseover="this.style.background='rgba(100,100,200,.25)'" onmouseout="this.style.background='rgba(100,100,200,.12)'">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8888cc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+      <input type="file" id="rk-agente-pdf-input" accept=".pdf,application/pdf" style="display:none;" onchange="rkAgentePdfSeleccionado(this)">
+    </label>
     <textarea id="rk-agente-input" placeholder="Preguntame algo sobre RK..." rows="1"
       onkeydown="rkAgenteKeydown(event)"></textarea>
     <button id="rk-agente-enviar" onclick="rkAgenteEnviar()" title="Enviar">
@@ -18933,6 +18937,10 @@
       </svg>
     </button>
   </div>
+  <div id="rk-agente-pdf-preview" style="display:none;padding:4px 12px 8px;font-size:11px;color:#8888cc;display:flex;align-items:center;gap:6px;">
+    <span>📄</span><span id="rk-agente-pdf-nombre" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <button onclick="rkAgentePdfLimpiar()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:13px;padding:0 2px;" title="Quitar PDF">✕</button>
+  </div>
 </div>
 
 <script>
@@ -18940,6 +18948,7 @@
   var _rkAbierto = false;
   var _rkHistorial = []; // {role, parts}
   var _rkEsperando = false;
+  var _rkPdfData = null; // { base64, nombre }
 
   var CONTEXTOS_TABS = {
     'Home': 'página de inicio con resumen de empresas y proyectos',
@@ -19023,11 +19032,40 @@
     }
   };
 
+  window.rkAgentePdfSeleccionado = function(fileInput) {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      alert('El PDF es demasiado grande (máx. 20 MB).');
+      fileInput.value = '';
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var base64 = e.target.result.split(',')[1];
+      _rkPdfData = { base64: base64, nombre: file.name };
+      var preview = document.getElementById('rk-agente-pdf-preview');
+      document.getElementById('rk-agente-pdf-nombre').textContent = file.name;
+      preview.style.display = 'flex';
+      document.getElementById('rk-agente-input').placeholder = 'Preguntame algo sobre el PDF…';
+      document.getElementById('rk-agente-input').focus();
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = '';
+  };
+
+  window.rkAgentePdfLimpiar = function() {
+    _rkPdfData = null;
+    document.getElementById('rk-agente-pdf-preview').style.display = 'none';
+    document.getElementById('rk-agente-input').placeholder = 'Preguntame algo sobre RK…';
+  };
+
   window.rkAgenteEnviar = function() {
     if (_rkEsperando) return;
     var input = document.getElementById('rk-agente-input');
     var texto = input.value.trim();
-    if (!texto) return;
+    if (!texto && !_rkPdfData) return;
+    if (!texto) texto = 'Analizá este PDF y decime de qué se trata.';
 
     var apiKey = (typeof getGeminiKey === 'function') ? getGeminiKey() : null;
     if (!apiKey) {
@@ -19037,7 +19075,6 @@
 
     input.value = '';
     input.style.height = 'auto';
-    rkMensajeUser(texto);
 
     var ctx = rkActualizarContexto();
     var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
@@ -19046,7 +19083,17 @@
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.';
 
-    _rkHistorial.push({ role: 'user', parts: [{ text: texto }] });
+    var parts = [];
+    if (_rkPdfData) {
+      parts.push({ inlineData: { mimeType: 'application/pdf', data: _rkPdfData.base64 } });
+      parts.push({ text: texto });
+      rkMensajeUser('📄 ' + _rkPdfData.nombre + '\n' + texto);
+      rkAgentePdfLimpiar();
+    } else {
+      parts.push({ text: texto });
+      rkMensajeUser(texto);
+    }
+    _rkHistorial.push({ role: 'user', parts: parts });
     _rkEsperando = true;
 
     document.getElementById('rk-agente-enviar').disabled = true;
