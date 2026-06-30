@@ -19013,35 +19013,20 @@
   }
 
   window.rkCargarFactura = function(f) {
-    // Abrir tab Facturas y pre-cargar formulario
-    if (typeof mostrarTab === 'function') mostrarTab('Facturas');
-    setTimeout(function() {
-      if (typeof agregarFactura === 'function') agregarFactura();
-      setTimeout(function() {
-        var setVal = function(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; };
-        setVal('factProveedor', f.proveedor || '');
-        setVal('factNumero', f.numero || '');
-        setVal('factFecha', f.fecha || '');
-        setVal('factVencimiento', f.vencimiento || '');
-        setVal('factDescripcion', f.descripcion || '');
-        setVal('factImporte', f.importe || '');
-        setVal('factMoneda', f.moneda || 'ARS');
-        // Si el proveedor no está en el select, lo agregamos como opción
-        var sel = document.getElementById('factProveedor');
-        if (sel && f.proveedor) {
-          var existe = Array.from(sel.options).some(function(o){ return o.value === f.proveedor; });
-          if (!existe) {
-            var opt = document.createElement('option');
-            opt.value = opt.textContent = f.proveedor;
-            opt.selected = true;
-            sel.appendChild(opt);
-          } else { sel.value = f.proveedor; }
-        }
-      }, 200);
-    }, 300);
     // Cerrar el panel del asistente
     _rkAbierto = false;
     document.getElementById('rk-agente-panel').classList.remove('abierto');
+    // Reusar el flujo completo de "Leer Factura desde PDF": adjunta el archivo
+    // y permite dar de alta el proveedor si no existe.
+    if (typeof mostrarTab === 'function') mostrarTab('Facturas');
+    setTimeout(function() {
+      if (typeof abrirLeerFactPDF === 'function') abrirLeerFactPDF();
+      if (f._pdfBase64) {
+        window._leerFactArchivoDB64 = f._pdfBase64;
+        window._leerFactArchivoTipo = f._pdfMime || 'application/pdf';
+      }
+      if (typeof _mostrarPreviewFactura === 'function') _mostrarPreviewFactura(f);
+    }, 200);
   };
 
   function rkMensajeUser(texto) {
@@ -19151,7 +19136,7 @@
       var extractPayload = {
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
-          { text: 'Analizá este documento. Si es una factura o comprobante comercial, extraé los datos y respondé SOLO con un JSON válido con esta estructura exacta:\n{"esFactura":true,"proveedor":"...","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\nSi NO es una factura, respondé solo: {"esFactura":false}\nNo agregues texto fuera del JSON.' }
+          { text: 'Analizá este documento. Si es una factura o comprobante comercial, extraé los datos y respondé SOLO con un JSON válido con esta estructura exacta:\n{"esFactura":true,"proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\nUsá null en los campos que no encuentres. Si NO es una factura, respondé solo: {"esFactura":false}\nNo agregues texto fuera del JSON.' }
         ]}],
         generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
       };
@@ -19201,6 +19186,11 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) factDatos = JSON.parse(m[0]);
             } catch(e) {}
+            if (factDatos && factDatos.esFactura) {
+              factDatos._pdfBase64 = pdfBase64;
+              factDatos._pdfMime = 'application/pdf';
+              factDatos._pdfNombre = pdfNombre;
+            }
             rkMensajeBot(respuesta, factDatos && factDatos.esFactura ? factDatos : null);
           });
         } else {
