@@ -2556,6 +2556,7 @@
                 <span></span><span></span><span></span>
             </button>
             <div class="topbar-title" id="topbarTitle">Presupuestos y Pagos</div>
+            <span id="topbarEmpresaChip" onclick="mostrarTab('Home')" title="Ir al inicio" style="display:none;cursor:pointer;align-items:center;gap:5px;background:rgba(201,168,76,.13);border:1px solid rgba(201,168,76,.35);color:rgba(201,168,76,.95);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;letter-spacing:.03em;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;"></span>
             <button class="btn-refresh" id="btnRefresh" onclick="refreshTabActivo()" title="Actualizar">↻</button>
             <div class="topbar-actions">
                 <div class="tc-chip">
@@ -2656,6 +2657,14 @@
                       </div>
                     </div>
                   </div>
+                </div>
+
+                <!-- ── PANEL DE EMPRESAS ── -->
+                <div id="hpEmpresas" style="margin-bottom:16px;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--text-2,#888);letter-spacing:.06em;text-transform:uppercase;">Mis empresas</span>
+                  </div>
+                  <div id="hpEmpresasGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
                 </div>
 
                 <!-- Fila 1: Fecha · Clima · Mercado -->
@@ -4927,10 +4936,21 @@
 
     function _actualizarSidebarContexto() {
         var el = document.getElementById('sidebarEmpresaNombre');
-        if (!el) return;
-        var emp = empresaActual ? empresaActual.nombre : '';
-        var proy = proyectoActual ? proyectoActual.nombre : '';
-        el.textContent = emp + (proy ? '  ·  ' + proy : '');
+        if (el) {
+            var emp = empresaActual ? empresaActual.nombre : '';
+            var proy = proyectoActual ? proyectoActual.nombre : '';
+            el.textContent = emp + (proy ? '  ·  ' + proy : '');
+        }
+        // Chip de empresa en topbar
+        var chip = document.getElementById('topbarEmpresaChip');
+        if (chip) {
+            if (empresaActual) {
+                chip.textContent = empresaActual.nombre + (proyectoActual ? ' · ' + proyectoActual.nombre : '');
+                chip.style.display = 'inline-flex';
+            } else {
+                chip.style.display = 'none';
+            }
+        }
     }
 
     function getBasePath() {
@@ -15933,9 +15953,104 @@
     function _hNoticias(){hpNTab('ar',document.getElementById('hpnt-ar'));}
     function _hNoticiasInt(){}
 
+    // ── Tarjetas de empresas en el Home ──
+    function _hEmpresasCards() {
+        var grid = document.getElementById('hpEmpresasGrid');
+        if (!grid) return;
+        if (!empresas || !empresas.length) {
+            grid.innerHTML = '<div style="color:var(--text-2,#aaa);font-size:13px;padding:12px 0;">No hay empresas cargadas.</div>';
+            return;
+        }
+        grid.innerHTML = empresas.map(function(emp) {
+            var d = emp.datos || {};
+            var proyCount = (emp.proyectos || []).length;
+            var esActual = empresaActual && empresaActual.id === emp.id;
+            var proyHTML = (emp.proyectos || []).slice(0, 4).map(function(p) {
+                return '<span style="display:inline-block;background:rgba(255,255,255,.07);border-radius:10px;padding:2px 8px;font-size:10px;margin:2px 2px 0 0;color:var(--text-2,#aaa);">'+p.nombre+'</span>';
+            }).join('') + (proyCount > 4 ? '<span style="font-size:10px;color:var(--text-2,#aaa);margin-left:4px;">+' + (proyCount-4) + ' más</span>' : '');
+            return '<div onclick="hpSeleccionarEmpresa(\''+emp.id+'\')" style="cursor:pointer;background:var(--surface-2,#f8f8f8);border:2px solid '+(esActual?'#C9A84C':'var(--border-soft,#e0e0e0)')+';border-radius:14px;padding:16px 18px;transition:box-shadow .15s,border-color .15s;position:relative;" '
+                + 'onmouseenter="this.style.boxShadow=\'0 4px 18px rgba(0,0,0,.1)\'" onmouseleave="this.style.boxShadow=\'\'">'+
+                (esActual ? '<span style="position:absolute;top:12px;right:12px;background:#C9A84C;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;">Activa</span>' : '')+
+                '<div style="font-weight:700;font-size:14px;margin-bottom:4px;padding-right:60px;">'+emp.nombre+'</div>'+
+                (d.cuit ? '<div style="font-size:11px;color:var(--text-2,#888);margin-bottom:2px;">CUIT: '+d.cuit+'</div>' : '')+
+                (d.condIva ? '<div style="font-size:11px;color:var(--text-2,#888);margin-bottom:6px;">'+d.condIva+'</div>' : '<div style="margin-bottom:6px;"></div>')+
+                '<div style="margin-bottom:10px;">'+proyHTML+'</div>'+
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;">'+
+                    '<button onclick="event.stopPropagation();hpFiscalModal(\''+emp.id+'\')" style="font-size:11px;padding:4px 10px;border-radius:8px;border:1px solid #C9A84C;background:rgba(201,168,76,.1);color:#9a7a2a;cursor:pointer;font-weight:600;">📋 Estado fiscal</button>'+
+                    (esActual ? '' : '<button onclick="event.stopPropagation();hpSeleccionarEmpresa(\''+emp.id+'\')" style="font-size:11px;padding:4px 10px;border-radius:8px;border:1px solid #4a9af5;background:rgba(74,154,245,.08);color:#1a6dd4;cursor:pointer;font-weight:600;">↩ Activar</button>')+
+                '</div>'+
+            '</div>';
+        }).join('');
+    }
+
+    function hpSeleccionarEmpresa(empId) {
+        var sel = document.getElementById('selEmpresa');
+        if (!sel) return;
+        sel.value = empId;
+        cambiarEmpresa();
+        _hEmpresasCards();
+    }
+
+    function hpFiscalModal(empId) {
+        var emp = empresas.find(function(e) { return e.id === empId; });
+        if (!emp) return;
+        var d = emp.datos || {};
+        var cuit = (d.cuit || '').replace(/\D/g,'');
+        var cuitFmt = d.cuit || '—';
+        var urlConstanciaAfip = cuit ? 'https://www.afip.gob.ar/genericos/CIR/generarConstancia.aspx?cuit=' + cuit : 'https://www.afip.gob.ar/genericos/CIR/';
+        var urlArba = 'https://www.arba.gov.ar/Aplicaciones/CertificadoExencion.aspx';
+        var urlRentas = 'https://seti.rentas.gov.ar/constancias/iibb';
+
+        var condMap = { responsable_inscripto:'Responsable Inscripto', monotributo:'Monotributista', exento:'Exento', no_responsable:'No Responsable', consumidor_final:'Consumidor Final' };
+
+        var html = '<div style="font-size:13px;">'
+            + '<table style="width:100%;border-collapse:collapse;margin-bottom:16px;">'
+            + '<tr><td style="padding:6px 0;color:var(--text-2,#888);width:120px;">Razón social</td><td style="font-weight:600;">'+emp.nombre+'</td></tr>'
+            + (d.cuit ? '<tr><td style="padding:6px 0;color:var(--text-2,#888);">CUIT</td><td style="font-weight:600;font-family:monospace;">'+cuitFmt+'</td></tr>' : '')
+            + (d.condIva ? '<tr><td style="padding:6px 0;color:var(--text-2,#888);">Condición IVA</td><td>'+( condMap[d.condIva] || d.condIva)+'</td></tr>' : '')
+            + (d.provincia ? '<tr><td style="padding:6px 0;color:var(--text-2,#888);">Provincia</td><td>'+d.provincia+'</td></tr>' : '')
+            + (d.direccion ? '<tr><td style="padding:6px 0;color:var(--text-2,#888);">Dirección</td><td>'+[d.direccion,d.ciudad].filter(Boolean).join(', ')+'</td></tr>' : '')
+            + '</table>'
+            + '<div style="font-weight:700;margin-bottom:10px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-2,#888);">Constancias y certificados</div>'
+            + '<div style="display:flex;flex-direction:column;gap:10px;">'
+            + '<a href="'+urlConstanciaAfip+'" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid #e0e0e0;border-radius:10px;text-decoration:none;color:inherit;background:var(--surface,#fff);transition:box-shadow .15s;" onmouseenter="this.style.boxShadow=\'0 2px 12px rgba(0,0,0,.1)\'" onmouseleave="this.style.boxShadow=\'\'">'
+            + '<span style="font-size:24px;">🏛️</span>'
+            + '<div><div style="font-weight:600;font-size:13px;">Constancia CUIT — ARCA/AFIP</div><div style="font-size:11px;color:#888;">Constancia de inscripción ante la AFIP</div></div>'
+            + '<span style="margin-left:auto;font-size:18px;">↗</span></a>'
+            + '<a href="'+urlArba+'" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid #e0e0e0;border-radius:10px;text-decoration:none;color:inherit;background:var(--surface,#fff);transition:box-shadow .15s;" onmouseenter="this.style.boxShadow=\'0 2px 12px rgba(0,0,0,.1)\'" onmouseleave="this.style.boxShadow=\'\'">'
+            + '<span style="font-size:24px;">📄</span>'
+            + '<div><div style="font-weight:600;font-size:13px;">Ingresos Brutos — ARBA (Bs. As.)</div><div style="font-size:11px;color:#888;">Constancia / certificado IIBB provincia</div></div>'
+            + '<span style="margin-left:auto;font-size:18px;">↗</span></a>'
+            + '<a href="'+urlRentas+'" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid #e0e0e0;border-radius:10px;text-decoration:none;color:inherit;background:var(--surface,#fff);transition:box-shadow .15s;" onmouseenter="this.style.boxShadow=\'0 2px 12px rgba(0,0,0,.1)\'" onmouseleave="this.style.boxShadow=\'\'">'
+            + '<span style="font-size:24px;">🏢</span>'
+            + '<div><div style="font-weight:600;font-size:13px;">SETI — Rentas CABA</div><div style="font-size:11px;color:#888;">Constancia IIBB Ciudad de Buenos Aires</div></div>'
+            + '<span style="margin-left:auto;font-size:18px;">↗</span></a>'
+            + '</div></div>';
+
+        abrirModalGenerico('Estado fiscal · ' + emp.nombre, html);
+    }
+
+    function abrirModalGenerico(titulo, contenido) {
+        var existing = document.getElementById('modalGenerico');
+        if (existing) existing.remove();
+        var m = document.createElement('div');
+        m.id = 'modalGenerico';
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9500;display:flex;align-items:center;justify-content:center;padding:16px;';
+        m.onclick = function(e) { if (e.target === m) m.remove(); };
+        m.innerHTML = '<div style="background:var(--surface,#fff);border-radius:16px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,.25);">'
+            + '<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--border-soft,#e0e0e0);">'
+            + '<strong style="font-size:14px;">'+titulo+'</strong>'
+            + '<button onclick="document.getElementById(\'modalGenerico\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-2,#888);line-height:1;">✕</button>'
+            + '</div>'
+            + '<div style="padding:20px;">'+contenido+'</div>'
+            + '</div>';
+        document.body.appendChild(m);
+    }
+
     function renderHome() {
         _hPoblarSels();
         _hReloj();
+        _hEmpresasCards();
         if (!_hRInterval) _hRInterval=setInterval(_hReloj,1000);
         if (_hYaCargo) return;
         _hYaCargo=true;
