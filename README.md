@@ -95,7 +95,7 @@ Aplicación de una sola página construida con **JavaScript vanilla** (sin React
 
 La UI es un **sidebar** con menús desplegables. Cada vista se muestra con `mostrarTab('<Nombre>')`. Tabs disponibles:
 
-`Home`, `Dashboard`, `CajaGeneral`, `EfectivoPesos`, `EfectivoUSD`, `CuentasBancarias`, `Ventas`, `Alquileres`, `Servicios`, `IngGeneral`, `ResumenIngresos`, `Facturas`, `Proveedores`, `Presupuestos`, `Pagos`, `Egresos`, `Tesoreria`, `Documentos`, `Reportes`, `PlanTrabajo`, `Config`.
+`Home`, `Desarrollos`, `Dashboard`, `CajaGeneral`, `EfectivoPesos`, `EfectivoUSD`, `CuentasBancarias`, `Ventas`, `Alquileres`, `Servicios`, `IngGeneral`, `Inversiones`, `ResumenIngresos`, `Facturas`, `Proveedores`, `Presupuestos`, `Pagos`, `Egresos`, `Tesoreria`, `Documentos`, `Reportes`, `PlanTrabajo`, `Config`.
 
 ---
 
@@ -164,6 +164,8 @@ getBasePath()  →  empresas/<empresaId>/proyectos/<proyectoId>
 | `REF_INGRESOS`    | `…/ingresos`    | Ventas, alquileres, servicios, generales |
 | `REF_BANCO`       | `…/banco`       | Cuentas y movimientos bancarios |
 | `REF_CONTADOR_OP` | `…/contadorOP`  | Numeración correlativa de órdenes de pago |
+| `REF_DESARROLLOS` | `…/desarrollos` | Desarrollos inmobiliarios (m², valor de terreno, m² vendibles, costos, valor de venta) |
+| `REF_APORTANTES`  | `…/aportantes`  | Aportantes/socios que invierten capital en un desarrollo, con su rentabilidad pactada |
 
 ### Datos GLOBALES (compartidos entre todas las empresas)
 
@@ -201,10 +203,13 @@ getBasePath()  →  empresas/<empresaId>/proyectos/<proyectoId>
 
 - **Caja y Bancos:** libro de caja general, efectivo en pesos y en dólares, y cuentas bancarias. Importación de extractos bancarios (Santander) en CSV/Excel con **anti-duplicados** (`impExtClave`). Conexión automática opcional a bancos (Belvo/Prometeo).
 - **Ingresos:** Ventas (unidades funcionales), Alquileres, Servicios del estudio, Ingresos generales y un **Resumen de Ingresos** consolidado.
+- **Desarrollos Inmobiliarios** (tab propia, debajo de "Inicio"): galería de tarjetas con los desarrollos cargados (m² totales/vendibles, valor de terreno, costos, valor de venta por m²) y una **ficha de detalle** por desarrollo con sus aportantes vinculados y gráficos (Incidencia del Terreno, % del Terreno sobre el Costo Total, Participación de Aportantes, Ganancia Estimada vs. Rentabilidad Comprometida).
+- **Aportantes / Socios** (tab "Inversiones" en el submenú Ingresos): registro de quién invierte capital en qué desarrollo, con la rentabilidad pactada — como % sobre el valor de venta total, la ganancia estimada, el terreno o el costo de obra, o como una cantidad de m² a un valor fijo — y cálculo automático de la rentabilidad estimada en $.
 - **Facturación electrónica ARCA:** emitir facturas con CAE real, listar facturas emitidas, ver/imprimir comprobante y **enviarlo por mail** (EmailJS + PDF).
 - **Egresos / Proveedores / Presupuestos:** datos de proveedores, presupuestos por proveedor, pagos y órdenes de pago numeradas.
 - **Tesorería interempresa:** préstamos y movimientos entre empresas.
 - **Documentos:** adjuntos; lectura de facturas PDF con **Google Gemini** (extracción automática de datos).
+- **Asistente RK** (chat flotante, `Google Gemini`): responde dudas sobre la app, analiza PDFs de facturas adjuntos (con botón para precargarlas en Facturas) y responde preguntas concretas sobre los datos cargados en el proyecto activo (p. ej. "¿cuánto aportó Juan Pérez?"), a partir de un resumen en texto que se envía junto con cada consulta (`rkResumenDatosApp()`).
 - **Reportes y Dashboard:** gráficos (Chart.js) e impresión/exportación.
 - **Exportación de datos:** presupuestos a Excel, y la base completa a **JSON / Excel / CSV / SQL**.
 - **Ajustes (Config):** tipo de cambio USD, índice CAC, claves de Gemini/EmailJS, URL del backend y administración de usuarios.
