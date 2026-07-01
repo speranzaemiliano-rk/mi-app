@@ -8,7 +8,14 @@ on:
 jobs:
   backup:
     runs-on: ubuntu-latest
+
     steps:
+      # ── Fecha ────────────────────────────────────────────────
+      - name: Fecha actual
+        id: fecha
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      # ── Exportar DB ──────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -25,42 +32,128 @@ jobs:
           node << 'SCRIPT'
           const admin = require('firebase-admin');
           const fs    = require('fs');
-
           const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
           admin.initializeApp({
             credential:  admin.credential.cert(sa),
             databaseURL: process.env.FIREBASE_DATABASE_URL
           });
-
           admin.database().ref('/').once('value')
             .then(snap => {
-              const date     = new Date().toISOString().slice(0, 10);
-              const filename = `backup-${date}.json`;
-              fs.writeFileSync(filename, JSON.stringify(snap.val(), null, 2));
-              console.log(`✓ Backup guardado: ${filename}`);
-              const mb = (fs.statSync(filename).size / 1024 / 1024).toFixed(2);
-              console.log(`  Tamaño: ${mb} MB`);
+              const date = new Date().toISOString().slice(0, 10);
+              const file = `backup-${date}.json`;
+              fs.writeFileSync(file, JSON.stringify(snap.val(), null, 2));
+              const mb = (fs.statSync(file).size / 1024 / 1024).toFixed(2);
+              console.log(`✓ ${file}  (${mb} MB)`);
               process.exit(0);
             })
             .catch(e => { console.error('Error:', e.message); process.exit(1); });
           SCRIPT
 
-      - name: Subir backup como artefacto
+      - name: Comprimir backup
+        run: gzip -k backup-*.json
+
+      # ── 1) Artefacto GitHub Actions (90 días) ────────────────
+      - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
-          name: firebase-backup-${{ github.run_id }}
+          name: firebase-backup-${{ steps.fecha.outputs.date }}
           path: backup-*.json
           retention-days: 90
 
-      - name: Resumen
+      # ── 2) Commit en rama backups (30 días de historial) ─────
+      - name: Guardar en rama backups
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## 💾 Backup completado" >> $GITHUB_STEP_SUMMARY
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" backups-repo
+          cd backups-repo
+
+          # Crear la rama backups si no existe (rama huérfana sin historial de main)
+          if git ls-remote --exit-code --heads origin backups > /dev/null 2>&1; then
+            git checkout backups
+          else
+            git checkout --orphan backups
+            git rm -rf . 2>/dev/null || true
+            echo "# Backups automáticos de Firebase Realtime Database" > README.md
+            echo "" >> README.md
+            echo "Generados por GitHub Actions cada 24 hs. Se mantienen los últimos 30 días." >> README.md
+            git add README.md
+            git config user.name  'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git commit -m "init: rama de backups automáticos"
+            git push origin backups
+          fi
+
+          # Copiar backup del día
+          cp ../backup-*.json .
+
+          # Eliminar backups de más de 30 días (por nombre de archivo)
+          python3 - << 'PY'
+          import os, glob
+          from datetime import datetime, timedelta
+          cutoff = datetime.now() - timedelta(days=30)
+          for f in glob.glob('backup-*.json'):
+              try:
+                  d = datetime.strptime(f, 'backup-%Y-%m-%d.json')
+                  if d < cutoff:
+                      os.remove(f)
+                      print(f'Eliminado backup antiguo: {f}')
+              except Exception:
+                  pass
+          PY
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "backup: ${{ steps.fecha.outputs.date }}" || echo "Sin cambios"
+          git push origin backups
+
+      # ── 3) Mail con JSON comprimido adjunto ──────────────────
+      #
+      # Secrets necesarios (configurar una sola vez en GitHub → Settings → Secrets):
+      #   BACKUP_MAIL_USERNAME  → tu dirección de Gmail (ej: usuario@gmail.com)
+      #   BACKUP_MAIL_PASSWORD  → App Password de Google (16 caracteres, sin espacios)
+      #                           Generalo en: Google Account → Seguridad → Contraseñas de aplicación
+      #   BACKUP_MAIL_TO        → dirección donde recibir el backup (puede ser la misma)
+      #
+      - name: Enviar backup por mail
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.BACKUP_MAIL_USERNAME }}
+          password: ${{ secrets.BACKUP_MAIL_PASSWORD }}
+          to: ${{ secrets.BACKUP_MAIL_TO }}
+          from: "RK Backup <${{ secrets.BACKUP_MAIL_USERNAME }}>"
+          subject: "💾 Backup RK — ${{ steps.fecha.outputs.date }}"
+          body: |
+            Backup automático de la base de datos RK generado el ${{ steps.fecha.outputs.date }}.
+
+            El archivo comprimido (backup-${{ steps.fecha.outputs.date }}.json.gz) está adjunto.
+
+            También disponible en:
+            • GitHub Actions (90 días): https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            • Rama backups del repo:    https://github.com/${{ github.repository }}/tree/backups
+
+            Para restaurar:
+            1. Descomprimí el .gz para obtener el .json
+            2. En la app → ⚙️ Configuración → Respaldo de Base de Datos → Restaurar desde respaldo
+            3. Seleccioná el JSON y confirmá
+          attachments: backup-*.json.gz
+        continue-on-error: true   # si los secrets de mail no están configurados, el resto del workflow sigue igual
+
+      # ── Resumen ───────────────────────────────────────────────
+      - name: Resumen del run
+        run: |
+          echo "## 💾 Backup ${{ steps.fecha.outputs.date }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Fecha:** $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "- **Retención:** 90 días" >> $GITHUB_STEP_SUMMARY
-          echo "- **Descargar:** ir a Actions → este run → pestaña *Artifacts*" >> $GITHUB_STEP_SUMMARY
+          echo "| Destino | Estado |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Artefacto GitHub Actions (90 días) | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rama \`backups\` del repo (30 días) | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Mail (si BACKUP_MAIL_USERNAME configurado) | ⚠️ ver paso anterior |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Cómo restaurar" >> $GITHUB_STEP_SUMMARY
-          echo "1. Descargar el archivo JSON desde Artifacts." >> $GITHUB_STEP_SUMMARY
-          echo "2. En la app → ⚙️ Configuración → Respaldo → **Restaurar desde respaldo**." >> $GITHUB_STEP_SUMMARY
-          echo "3. Seleccionar el JSON descargado y confirmar." >> $GITHUB_STEP_SUMMARY
+          echo "1. Descargá el JSON desde Artifacts o desde la rama \`backups\`." >> $GITHUB_STEP_SUMMARY
+          echo "2. App → ⚙️ Configuración → Respaldo → **Restaurar desde respaldo**." >> $GITHUB_STEP_SUMMARY
