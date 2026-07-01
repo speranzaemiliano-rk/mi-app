@@ -1,6 +1,6 @@
 # Pendientes
 
-> Última actualización: 2026-06-28. Todo el código está mergeado en `main` y
+> Última actualización: 2026-07-01. Todo el código está mergeado en `main` y
 > desplegado (frontend en GitHub Pages, backend en Railway). Lo que queda en su
 > mayoría son **pasos de configuración** (cargar credenciales), no código.
 
@@ -136,6 +136,40 @@ Después de eso, el link del PDF en el mail funciona y queda todo terminado.
 ---
 
 # ✅ Hecho
+
+## ✅ Sesión 2026-07-01: Aportantes/Socios, Desarrollos Inmobiliarios y consolidación
+
+- **Módulo nuevo — Desarrollos Inmobiliarios:** tab propia en el sidebar (debajo de
+  "Inicio") con galería de tarjetas (una por desarrollo) y ficha de detalle al
+  hacer click: m² totales/vendibles, valor de terreno, costos, valor de venta
+  por m², ganancia estimada, y la lista de aportantes/socios vinculados a ese
+  desarrollo. Alta/edición/borrado dentro de la misma tab (sin modal). Datos en
+  `REF_DESARROLLOS` (`…/desarrollos`).
+- **Módulo nuevo — Aportantes / Socios** (tab "Inversiones" del submenú
+  Ingresos): registro de capital aportado por cada inversor/socio, vinculado a
+  un desarrollo, con rentabilidad pactada como % (sobre valor de venta total,
+  ganancia estimada, terreno o costo de obra) o como m² a un valor fijo.
+  Cálculo automático de la rentabilidad estimada en $. Datos en
+  `REF_APORTANTES` (`…/aportantes`).
+- **Gráficos (Chart.js):** en la galería, comparativa de "Incidencia del
+  Terreno" ($/m² vendible) y "Terreno como % del Costo Total" entre todos los
+  desarrollos; en la ficha de cada desarrollo, "Participación de Aportantes"
+  (torta) y "Ganancia Estimada vs. Rentabilidad Comprometida".
+- **Asistente RK responde sobre datos reales:** `rkResumenDatosApp()` arma un
+  resumen de aportantes, desarrollos, alquileres, cuentas bancarias,
+  proveedores y ventas del proyecto activo y lo agrega al *system prompt* de
+  Gemini, para que el asistente pueda responder preguntas concretas
+  ("¿cuánto aportó Juan Pérez?") con datos reales.
+- **Fixes de esta sesión:** botón "Cargar en Facturas" del Asistente RK que no
+  abría el formulario (typo en el nombre de función); movimientos bancarios
+  mezclados con caja en Efectivo Pesos/Dólares (faltaba filtro `esBancario`).
+- **Consolidación y seguridad:** se agregó `escHtml()` y se aplicó a los
+  campos de texto libre (`nombre`, `obs`) del módulo nuevo, que se insertaban
+  sin escapar en `innerHTML` (XSS almacenado — verificado con un payload de
+  prueba). Se corrigió el gráfico de participación de aportantes, que sumaba
+  capital de distintas monedas como si fueran la misma. Ver `SECURITY.md`
+  puntos 7 y 8 para el detalle y lo que queda pendiente (extender el escape
+  al resto del archivo; acotar qué datos financieros ve el Asistente RK).
 
 ## ✅ Sesión 2026-06-28: comprobantes ARCA, exportación e impresión
 

@@ -14,6 +14,8 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 | 4 | 🟡 MEDIO | Sin validación de inputs ni rate limiting en el backend | Pendiente |
 | 5 | 🟡 MEDIO | Datos compartidos globalmente entre empresas (proveedores, grupos) | A evaluar |
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
+| 7 | 🟡 MEDIO | XSS almacenado: texto libre insertado en `innerHTML` sin escapar | ✅ Corregido en Desarrollos/Aportantes — resto del código sin auditar |
+| 8 | 🟢 BAJO | El Asistente RK envía un resumen de datos financieros a la API de Google Gemini en cada consulta | Por diseño — evaluar alcance |
 
 > ### ✅ Mitigaciones aplicadas en código (faltan los pasos de despliegue)
 >
@@ -151,6 +153,32 @@ Claves del enfoque:
 
 ---
 
+## 🟡 7. XSS almacenado: texto libre sin escapar en `innerHTML`
+
+**Dónde:** la UI arma tablas y tarjetas con template strings que escriben `innerHTML` directamente (ver nota en `CLAUDE.md`: "Ojo con escapar datos"). Es un patrón usado en todo el archivo, no solo en código nuevo.
+
+**Riesgo:** si un campo de texto libre (nombre de un proveedor, aportante, desarrollo, observación, etc.) contiene HTML/JS (`<img src=x onerror=...>`), y ese valor se inserta sin escapar en `innerHTML`, se ejecuta en el navegador de **cualquier usuario que vea esa pantalla** (XSS almacenado). Requiere que alguien con permiso de edición cargue el payload — no es explotable por un usuario anónimo — pero en una app multiusuario con roles `editor` es un vector real.
+
+**Qué se hizo en esta sesión:** se agregó `escHtml(s)` (escapa `& < > " '`) y se aplicó a los campos `nombre`/`obs` en el módulo nuevo de **Desarrollos** y **Aportantes/Socios** (galería, ficha de detalle y tabla). Verificado con un payload de prueba (`<img src=x onerror=...>`) que queda como texto plano y no se ejecuta.
+
+**Pendiente:** el resto del archivo (Proveedores, Alquileres, Ventas, Presupuestos, etc.) sigue interpolando texto libre sin escapar en varios lugares. Recomendación: adoptar `escHtml()` de forma incremental cada vez que se toque una función de render existente, priorizando los campos que un `editor` (no solo `admin`) puede cargar.
+
+---
+
+## 🟢 8. El Asistente RK envía datos financieros a Google Gemini
+
+**Dónde:** `rkResumenDatosApp()` — arma un resumen en texto de aportantes/socios (nombre + monto + desarrollo), desarrollos, alquileres (inquilino + canon), cuentas bancarias (banco + saldo), proveedores y ventas del proyecto activo, y lo agrega al *system prompt* que se envía a la API de Gemini en **cada mensaje** del Asistente RK.
+
+**Riesgo:** esos datos (nombres de personas, montos, saldos bancarios) viajan a un servicio de terceros (Google) aunque la pregunta del usuario no tenga relación con ellos. Es el mismo modelo de confianza que ya existía para la lectura de facturas PDF (también vía Gemini), pero ahora aplica a **todos** los mensajes del chat, no solo a los que adjuntan un PDF.
+
+**Mitigación aplicada:** el resumen se trunca a 6000 caracteres para acotar el volumen de datos por request.
+
+**A evaluar:**
+- Si el modelo de negocio requiere confidencialidad estricta de estos datos frente a terceros, considerar acotar `rkResumenDatosApp()` a menos campos, o activarlo solo cuando el usuario lo pide explícitamente (en vez de en cada mensaje).
+- Confirmar los términos de retención de datos de la API de Gemini que se esté usando (v1beta `generateContent`).
+
+---
+
 ## ✅ Cosas que ya están bien
 
 - **Certificados ARCA en el backend, no en el navegador** — la clave privada nunca se expone al cliente. ✔
@@ -158,6 +186,7 @@ Claves del enfoque:
 - **Credenciales de banco en Prometeo no se persisten** — viajan una vez y se obtiene una `key` de sesión temporal. ✔
 - **Flujo de borrado con aprobación** — buena idea de control (hay que reforzarlo con reglas, ver punto 2). ✔
 - **Service Worker** no cachea llamadas a Firebase/Railway/Google — evita servir datos sensibles obsoletos. ✔
+- **Escape de HTML en el módulo de Desarrollos/Aportantes** (`escHtml()`) — corrige XSS almacenado en ese módulo; falta extenderlo al resto del archivo (ver punto 7). ✔
 
 ---
 
@@ -168,6 +197,8 @@ Claves del enfoque:
 3. **Endurecer `temp-pdf`** (punto 3): expiración + IDs aleatorios.
 4. Validación de inputs y rate limiting en el backend (punto 4).
 5. Restringir la key de EmailJS por dominio (punto 6).
+6. Extender `escHtml()` al resto de los módulos que interpolan texto libre en `innerHTML` (punto 7).
+7. Definir el alcance de datos que el Asistente RK puede enviar a Gemini (punto 8), si la confidencialidad frente a terceros es un requisito del negocio.
 
 ---
 
