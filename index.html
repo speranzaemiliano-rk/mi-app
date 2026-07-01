@@ -2986,8 +2986,8 @@
                             </div>
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                                 <div class="form-group">
-                                    <label>m² Totales</label>
-                                    <input type="number" id="desM2Totales" step="0.01" min="0" placeholder="0">
+                                    <label>m² Totales (metros a construir)</label>
+                                    <input type="number" id="desM2Totales" step="0.01" min="0" placeholder="0" oninput="desCalcularCostos()">
                                 </div>
                                 <div class="form-group">
                                     <label>m² Vendibles</label>
@@ -2996,12 +2996,22 @@
                             </div>
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                                 <div class="form-group">
-                                    <label>Valor de Terreno</label>
-                                    <input type="number" id="desValorTerreno" step="0.01" min="0" placeholder="0">
+                                    <label>Costo por m² de construcción</label>
+                                    <input type="number" id="desCostoM2Const" step="0.01" min="0" placeholder="0" oninput="desCalcularCostos()">
                                 </div>
                                 <div class="form-group">
-                                    <label>Costos (costo de obra)</label>
-                                    <input type="number" id="desCostos" step="0.01" min="0" placeholder="0">
+                                    <label>Costo de obra (auto-calculado)</label>
+                                    <input type="number" id="desCostos" step="0.01" min="0" placeholder="0" oninput="desCalcularCostos()">
+                                </div>
+                            </div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div class="form-group">
+                                    <label>Valor de Terreno</label>
+                                    <input type="number" id="desValorTerreno" step="0.01" min="0" placeholder="0" oninput="desCalcularCostos()">
+                                </div>
+                                <div class="form-group">
+                                    <label style="color:var(--text-3);">Costo Total (terreno + obra)</label>
+                                    <input type="text" id="desCostoTotalInput" readonly style="background:var(--surface-2);color:var(--gold);font-weight:700;cursor:default;" placeholder="—">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -11596,6 +11606,13 @@
         } else {
             document.getElementById('ventaFecha').valueAsDate = new Date();
         }
+        // Desarrollo vinculado y m²
+        poblarSelectDesarrollos('ventaDesarrolloId', v && v.desarrolloId);
+        document.getElementById('ventaM2Unidad').value    = v ? (v.m2Unidad    || '') : '';
+        document.getElementById('ventaM2Amenities').value = v ? (v.m2Amenities || '') : '';
+        var restoWrap = document.getElementById('ventaM2RestoWrap');
+        if (restoWrap) restoWrap.style.display = 'none';
+        ventaOnCambioDesarrollo();
         // Adjuntos (boleto / plano): guardo las referencias actuales y las muestro
         _ventaDocs = {
             boleto: v && v.boletoDocId ? { docId: v.boletoDocId, nombre: v.boletoNombre, tipo: v.boletoTipo } : null,
@@ -11644,18 +11661,41 @@
 
     function cerrarModalVenta() { document.getElementById('modalVenta').classList.remove('active'); }
 
+    function ventaOnCambioDesarrollo() {
+        var desId = document.getElementById('ventaDesarrolloId').value;
+        var m2Unidad     = parseFloat(document.getElementById('ventaM2Unidad').value)    || 0;
+        var m2Amenities  = parseFloat(document.getElementById('ventaM2Amenities').value) || 0;
+        var wrap  = document.getElementById('ventaM2RestoWrap');
+        var valor = document.getElementById('ventaM2RestoValor');
+        if (!desId || !wrap || !valor) { if (wrap) wrap.style.display = 'none'; return; }
+        var d = desarrollos.find(function(x){ return x.id === desId; });
+        if (!d) { wrap.style.display = 'none'; return; }
+        var m2Usados = ventas.reduce(function(acc, v, i) {
+            if (v.desarrolloId !== desId) return acc;
+            if (editandoVentaIdx >= 0 && i === editandoVentaIdx) return acc;
+            return acc + ((parseFloat(v.m2Unidad)||0) + (parseFloat(v.m2Amenities)||0));
+        }, 0);
+        var restantes = (d.m2Vendibles || 0) - m2Usados - m2Unidad - m2Amenities;
+        wrap.style.display = '';
+        valor.textContent = restantes.toLocaleString('es-AR', {maximumFractionDigits:2}) + ' m²';
+        valor.style.color = restantes < 0 ? 'var(--danger)' : 'var(--gold)';
+    }
+
     async function guardarVenta() {
         const uf = document.getElementById('ventaUF').value.trim().toUpperCase();
         if (!uf) { alert('El código de UF es obligatorio.'); return; }
         const mod = document.getElementById('ventaModalidad').value;
         const nuevo = {
             uf,
-            tipo:      document.getElementById('ventaTipo').value,
-            comprador: document.getElementById('ventaComprador').value.trim(),
-            modalidad: mod,
-            fecha:     document.getElementById('ventaFecha').value,
-            obs:       document.getElementById('ventaObs').value.trim(),
-            acuerdo:   document.getElementById('ventaAcuerdo').value.trim(),
+            tipo:        document.getElementById('ventaTipo').value,
+            comprador:   document.getElementById('ventaComprador').value.trim(),
+            modalidad:   mod,
+            fecha:       document.getElementById('ventaFecha').value,
+            obs:         document.getElementById('ventaObs').value.trim(),
+            acuerdo:     document.getElementById('ventaAcuerdo').value.trim(),
+            desarrolloId: document.getElementById('ventaDesarrolloId').value || '',
+            m2Unidad:    parseFloat(document.getElementById('ventaM2Unidad').value) || 0,
+            m2Amenities: parseFloat(document.getElementById('ventaM2Amenities').value) || 0,
             cobrosHistorial: (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].cobrosHistorial) || []
         };
         if (mod === 'total_usd') {
@@ -12160,6 +12200,14 @@
                 const cuotasCell = v.modalidad === 'cuotas_cac' && v.nroCuotas
                     ? '<span class="pill" style="font-size:10px;">' + v.nroCuotas + ' cuotas</span>'
                     : '—';
+                var desVinc = '';
+                if (v.desarrolloId) {
+                    var dv = desarrollos.find(function(x){ return x.id === v.desarrolloId; });
+                    if (dv) {
+                        var m2Tot = (parseFloat(v.m2Unidad)||0) + (parseFloat(v.m2Amenities)||0);
+                        desVinc = '<br><small style="color:var(--text-3);font-size:10px;">🏗 ' + escHtml(dv.nombre) + (m2Tot ? ' · ' + m2Tot.toLocaleString('es-AR',{maximumFractionDigits:2}) + ' m²' : '') + '</small>';
+                    }
+                }
                 var docsBtns = '';
                 if (v.boletoDocId) docsBtns += '<button class="btn btn-outline btn-sm" title="Ver boleto de compraventa" onclick="descargarDoc(\'' + v.boletoDocId + '\',\'' + (v.boletoNombre||'boleto').replace(/'/g,'') + '\')">📄</button> ';
                 if (v.planoDocId)  docsBtns += '<button class="btn btn-outline btn-sm" title="Ver plano" onclick="descargarDoc(\'' + v.planoDocId + '\',\'' + (v.planoNombre||'plano').replace(/'/g,'') + '\')">📐</button> ';
@@ -12173,7 +12221,7 @@
                     : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' + docsBtns;
                 const tr = document.createElement('tr');
                 tr.innerHTML =
-                    '<td><strong>' + (v.uf||'—') + '</strong></td>' +
+                    '<td><strong>' + (v.uf||'—') + '</strong>' + desVinc + '</td>' +
                     '<td>' + (tipos[v.tipo]||v.tipo||'—') + '</td>' +
                     '<td>' + (v.comprador||'—') + '</td>' +
                     '<td><span class="pill pill-A">' + (modLabels[v.modalidad]||v.modalidad) + '</span></td>' +
@@ -13218,10 +13266,23 @@
     function volverGaleriaDesarrollos() { mostrarDesGaleria(); }
 
     function limpiarFormDesarrollo() {
-        ['desNombre','desM2Totales','desValorTerreno','desM2Vendibles','desCostos','desValorM2Vendible','desObs'].forEach(function(id){
+        ['desNombre','desM2Totales','desValorTerreno','desM2Vendibles','desCostos','desValorM2Vendible','desObs','desCostoM2Const','desCostoTotalInput'].forEach(function(id){
             var el = document.getElementById(id); if (el) el.value = '';
         });
         document.getElementById('desMoneda').value = 'ARS';
+    }
+
+    function desCalcularCostos() {
+        var m2 = parseFloat(document.getElementById('desM2Totales').value) || 0;
+        var costoM2 = parseFloat(document.getElementById('desCostoM2Const').value) || 0;
+        var terreno = parseFloat(document.getElementById('desValorTerreno').value) || 0;
+        if (costoM2 > 0 && m2 > 0) {
+            document.getElementById('desCostos').value = (costoM2 * m2).toFixed(2);
+        }
+        var costos = parseFloat(document.getElementById('desCostos').value) || 0;
+        var total = terreno + costos;
+        var disp = document.getElementById('desCostoTotalInput');
+        if (disp) disp.value = total > 0 ? total.toLocaleString('es-AR', {maximumFractionDigits:2}) : '';
     }
 
     function nuevoDesarrolloForm() {
@@ -13242,9 +13303,11 @@
         document.getElementById('desM2Totales').value        = d.m2Totales || '';
         document.getElementById('desValorTerreno').value     = d.valorTerreno || '';
         document.getElementById('desM2Vendibles').value      = d.m2Vendibles || '';
+        document.getElementById('desCostoM2Const').value     = d.costoM2Construccion || '';
         document.getElementById('desCostos').value           = d.costos || '';
         document.getElementById('desValorM2Vendible').value  = d.valorM2Vendible || '';
         document.getElementById('desObs').value              = d.obs || '';
+        desCalcularCostos();
         document.getElementById('desFormTitle').textContent = '🏗️ Editar Desarrollo';
         document.getElementById('desGaleria').style.display = 'none';
         document.getElementById('desFichaView').style.display = 'none';
@@ -13256,12 +13319,13 @@
         if (!nombre) { alert('El nombre del desarrollo es obligatorio.'); return; }
         var nuevo = {
             nombre: nombre,
-            moneda:          document.getElementById('desMoneda').value || 'ARS',
-            m2Totales:       parseFloat(document.getElementById('desM2Totales').value) || 0,
-            valorTerreno:    parseFloat(document.getElementById('desValorTerreno').value) || 0,
-            m2Vendibles:     parseFloat(document.getElementById('desM2Vendibles').value) || 0,
-            costos:          parseFloat(document.getElementById('desCostos').value) || 0,
-            valorM2Vendible: parseFloat(document.getElementById('desValorM2Vendible').value) || 0,
+            moneda:              document.getElementById('desMoneda').value || 'ARS',
+            m2Totales:           parseFloat(document.getElementById('desM2Totales').value) || 0,
+            valorTerreno:        parseFloat(document.getElementById('desValorTerreno').value) || 0,
+            m2Vendibles:         parseFloat(document.getElementById('desM2Vendibles').value) || 0,
+            costoM2Construccion: parseFloat(document.getElementById('desCostoM2Const').value) || 0,
+            costos:              parseFloat(document.getElementById('desCostos').value) || 0,
+            valorM2Vendible:     parseFloat(document.getElementById('desValorM2Vendible').value) || 0,
             obs: document.getElementById('desObs').value.trim()
         };
         if (editandoDesarrolloIdx >= 0) {
@@ -13306,6 +13370,12 @@
         if (!d) return;
         var fmtD = d.moneda === 'USD' ? fmtUSD : fmt;
         var aportantesVinculados = aportantes.filter(function(a){ return a.desarrolloId === d.id; });
+        var m2Vendidos = ventas.reduce(function(acc, v) {
+            if (v.desarrolloId !== d.id) return acc;
+            return acc + ((parseFloat(v.m2Unidad)||0) + (parseFloat(v.m2Amenities)||0));
+        }, 0);
+        var m2Disponibles = (d.m2Vendibles || 0) - m2Vendidos;
+        var costoTotal = (d.costos || 0) + (d.valorTerreno || 0);
         var filasAp = aportantesVinculados.length
             ? aportantesVinculados.map(function(ap){
                 var rent = rentabilidadEstimadaAportante(ap);
@@ -13327,8 +13397,12 @@
                 '<div class="stats-grid" style="margin-top:16px;">' +
                     '<div class="stat-card"><div class="stat-label">m² Totales</div><div class="stat-value" style="font-size:20px;">'+(d.m2Totales||0).toLocaleString('es-AR')+'</div></div>' +
                     '<div class="stat-card"><div class="stat-label">m² Vendibles</div><div class="stat-value" style="font-size:20px;">'+(d.m2Vendibles||0).toLocaleString('es-AR')+'</div></div>' +
+                    '<div class="stat-card"><div class="stat-label">m² Vendidos</div><div class="stat-value" style="font-size:20px;">'+m2Vendidos.toLocaleString('es-AR',{maximumFractionDigits:2})+'</div></div>' +
+                    '<div class="stat-card"><div class="stat-label">m² Disponibles</div><div class="stat-value" style="font-size:20px;color:'+(m2Disponibles<0?'var(--danger)':'var(--success)')+';">'+m2Disponibles.toLocaleString('es-AR',{maximumFractionDigits:2})+'</div></div>' +
+                    '<div class="stat-card"><div class="stat-label">Costo m² Construcción</div><div class="stat-value" style="font-size:18px;">'+fmtD(d.costoM2Construccion||0)+'</div></div>' +
                     '<div class="stat-card"><div class="stat-label">Valor Terreno</div><div class="stat-value" style="font-size:18px;">'+fmtD(d.valorTerreno||0)+'</div></div>' +
                     '<div class="stat-card"><div class="stat-label">Costos (obra)</div><div class="stat-value" style="font-size:18px;">'+fmtD(d.costos||0)+'</div></div>' +
+                    '<div class="stat-card"><div class="stat-label">Costo Total</div><div class="stat-value" style="font-size:18px;color:var(--gold);">'+fmtD(costoTotal)+'</div></div>' +
                     '<div class="stat-card"><div class="stat-label">Valor Venta Total</div><div class="stat-value" style="font-size:18px;">'+fmtD(valorVentaTotalDesarrollo(d))+'</div></div>' +
                     '<div class="stat-card"><div class="stat-label">Ganancia Estimada</div><div class="stat-value" style="font-size:18px;">'+fmtD(gananciaEstimadaDesarrollo(d))+'</div></div>' +
                 '</div>' +
@@ -17676,6 +17750,28 @@
               </div>
             </div>
 
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border); margin-top:4px; padding-top:12px;">
+          <div class="form-group">
+            <label>🏗️ Desarrollo inmobiliario vinculado</label>
+            <select id="ventaDesarrolloId" onchange="ventaOnCambioDesarrollo()">
+              <option value="">— Sin vincular a un desarrollo —</option>
+            </select>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+              <label>m² de la unidad</label>
+              <input type="number" id="ventaM2Unidad" step="0.01" min="0" placeholder="0" oninput="ventaOnCambioDesarrollo()">
+            </div>
+            <div class="form-group">
+              <label>m² de amenities</label>
+              <input type="number" id="ventaM2Amenities" step="0.01" min="0" placeholder="0" oninput="ventaOnCambioDesarrollo()">
+            </div>
+          </div>
+          <div id="ventaM2RestoWrap" style="display:none; background:var(--surface-2); border-radius:8px; padding:10px 14px; margin-bottom:8px; font-size:13px;">
+            <span style="color:var(--text-3);">m² vendibles restantes en el desarrollo:</span>
+            <strong id="ventaM2RestoValor" style="color:var(--gold); margin-left:8px;"></strong>
           </div>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
