@@ -19729,6 +19729,66 @@
     return { tab: tab, desc: desc };
   }
 
+  // Arma un resumen en texto plano de los datos cargados en el proyecto activo,
+  // para que el asistente pueda responder preguntas concretas (montos, nombres, etc.)
+  function rkResumenDatosApp() {
+    var monFmt = function(n, mon) { return (mon==='USD'?'USD ':'$') + Math.round(n||0).toLocaleString('es-AR'); };
+    var bloques = [];
+
+    if (typeof aportantes !== 'undefined' && aportantes.length) {
+      var linsAp = aportantes.map(function(a) {
+        var d = (typeof desarrollos !== 'undefined') ? desarrollos.find(function(x){ return x.id === a.desarrolloId; }) : null;
+        return '- ' + (a.nombre||'—') + ': aportó ' + monFmt(a.capitalAportado, a.moneda) +
+          (d ? (' al desarrollo "' + d.nombre + '"') : '') +
+          (a.fecha ? (' el ' + a.fecha) : '') +
+          (a.fechaVencimiento ? (', vence ' + a.fechaVencimiento) : '');
+      });
+      bloques.push('APORTANTES / SOCIOS (inversiones):\n' + linsAp.join('\n'));
+    }
+
+    if (typeof desarrollos !== 'undefined' && desarrollos.length) {
+      var linsDes = desarrollos.map(function(d) {
+        return '- ' + (d.nombre||'—') + ': ' + (d.m2Vendibles||0) + ' m² vendibles, valor terreno ' + monFmt(d.valorTerreno, d.moneda) +
+          ', costos ' + monFmt(d.costos, d.moneda) + ', valor de venta por m² ' + monFmt(d.valorM2Vendible, d.moneda);
+      });
+      bloques.push('DESARROLLOS INMOBILIARIOS:\n' + linsDes.join('\n'));
+    }
+
+    if (typeof alquileres !== 'undefined' && alquileres.length) {
+      var linsAlq = alquileres.map(function(a) {
+        return '- ' + (a.unidad||'—') + ' (inquilino: ' + (a.inquilino||'—') + '), canon actual ' + monFmt(a.canonActual||a.canon, a.moneda);
+      });
+      bloques.push('ALQUILERES:\n' + linsAlq.join('\n'));
+    }
+
+    if (typeof servicios !== 'undefined' && servicios.length) {
+      var linsSrv = servicios.map(function(s) { return '- ' + (s.cliente||'—') + ': ' + (s.descripcion||'—'); });
+      bloques.push('SERVICIOS DEL ESTUDIO:\n' + linsSrv.join('\n'));
+    }
+
+    if (typeof cuentasBancarias !== 'undefined' && cuentasBancarias.length) {
+      var linsCta = cuentasBancarias.map(function(c) {
+        return '- ' + (c.banco||'—') + ' (' + (c.tipo||'—') + ', ' + (c.moneda||'ARS') + '): saldo ' + monFmt(c.saldo, c.moneda);
+      });
+      bloques.push('CUENTAS BANCARIAS:\n' + linsCta.join('\n'));
+    }
+
+    if (typeof proveedores !== 'undefined' && proveedores.length) {
+      var nombresProv = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
+      if (nombresProv.length) bloques.push('PROVEEDORES: ' + nombresProv.join(', '));
+    }
+
+    if (typeof ventas !== 'undefined' && ventas.length) {
+      var linsVta = ventas.map(function(v) { return '- ' + (v.uf||'—') + ' (comprador: ' + (v.comprador||'—') + ')'; });
+      bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
+    }
+
+    var texto = bloques.join('\n\n');
+    var LIMITE = 6000;
+    if (texto.length > LIMITE) texto = texto.slice(0, LIMITE) + '\n[...datos truncados por espacio, hay más registros cargados...]';
+    return texto;
+  }
+
   function rkMensajeBot(texto, factDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
@@ -19835,11 +19895,15 @@
     input.style.height = 'auto';
 
     var ctx = rkActualizarContexto();
+    var datosApp = (typeof rkResumenDatosApp === 'function') ? rkResumenDatosApp() : '';
     var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
       + 'Ayudás a los usuarios a usar la app, entender secciones y resolver dudas sobre gestión administrativa. '
       + 'Respondés en español argentino, de forma concisa y amigable. '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
-      + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.';
+      + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
+      + (datosApp
+          ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
+          : '');
 
     var esPdf = !!_rkPdfData;
     var pdfNombre = esPdf ? _rkPdfData.nombre : '';
