@@ -3783,6 +3783,25 @@
                   </div>
 
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">💾 Respaldo de Base de Datos</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Descargá una copia completa de todos tus datos en formato JSON. Guardala en un lugar seguro.<br>
+                      Para restaurar ante una pérdida de datos, usá el botón <strong>Importar respaldo</strong>.
+                    </p>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                      <button class="btn btn-gold btn-sm" onclick="exportarBackupDB()">⬇️ Descargar respaldo ahora</button>
+                      <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0;">
+                        ⬆️ Restaurar desde respaldo
+                        <input type="file" id="backupImportFile" accept=".json" style="display:none;" onchange="importarBackupDB(this)">
+                      </label>
+                    </div>
+                    <div id="backupStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    <p style="font-size:11px;color:var(--text-3);margin-top:10px;line-height:1.5;">
+                      💡 <strong>Respaldo automático:</strong> el repositorio tiene un workflow de GitHub Actions que genera un backup cada 24 hs y lo guarda como artefacto descargable (90 días). Se puede ejecutar manualmente desde <em>GitHub → Actions → Backup Firebase</em>.
+                    </p>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📥 Lectura automática de Gmail</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       Permite leer las facturas que te llegan por mail. Pegá el <strong>ID de cliente de OAuth</strong> de Google Cloud
@@ -8834,6 +8853,59 @@
         localStorage.removeItem(ANTHROPIC_API_KEY_LS);
         document.getElementById('cfgApiKey').value = '';
         document.getElementById('cfgApiKeyStatus').textContent = '⚠️ API Key eliminada.';
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // BACKUP / RESTAURACIÓN DE BASE DE DATOS
+    // ══════════════════════════════════════════════════════════
+    function exportarBackupDB() {
+        var status = document.getElementById('backupStatus');
+        if (status) { status.style.color = 'var(--text-3)'; status.textContent = '⏳ Descargando datos de Firebase…'; }
+        db.ref('/').once('value').then(function(snap) {
+            var data = snap.val();
+            var json = JSON.stringify(data, null, 2);
+            var blob = new Blob([json], { type: 'application/json' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            var fecha = new Date().toISOString().replace('T', '_').slice(0, 16).replace(':', '-');
+            a.href = url;
+            a.download = 'rk-backup-' + fecha + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            if (status) { status.style.color = 'var(--success)'; status.textContent = '✓ Respaldo descargado (' + fecha + ')'; }
+        }).catch(function(e) {
+            if (status) { status.style.color = 'var(--danger)'; status.textContent = '❌ Error: ' + e.message; }
+        });
+    }
+
+    function importarBackupDB(input) {
+        var file = input && input.files && input.files[0];
+        if (!file) return;
+        var status = document.getElementById('backupStatus');
+        if (!confirm('⚠️ ATENCIÓN: Esto va a REEMPLAZAR TODA la base de datos con el contenido del respaldo.\n\nEsta acción no se puede deshacer. ¿Estás seguro?')) {
+            input.value = ''; return;
+        }
+        if (status) { status.style.color = 'var(--text-3)'; status.textContent = '⏳ Leyendo archivo…'; }
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                var data = JSON.parse(e.target.result);
+                if (status) status.textContent = '⏳ Restaurando en Firebase… (no cierres la página)';
+                db.ref('/').set(data).then(function() {
+                    if (status) { status.style.color = 'var(--success)'; status.textContent = '✓ Restauración exitosa. Recargá la página para ver los datos.'; }
+                    input.value = '';
+                }).catch(function(err) {
+                    if (status) { status.style.color = 'var(--danger)'; status.textContent = '❌ Error al restaurar: ' + err.message; }
+                    input.value = '';
+                });
+            } catch(err) {
+                if (status) { status.style.color = 'var(--danger)'; status.textContent = '❌ Archivo JSON inválido: ' + err.message; }
+                input.value = '';
+            }
+        };
+        reader.readAsText(file);
     }
 
     // ══════════════════════════════════════════════════════════

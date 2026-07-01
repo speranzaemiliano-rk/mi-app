@@ -1,0 +1,66 @@
+name: Backup Firebase Realtime Database
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 3:00 UTC = 0:00 Argentina (GMT-3)
+  workflow_dispatch:       # permite ejecutarlo manualmente desde GitHub → Actions
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar firebase-admin
+        run: npm install firebase-admin
+
+      - name: Exportar base de datos
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_DATABASE_URL: https://modo-prueba-bb8c2-default-rtdb.firebaseio.com
+        run: |
+          node << 'SCRIPT'
+          const admin = require('firebase-admin');
+          const fs    = require('fs');
+
+          const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+          admin.initializeApp({
+            credential:  admin.credential.cert(sa),
+            databaseURL: process.env.FIREBASE_DATABASE_URL
+          });
+
+          admin.database().ref('/').once('value')
+            .then(snap => {
+              const date     = new Date().toISOString().slice(0, 10);
+              const filename = `backup-${date}.json`;
+              fs.writeFileSync(filename, JSON.stringify(snap.val(), null, 2));
+              console.log(`✓ Backup guardado: ${filename}`);
+              const mb = (fs.statSync(filename).size / 1024 / 1024).toFixed(2);
+              console.log(`  Tamaño: ${mb} MB`);
+              process.exit(0);
+            })
+            .catch(e => { console.error('Error:', e.message); process.exit(1); });
+          SCRIPT
+
+      - name: Subir backup como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-backup-${{ github.run_id }}
+          path: backup-*.json
+          retention-days: 90
+
+      - name: Resumen
+        run: |
+          echo "## 💾 Backup completado" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Fecha:** $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Retención:** 90 días" >> $GITHUB_STEP_SUMMARY
+          echo "- **Descargar:** ir a Actions → este run → pestaña *Artifacts*" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Cómo restaurar" >> $GITHUB_STEP_SUMMARY
+          echo "1. Descargar el archivo JSON desde Artifacts." >> $GITHUB_STEP_SUMMARY
+          echo "2. En la app → ⚙️ Configuración → Respaldo → **Restaurar desde respaldo**." >> $GITHUB_STEP_SUMMARY
+          echo "3. Seleccionar el JSON descargado y confirmar." >> $GITHUB_STEP_SUMMARY
