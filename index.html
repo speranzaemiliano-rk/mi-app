@@ -19892,7 +19892,7 @@
     panel.classList.toggle('abierto', _rkAbierto);
     if (_rkAbierto) {
       rkActualizarContexto();
-      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo explicarte cómo usar la app, responder con los **datos reales de tu proyecto** (presupuestos, facturas, caja, ingresos…), hacer cálculos y comparaciones, analizar PDFs de facturas y **llevarte a cualquier sección**. ¿En qué te ayudo?');
+      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo explicarte cómo usar la app, responder con los **datos reales de tu proyecto** (presupuestos, facturas, caja, ingresos…), hacer cálculos, analizar PDFs de facturas, **llevarte a cualquier sección** y **precargarte formularios** (p. ej. "cargá un pago de $500.000 a Constructora Sur") — vos siempre revisás y guardás. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     }
   };
@@ -19977,6 +19977,133 @@
     return json;
   }
 
+  // ── Precarga de formularios ──
+  // Abre los modales existentes de la app con campos completados. NUNCA
+  // guarda directo: el guardado siempre pasa por el botón del formulario.
+  function rkSetVal(id, v) {
+    var el = document.getElementById(id);
+    if (el && v !== undefined && v !== null && v !== '') el.value = v;
+  }
+
+  function rkCerrarPanel() {
+    _rkAbierto = false;
+    var p = document.getElementById('rk-agente-panel');
+    if (p) p.classList.remove('abierto');
+  }
+
+  function rkPrecargarFormulario(tipo, c) {
+    c = c || {};
+    if (typeof puedeEditar !== 'undefined' && !puedeEditar) {
+      return { error: 'El usuario tiene rol de solo lectura: no puede cargar datos.' };
+    }
+    var NOTA = 'Formulario abierto con los datos precargados (el panel del chat se cerró para que se vea). NO se guardó nada todavía: el usuario tiene que revisar los campos y tocar Guardar. Avisale eso en tu respuesta, breve.';
+
+    if (tipo === 'presupuesto') {
+      if (typeof agregarFila !== 'function') return { error: 'Formulario de presupuestos no disponible.' };
+      if (typeof mostrarTab === 'function') mostrarTab('Presupuestos');
+      agregarFila();
+      if (c.proveedor && typeof poblarSelectProveedores === 'function') poblarSelectProveedores(c.proveedor);
+      rkSetVal('fecha', c.fecha);
+      rkSetVal('concepto', c.concepto || c.descripcion);
+      rkSetVal('rubro', c.rubro);
+      rkSetVal('subrubro', c.subrubro);
+      rkSetVal('presupuesto', c.monto);
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA };
+    }
+
+    if (tipo === 'factura') {
+      if (typeof agregarFactura !== 'function') return { error: 'Formulario de facturas no disponible.' };
+      if (typeof mostrarTab === 'function') mostrarTab('Facturas');
+      agregarFactura();
+      if (c.proveedor && typeof poblarSelectProveedoresFact === 'function') poblarSelectProveedoresFact(c.proveedor);
+      rkSetVal('factNumero', c.numero);
+      rkSetVal('factFecha', c.fecha);
+      rkSetVal('factVencimiento', c.vencimiento);
+      rkSetVal('factDescripcion', c.descripcion || c.concepto);
+      rkSetVal('factImporte', c.monto);
+      rkSetVal('factMoneda', c.moneda);
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA };
+    }
+
+    if (tipo === 'pago') {
+      if (typeof abrirPagoDe !== 'function') return { error: 'Formulario de pagos no disponible.' };
+      var lista = (typeof datos !== 'undefined' && datos) || [];
+      var q = String(c.presupuesto || c.proveedor || '').toLowerCase().trim();
+      if (!q) return { error: 'Indicá a qué presupuesto va el pago (proveedor y/o concepto) en el campo "presupuesto".' };
+      var matches = [];
+      lista.forEach(function(d, i) {
+        var txt = ((d.proveedor || '') + ' ' + (d.concepto || '')).toLowerCase();
+        if (txt.indexOf(q) !== -1) matches.push({ indice: i, proveedor: d.proveedor, concepto: d.concepto });
+      });
+      if (!matches.length) return { error: 'No encontré ningún presupuesto que coincida con "' + q + '". Consultá la sección presupuestos con obtenerDatos y volvé a intentar con el nombre exacto.' };
+      if (matches.length > 1) return { error: 'Hay varios presupuestos que coinciden, pedile al usuario que elija: ' + JSON.stringify(matches) };
+      if (typeof mostrarTab === 'function') mostrarTab('Presupuestos');
+      abrirPagoDe(matches[0].indice);
+      rkSetVal('pagoFecha', c.fecha);
+      rkSetVal('pagoCapital', c.monto);
+      if (typeof recalcularRetenciones === 'function') { try { recalcularRetenciones(); } catch (e) {} }
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA + ' Pago sobre el presupuesto de ' + matches[0].proveedor + ' — ' + matches[0].concepto + '.' };
+    }
+
+    if (tipo === 'proveedor') {
+      if (typeof agregarProveedor !== 'function') return { error: 'Formulario de proveedores no disponible.' };
+      if (typeof mostrarTab === 'function') mostrarTab('Proveedores');
+      agregarProveedor();
+      rkSetVal('provRazon', c.proveedor || c.razonSocial);
+      rkSetVal('provCuit', c.cuit);
+      rkSetVal('provIva', c.condicionIVA);
+      rkSetVal('provRubro', c.rubro);
+      rkSetVal('provTel', c.telefono);
+      rkSetVal('provDir', c.direccion);
+      rkSetVal('provEmail', c.email);
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA };
+    }
+
+    if (tipo === 'ingresoGeneral' || tipo === 'movimientoCaja') {
+      var esCaja = tipo === 'movimientoCaja';
+      if (esCaja) {
+        if (typeof abrirMovCaja !== 'function') return { error: 'Formulario de movimientos de caja no disponible.' };
+        abrirMovCaja(c.tipoMovimiento === 'egreso' ? 'egreso' : 'ingreso', c.moneda);
+      } else {
+        if (typeof abrirModalIngGeneral !== 'function') return { error: 'Formulario de ingresos generales no disponible.' };
+        if (typeof mostrarTab === 'function') mostrarTab('IngGeneral');
+        abrirModalIngGeneral();
+      }
+      rkSetVal('igFecha', c.fecha);
+      rkSetVal('igOrigen', c.origen || c.descripcion || c.concepto);
+      rkSetVal('igReferencia', c.referencia);
+      rkSetVal('igMoneda', c.moneda);
+      rkSetVal('igMonto', c.monto);
+      rkSetVal('igObs', c.observaciones);
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA };
+    }
+
+    if (tipo === 'movimientoBancario') {
+      if (typeof abrirMovBanco !== 'function') return { error: 'Formulario de movimientos bancarios no disponible.' };
+      if (typeof mostrarTab === 'function') mostrarTab('CuentasBancarias');
+      abrirMovBanco(c.tipoMovimiento === 'salida' || c.tipoMovimiento === 'egreso' ? 'salida' : 'entrada');
+      rkSetVal('movBancoFecha', c.fecha);
+      rkSetVal('movBancoDesc', c.descripcion || c.concepto);
+      rkSetVal('movBancoMonto', c.monto);
+      rkSetVal('movBancoOrigen', c.origen);
+      rkSetVal('movBancoRef', c.referencia);
+      if (c.cuenta) {
+        var ctas = (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [];
+        var cta = ctas.find(function(cu){ return (cu.banco || '').toLowerCase().indexOf(String(c.cuenta).toLowerCase()) !== -1; });
+        if (cta) rkSetVal('movBancoCuenta', cta.id || cta.banco);
+      }
+      rkCerrarPanel();
+      return { ok: true, mensaje: NOTA };
+    }
+
+    return { error: 'Tipo de formulario desconocido: ' + tipo };
+  }
+
   // ── Herramientas (function calling de Gemini) ──
   var RK_TOOLS = [{
     functionDeclarations: [
@@ -20005,6 +20132,48 @@
           },
           required: ['tab']
         }
+      },
+      {
+        name: 'precargarFormulario',
+        description: 'Abre un formulario de la app con los campos ya completados para que el usuario lo revise y lo guarde. NUNCA guarda directo: el guardado final siempre lo confirma el usuario. Usala cuando pidan cargar/registrar algo (un pago, una factura, un presupuesto, un ingreso, un proveedor, un movimiento de caja o bancario). Si te faltan datos clave (monto, a quién), preguntá primero.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            tipo: {
+              type: 'STRING',
+              enum: ['presupuesto', 'factura', 'pago', 'proveedor', 'ingresoGeneral', 'movimientoCaja', 'movimientoBancario'],
+              description: '"pago" es un pago sobre un presupuesto existente (requiere campos.presupuesto para identificarlo); "movimientoCaja" es ingreso/egreso de efectivo; "movimientoBancario" es entrada/salida en una cuenta bancaria.'
+            },
+            campos: {
+              type: 'OBJECT',
+              description: 'Campos a precargar. Todos opcionales; completá solo los que el usuario dio.',
+              properties: {
+                fecha:          { type: 'STRING', description: 'Formato YYYY-MM-DD.' },
+                monto:          { type: 'NUMBER' },
+                moneda:         { type: 'STRING', enum: ['ARS', 'USD'] },
+                proveedor:      { type: 'STRING', description: 'Razón social del proveedor.' },
+                presupuesto:    { type: 'STRING', description: 'Solo para tipo "pago": texto para identificar el presupuesto (proveedor y/o concepto).' },
+                concepto:       { type: 'STRING' },
+                descripcion:    { type: 'STRING' },
+                numero:         { type: 'STRING', description: 'Número de comprobante/factura.' },
+                vencimiento:    { type: 'STRING', description: 'Formato YYYY-MM-DD.' },
+                origen:         { type: 'STRING', description: 'Origen del ingreso/movimiento.' },
+                referencia:     { type: 'STRING' },
+                observaciones:  { type: 'STRING' },
+                tipoMovimiento: { type: 'STRING', enum: ['ingreso', 'egreso', 'entrada', 'salida'], description: 'Para movimientoCaja: ingreso/egreso. Para movimientoBancario: entrada/salida.' },
+                rubro:          { type: 'STRING' },
+                subrubro:       { type: 'STRING' },
+                cuenta:         { type: 'STRING', description: 'Para movimientoBancario: nombre del banco de la cuenta.' },
+                cuit:           { type: 'STRING' },
+                condicionIVA:   { type: 'STRING' },
+                telefono:       { type: 'STRING' },
+                direccion:      { type: 'STRING' },
+                email:          { type: 'STRING' }
+              }
+            }
+          },
+          required: ['tipo']
+        }
       }
     ]
   }];
@@ -20018,6 +20187,7 @@
         if (typeof mostrarTab === 'function') mostrarTab(args.tab);
         return { ok: true, mensaje: 'Listo, el usuario ahora está viendo la sección ' + args.tab + '.' };
       }
+      if (fc.name === 'precargarFormulario') return rkPrecargarFormulario(args.tipo, args.campos);
       return { error: 'Herramienta desconocida: ' + fc.name };
     } catch (e) {
       return { error: String((e && e.message) || e) };
@@ -20153,8 +20323,9 @@
       + 'Respondés en español argentino, de forma concisa y amigable, en Markdown simple (negritas, viñetas). '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
-      + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas y caja); con irASeccion llevás al usuario a cualquier pantalla de la app. '
-      + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar. Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece, decilo con claridad en vez de inventar.'
+      + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas y caja); con irASeccion llevás al usuario a cualquier pantalla de la app; con precargarFormulario abrís un formulario (pago, factura, presupuesto, ingreso, proveedor, movimiento de caja o bancario) con los campos ya completados para que el usuario lo revise y lo guarde. '
+      + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar. Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece, decilo con claridad en vez de inventar. '
+      + 'Cuando el usuario pida cargar/registrar algo, usá precargarFormulario; si te falta un dato clave (monto, proveedor, fecha), preguntá antes. La herramienta nunca guarda: recordale al usuario que revise y confirme el formulario.'
       + (inventario
           ? ('\n\nInventario del proyecto activo (solo cantidades; el detalle se pide con obtenerDatos):\n' + inventario)
           : '\n\nEl proyecto activo todavía no tiene datos cargados.');
