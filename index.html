@@ -2947,6 +2947,16 @@
                             <h3><span class="nav-icon">apartment</span> Desarrollos Inmobiliarios</h3>
                             <div id="hpDesarrollosResumen" style="font-size:12px;color:var(--text-3);">Sin desarrollos cargados</div>
                         </div>
+                        <div class="charts-grid" id="desChartsGaleria" style="margin-bottom:20px;">
+                            <div class="chart-card">
+                                <h4>Incidencia del Terreno ($/m² vendible)</h4>
+                                <canvas id="desChartIncidencia"></canvas>
+                            </div>
+                            <div class="chart-card">
+                                <h4>Terreno como % del Costo Total</h4>
+                                <canvas id="desChartTerrenoPct"></canvas>
+                            </div>
+                        </div>
                         <div class="des-gallery" id="desGaleriaGrid"></div>
                     </div>
 
@@ -13185,10 +13195,15 @@
     // DESARROLLOS (proyectos inmobiliarios)
     // ══════════════════════════════════════════════════════════
     var desarrolloSeleccionadoIdx = -1;
+    var _desGalCharts = {};
+    function _desGalDestroy(){ Object.keys(_desGalCharts).forEach(function(k){ if(_desGalCharts[k]){_desGalCharts[k].destroy();delete _desGalCharts[k];} }); }
+    var _desFichaCharts = {};
+    function _desFichaDestroy(){ Object.keys(_desFichaCharts).forEach(function(k){ if(_desFichaCharts[k]){_desFichaCharts[k].destroy();delete _desFichaCharts[k];} }); }
 
     function mostrarDesGaleria() {
         desarrolloSeleccionadoIdx = -1;
         editandoDesarrolloIdx = -1;
+        _desFichaDestroy();
         var g = document.getElementById('desGaleria'), f = document.getElementById('desFichaView'), fo = document.getElementById('desFormView');
         if (g) g.style.display = '';
         if (f) f.style.display = 'none';
@@ -13314,10 +13329,44 @@
                 (d.obs ? '<div style="margin-top:12px;font-size:13px;color:var(--text-2);"><strong>Obs.:</strong> '+d.obs+'</div>' : '') +
                 '<h3 style="margin-top:24px;">🤝 Aportantes / Socios vinculados</h3>' +
                 '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th style="text-align:right">Capital</th><th style="text-align:right">Rentabilidad Estimada</th></tr></thead><tbody>'+filasAp+'</tbody></table></div>' +
+                '<div class="charts-grid" style="margin-top:20px;">' +
+                    '<div class="chart-card"><h4>Participación de Aportantes</h4><canvas id="desChartParticipacion"></canvas></div>' +
+                    '<div class="chart-card"><h4>Ganancia Estimada vs. Rentabilidad Comprometida</h4><canvas id="desChartGananciaVsRent"></canvas></div>' +
+                '</div>' +
             '</div>';
         document.getElementById('desGaleria').style.display = 'none';
         document.getElementById('desFormView').style.display = 'none';
         document.getElementById('desFichaView').style.display = '';
+
+        _desFichaDestroy();
+        if (typeof Chart === 'undefined') return;
+        var ctxPart = document.getElementById('desChartParticipacion');
+        if (ctxPart && aportantesVinculados.length) {
+            var totalCap = aportantesVinculados.reduce(function(s,a){ return s+(a.capitalAportado||0); }, 0);
+            _desFichaCharts.participacion = new Chart(ctxPart.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: aportantesVinculados.map(function(a){ return a.nombre || '—'; }),
+                    datasets: [{ data: aportantesVinculados.map(function(a){ return totalCap ? (a.capitalAportado||0)/totalCap*100 : 0; }),
+                                 backgroundColor: ['#B8964A','#1A6640','#8C1F1F','#1565C0','#6A1B9A','#00838F','#B45309','#455A64'] }]
+                },
+                options: { responsive:true, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12, font:{size:11} } },
+                    tooltip:{ callbacks:{ label:function(ctx){ return ctx.label+': '+ctx.parsed.toFixed(1)+'%'; } } } } }
+            });
+        }
+        var ctxGvsR = document.getElementById('desChartGananciaVsRent');
+        if (ctxGvsR) {
+            var ganancia = gananciaEstimadaDesarrollo(d);
+            var rentComprometida = aportantesVinculados.reduce(function(s,a){ return s+rentabilidadEstimadaAportante(a); }, 0);
+            _desFichaCharts.gananciaVsRent = new Chart(ctxGvsR.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: ['Ganancia Estimada', 'Rentabilidad Comprometida'],
+                    datasets: [{ data:[ganancia, rentComprometida], backgroundColor:[ganancia>=rentComprometida?'#1A6640':'#8C1F1F','#B8964A'], borderRadius:3 }]
+                },
+                options: { indexAxis:'y', responsive:true, plugins:{ legend:{display:false} }, scales:{ x:{ ticks:{ callback:function(v){ return fmtD(v); } } } } }
+            });
+        }
     }
 
     function renderDesarrollos() {
@@ -13359,6 +13408,30 @@
         });
         poblarSelectDesarrollos('invFiltroDesarrollo');
         poblarSelectDesarrollos('apDesarrolloId');
+        renderDesGraficosGaleria();
+    }
+
+    function renderDesGraficosGaleria() {
+        _desGalDestroy();
+        var ctxInc = document.getElementById('desChartIncidencia');
+        var ctxPct = document.getElementById('desChartTerrenoPct');
+        if (!ctxInc || !ctxPct || typeof Chart === 'undefined') return;
+        var labels     = desarrollos.map(function(d){ return d.nombre || '—'; });
+        var incidencia = desarrollos.map(function(d){ return d.m2Vendibles ? (d.valorTerreno||0)/d.m2Vendibles : 0; });
+        var pctTerreno = desarrollos.map(function(d){
+            var totCosto = (d.valorTerreno||0) + (d.costos||0);
+            return totCosto ? (d.valorTerreno||0)/totCosto*100 : 0;
+        });
+        _desGalCharts.incidencia = new Chart(ctxInc.getContext('2d'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label:'$/m² vendible', data: incidencia, backgroundColor:'#B8964A', borderRadius:3 }] },
+            options: { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ ticks:{ callback:function(v){ return '$'+Math.round(v).toLocaleString('es-AR'); } } } } }
+        });
+        _desGalCharts.pctTerreno = new Chart(ctxPct.getContext('2d'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label:'% Terreno / Costo Total', data: pctTerreno, backgroundColor:'#1A6640', borderRadius:3 }] },
+            options: { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ max:100, ticks:{ callback:function(v){ return v+'%'; } } } } }
+        });
     }
 
     // ══════════════════════════════════════════════════════════
