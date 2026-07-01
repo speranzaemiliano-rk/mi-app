@@ -1,6 +1,6 @@
 # Pendientes
 
-> Última actualización: 2026-07-01. Todo el código está mergeado en `main` y
+> Última actualización: 2026-07-02. Todo el código está mergeado en `main` y
 > desplegado (frontend en GitHub Pages, backend en Railway). Lo que queda en su
 > mayoría son **pasos de configuración** (cargar credenciales), no código.
 
@@ -136,6 +136,23 @@ Después de eso, el link del PDF en el mail funciona y queda todo terminado.
 ---
 
 # ✅ Hecho
+
+## ✅ Sesión 2026-07-02: Ventas → Desarrollos + m² + costo de construcción
+
+- **Ventas vinculadas a Desarrollos:** nuevo select en el modal de UF/Venta
+  para asociar la venta a un Desarrollo Inmobiliario (`desarrolloId`). Campos
+  **m² de la unidad** y **m² de amenities** por venta. Display en tiempo real
+  de los **m² vendibles restantes** del desarrollo (descuenta lo asignado a
+  otras ventas; se muestra en rojo si se supera el límite).
+- **Tabla de Ventas:** muestra el nombre del desarrollo vinculado y los m²
+  totales de la UF como línea secundaria bajo el código de UF.
+- **Costo por m² de construcción en Desarrollos:** nuevo campo
+  `costoM2Construccion` en el formulario; se multiplica por *m² Totales* y
+  auto-completa el campo **Costo de Obra**. El campo **Costo Total**
+  (Terreno + Obra) se actualiza en tiempo real como lectura.
+- **Ficha de Desarrollos:** nuevas tarjetas de estadísticas **m² Vendidos**,
+  **m² Disponibles** (dinámico según ventas vinculadas), **Costo m²
+  Construcción** y **Costo Total**.
 
 ## ✅ Sesión 2026-07-01: Aportantes/Socios, Desarrollos Inmobiliarios y consolidación
 
