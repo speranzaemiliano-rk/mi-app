@@ -209,7 +209,7 @@ getBasePath()  →  empresas/<empresaId>/proyectos/<proyectoId>
 - **Egresos / Proveedores / Presupuestos:** datos de proveedores, presupuestos por proveedor, pagos y órdenes de pago numeradas.
 - **Tesorería interempresa:** préstamos y movimientos entre empresas.
 - **Documentos:** adjuntos; lectura de facturas PDF con **Google Gemini** (extracción automática de datos).
-- **Asistente RK** (chat flotante, `Google Gemini`): responde dudas sobre la app, analiza PDFs de facturas adjuntos (con botón para precargarlas en Facturas) y responde preguntas concretas sobre los datos cargados en el proyecto activo (p. ej. "¿cuánto aportó Juan Pérez?"), a partir de un resumen en texto que se envía junto con cada consulta (`rkResumenDatosApp()`).
+- **Asistente RK** (chat flotante, `Google Gemini` con *function calling*): responde dudas sobre la app, analiza PDFs de facturas adjuntos (con botón para precargarlas en Facturas), consulta bajo demanda los datos reales del proyecto activo (presupuestos con pagos, facturas, ingresos, caja, cuentas bancarias, etc. — p. ej. "¿cuánto aportó Juan Pérez?" o "¿cuánto le pagué a X este mes?") haciendo cálculos y comparaciones, y puede navegar la app ("llevame a Facturas").
 - **Reportes y Dashboard:** gráficos (Chart.js) e impresión/exportación.
 - **Exportación de datos:** presupuestos a Excel, y la base completa a **JSON / Excel / CSV / SQL**.
 - **Ajustes (Config):** tipo de cambio USD, índice CAC, claves de Gemini/EmailJS, URL del backend y administración de usuarios.

@@ -19892,7 +19892,7 @@
     panel.classList.toggle('abierto', _rkAbierto);
     if (_rkAbierto) {
       rkActualizarContexto();
-      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, explicarte secciones, o responder preguntas sobre gestión contable. ¿En qué te ayudo?');
+      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo explicarte cómo usar la app, responder con los **datos reales de tu proyecto** (presupuestos, facturas, caja, ingresos…), hacer cálculos y comparaciones, analizar PDFs de facturas y **llevarte a cualquier sección**. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     }
   };
@@ -19905,71 +19905,147 @@
     return { tab: tab, desc: desc };
   }
 
-  // Arma un resumen en texto plano de los datos cargados en el proyecto activo,
-  // para que el asistente pueda responder preguntas concretas (montos, nombres, etc.)
-  function rkResumenDatosApp() {
-    var monFmt = function(n, mon) { return (mon==='USD'?'USD ':'$') + Math.round(n||0).toLocaleString('es-AR'); };
-    var bloques = [];
+  // ── Acceso a datos del proyecto activo para el asistente ──
+  // Las colecciones son variables top-level del script principal (let), por eso
+  // se accede por identificador con guarda typeof, no vía window.
+  function rkColecciones() {
+    return {
+      presupuestos:     (typeof datos !== 'undefined' && datos) || [],
+      facturas:         (typeof facturas !== 'undefined' && facturas) || [],
+      ingresos:         (typeof ingresos !== 'undefined' && ingresos) || [],
+      proveedores:      (typeof proveedores !== 'undefined' && proveedores) || [],
+      cuentasBancarias: (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [],
+      aportantes:       (typeof aportantes !== 'undefined' && aportantes) || [],
+      desarrollos:      (typeof desarrollos !== 'undefined' && desarrollos) || [],
+      alquileres:       (typeof alquileres !== 'undefined' && alquileres) || [],
+      servicios:        (typeof servicios !== 'undefined' && servicios) || [],
+      ventas:           (typeof ventas !== 'undefined' && ventas) || []
+    };
+  }
 
-    if (typeof aportantes !== 'undefined' && aportantes.length) {
-      var linsAp = aportantes.map(function(a) {
-        var d = (typeof desarrollos !== 'undefined') ? desarrollos.find(function(x){ return x.id === a.desarrolloId; }) : null;
-        return '- ' + (a.nombre||'—') + ': aportó ' + monFmt(a.capitalAportado, a.moneda) +
-          (d ? (' al desarrollo "' + d.nombre + '"') : '') +
-          (a.fecha ? (' el ' + a.fecha) : '') +
-          (a.fechaVencimiento ? (', vence ' + a.fechaVencimiento) : '');
+  // Inventario compacto: solo cantidades y saldos, va en el system prompt.
+  // El detalle se pide bajo demanda con la herramienta obtenerDatos.
+  function rkInventarioDatos() {
+    var col = rkColecciones();
+    var lineas = Object.keys(col)
+      .filter(function(k){ return col[k].length; })
+      .map(function(k){ return '- ' + k + ': ' + col[k].length + ' registro' + (col[k].length !== 1 ? 's' : ''); });
+    if (typeof caja !== 'undefined' && caja) {
+      lineas.push('- caja: saldo $' + Math.round(caja.ars || 0).toLocaleString('es-AR') + ' / USD ' + Math.round(caja.usd || 0).toLocaleString('es-AR'));
+    }
+    if (typeof exchangeRate !== 'undefined' && exchangeRate > 0) {
+      lineas.push('- tipo de cambio cargado: $' + exchangeRate + ' por USD');
+    }
+    return lineas.join('\n');
+  }
+
+  // Saca adjuntos/base64 y campos internos antes de mandar registros al modelo,
+  // y acota strings largos para no reventar el contexto.
+  function rkSanitizar(v, prof) {
+    prof = prof || 0;
+    if (prof > 6) return undefined;
+    if (v === null || typeof v === 'number' || typeof v === 'boolean') return v;
+    if (typeof v === 'string') return v.length > 300 ? v.slice(0, 300) + '…' : v;
+    if (Array.isArray(v)) return v.map(function(x){ return rkSanitizar(x, prof + 1); });
+    if (typeof v === 'object') {
+      var out = {};
+      Object.keys(v).forEach(function(k) {
+        if (/base64|contenido|^_/i.test(k)) return;
+        var s = rkSanitizar(v[k], prof + 1);
+        if (s !== undefined) out[k] = s;
       });
-      bloques.push('APORTANTES / SOCIOS (inversiones):\n' + linsAp.join('\n'));
+      return out;
     }
+    return undefined;
+  }
 
-    if (typeof desarrollos !== 'undefined' && desarrollos.length) {
-      var linsDes = desarrollos.map(function(d) {
-        return '- ' + (d.nombre||'—') + ': ' + (d.m2Vendibles||0) + ' m² vendibles, valor terreno ' + monFmt(d.valorTerreno, d.moneda) +
-          ', costos ' + monFmt(d.costos, d.moneda) + ', valor de venta por m² ' + monFmt(d.valorM2Vendible, d.moneda);
+  function rkDatosSeccion(seccion) {
+    var LIMITE = 14000;
+    if (seccion === 'caja') {
+      return JSON.stringify({
+        saldos: (typeof caja !== 'undefined' && caja) || null,
+        tipoCambioUSD: (typeof exchangeRate !== 'undefined' && exchangeRate > 0) ? exchangeRate : null
       });
-      bloques.push('DESARROLLOS INMOBILIARIOS:\n' + linsDes.join('\n'));
     }
-
-    if (typeof alquileres !== 'undefined' && alquileres.length) {
-      var linsAlq = alquileres.map(function(a) {
-        return '- ' + (a.unidad||'—') + ' (inquilino: ' + (a.inquilino||'—') + '), canon actual ' + monFmt(a.canonActual||a.canon, a.moneda);
-      });
-      bloques.push('ALQUILERES:\n' + linsAlq.join('\n'));
+    var col = rkColecciones();
+    if (!(seccion in col)) {
+      return 'Sección desconocida: "' + seccion + '". Secciones válidas: ' + Object.keys(col).join(', ') + ', caja.';
     }
+    if (!col[seccion].length) return 'No hay registros cargados en "' + seccion + '" para el proyecto activo.';
+    var json = JSON.stringify(rkSanitizar(col[seccion]));
+    if (json.length > LIMITE) json = json.slice(0, LIMITE) + '… [truncado: hay ' + col[seccion].length + ' registros en total]';
+    return json;
+  }
 
-    if (typeof servicios !== 'undefined' && servicios.length) {
-      var linsSrv = servicios.map(function(s) { return '- ' + (s.cliente||'—') + ': ' + (s.descripcion||'—'); });
-      bloques.push('SERVICIOS DEL ESTUDIO:\n' + linsSrv.join('\n'));
+  // ── Herramientas (function calling de Gemini) ──
+  var RK_TOOLS = [{
+    functionDeclarations: [
+      {
+        name: 'obtenerDatos',
+        description: 'Devuelve los registros reales (JSON) de una sección de datos del proyecto activo. Usala SIEMPRE antes de responder preguntas sobre montos, fechas, nombres, saldos o cantidades concretas.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            seccion: {
+              type: 'STRING',
+              enum: ['presupuestos', 'facturas', 'ingresos', 'proveedores', 'cuentasBancarias', 'aportantes', 'desarrollos', 'alquileres', 'servicios', 'ventas', 'caja'],
+              description: 'Sección a consultar. "presupuestos" incluye el historial de pagos a cada proveedor; "caja" devuelve saldos en pesos/USD y el tipo de cambio.'
+            }
+          },
+          required: ['seccion']
+        }
+      },
+      {
+        name: 'irASeccion',
+        description: 'Navega la app hasta una sección (tab). Usala cuando el usuario pida ir a algún lado o cuando le convenga ver esa pantalla para continuar.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            tab: { type: 'STRING', enum: Object.keys(CONTEXTOS_TABS), description: 'Nombre interno del tab de destino.' }
+          },
+          required: ['tab']
+        }
+      }
+    ]
+  }];
+
+  function rkEjecutarHerramienta(fc) {
+    var args = fc.args || {};
+    try {
+      if (fc.name === 'obtenerDatos') return { datos: rkDatosSeccion(args.seccion || '') };
+      if (fc.name === 'irASeccion') {
+        if (!CONTEXTOS_TABS[args.tab]) return { error: 'Tab desconocido: ' + args.tab };
+        if (typeof mostrarTab === 'function') mostrarTab(args.tab);
+        return { ok: true, mensaje: 'Listo, el usuario ahora está viendo la sección ' + args.tab + '.' };
+      }
+      return { error: 'Herramienta desconocida: ' + fc.name };
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
     }
+  }
 
-    if (typeof cuentasBancarias !== 'undefined' && cuentasBancarias.length) {
-      var linsCta = cuentasBancarias.map(function(c) {
-        return '- ' + (c.banco||'—') + ' (' + (c.tipo||'—') + ', ' + (c.moneda||'ARS') + '): saldo ' + monFmt(c.saldo, c.moneda);
-      });
-      bloques.push('CUENTAS BANCARIAS:\n' + linsCta.join('\n'));
-    }
+  function rkEscaparHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
 
-    if (typeof proveedores !== 'undefined' && proveedores.length) {
-      var nombresProv = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
-      if (nombresProv.length) bloques.push('PROVEEDORES: ' + nombresProv.join(', '));
-    }
-
-    if (typeof ventas !== 'undefined' && ventas.length) {
-      var linsVta = ventas.map(function(v) { return '- ' + (v.uf||'—') + ' (comprador: ' + (v.comprador||'—') + ')'; });
-      bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
-    }
-
-    var texto = bloques.join('\n\n');
-    var LIMITE = 6000;
-    if (texto.length > LIMITE) texto = texto.slice(0, LIMITE) + '\n[...datos truncados por espacio, hay más registros cargados...]';
-    return texto;
+  // Markdown mínimo y seguro: escapa TODO el HTML primero y después aplica
+  // negrita, código, títulos y viñetas. Sin imágenes ni HTML arbitrario.
+  function rkMarkdown(texto) {
+    var t = rkEscaparHtml(texto || '');
+    t = t.replace(/```\w*\n?([\s\S]*?)```/g, '<code style="display:block;background:rgba(0,0,0,.25);padding:8px 10px;border-radius:8px;margin:6px 0;white-space:pre-wrap;">$1</code>');
+    t = t.replace(/`([^`\n]+)`/g, '<code style="background:rgba(255,255,255,.12);padding:1px 4px;border-radius:4px;">$1</code>');
+    t = t.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/^#{1,4}\s+(.+)$/gm, '<strong>$1</strong>');
+    t = t.replace(/^\s*[-*]\s+/gm, '&nbsp;• ');
+    t = t.replace(/\n/g, '<br>');
+    return t;
   }
 
   function rkMensajeBot(texto, factDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
-    div.textContent = texto;
+    div.innerHTML = rkMarkdown(texto);
     if (factDatos && factDatos.esFactura) {
       var btn = document.createElement('button');
       btn.textContent = '📥 Cargar en Facturas';
@@ -20071,15 +20147,17 @@
     input.style.height = 'auto';
 
     var ctx = rkActualizarContexto();
-    var datosApp = (typeof rkResumenDatosApp === 'function') ? rkResumenDatosApp() : '';
+    var inventario = rkInventarioDatos();
     var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
       + 'Ayudás a los usuarios a usar la app, entender secciones y resolver dudas sobre gestión administrativa. '
-      + 'Respondés en español argentino, de forma concisa y amigable. '
+      + 'Respondés en español argentino, de forma concisa y amigable, en Markdown simple (negritas, viñetas). '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
-      + (datosApp
-          ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
-          : '');
+      + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas y caja); con irASeccion llevás al usuario a cualquier pantalla de la app. '
+      + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar. Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece, decilo con claridad en vez de inventar.'
+      + (inventario
+          ? ('\n\nInventario del proyecto activo (solo cantidades; el detalle se pide con obtenerDatos):\n' + inventario)
+          : '\n\nEl proyecto activo todavía no tiene datos cargados.');
 
     var esPdf = !!_rkPdfData;
     var pdfNombre = esPdf ? _rkPdfData.nombre : '';
@@ -20095,6 +20173,8 @@
       rkMensajeUser(texto);
     }
     _rkHistorial.push({ role: 'user', parts: parts });
+    // Marca para descartar rondas de herramientas incompletas si todo falla
+    var _histBase = _rkHistorial.length;
     _rkEsperando = true;
 
     document.getElementById('rk-agente-enviar').disabled = true;
@@ -20119,12 +20199,21 @@
       }).then(function(r){ return r.json(); }).catch(function(){ return null; });
     }
 
+    // Rondas de herramientas: el modelo puede pedir datos/navegar varias veces
+    // antes de dar la respuesta final. Tope para evitar loops infinitos.
+    var rondas = 0;
+    var MAX_RONDAS = 6;
+
     function intentar() {
-      var generationConfig = { maxOutputTokens: 2048, temperature: 0.7 };
-      if (MODELOS[mi].indexOf('gemini-2.5') === 0) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      // thinkingBudget > 0: dejamos que los modelos 2.5 razonen en preguntas
+      // complejas (cálculos, cruces de datos). El budget cuenta dentro de
+      // maxOutputTokens, por eso el tope va más alto que antes.
+      var generationConfig = { maxOutputTokens: 4096, temperature: 0.7 };
+      if (MODELOS[mi].indexOf('gemini-2.5') === 0) generationConfig.thinkingConfig = { thinkingBudget: 1024 };
       var payload = {
         system_instruction: { parts: [{ text: sistemaPrompt }] },
         contents: _rkHistorial,
+        tools: RK_TOOLS,
         generationConfig: generationConfig
       };
       fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODELOS[mi] + ':generateContent?key=' + apiKey, {
@@ -20139,12 +20228,28 @@
           return Promise.reject(res.data && res.data.error ? res.data.error : new Error('respuesta inválida'));
         }
         var data = res.data;
-        typing.remove();
         var cand = data.candidates[0];
-        var respuesta;
-        if (cand.content && cand.content.parts && cand.content.parts[0]) {
-          respuesta = cand.content.parts[0].text;
-        } else {
+        var partes = (cand.content && cand.content.parts) || [];
+        var llamadas = partes.filter(function(p){ return p.functionCall; });
+
+        // ¿El modelo pidió usar herramientas? Ejecutarlas y devolverle el resultado.
+        if (llamadas.length && rondas < MAX_RONDAS) {
+          rondas++;
+          _rkHistorial.push({ role: 'model', parts: partes });
+          _rkHistorial.push({ role: 'user', parts: llamadas.map(function(p) {
+            return { functionResponse: { name: p.functionCall.name, response: rkEjecutarHerramienta(p.functionCall) } };
+          }) });
+          document.getElementById('rk-agente-estado').textContent = 'Consultando datos…';
+          intentar();
+          return;
+        }
+
+        typing.remove();
+        var respuesta = partes
+          .filter(function(p){ return typeof p.text === 'string'; })
+          .map(function(p){ return p.text; })
+          .join('\n').trim();
+        if (!respuesta) {
           console.error('Gemini respuesta sin contenido (' + MODELOS[mi] + '), finishReason:', cand.finishReason);
           respuesta = 'No pude generar una respuesta (motivo: ' + (cand.finishReason || 'desconocido') + '). Probá con un PDF más liviano o reformulá la pregunta.';
         }
@@ -20179,6 +20284,8 @@
         mi++;
         if (mi < MODELOS.length) { intentar(); return; }
         typing.remove();
+        // Descartar rondas de herramientas a medio hacer para no corromper el historial
+        _rkHistorial.length = _histBase;
         var detalle = (err && err.message) ? err.message : 'Verificá tu API key y conexión.';
         var esQuota = /quota|capacity|overloaded|saturad|demand|429|503/i.test(detalle);
         var esLimiteCero = /limit:\s*0/i.test(detalle);

@@ -167,14 +167,14 @@ Claves del enfoque:
 
 ## 🟢 8. El Asistente RK envía datos financieros a Google Gemini
 
-**Dónde:** `rkResumenDatosApp()` — arma un resumen en texto de aportantes/socios (nombre + monto + desarrollo), desarrollos, alquileres (inquilino + canon), cuentas bancarias (banco + saldo), proveedores y ventas del proyecto activo, y lo agrega al *system prompt* que se envía a la API de Gemini en **cada mensaje** del Asistente RK.
+**Dónde:** el Asistente RK usa *function calling* de Gemini. En **cada mensaje** viaja un inventario compacto (`rkInventarioDatos()`: cantidad de registros por sección + saldos de caja + tipo de cambio). Cuando el modelo lo pide, la herramienta `obtenerDatos` (`rkDatosSeccion()`) le envía los **registros completos en JSON** de la sección consultada (presupuestos con pagos, facturas, ingresos, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas o caja).
 
-**Riesgo:** esos datos (nombres de personas, montos, saldos bancarios) viajan a un servicio de terceros (Google) aunque la pregunta del usuario no tenga relación con ellos. Es el mismo modelo de confianza que ya existía para la lectura de facturas PDF (también vía Gemini), pero ahora aplica a **todos** los mensajes del chat, no solo a los que adjuntan un PDF.
+**Riesgo:** esos datos (nombres de personas, montos, saldos bancarios) viajan a un servicio de terceros (Google). El inventario va siempre; el detalle solo cuando la conversación lo requiere, pero cuando va, va más completo que el resumen anterior. Es el mismo modelo de confianza que ya existía para la lectura de facturas PDF (también vía Gemini).
 
-**Mitigación aplicada:** el resumen se trunca a 6000 caracteres para acotar el volumen de datos por request.
+**Mitigación aplicada:** `rkSanitizar()` elimina adjuntos/base64 y campos internos antes de enviar, acota strings largos, y cada respuesta de herramienta se trunca a 14.000 caracteres.
 
 **A evaluar:**
-- Si el modelo de negocio requiere confidencialidad estricta de estos datos frente a terceros, considerar acotar `rkResumenDatosApp()` a menos campos, o activarlo solo cuando el usuario lo pide explícitamente (en vez de en cada mensaje).
+- Si el modelo de negocio requiere confidencialidad estricta de estos datos frente a terceros, considerar acotar las secciones expuestas en `rkColecciones()` a menos campos, o pedir confirmación al usuario antes de enviar el detalle.
 - Confirmar los términos de retención de datos de la API de Gemini que se esté usando (v1beta `generateContent`).
 
 ---
