@@ -5212,6 +5212,7 @@
         REF_BANCO        = db.ref(base + '/banco');  // Cuentas bancarias: por empresa/proyecto
         REF_CONTADOR_OP  = db.ref(base + '/contadorOP');  // Numeración correlativa órdenes de pago
         actualizarRefsIngresos();
+        actualizarRefTareas();  // Pizarrón de tareas: por empresa, no compartido
     }
 
     function initEmpresas() {
@@ -15685,12 +15686,22 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // PIZARRÓN DE TAREAS
+    // PIZARRÓN DE TAREAS (por empresa: NO se comparte entre empresas)
     // ══════════════════════════════════════════════════════════
-    var REF_TAREAS = db ? db.ref('global/tareas') : null;
+    var REF_TAREAS = null;
     var tareas = [];
+    var _tareasMigracionIntentada = false;
 
-    if (REF_TAREAS) {
+    // Se llama desde actualizarRefs() cada vez que cambia la empresa/proyecto activo
+    function actualizarRefTareas() {
+        if (REF_TAREAS) REF_TAREAS.off();
+        tareas = [];
+        if (!db || !empresaActual) { REF_TAREAS = null; renderTareas(); return; }
+        REF_TAREAS = db.ref('empresas/' + empresaActual.id + '/tareas');
+        if (!_tareasMigracionIntentada) {
+            _tareasMigracionIntentada = true;
+            _migrarTareasGlobalesAEmpresa();
+        }
         REF_TAREAS.on('value', function(snap) {
             tareas = [];
             var v = snap.val();
@@ -15698,6 +15709,21 @@
             renderTareas();
             _checkRecordatoriosTareas();
         });
+    }
+
+    // Migración única: las tareas viejas vivían en global/tareas (compartidas entre
+    // todas las empresas). Se mudan una sola vez a la primera empresa que se cargue,
+    // y solo si esa empresa todavía no tiene tareas propias.
+    function _migrarTareasGlobalesAEmpresa() {
+        var oldRef = db.ref('global/tareas');
+        oldRef.once('value').then(function(snapVieja) {
+            var v = snapVieja.val();
+            if (!v) return;
+            REF_TAREAS.once('value').then(function(snapNueva) {
+                if (snapNueva.val()) return; // la empresa ya tiene tareas propias: no pisar
+                REF_TAREAS.set(v).then(function() { oldRef.remove(); });
+            });
+        }).catch(function(err) { console.warn('No se pudo migrar tareas globales:', err); });
     }
 
     function renderTareas() {
@@ -19892,7 +19918,7 @@
     panel.classList.toggle('abierto', _rkAbierto);
     if (_rkAbierto) {
       rkActualizarContexto();
-      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, explicarte secciones, o responder preguntas sobre gestión contable. ¿En qué te ayudo?');
+      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, tus datos cargados, gestión contable, o cualquier otra pregunta que tengas. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     }
   };
@@ -20073,8 +20099,12 @@
     var ctx = rkActualizarContexto();
     var datosApp = (typeof rkResumenDatosApp === 'function') ? rkResumenDatosApp() : '';
     var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
-      + 'Ayudás a los usuarios a usar la app, entender secciones y resolver dudas sobre gestión administrativa. '
-      + 'Respondés en español argentino, de forma concisa y amigable. '
+      + 'Sos un asistente general capaz y con criterio propio: además de ayudar con la app, respondés con solvencia cualquier '
+      + 'pregunta que te hagan (conocimientos generales, cálculos, redacción, consejos, dudas legales/impositivas/de negocio, '
+      + 'o cualquier otro tema), igual que lo haría un asistente de IA de uso general. No te limites a temas de la app: si la '
+      + 'pregunta no tiene nada que ver con el sistema, respondela igual de bien, usando tu conocimiento general. '
+      + 'Cuando la pregunta sí sea sobre la app o los datos del usuario, usá el contexto de abajo para responder con precisión. '
+      + 'Respondés en español argentino, de forma clara, concisa y amigable, con la profundidad que la pregunta requiera. '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
       + (datosApp
@@ -20101,7 +20131,7 @@
     document.getElementById('rk-agente-estado').textContent = 'Pensando…';
     var typing = rkTyping();
 
-    var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+    var MODELOS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
     var mi = 0;
 
     // Si es PDF, primero extraemos datos estructurados de factura en paralelo
@@ -20120,8 +20150,11 @@
     }
 
     function intentar() {
-      var generationConfig = { maxOutputTokens: 2048, temperature: 0.7 };
-      if (MODELOS[mi].indexOf('gemini-2.5') === 0) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      var generationConfig = { maxOutputTokens: 4096, temperature: 0.7 };
+      // gemini-2.5-pro no permite desactivar el thinking (mínimo 128): le damos un presupuesto acotado
+      // para que razone sin demorar demasiado la respuesta del chat. Los flash sí aceptan 0 (sin thinking).
+      if (MODELOS[mi].indexOf('gemini-2.5-flash') === 0) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      else if (MODELOS[mi] === 'gemini-2.5-pro') generationConfig.thinkingConfig = { thinkingBudget: 512 };
       var payload = {
         system_instruction: { parts: [{ text: sistemaPrompt }] },
         contents: _rkHistorial,
