@@ -5212,6 +5212,7 @@
         REF_BANCO        = db.ref(base + '/banco');  // Cuentas bancarias: por empresa/proyecto
         REF_CONTADOR_OP  = db.ref(base + '/contadorOP');  // Numeración correlativa órdenes de pago
         actualizarRefsIngresos();
+        actualizarRefTareas();  // Pizarrón de tareas: por empresa, no compartido
     }
 
     function initEmpresas() {
@@ -15685,12 +15686,22 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // PIZARRÓN DE TAREAS
+    // PIZARRÓN DE TAREAS (por empresa: NO se comparte entre empresas)
     // ══════════════════════════════════════════════════════════
-    var REF_TAREAS = db ? db.ref('global/tareas') : null;
+    var REF_TAREAS = null;
     var tareas = [];
+    var _tareasMigracionIntentada = false;
 
-    if (REF_TAREAS) {
+    // Se llama desde actualizarRefs() cada vez que cambia la empresa/proyecto activo
+    function actualizarRefTareas() {
+        if (REF_TAREAS) REF_TAREAS.off();
+        tareas = [];
+        if (!db || !empresaActual) { REF_TAREAS = null; renderTareas(); return; }
+        REF_TAREAS = db.ref('empresas/' + empresaActual.id + '/tareas');
+        if (!_tareasMigracionIntentada) {
+            _tareasMigracionIntentada = true;
+            _migrarTareasGlobalesAEmpresa();
+        }
         REF_TAREAS.on('value', function(snap) {
             tareas = [];
             var v = snap.val();
@@ -15698,6 +15709,21 @@
             renderTareas();
             _checkRecordatoriosTareas();
         });
+    }
+
+    // Migración única: las tareas viejas vivían en global/tareas (compartidas entre
+    // todas las empresas). Se mudan una sola vez a la primera empresa que se cargue,
+    // y solo si esa empresa todavía no tiene tareas propias.
+    function _migrarTareasGlobalesAEmpresa() {
+        var oldRef = db.ref('global/tareas');
+        oldRef.once('value').then(function(snapVieja) {
+            var v = snapVieja.val();
+            if (!v) return;
+            REF_TAREAS.once('value').then(function(snapNueva) {
+                if (snapNueva.val()) return; // la empresa ya tiene tareas propias: no pisar
+                REF_TAREAS.set(v).then(function() { oldRef.remove(); });
+            });
+        }).catch(function(err) { console.warn('No se pudo migrar tareas globales:', err); });
     }
 
     function renderTareas() {
