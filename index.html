@@ -19862,6 +19862,10 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8888cc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
       <input type="file" id="rk-agente-pdf-input" accept=".pdf,application/pdf" style="display:none;" onchange="rkAgentePdfSeleccionado(this)">
     </label>
+    <label id="rk-agente-audio-btn" title="Adjuntar audio (ej. nota de voz de WhatsApp)" style="cursor:pointer;display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:rgba(76,175,130,.12);flex-shrink:0;transition:background .2s;" onmouseover="this.style.background='rgba(76,175,130,.25)'" onmouseout="this.style.background='rgba(76,175,130,.12)'">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4CAF82" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      <input type="file" id="rk-agente-audio-input" accept="audio/*,.opus,.oga,.ogg,.m4a,.amr" style="display:none;" onchange="rkAgenteAudioSeleccionado(this)">
+    </label>
     <textarea id="rk-agente-input" placeholder="Preguntame algo sobre RK..." rows="1"
       onkeydown="rkAgenteKeydown(event)"></textarea>
     <button id="rk-agente-enviar" onclick="rkAgenteEnviar()" title="Enviar">
@@ -19875,6 +19879,10 @@
     <span>📄</span><span id="rk-agente-pdf-nombre" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     <button onclick="rkAgentePdfLimpiar()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:13px;padding:0 2px;" title="Quitar PDF">✕</button>
   </div>
+  <div id="rk-agente-audio-preview" style="display:none;padding:4px 12px 8px;font-size:11px;color:#4CAF82;display:flex;align-items:center;gap:6px;">
+    <span>🎤</span><span id="rk-agente-audio-nombre" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <button onclick="rkAgenteAudioLimpiar()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:13px;padding:0 2px;" title="Quitar audio">✕</button>
+  </div>
 </div>
 
 <script>
@@ -19883,6 +19891,7 @@
   var _rkHistorial = []; // {role, parts}
   var _rkEsperando = false;
   var _rkPdfData = null; // { base64, nombre }
+  var _rkAudioData = null; // { base64, nombre, mime }
 
   var CONTEXTOS_TABS = {
     'Home': 'página de inicio con resumen de empresas y proyectos',
@@ -19991,7 +20000,7 @@
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
@@ -20003,10 +20012,42 @@
       btn.onclick = function() { rkCargarFactura(factDatos); btn.textContent = '✓ Abriendo formulario…'; btn.disabled = true; };
       div.appendChild(btn);
     }
+    if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
+      var btnT = document.createElement('button');
+      btnT.textContent = '📋 Cargar ' + tareasDatos.tareas.length + (tareasDatos.tareas.length === 1 ? ' tarea al Pizarrón' : ' tareas al Pizarrón');
+      btnT.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#4CAF82,#2E9E68);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnT.onclick = function() { rkCargarTareasDesdeAudio(tareasDatos.tareas); btnT.textContent = '✓ Cargadas'; btnT.disabled = true; };
+      div.appendChild(btnT);
+    }
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
     return div;
   }
+
+  // Vuelca las tareas extraídas de un audio al Pizarrón de Tareas de la empresa activa
+  // (mismo REF_TAREAS/array "tareas" que usa el widget de Home; ver sección PIZARRÓN DE TAREAS).
+  window.rkCargarTareasDesdeAudio = function(lista) {
+    if (typeof tareas === 'undefined') { alert('No se pudo acceder al Pizarrón de Tareas.'); return; }
+    lista.forEach(function(t) {
+      tareas.push({
+        titulo: t.titulo || 'Tarea sin título',
+        responsable: t.responsable || 'Sin asignar',
+        emailResponsable: '',
+        controlador: '',
+        emailControlador: '',
+        fechaVencimiento: t.fechaVencimiento || '',
+        intervaloDias: 3,
+        estado: 'pendiente',
+        creadaEn: Date.now(),
+        ultimoRecordatorio: null
+      });
+    });
+    if (typeof REF_TAREAS !== 'undefined' && REF_TAREAS) REF_TAREAS.set(tareas);
+    if (typeof renderTareas === 'function') renderTareas();
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('Home');
+  };
 
   window.rkCargarFactura = function(f) {
     // Cerrar el panel del asistente
@@ -20060,6 +20101,7 @@
       fileInput.value = '';
       return;
     }
+    if (_rkAudioData) rkAgenteAudioLimpiar(); // no se puede analizar PDF y audio a la vez
     var reader = new FileReader();
     reader.onload = function(e) {
       var base64 = e.target.result.split(',')[1];
@@ -20080,12 +20122,52 @@
     document.getElementById('rk-agente-input').placeholder = 'Preguntame algo sobre RK…';
   };
 
+  // Adivina el mimeType de audio cuando el navegador no lo informa (típico en notas
+  // de voz de WhatsApp exportadas como .opus/.oga) y le saca los ";codecs=..." que Gemini no acepta.
+  function _rkMimeAudio(file) {
+    var mime = (file.type || '').split(';')[0].trim();
+    if (mime && mime.indexOf('audio/') === 0) return mime;
+    var ext = (file.name.split('.').pop() || '').toLowerCase();
+    var MAPA = { ogg:'audio/ogg', oga:'audio/ogg', opus:'audio/ogg', mp3:'audio/mpeg', m4a:'audio/mp4', mp4:'audio/mp4', wav:'audio/wav', aac:'audio/aac', flac:'audio/flac', amr:'audio/amr', '3gp':'audio/3gpp', '3gpp':'audio/3gpp' };
+    return MAPA[ext] || 'audio/ogg';
+  }
+
+  window.rkAgenteAudioSeleccionado = function(fileInput) {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      alert('El audio es demasiado grande (máx. 20 MB).');
+      fileInput.value = '';
+      return;
+    }
+    if (_rkPdfData) rkAgentePdfLimpiar(); // no se puede analizar PDF y audio a la vez
+    var mime = _rkMimeAudio(file);
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var base64 = e.target.result.split(',')[1];
+      _rkAudioData = { base64: base64, nombre: file.name, mime: mime };
+      var preview = document.getElementById('rk-agente-audio-preview');
+      document.getElementById('rk-agente-audio-nombre').textContent = file.name;
+      preview.style.display = 'flex';
+      document.getElementById('rk-agente-input').placeholder = 'Preguntame algo sobre el audio (o dejalo vacío para transcribirlo y cargar tareas)…';
+      document.getElementById('rk-agente-input').focus();
+    };
+    reader.readAsDataURL(file);
+    fileInput.value = '';
+  };
+
+  window.rkAgenteAudioLimpiar = function() {
+    _rkAudioData = null;
+    document.getElementById('rk-agente-audio-preview').style.display = 'none';
+    document.getElementById('rk-agente-input').placeholder = 'Preguntame algo sobre RK…';
+  };
+
   window.rkAgenteEnviar = function() {
     if (_rkEsperando) return;
     var input = document.getElementById('rk-agente-input');
     var texto = input.value.trim();
-    if (!texto && !_rkPdfData) return;
-    if (!texto) texto = 'Analizá este PDF y decime de qué se trata.';
+    if (!texto && !_rkPdfData && !_rkAudioData) return;
+    if (!texto) texto = _rkAudioData ? 'Escuchá este audio y extraé las tareas o pendientes que menciona.' : 'Analizá este PDF y decime de qué se trata.';
 
     var apiKey = (typeof getGeminiKey === 'function') ? getGeminiKey() : null;
     if (!apiKey) {
@@ -20098,6 +20180,14 @@
 
     var ctx = rkActualizarContexto();
     var datosApp = (typeof rkResumenDatosApp === 'function') ? rkResumenDatosApp() : '';
+    var empresasTxt = '';
+    if (typeof empresas !== 'undefined' && empresas && empresas.length) {
+      empresasTxt = '\n\nEmpresas dadas de alta en el sistema: ' + empresas.map(function(e) {
+        var proys = (e.proyectos || []).map(function(p) { return p.nombre; }).join(', ');
+        return e.nombre + (proys ? ' (proyectos: ' + proys + ')' : '');
+      }).join(' | ') + '. La empresa/proyecto activo ahora es "' + (typeof empresaActual !== 'undefined' && empresaActual ? empresaActual.nombre : '—')
+        + (typeof proyectoActual !== 'undefined' && proyectoActual ? ' / ' + proyectoActual.nombre : '') + '".';
+    }
     var sistemaPrompt = 'Sos el asistente inteligente de RK · Gestión Multiempresa, una PWA de administración contable argentina. '
       + 'Sos un asistente general capaz y con criterio propio: además de ayudar con la app, respondés con solvencia cualquier '
       + 'pregunta que te hagan (conocimientos generales, cálculos, redacción, consejos, dudas legales/impositivas/de negocio, '
@@ -20109,6 +20199,7 @@
       + 'Respondés en español argentino, de forma clara, concisa y amigable, con la profundidad que la pregunta requiera. '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
+      + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
           : '');
@@ -20116,12 +20207,21 @@
     var esPdf = !!_rkPdfData;
     var pdfNombre = esPdf ? _rkPdfData.nombre : '';
     var pdfBase64 = esPdf ? _rkPdfData.base64 : null;
+    var esAudio = !esPdf && !!_rkAudioData;
+    var audioNombre = esAudio ? _rkAudioData.nombre : '';
+    var audioBase64 = esAudio ? _rkAudioData.base64 : null;
+    var audioMime = esAudio ? _rkAudioData.mime : null;
     var parts = [];
     if (esPdf) {
       parts.push({ inlineData: { mimeType: 'application/pdf', data: pdfBase64 } });
       parts.push({ text: texto });
       rkMensajeUser('📄 ' + pdfNombre + '\n' + texto);
       rkAgentePdfLimpiar();
+    } else if (esAudio) {
+      parts.push({ inlineData: { mimeType: audioMime, data: audioBase64 } });
+      parts.push({ text: texto });
+      rkMensajeUser('🎤 ' + audioNombre + '\n' + texto);
+      rkAgenteAudioLimpiar();
     } else {
       parts.push({ text: texto });
       rkMensajeUser(texto);
@@ -20148,6 +20248,21 @@
       };
       promesaFactura = fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(extractPayload)
+      }).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    }
+
+    // Si es audio, transcribimos y extraemos las tareas/pendientes mencionados en paralelo
+    var promesaTareasAudio = null;
+    if (esAudio) {
+      var extractTareasPayload = {
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: audioMime, data: audioBase64 } },
+          { text: 'Escuchá este audio (probablemente una nota de voz de WhatsApp). Identificá todas las tareas, pendientes o encargos que se mencionen y respondé SOLO con un JSON válido con esta estructura exacta:\n{"tareas":[{"titulo":"...","responsable":"...","fechaVencimiento":"YYYY-MM-DD o null"}]}\nEl campo "responsable" es la persona que tiene que hacer la tarea si se menciona; si no está claro dejalo como null. Si no hay ninguna tarea o pendiente identificable, respondé {"tareas":[]}. No agregues texto fuera del JSON.' }
+        ]}],
+        generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
+      };
+      promesaTareasAudio = fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(extractTareasPayload)
       }).then(function(r){ return r.json(); }).catch(function(){ return null; });
     }
 
@@ -20202,6 +20317,17 @@
               factDatos._pdfNombre = pdfNombre;
             }
             rkMensajeBot(respuesta, factDatos && factDatos.esFactura ? factDatos : null);
+          });
+        } else if (promesaTareasAudio) {
+          promesaTareasAudio.then(function(extData) {
+            var jsonStr = extData && extData.candidates && extData.candidates[0] && extData.candidates[0].content && extData.candidates[0].content.parts && extData.candidates[0].content.parts[0]
+              ? extData.candidates[0].content.parts[0].text.trim() : '';
+            var tareasDatos = null;
+            try {
+              var m = jsonStr.match(/\{[\s\S]*\}/);
+              if (m) tareasDatos = JSON.parse(m[0]);
+            } catch(e) {}
+            rkMensajeBot(respuesta, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null);
           });
         } else {
           rkMensajeBot(respuesta, null);
