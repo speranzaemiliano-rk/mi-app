@@ -6202,6 +6202,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
         });
+        var pagosSis=impExtPagosSistema(cuentaId);
         function parseAmt(s){
             var neg=s.charAt(0)==='-';
             s=s.replace(/[^0-9.,]/g,'');
@@ -6251,9 +6252,11 @@
                 .replace(/-?\$\s*[\d.,]+/g,'')
                 .trim().replace(/\s+/g,' ');
             var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var pagoSis=existentes[clave]?null:impExtMatchPagoSistema(pagosSis,fecha,monto,esEgreso);
             out.push({fecha:fecha,concepto:concepto||(esEgreso?'Débito':'Crédito'),
                       monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
-                      dup:!!existentes[clave],usar:!existentes[clave]});
+                      dup:!!existentes[clave],dupSistema:pagoSis,
+                      usar:!existentes[clave] && !pagoSis});
             existentes[clave]=true;
             i++;
         }
@@ -6292,6 +6295,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')]=true;
         });
+        var pagosSis=impExtPagosSistema(cuentaId);
 
         // 3) Parsear cada fila de datos
         var out=[];
@@ -6313,8 +6317,10 @@
             var monto=esEgreso?salida:entrada;
             var ref=cols.comprob!==undefined?String(row[cols.comprob]||'').trim():'';
             var clave=impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+            var pagoSis=existentes[clave]?null:impExtMatchPagoSistema(pagosSis, fecha, monto, esEgreso);
             out.push({fecha:fecha, concepto:concepto||(esEgreso?'Débito':'Crédito'), monto:monto, esEgreso:esEgreso,
-                ref:ref, cuentaId:cuentaId, dup:!!existentes[clave], usar:!existentes[clave]});
+                ref:ref, cuentaId:cuentaId, dup:!!existentes[clave], dupSistema:pagoSis,
+                usar:!existentes[clave] && !pagoSis});
             existentes[clave]=true; // evita duplicar dentro del mismo archivo
         }
         return out;
@@ -6324,29 +6330,92 @@
         return [cuentaId, fecha, Math.round(montoConSigno*100), (desc||'').toLowerCase().replace(/\s+/g,' ').trim().substring(0,40)].join('|');
     }
 
+    // ── Conciliación con pagos hechos POR SISTEMA ──────────────────
+    // Los pagos a proveedores (presupuestos/facturas, modalidad A) impactan el
+    // saldo bancario vía pagosHistorial, NO están en ingGeneral. Al importar el
+    // extracto o sincronizar con el banco, esa misma transferencia vuelve como
+    // movimiento del banco: si se importara, el egreso contaría DOS veces.
+    // Lista de candidatos: cada pago aporta su monto neto (bruto - retenciones)
+    // y también el bruto si difiere, porque según el banco el débito puede ser
+    // uno u otro.
+    function impExtPagosSistema(cuentaId){
+        var lista=[];
+        var agregar=function(fecha, monto, etiqueta, ctaPago){
+            if(!fecha || !(monto>0)) return;
+            // Pagos sin cuenta asignada (registros viejos) matchean cualquier cuenta
+            if(ctaPago && cuentaId && ctaPago!==cuentaId) return;
+            lista.push({fecha:String(fecha).substring(0,10), monto:Math.round(monto*100)/100, etiqueta:etiqueta});
+        };
+        (typeof datos!=='undefined' && datos ? datos : []).forEach(function(d){
+            (d.pagosHistorial||[]).forEach(function(p){
+                if(p.modalidad!=='A') return; // B = efectivo, no pasa por el banco
+                var bruto=(p.capital||0)+(p.mayores||0);
+                var neto=bruto-(p.totalRet||0);
+                var et='pago a '+(d.proveedor||'proveedor')+(d.concepto?(' ('+d.concepto+')'):'');
+                agregar(p.fecha, neto, et, p.cuentaId);
+                if(Math.round(neto*100)!==Math.round(bruto*100)) agregar(p.fecha, bruto, et, p.cuentaId);
+            });
+        });
+        (typeof facturas!=='undefined' && facturas ? facturas : []).forEach(function(f){
+            (f.pagosHistorial||[]).forEach(function(p){
+                if(p.modalidad && p.modalidad!=='A') return;
+                var bruto=(p.monto!==undefined)?(p.monto||0):((p.capital||0)+(p.mayores||0));
+                var neto=bruto-(p.totalRet||0);
+                var et='pago factura de '+(f.proveedor||'proveedor');
+                agregar(p.fecha, neto, et, p.cuentaId);
+                if(Math.round(neto*100)!==Math.round(bruto*100)) agregar(p.fecha, bruto, et, p.cuentaId);
+            });
+        });
+        return lista;
+    }
+
+    // Un débito del extracto coincide con un pago del sistema si el monto es
+    // igual (tolerancia $1 por redondeos) y la fecha difiere hasta 3 días (los
+    // bancos debitan con demora). Consume el pago matcheado para que dos
+    // débitos iguales no coincidan contra el mismo pago. Devuelve la etiqueta.
+    function impExtMatchPagoSistema(pagos, fecha, monto, esEgreso){
+        if(!esEgreso || !fecha || !pagos || !pagos.length) return null;
+        var t=Date.parse(fecha+'T00:00:00');
+        if(isNaN(t)) return null;
+        for(var i=0;i<pagos.length;i++){
+            if(Math.abs(pagos[i].monto-monto)>1) continue;
+            var tp=Date.parse(pagos[i].fecha+'T00:00:00');
+            if(isNaN(tp) || Math.abs(t-tp)>3*86400000) continue;
+            return pagos.splice(i,1)[0].etiqueta;
+        }
+        return null;
+    }
+
     function impExtRenderPreview(){
         var fmt=function(n){return n?'$'+Math.round(n).toLocaleString('es-AR'):'';};
         var body=document.getElementById('impExtPreviewBody');
-        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup;}).length;
-        var dups=_impExtCandidatos.length-nuevos;
+        var dups=_impExtCandidatos.filter(function(c){return c.dup;}).length;
+        var delSistema=_impExtCandidatos.filter(function(c){return !c.dup && c.dupSistema;}).length;
+        var nuevos=_impExtCandidatos.length-dups-delSistema;
         var resumen=document.getElementById('impExtResumen');
         resumen.style.display='';
         resumen.innerHTML='Se encontraron <strong>'+_impExtCandidatos.length+'</strong> movimientos · '+
             '<strong style="color:var(--success)">'+nuevos+'</strong> nuevos · '+
-            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten).';
+            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten)'+
+            (delSistema?(' · <strong style="color:var(--gold)">'+delSistema+'</strong> coinciden con pagos del sistema (se omiten; podés tildarlos para importarlos igual)'):'')+'.';
         if(!_impExtCandidatos.length){
             document.getElementById('impExtPreviewWrap').style.display='none';
             document.getElementById('impExtBtnImportar').disabled=true;
             return;
         }
         body.innerHTML=_impExtCandidatos.map(function(c,i){
-            return '<tr style="'+(c.dup?'opacity:.5;':'')+'">'+
+            var estado=c.dup
+                ? '<span style="color:var(--text-3)">ya importado</span>'
+                : (c.dupSistema
+                    ? '<span style="color:var(--gold)" title="Coincide en monto y fecha con un pago registrado por sistema">≈ '+String(c.dupSistema).replace(/</g,'&lt;')+'</span>'
+                    : '<span style="color:var(--success)">nuevo</span>');
+            return '<tr style="'+((c.dup||(c.dupSistema&&!c.usar))?'opacity:.5;':'')+'">'+
                 '<td><input type="checkbox" '+(c.usar?'checked':'')+' '+(c.dup?'disabled':'')+' onchange="_impExtCandidatos['+i+'].usar=this.checked;impExtRefreshBtn()"></td>'+
                 '<td>'+c.fecha+'</td>'+
                 '<td>'+(c.concepto||'').replace(/</g,'&lt;')+'</td>'+
                 '<td style="text-align:right;color:var(--success)">'+(!c.esEgreso?fmt(c.monto):'')+'</td>'+
                 '<td style="text-align:right;color:var(--danger)">'+(c.esEgreso?fmt(c.monto):'')+'</td>'+
-                '<td>'+(c.dup?'<span style="color:var(--text-3)">ya importado</span>':'<span style="color:var(--success)">nuevo</span>')+'</td>'+
+                '<td>'+estado+'</td>'+
             '</tr>';
         }).join('');
         document.getElementById('impExtPreviewWrap').style.display='';
@@ -6361,7 +6430,9 @@
     }
 
     function impExtToggleAll(chk){
-        _impExtCandidatos.forEach(function(c){ if(!c.dup) c.usar=chk.checked; });
+        // "Seleccionar todos" no toca los que coinciden con pagos del sistema:
+        // esos se tildan uno a uno, a conciencia
+        _impExtCandidatos.forEach(function(c){ if(!c.dup && !c.dupSistema) c.usar=chk.checked; });
         impExtRenderPreview();
         document.getElementById('impExtCheckAll').checked=chk.checked;
     }
@@ -6471,7 +6542,8 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')] = true;
         });
-        var nuevos = 0;
+        var pagosSis = impExtPagosSistema(cuentaId);
+        var nuevos = 0, omitidosSistema = 0;
         lista.forEach(function(t){
             var fecha = String(t.value_date || t.accounting_date || '').substring(0,10);
             if(!fecha) return;
@@ -6481,6 +6553,7 @@
             var concepto = (t.description || t.merchant && t.merchant.name || 'Movimiento').toString().trim();
             var clave = impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
             if(existentes[clave]) return;
+            if(impExtMatchPagoSistema(pagosSis, fecha, monto, esEgreso)){ omitidosSistema++; return; }
             existentes[clave] = true;
             ingGeneral.push({
                 tipo: esEgreso?'mov_banco_salida':'mov_banco_entrada',
@@ -6491,7 +6564,8 @@
             nuevos++;
         });
         if(nuevos){ persistirIngGeneral(); renderCuentasBancarias(); }
-        alert(nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.');
+        var msgOmit = omitidosSistema ? ('\n('+omitidosSistema+' movimiento'+(omitidosSistema===1?'':'s')+' omitido'+(omitidosSistema===1?'':'s')+' por coincidir con pagos ya registrados en el sistema.)') : '';
+        alert((nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.') + msgOmit);
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────
@@ -20087,12 +20161,19 @@
     if (p) p.classList.remove('abierto');
   }
 
-  function rkPrecargarFormulario(tipo, c) {
+  // paraGuardar=true: la usa rkGuardarRegistro — deja el modal listo pero no
+  // cierra el panel del chat ni redacta la nota de "revisá y guardá".
+  function rkPrecargarFormulario(tipo, c, paraGuardar) {
     c = c || {};
     if (typeof puedeEditar !== 'undefined' && !puedeEditar) {
       return { error: 'El usuario tiene rol de solo lectura: no puede cargar datos.' };
     }
     var NOTA = 'Formulario abierto con los datos precargados (el panel del chat se cerró para que se vea). NO se guardó nada todavía: el usuario tiene que revisar los campos y tocar Guardar. Avisale eso en tu respuesta, breve.';
+    var fin = function(extra) {
+      if (paraGuardar) return Object.assign({ ok: true }, extra || {});
+      rkCerrarPanel();
+      return Object.assign({ ok: true, mensaje: NOTA }, extra || {});
+    };
 
     if (tipo === 'presupuesto') {
       if (typeof agregarFila !== 'function') return { error: 'Formulario de presupuestos no disponible.' };
@@ -20137,11 +20218,20 @@
       if (matches.length > 1) return { error: 'Hay varios presupuestos que coinciden, pedile al usuario que elija: ' + JSON.stringify(matches) };
       if (typeof mostrarTab === 'function') mostrarTab('Presupuestos');
       abrirPagoDe(matches[0].indice);
+      // Modalidad A (banco, con retenciones) o B (efectivo); abrirPago deja A
+      if (c.modalidad && typeof selModalidadPago === 'function') selModalidadPago(c.modalidad === 'B' ? 'B' : 'A');
       rkSetVal('pagoFecha', c.fecha);
       rkSetVal('pagoCapital', c.monto);
+      if (c.mayores !== undefined) rkSetVal('pagoMayores', c.mayores);
+      if (c.cuenta) {
+        var ctasPago = (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [];
+        var ctaPago = ctasPago.find(function(cu){ return (cu.banco || '').toLowerCase().indexOf(String(c.cuenta).toLowerCase()) !== -1; });
+        if (ctaPago) rkSetVal('pagoCuentaBancaria', ctaPago.id || ctaPago.banco);
+      }
+      rkSetVal('pagoMedioBancario', c.medio);
+      rkSetVal('pagoNroComprobante', c.numero || c.referencia);
       if (typeof recalcularRetenciones === 'function') { try { recalcularRetenciones(); } catch (e) {} }
-      rkCerrarPanel();
-      return { ok: true, mensaje: NOTA + ' Pago sobre el presupuesto de ' + matches[0].proveedor + ' — ' + matches[0].concepto + '.' };
+      return fin({ idx: matches[0].indice, etiqueta: matches[0].proveedor + ' — ' + (matches[0].concepto || ''), mensaje: paraGuardar ? undefined : (NOTA + ' Pago sobre el presupuesto de ' + matches[0].proveedor + ' — ' + matches[0].concepto + '.') });
     }
 
     if (tipo === 'proveedor') {
@@ -20169,14 +20259,14 @@
         if (typeof mostrarTab === 'function') mostrarTab('IngGeneral');
         abrirModalIngGeneral();
       }
+      if (!esCaja) rkSetVal('igTipoIngreso', c.tipoIngreso);
       rkSetVal('igFecha', c.fecha);
       rkSetVal('igOrigen', c.origen || c.descripcion || c.concepto);
       rkSetVal('igReferencia', c.referencia);
       rkSetVal('igMoneda', c.moneda);
       rkSetVal('igMonto', c.monto);
       rkSetVal('igObs', c.observaciones);
-      rkCerrarPanel();
-      return { ok: true, mensaje: NOTA };
+      return fin();
     }
 
     if (tipo === 'movimientoBancario') {
@@ -20188,16 +20278,88 @@
       rkSetVal('movBancoMonto', c.monto);
       rkSetVal('movBancoOrigen', c.origen);
       rkSetVal('movBancoRef', c.referencia);
+      rkSetVal('movBancoMedio', c.medio);
       if (c.cuenta) {
         var ctas = (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [];
         var cta = ctas.find(function(cu){ return (cu.banco || '').toLowerCase().indexOf(String(c.cuenta).toLowerCase()) !== -1; });
         if (cta) rkSetVal('movBancoCuenta', cta.id || cta.banco);
       }
-      rkCerrarPanel();
-      return { ok: true, mensaje: NOTA };
+      return fin();
     }
 
     return { error: 'Tipo de formulario desconocido: ' + tipo };
+  }
+
+  // ── Guardado real con confirmación del usuario ──
+  // El asistente propone, un confirm() nativo (que el modelo no puede saltear)
+  // muestra el resumen, y si el usuario acepta se invoca la MISMA función de
+  // guardado que usan los botones de la app (validaciones y persistencia reales).
+  var RK_TIPOS_GUARDADO = {
+    ingresoGeneral:     'INGRESO GENERAL',
+    movimientoCaja:     'MOVIMIENTO DE CAJA',
+    movimientoBancario: 'MOVIMIENTO BANCARIO',
+    pago:               'PAGO DE PRESUPUESTO'
+  };
+
+  function rkGuardarRegistro(tipo, c) {
+    c = c || {};
+    if (!RK_TIPOS_GUARDADO[tipo]) {
+      return { error: 'guardarRegistro solo soporta: ' + Object.keys(RK_TIPOS_GUARDADO).join(', ') + '. Para facturas, presupuestos o proveedores usá precargarFormulario.' };
+    }
+    if (typeof puedeEditar !== 'undefined' && !puedeEditar) {
+      return { error: 'El usuario tiene rol de solo lectura: no puede cargar datos.' };
+    }
+    if (!(Number(c.monto) > 0)) return { error: 'Falta un monto válido (mayor a 0). Preguntale al usuario.' };
+
+    var dir = '';
+    if (tipo === 'movimientoCaja') dir = c.tipoMovimiento === 'egreso' ? ' (EGRESO)' : ' (INGRESO)';
+    if (tipo === 'movimientoBancario') dir = (c.tipoMovimiento === 'salida' || c.tipoMovimiento === 'egreso') ? ' (SALIDA)' : ' (ENTRADA)';
+    var monTxt = (c.moneda === 'USD' ? 'USD ' : '$') + Number(c.monto).toLocaleString('es-AR');
+    var lineas = ['Monto: ' + monTxt];
+    var descConf = c.descripcion || c.concepto || c.origen;
+    if (descConf) lineas.push('Descripción: ' + descConf);
+    if (tipo === 'pago') lineas.push('Presupuesto: ' + (c.presupuesto || c.proveedor || '—') + (c.modalidad ? ('\nModalidad: ' + c.modalidad) : ''));
+    if (c.cuenta) lineas.push('Cuenta: ' + c.cuenta);
+    if (c.fecha) lineas.push('Fecha: ' + c.fecha);
+
+    if (!window.confirm('🤖 El Asistente RK va a guardar un ' + RK_TIPOS_GUARDADO[tipo] + dir + ':\n\n' + lineas.join('\n') + '\n\n¿Confirmás?')) {
+      return { cancelado: true, mensaje: 'El usuario CANCELÓ en el diálogo de confirmación. No se guardó nada. No insistas salvo que te lo vuelva a pedir.' };
+    }
+
+    // Prepara el modal correspondiente (setea editandoIgIdx/_movBancoEditIdx,
+    // inyecta options de tipo, etc.) sin cerrar el panel del chat
+    var prep = rkPrecargarFormulario(tipo, c, true);
+    if (prep.error) return prep;
+
+    if (tipo === 'pago') {
+      var listaP = (typeof datos !== 'undefined' && datos) || [];
+      var item = listaP[prep.idx];
+      var antesP = (item && item.pagosHistorial ? item.pagosHistorial.length : 0);
+      var form = document.getElementById('formPagoReg');
+      if (!form) return { error: 'No encontré el formulario de pago.' };
+      if (form.requestSubmit) form.requestSubmit();
+      else form.dispatchEvent(new Event('submit', { cancelable: true }));
+      var itemDesp = ((typeof datos !== 'undefined' && datos) || [])[prep.idx];
+      var despP = (itemDesp && itemDesp.pagosHistorial ? itemDesp.pagosHistorial.length : 0);
+      if (despP > antesP) {
+        return { ok: true, guardado: true, mensaje: 'PAGO REGISTRADO Y GUARDADO sobre el presupuesto ' + prep.etiqueta + ' por ' + monTxt + '. Confirmáselo al usuario (las retenciones se calcularon automáticamente si era modalidad A).' };
+      }
+      return { error: 'El pago NO quedó registrado: la app rechazó la validación o el usuario canceló un diálogo. El formulario quedó abierto para completarlo a mano.' };
+    }
+
+    var antes = ((typeof ingGeneral !== 'undefined' && ingGeneral) || []).length;
+    if (tipo === 'movimientoBancario') {
+      if (typeof guardarMovBanco !== 'function') return { error: 'Función de guardado bancario no disponible.' };
+      guardarMovBanco();
+    } else {
+      if (typeof guardarIngGeneral !== 'function') return { error: 'Función de guardado no disponible.' };
+      guardarIngGeneral();
+    }
+    var despues = ((typeof ingGeneral !== 'undefined' && ingGeneral) || []).length;
+    if (despues > antes) {
+      return { ok: true, guardado: true, mensaje: 'REGISTRO GUARDADO (' + RK_TIPOS_GUARDADO[tipo] + dir + ' por ' + monTxt + '). Confirmáselo al usuario brevemente.' };
+    }
+    return { error: 'NO se guardó: la validación de la app falló (revisá descripción y monto) o el usuario canceló. El formulario quedó abierto para completarlo a mano.' };
   }
 
   // ── Herramientas (function calling de Gemini) ──
@@ -20242,8 +20404,46 @@
         }
       },
       {
+        name: 'guardarRegistro',
+        description: 'GUARDA de verdad un ingreso general, un movimiento de caja (ingreso/egreso de efectivo), un movimiento bancario o un pago sobre un presupuesto. Antes de guardar, la app le muestra al usuario un diálogo nativo de confirmación con el resumen — vos no podés saltearlo. Usala cuando el usuario pida cargar/registrar/guardar algo de estos tipos y ya tengas los datos clave (monto y descripción/destino como mínimo; para pagos, el presupuesto). Si falta un dato, preguntá primero. Para facturas, presupuestos nuevos o proveedores usá precargarFormulario.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            tipo: {
+              type: 'STRING',
+              enum: ['ingresoGeneral', 'movimientoCaja', 'movimientoBancario', 'pago'],
+              description: '"movimientoCaja" es efectivo (usa tipoMovimiento ingreso/egreso); "movimientoBancario" es sobre una cuenta bancaria (tipoMovimiento entrada/salida); "pago" descuenta de un presupuesto existente (requiere campos.presupuesto).'
+            },
+            campos: {
+              type: 'OBJECT',
+              description: 'Datos del registro.',
+              properties: {
+                monto:          { type: 'NUMBER', description: 'Obligatorio, mayor a 0.' },
+                fecha:          { type: 'STRING', description: 'YYYY-MM-DD. Si el usuario no dijo, dejala vacía (la app pone hoy).' },
+                moneda:         { type: 'STRING', enum: ['ARS', 'USD'] },
+                descripcion:    { type: 'STRING', description: 'Origen/descripción del movimiento. Obligatorio salvo para pago.' },
+                origen:         { type: 'STRING' },
+                referencia:     { type: 'STRING' },
+                observaciones:  { type: 'STRING' },
+                tipoMovimiento: { type: 'STRING', enum: ['ingreso', 'egreso', 'entrada', 'salida'] },
+                tipoIngreso:    { type: 'STRING', enum: ['aporte_socio', 'prestamo_empresa', 'prestamo_bancario', 'subsidio', 'devolucion', 'otro'], description: 'Solo para ingresoGeneral.' },
+                presupuesto:    { type: 'STRING', description: 'Solo para pago: texto que identifique el presupuesto (proveedor y/o concepto).' },
+                proveedor:      { type: 'STRING' },
+                modalidad:      { type: 'STRING', enum: ['A', 'B'], description: 'Solo para pago: A = bancario con retenciones (default), B = efectivo.' },
+                cuenta:         { type: 'STRING', description: 'Nombre del banco de la cuenta (para movimientoBancario o pago modalidad A).' },
+                medio:          { type: 'STRING', enum: ['Transferencia', 'Cheque', 'Débito', 'Acreditación'], description: 'Medio bancario.' },
+                numero:         { type: 'STRING', description: 'Nº de transferencia/cheque/comprobante.' },
+                mayores:        { type: 'NUMBER', description: 'Solo para pago: mayores costos CAC; si no lo pasás la app lo calcula.' }
+              },
+              required: ['monto']
+            }
+          },
+          required: ['tipo', 'campos']
+        }
+      },
+      {
         name: 'precargarFormulario',
-        description: 'Abre un formulario de la app con los campos ya completados para que el usuario lo revise y lo guarde. NUNCA guarda directo: el guardado final siempre lo confirma el usuario. Usala cuando pidan cargar/registrar algo (un pago, una factura, un presupuesto, un ingreso, un proveedor, un movimiento de caja o bancario). Si te faltan datos clave (monto, a quién), preguntá primero.',
+        description: 'Abre un formulario de la app con los campos ya completados para que el usuario lo revise, lo complete y lo guarde a mano. Usala para facturas, presupuestos nuevos y proveedores (que guardarRegistro no soporta), o cuando el usuario prefiera revisar antes de guardar. Si te faltan datos clave (monto, a quién), preguntá primero.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -20298,6 +20498,7 @@
         return { ok: true, mensaje: 'Listo, el usuario ahora está viendo la sección ' + args.tab + '.' };
       }
       if (fc.name === 'precargarFormulario') return rkPrecargarFormulario(args.tipo, args.campos);
+      if (fc.name === 'guardarRegistro') return rkGuardarRegistro(args.tipo, args.campos);
       return { error: 'Herramienta desconocida: ' + fc.name };
     } catch (e) {
       return { error: String((e && e.message) || e) };
@@ -20435,7 +20636,7 @@
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
       + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, ingresos generales, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas, plan de trabajo, tareas pendientes, documentos y caja); con buscarEnSistema buscás un texto en todas las secciones a la vez (y con alcance "todasLasEmpresas", en todos los proyectos y empresas del sistema); con irASeccion llevás al usuario a cualquier pantalla; con precargarFormulario abrís un formulario (pago, factura, presupuesto, ingreso, proveedor, movimiento de caja o bancario) con los campos ya completados para que el usuario lo revise y lo guarde. '
       + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar; si no sabés en qué sección está algo, o no aparece donde esperabas, usá buscarEnSistema antes de dar por perdido el dato. Si preguntan por las tareas pendientes de alguien, consultá la sección "tareas" (pizarrón con responsable, vencimiento y estado) y si hace falta también "planTrabajo". Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece tras buscar, decilo con claridad en vez de inventar. '
-      + 'Cuando el usuario pida cargar/registrar algo, usá precargarFormulario; si te falta un dato clave (monto, proveedor, fecha), preguntá antes. La herramienta nunca guarda: recordale al usuario que revise y confirme el formulario.'
+      + 'Cuando el usuario pida cargar/registrar un ingreso, un egreso, un movimiento de caja/banco o un pago, usá guardarRegistro: la app le muestra un diálogo de confirmación con el resumen y, si acepta, queda guardado de verdad — después confirmáselo. Si te falta un dato clave (monto, descripción, a qué presupuesto), preguntá antes de llamarla. Para facturas, presupuestos nuevos o proveedores usá precargarFormulario (ahí el usuario revisa y guarda a mano).'
       + (inventario
           ? ('\n\nInventario del proyecto activo (solo cantidades; el detalle se pide con obtenerDatos):\n' + inventario)
           : '\n\nEl proyecto activo todavía no tiene datos cargados.');
