@@ -19901,7 +19901,7 @@
     panel.classList.toggle('abierto', _rkAbierto);
     if (_rkAbierto) {
       rkActualizarContexto();
-      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo explicarte cómo usar la app, responder con los **datos reales de tu proyecto** (presupuestos, facturas, caja, ingresos…), hacer cálculos, analizar PDFs de facturas, **llevarte a cualquier sección** y **precargarte formularios** (p. ej. "cargá un pago de $500.000 a Constructora Sur") — vos siempre revisás y guardás. ¿En qué te ayudo?');
+      if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo responder con los **datos reales del sistema** (presupuestos, facturas, caja, ingresos, tareas pendientes…), **buscar cualquier cosa** en todas las secciones — incluso en tus otras empresas y proyectos —, hacer cálculos, analizar PDFs de facturas, **llevarte a cualquier sección** y **precargarte formularios** (p. ej. "cargá un pago de $500.000 a Constructora Sur") — vos siempre revisás y guardás. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     }
   };
@@ -19919,16 +19919,20 @@
   // se accede por identificador con guarda typeof, no vía window.
   function rkColecciones() {
     return {
-      presupuestos:     (typeof datos !== 'undefined' && datos) || [],
-      facturas:         (typeof facturas !== 'undefined' && facturas) || [],
-      ingresos:         (typeof ingresos !== 'undefined' && ingresos) || [],
-      proveedores:      (typeof proveedores !== 'undefined' && proveedores) || [],
-      cuentasBancarias: (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [],
-      aportantes:       (typeof aportantes !== 'undefined' && aportantes) || [],
-      desarrollos:      (typeof desarrollos !== 'undefined' && desarrollos) || [],
-      alquileres:       (typeof alquileres !== 'undefined' && alquileres) || [],
-      servicios:        (typeof servicios !== 'undefined' && servicios) || [],
-      ventas:           (typeof ventas !== 'undefined' && ventas) || []
+      presupuestos:      (typeof datos !== 'undefined' && datos) || [],
+      facturas:          (typeof facturas !== 'undefined' && facturas) || [],
+      ingresos:          (typeof ingresos !== 'undefined' && ingresos) || [],
+      ingresosGenerales: (typeof ingGeneral !== 'undefined' && ingGeneral) || [],
+      proveedores:       (typeof proveedores !== 'undefined' && proveedores) || [],
+      cuentasBancarias:  (typeof cuentasBancarias !== 'undefined' && cuentasBancarias) || [],
+      aportantes:        (typeof aportantes !== 'undefined' && aportantes) || [],
+      desarrollos:       (typeof desarrollos !== 'undefined' && desarrollos) || [],
+      alquileres:        (typeof alquileres !== 'undefined' && alquileres) || [],
+      servicios:         (typeof servicios !== 'undefined' && servicios) || [],
+      ventas:            (typeof ventas !== 'undefined' && ventas) || [],
+      planTrabajo:       (typeof planTrabajo !== 'undefined' && planTrabajo) || [],
+      tareas:            (typeof tareas !== 'undefined' && tareas) || [],
+      documentos:        (typeof documentos !== 'undefined' && documentos) || []
     };
   }
 
@@ -19984,6 +19988,89 @@
     var json = JSON.stringify(rkSanitizar(col[seccion]));
     if (json.length > LIMITE) json = json.slice(0, LIMITE) + '… [truncado: hay ' + col[seccion].length + ' registros en total]';
     return json;
+  }
+
+  // ── Búsqueda global ──
+  function rkNormalizar(s) {
+    // Minúsculas y sin acentos, para que "Pérez" matchee "perez"
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  // Busca texto en todas las secciones del proyecto activo (en memoria)
+  function rkBuscarEnActivo(query) {
+    var q = rkNormalizar(query);
+    var col = rkColecciones();
+    var resultados = [];
+    Object.keys(col).forEach(function(sec) {
+      col[sec].forEach(function(reg, i) {
+        if (resultados.length >= 30) return;
+        var limpio = rkSanitizar(reg);
+        if (rkNormalizar(JSON.stringify(limpio)).indexOf(q) === -1) return;
+        var json = JSON.stringify(limpio);
+        if (json.length > 400) json = json.slice(0, 400) + '…';
+        resultados.push({ seccion: sec, indice: i, registro: json });
+      });
+    });
+    return resultados;
+  }
+
+  // Busca en los OTROS proyectos/empresas leyendo de Firebase (async).
+  // No trae /documentos (adjuntos base64 pesados); el resto de los nodos son livianos.
+  var RK_NODOS_BUSQUEDA = ['datos', 'facturas', 'ingresos', 'ingGeneral', 'ventas', 'alquileres', 'servicios', 'desarrollos', 'aportantes', 'planTrabajo'];
+  function rkBuscarEnOtrosProyectos(query) {
+    if (typeof db === 'undefined' || !db || typeof empresas === 'undefined') return Promise.resolve([]);
+    var q = rkNormalizar(query);
+    var objetivos = [];
+    (empresas || []).forEach(function(emp) {
+      (emp.proyectos || []).forEach(function(proy) {
+        var esActivo = (typeof empresaActual !== 'undefined' && empresaActual && empresaActual.id === emp.id)
+          && (typeof proyectoActual !== 'undefined' && proyectoActual && proyectoActual.id === proy.id);
+        if (!esActivo) objetivos.push({ emp: emp, proy: proy });
+      });
+    });
+    var truncadoProyectos = objetivos.length > 10;
+    objetivos = objetivos.slice(0, 10);
+    var resultados = [];
+    var lecturas = [];
+    objetivos.forEach(function(o) {
+      RK_NODOS_BUSQUEDA.forEach(function(nodo) {
+        lecturas.push(
+          db.ref('empresas/' + o.emp.id + '/proyectos/' + o.proy.id + '/' + nodo).once('value').then(function(snap) {
+            var v = snap.val();
+            if (!v) return;
+            var lista = Array.isArray(v) ? v : Object.values(v);
+            lista.forEach(function(reg) {
+              if (!reg || resultados.length >= 40) return;
+              var limpio = rkSanitizar(reg);
+              if (rkNormalizar(JSON.stringify(limpio)).indexOf(q) === -1) return;
+              var json = JSON.stringify(limpio);
+              if (json.length > 400) json = json.slice(0, 400) + '…';
+              resultados.push({ empresa: o.emp.nombre, proyecto: o.proy.nombre, seccion: nodo, registro: json });
+            });
+          }).catch(function() {})
+        );
+      });
+    });
+    // Tope de 12 segundos: devolvemos lo que haya en vez de colgar el chat
+    var timeout = new Promise(function(res) { setTimeout(res, 12000); });
+    return Promise.race([Promise.all(lecturas), timeout]).then(function() {
+      if (truncadoProyectos) resultados.push({ nota: 'Hay más de 10 proyectos; solo se buscó en los primeros 10 además del activo.' });
+      return resultados;
+    });
+  }
+
+  function rkBuscarEnSistema(query, alcance) {
+    if (!query || !String(query).trim()) return { error: 'Indicá qué texto buscar.' };
+    var activos = rkBuscarEnActivo(query);
+    if (alcance !== 'todasLasEmpresas') {
+      return {
+        proyectoActivo: activos,
+        nota: activos.length ? undefined : 'Sin resultados en el proyecto activo. Podés repetir la búsqueda con alcance "todasLasEmpresas" para revisar el resto del sistema.'
+      };
+    }
+    return rkBuscarEnOtrosProyectos(query).then(function(otros) {
+      return { proyectoActivo: activos, otrosProyectos: otros };
+    });
   }
 
   // ── Precarga de formularios ──
@@ -20124,11 +20211,23 @@
           properties: {
             seccion: {
               type: 'STRING',
-              enum: ['presupuestos', 'facturas', 'ingresos', 'proveedores', 'cuentasBancarias', 'aportantes', 'desarrollos', 'alquileres', 'servicios', 'ventas', 'caja'],
-              description: 'Sección a consultar. "presupuestos" incluye el historial de pagos a cada proveedor; "caja" devuelve saldos en pesos/USD y el tipo de cambio.'
+              enum: ['presupuestos', 'facturas', 'ingresos', 'ingresosGenerales', 'proveedores', 'cuentasBancarias', 'aportantes', 'desarrollos', 'alquileres', 'servicios', 'ventas', 'planTrabajo', 'tareas', 'documentos', 'caja'],
+              description: 'Sección a consultar. "presupuestos" incluye el historial de pagos a cada proveedor; "caja" devuelve saldos en pesos/USD y el tipo de cambio; "tareas" es el pizarrón de tareas pendientes (título, responsable, vencimiento, estado — es global, compartido entre empresas); "planTrabajo" son las etapas de obra del proyecto; "ingresosGenerales" incluye también movimientos manuales de caja y bancarios.'
             }
           },
           required: ['seccion']
+        }
+      },
+      {
+        name: 'buscarEnSistema',
+        description: 'Busca un texto (nombre, proveedor, número de factura, concepto, responsable de una tarea, etc.) en TODAS las secciones a la vez y devuelve los registros que coinciden, indicando en qué sección están. Usala cuando no sepas en qué sección está algo, o cuando el usuario pregunte "dónde está…" o por algo que puede estar en cualquier lado. Con alcance "todasLasEmpresas" también busca en los demás proyectos y empresas del sistema.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            texto: { type: 'STRING', description: 'Texto a buscar (sin distinción de mayúsculas ni acentos).' },
+            alcance: { type: 'STRING', enum: ['proyectoActivo', 'todasLasEmpresas'], description: 'Por defecto busca solo en el proyecto activo. "todasLasEmpresas" lee además los otros proyectos del sistema (tarda unos segundos).' }
+          },
+          required: ['texto']
         }
       },
       {
@@ -20187,10 +20286,12 @@
     ]
   }];
 
+  // Puede devolver un valor directo o una Promise (p. ej. búsqueda en Firebase)
   function rkEjecutarHerramienta(fc) {
     var args = fc.args || {};
     try {
       if (fc.name === 'obtenerDatos') return { datos: rkDatosSeccion(args.seccion || '') };
+      if (fc.name === 'buscarEnSistema') return rkBuscarEnSistema(args.texto, args.alcance);
       if (fc.name === 'irASeccion') {
         if (!CONTEXTOS_TABS[args.tab]) return { error: 'Tab desconocido: ' + args.tab };
         if (typeof mostrarTab === 'function') mostrarTab(args.tab);
@@ -20332,8 +20433,8 @@
       + 'Respondés en español argentino, de forma concisa y amigable, en Markdown simple (negritas, viñetas). '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
       + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
-      + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas y caja); con irASeccion llevás al usuario a cualquier pantalla de la app; con precargarFormulario abrís un formulario (pago, factura, presupuesto, ingreso, proveedor, movimiento de caja o bancario) con los campos ya completados para que el usuario lo revise y lo guarde. '
-      + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar. Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece, decilo con claridad en vez de inventar. '
+      + '\n\nTenés herramientas: con obtenerDatos leés los registros reales del proyecto activo (presupuestos con sus pagos, facturas, ingresos, ingresos generales, proveedores, cuentas bancarias, aportantes, desarrollos, alquileres, servicios, ventas, plan de trabajo, tareas pendientes, documentos y caja); con buscarEnSistema buscás un texto en todas las secciones a la vez (y con alcance "todasLasEmpresas", en todos los proyectos y empresas del sistema); con irASeccion llevás al usuario a cualquier pantalla; con precargarFormulario abrís un formulario (pago, factura, presupuesto, ingreso, proveedor, movimiento de caja o bancario) con los campos ya completados para que el usuario lo revise y lo guarde. '
+      + 'Antes de responder preguntas sobre montos, fechas, personas o cantidades, consultá los datos con obtenerDatos en vez de adivinar; si no sabés en qué sección está algo, o no aparece donde esperabas, usá buscarEnSistema antes de dar por perdido el dato. Si preguntan por las tareas pendientes de alguien, consultá la sección "tareas" (pizarrón con responsable, vencimiento y estado) y si hace falta también "planTrabajo". Podés consultar varias secciones y hacer cálculos (totales, comparaciones, conversiones con el tipo de cambio). Si el dato no aparece tras buscar, decilo con claridad en vez de inventar. '
       + 'Cuando el usuario pida cargar/registrar algo, usá precargarFormulario; si te falta un dato clave (monto, proveedor, fecha), preguntá antes. La herramienta nunca guarda: recordale al usuario que revise y confirme el formulario.'
       + (inventario
           ? ('\n\nInventario del proyecto activo (solo cantidades; el detalle se pide con obtenerDatos):\n' + inventario)
@@ -20361,7 +20462,7 @@
     document.getElementById('rk-agente-estado').textContent = 'Pensando…';
     var typing = rkTyping();
 
-    var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+    var MODELOS = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
     var mi = 0;
 
     // Si es PDF, primero extraemos datos estructurados de factura en paralelo
@@ -20385,10 +20486,10 @@
     var MAX_RONDAS = 6;
 
     function intentar() {
-      // thinkingBudget > 0: dejamos que los modelos 2.5 razonen en preguntas
-      // complejas (cálculos, cruces de datos). El budget cuenta dentro de
-      // maxOutputTokens, por eso el tope va más alto que antes.
-      var generationConfig = { maxOutputTokens: 4096, temperature: 0.7 };
+      // Gemini 3.x razona por defecto (thinking_level medium), no se toca.
+      // En los 2.5 se habilita un budget acotado; cuenta dentro de
+      // maxOutputTokens, por eso el tope va alto.
+      var generationConfig = { maxOutputTokens: 8192, temperature: 0.7 };
       if (MODELOS[mi].indexOf('gemini-2.5') === 0) generationConfig.thinkingConfig = { thinkingBudget: 1024 };
       var payload = {
         system_instruction: { parts: [{ text: sistemaPrompt }] },
@@ -20414,15 +20515,21 @@
         var partes = (cand.content && cand.content.parts) || [];
         var llamadas = partes.filter(function(p){ return p.functionCall; });
 
-        // ¿El modelo pidió usar herramientas? Ejecutarlas y devolverle el resultado.
+        // ¿El modelo pidió usar herramientas? Ejecutarlas (algunas son async,
+        // como la búsqueda global en Firebase) y devolverle los resultados.
         if (llamadas.length && rondas < MAX_RONDAS) {
           rondas++;
           _rkHistorial.push({ role: 'model', parts: partes });
-          _rkHistorial.push({ role: 'user', parts: llamadas.map(function(p) {
-            return { functionResponse: { name: p.functionCall.name, response: rkEjecutarHerramienta(p.functionCall) } };
-          }) });
           document.getElementById('rk-agente-estado').textContent = 'Consultando datos…';
-          intentar();
+          Promise.all(llamadas.map(function(p) {
+            return Promise.resolve()
+              .then(function() { return rkEjecutarHerramienta(p.functionCall); })
+              .catch(function(e) { return { error: String((e && e.message) || e) }; })
+              .then(function(resp) { return { functionResponse: { name: p.functionCall.name, response: resp } }; });
+          })).then(function(respuestas) {
+            _rkHistorial.push({ role: 'user', parts: respuestas });
+            intentar();
+          });
           return;
         }
 
