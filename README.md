@@ -314,6 +314,7 @@ npm start          # node server.js — escucha en process.env.PORT || 3000
 | `AFIP_KEY`  | Clave privada `.key` (recomendado: **base64**). |
 | `AFIP_ENV`  | `production` o `testing` (default `testing`). |
 | `AFIP_ACCESS_TOKEN` | Token de acceso de AFIP SDK (opcional). |
+| `AFIP_PTOSVTA` | Opcional: puntos de venta extra a recorrer al importar comprobantes, separados por coma (ej. `1,3`). Útil para PV del facturador en línea que ARCA no lista por web service. |
 | `BELVO_SECRET_ID` / `BELVO_SECRET_PASSWORD` | Credenciales de Belvo. |
 | `BELVO_ENV` | `sandbox` (default) / `development` / `production`. |
 | `PROMETEO_API_KEY` | API key de Prometeo. |

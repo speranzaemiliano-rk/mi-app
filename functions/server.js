@@ -108,22 +108,44 @@ app.get('/afip/importar', async (req, res) => {
             return res.json(lista);
         }
 
-        // Sin parámetros: traer todos los puntos de venta activos
-        const puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
-        const ptosActivos = (puntosDeVenta || [])
-            .filter(p => p.Bloqueado === 'N')
-            .map(p => p.Nro);
-
-        if (!ptosActivos.length) return res.json([]);
+        // Puntos de venta a recorrer.
+        // OJO: FEParamGetPtosVenta (getSalesPoints) solo lista los puntos de
+        // venta dados de alta para WEB SERVICES; los del "facturador en línea"
+        // (p. ej. un PV 1 histórico) NO aparecen, aunque sus comprobantes SÍ
+        // se pueden consultar con FECompConsultar. Para no perderlos:
+        //  - se completan los huecos desde 1 hasta el PV más alto conocido
+        //    (consultar un PV inexistente falla rápido y se ignora),
+        //  - se puede forzar la lista con la env AFIP_PTOSVTA (ej: "1,3"),
+        //  - o pedir un PV puntual con ?ptoVta= (sin tipoComp, que antes se
+        //    ignoraba silenciosamente).
+        let candidatos = new Set();
+        if (ptoVtaParam) {
+            candidatos.add(ptoVtaParam);
+        } else {
+            try {
+                const puntosDeVenta = await afip.ElectronicBilling.getSalesPoints();
+                (puntosDeVenta || [])
+                    .filter(p => p.Bloqueado === 'N')
+                    .forEach(p => { const n = parseInt(p.Nro); if (n) candidatos.add(n); });
+            } catch (_) { /* puede fallar (602 sin datos) aunque haya comprobantes */ }
+            String(process.env.AFIP_PTOSVTA || '')
+                .split(',')
+                .map(s => parseInt(s.trim()))
+                .filter(Boolean)
+                .forEach(n => candidatos.add(n));
+            const maxPto = Math.max(0, ...candidatos);
+            for (let p = 1; p <= maxPto; p++) candidatos.add(p);
+            if (!candidatos.size) candidatos.add(1);
+        }
 
         const tipos = tipoCompParam ? [tipoCompParam] : TIPOS_COMP_HABITUALES;
         const lista = [];
-        for (const pto of ptosActivos) {
+        for (const pto of [...candidatos].sort((a, b) => a - b)) {
             for (const tipo of tipos) {
                 try {
                     const parcial = await importarComprobantes(afip, pto, tipo);
                     lista.push(...parcial);
-                } catch (_) { /* tipo sin comprobantes, ignorar */ }
+                } catch (_) { /* PV inexistente o tipo sin comprobantes, ignorar */ }
             }
         }
         return res.json(lista);
