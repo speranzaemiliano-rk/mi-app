@@ -11175,11 +11175,18 @@
     }
 
     function emitToggleCuentaWrap() {
-        var asignado = document.getElementById('emitAsignarProv').checked;
+        var afecta = document.getElementById('emitAfectaCaja').value === 'si';
         var esA = document.getElementById('emitModalidad').value === 'A';
         var wrap = document.getElementById('emitCuentaWrap');
-        if (wrap) wrap.style.display = (asignado && esA) ? '' : 'none';
-        if (asignado && esA) emitPoblarCuentas();
+        if (wrap) wrap.style.display = (afecta && esA) ? '' : 'none';
+        if (afecta && esA) emitPoblarCuentas();
+    }
+
+    function emitToggleAfectaCaja() {
+        var wrap = document.getElementById('emitCajaWrap');
+        var afecta = document.getElementById('emitAfectaCaja').value === 'si';
+        if (wrap) wrap.style.display = afecta ? '' : 'none';
+        emitToggleCuentaWrap();
     }
 
     function emitToggleProveedor() {
@@ -11189,11 +11196,9 @@
         var clienteInp = document.getElementById('emitCliente');
         if (chk.checked) {
             emitPoblarProveedores();
-            emitToggleCuentaWrap();
         } else {
             document.getElementById('emitProveedorSel').value = '';
             if (clienteInp) { clienteInp.readOnly = false; clienteInp.style.background = ''; }
-            emitToggleCuentaWrap();
         }
     }
 
@@ -11223,7 +11228,7 @@
         for (var i = ingGeneral.length - 1; i >= 0; i--) {
             if (ingGeneral[i] && ingGeneral[i].origenEmitidoId === reg.id) ingGeneral.splice(i, 1);
         }
-        if (!reg.proveedorId) return;
+        if (!reg.afectaCaja) return;
         var esEgreso = reg.movTipo !== 'ingreso';
         var origenTxt = (reg.tipoDoc === 'factura' ? 'Doc. factura' : 'Recibo') + ' ' + reg.nro + ' — ' + (reg.proveedorNombre || reg.cliente);
         var mov;
@@ -11269,8 +11274,12 @@
             if (e.proveedorId) {
                 document.getElementById('emitProveedorSel').value = e.proveedorId;
                 emitOnProveedorChange();
+            }
+            document.getElementById('emitAfectaCaja').value = e.afectaCaja ? 'si' : 'no';
+            emitToggleAfectaCaja();
+            if (e.afectaCaja) {
                 document.getElementById('emitMovTipo').value = e.movTipo || 'egreso';
-                if (e.cuentaId) { emitToggleCuentaWrap(); document.getElementById('emitCuentaBancaria').value = e.cuentaId; }
+                if (e.cuentaId) document.getElementById('emitCuentaBancaria').value = e.cuentaId;
             }
         } else {
             document.getElementById('emitTipo').value      = 'recibo';
@@ -11280,6 +11289,8 @@
             document.getElementById('emitNroActual').textContent = '(se asigna al guardar)';
             document.getElementById('emitAsignarProv').checked = false;
             emitToggleProveedor();
+            document.getElementById('emitAfectaCaja').value = 'no';
+            emitToggleAfectaCaja();
         }
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
@@ -11301,8 +11312,9 @@
         var asignaProv = document.getElementById('emitAsignarProv').checked;
         var provId = asignaProv ? (document.getElementById('emitProveedorSel').value || '') : '';
         if (asignaProv && (!provId || provId === '__nuevo__')) { alert('Seleccioná un proveedor, o desmarcá "Asignar a un proveedor".'); return; }
+        var afectaCaja = document.getElementById('emitAfectaCaja').value === 'si';
         var cuentaId = '';
-        if (asignaProv && tipoAB === 'A') {
+        if (afectaCaja && tipoAB === 'A') {
             cuentaId = document.getElementById('emitCuentaBancaria').value;
             if (!cuentaId) { alert('Seleccioná la cuenta bancaria del movimiento.'); return; }
         }
@@ -11324,7 +11336,8 @@
             nro:           (prev && prev.nro) ? prev.nro : null,
             proveedorId:   provId || '',
             proveedorNombre: provObj ? provObj.razonSocial : '',
-            movTipo:       asignaProv ? (document.getElementById('emitMovTipo').value || 'egreso') : '',
+            afectaCaja:    afectaCaja,
+            movTipo:       afectaCaja ? (document.getElementById('emitMovTipo').value || 'egreso') : '',
             cuentaId:      cuentaId
         };
         // Asignar número correlativo solo si es nuevo (al editar se conserva el existente)
@@ -11335,12 +11348,12 @@
         cerrarModalEmitir();
         persistirEmitidos();
         renderEmitidos();
-        if (confirm('Comprobante ' + reg.nro + ' guardado' + (reg.proveedorId ? ' — se registró el movimiento de caja/banco' : '') + '. ¿Imprimir?')) imprimirComprobanteEmitido(reg.id);
+        if (confirm('Comprobante ' + reg.nro + ' guardado' + (reg.afectaCaja ? ' — se registró el movimiento de caja/banco' : '') + '. ¿Imprimir?')) imprimirComprobanteEmitido(reg.id);
     }
 
     function eliminarEmitido(id) {
         var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
-        var tieneMov = e && e.proveedorId;
+        var tieneMov = e && e.afectaCaja;
         if (!confirm('¿Eliminar este comprobante emitido?' + (tieneMov ? ' También se eliminará el movimiento de caja/banco asociado.' : ''))) return;
         var i = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
         if (i >= 0) {
@@ -11382,7 +11395,10 @@
                 '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
                 '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span></td>' +
                 '<td>' + tipoLbl + '</td>' +
-                '<td>' + escHtml(e.cliente||'—') + (e.proveedorId ? '<br><small style="color:var(--text-3);font-size:10px;">🏢 Proveedor · ' + (e.movTipo==='ingreso'?'Ingreso':'Egreso') + '</small>' : '') + '</td>' +
+                '<td>' + escHtml(e.cliente||'—') +
+                    (e.proveedorId ? '<br><small style="color:var(--text-3);font-size:10px;">🏢 Proveedor</small>' : '') +
+                    (e.afectaCaja ? '<br><small style="color:var(--text-3);font-size:10px;">💰 ' + (e.movTipo==='ingreso'?'Ingreso':'Egreso') + ' de caja/banco</small>' : '') +
+                '</td>' +
                 '<td>' + escHtml(concepto||'—') + '</td>' +
                 '<td style="text-align:right;">' + mon + Math.round(e.total||0).toLocaleString('es-AR') + '</td>' +
                 '<td><div class="action-btns">' +
@@ -18626,28 +18642,38 @@
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="emitAsignarProv" onchange="emitToggleProveedor()" style="width:auto;margin-right:6px;vertical-align:middle;">
-                        Asignar a un proveedor
+                        🏢 Asignar a un proveedor
                     </label>
-                    <div class="form-hint" style="color:var(--text-3);">Si lo asignás, se genera automáticamente el movimiento de caja/banco correspondiente.</div>
+                    <div class="form-hint" style="color:var(--text-3);">El proveedor elegido completa el campo Cliente/Destinatario.</div>
                 </div>
-                <div id="emitProveedorWrap" style="display:none;">
+                <div id="emitProveedorWrap" style="display:none;margin-bottom:10px;">
+                    <div class="form-group" style="margin:0;">
+                        <label>Proveedor</label>
+                        <select id="emitProveedorSel" onchange="emitOnProveedorChange()" style="width:100%;"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>💰 ¿Afecta caja o banco?</label>
+                    <select id="emitAfectaCaja" onchange="emitToggleAfectaCaja()" style="width:100%;">
+                        <option value="no">No — es solo un recibo / documento</option>
+                        <option value="si">Sí — genera un movimiento</option>
+                    </select>
+                    <div class="form-hint" style="color:var(--text-3);">Independiente de si está asignado a un proveedor. Si elegís "Sí", se genera el movimiento en la caja o el banco según la serie A/B.</div>
+                </div>
+                <div id="emitCajaWrap" style="display:none;">
                     <div class="cac-desglose" style="margin-bottom:12px;">
-                        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">
-                            <div class="form-group" style="margin:0;">
-                                <label>Proveedor</label>
-                                <select id="emitProveedorSel" onchange="emitOnProveedorChange()" style="width:100%;"></select>
-                            </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                             <div class="form-group" style="margin:0;">
                                 <label>Movimiento</label>
                                 <select id="emitMovTipo" style="width:100%;">
-                                    <option value="egreso">Egreso (pago al proveedor)</option>
-                                    <option value="ingreso">Ingreso</option>
+                                    <option value="egreso">Egreso (sale plata)</option>
+                                    <option value="ingreso">Ingreso (entra plata)</option>
                                 </select>
                             </div>
-                        </div>
-                        <div class="form-group" id="emitCuentaWrap" style="display:none;margin-top:10px;">
-                            <label>Cuenta bancaria</label>
-                            <select id="emitCuentaBancaria" style="width:100%;"></select>
+                            <div class="form-group" id="emitCuentaWrap" style="display:none;margin:0;">
+                                <label>Cuenta bancaria</label>
+                                <select id="emitCuentaBancaria" style="width:100%;"></select>
+                            </div>
                         </div>
                     </div>
                 </div>
