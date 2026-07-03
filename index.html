@@ -5254,7 +5254,7 @@
                 const e = { id: eid, nombre: val[eid].nombre || eid, datos: val[eid].datos || {}, proyectos: [] };
                 const proys = val[eid].proyectos || {};
                 Object.keys(proys).forEach(pid => {
-                    e.proyectos.push({ id: pid, nombre: (proys[pid] && proys[pid].nombre) || pid });
+                    e.proyectos.push({ id: pid, nombre: (proys[pid] && proys[pid].nombre) || pid, datos: (proys[pid] && proys[pid].datos) || {} });
                 });
                 if (e.proyectos.length === 0) e.proyectos.push({ id: 'proy_default', nombre: 'Proyecto 1' });
                 empresas.push(e);
@@ -5993,6 +5993,41 @@
         });
     }
 
+    // ── Numeración correlativa de comprobantes A (banco) / B (efectivo) ──
+    // Formato: <CODEMP>-<CODPROY>-<A|B>-00001, contador separado por empresa+proyecto y tipo.
+    function _slugCodigo(txt, fallback) {
+        var s = (txt || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return s ? s.slice(0, 6) : fallback;
+    }
+    function codigoEmpresaActual() {
+        var c = empresaActual && empresaActual.datos && empresaActual.datos.codigo;
+        return _slugCodigo(c || (empresaActual && empresaActual.nombre), 'EMP');
+    }
+    function codigoProyectoActual() {
+        var c = proyectoActual && proyectoActual.datos && proyectoActual.datos.codigo;
+        return _slugCodigo(c || (proyectoActual && proyectoActual.nombre), 'P');
+    }
+    // Deriva el tipo A/B a partir del medio de pago (banco → A, efectivo/caja → B)
+    function tipoABdesdeMedio(medio) {
+        var m = (medio || '').toString().toLowerCase();
+        if (m.indexOf('banc') >= 0 || m.indexOf('transfer') >= 0 || m.indexOf('cheque') >= 0 || m.indexOf('cuenta') >= 0 || m === 'a') return 'A';
+        return 'B'; // efectivo, caja, u otros
+    }
+    // Devuelve el próximo número correlativo para el tipo A/B (Promise<string>).
+    function obtenerProximoComprobante(tipoAB) {
+        var tipo = (tipoAB === 'A') ? 'A' : 'B';
+        var prefijo = codigoEmpresaActual() + '-' + codigoProyectoActual() + '-' + tipo + '-';
+        return new Promise(function(resolve) {
+            if (!db || !getBasePath) { resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); return; }
+            try {
+                var ref = db.ref(getBasePath() + '/contadoresComprobante/' + tipo);
+                ref.transaction(function(n){ return (n||0)+1; })
+                .then(function(r){ var n = (r.snapshot && r.snapshot.val()) || 1; resolve(prefijo + String(n).padStart(5,'0')); })
+                .catch(function(){ resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); });
+            } catch(e) { resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); }
+        });
+    }
+
     // ── Sort de columnas ──────────────────────────────────────────
     const _sortState = {};
     function sortTable(tbodyId, colIdx, thEl) {
@@ -6031,6 +6066,7 @@
         document.getElementById('igMonto').value='';
         document.getElementById('igObs').value='';
         document.getElementById('igMoneda').value=monedaForzada||'ARS';
+        document.getElementById('igModalidad').value='B'; // caja = efectivo
         var t2=document.getElementById('modalIngGeneralTitle');
         if(t2) t2.textContent=tipo==='egreso'?'💸 Nuevo Egreso de Caja':'💰 Nuevo Ingreso de Caja';
         var gb=document.getElementById('igGuardarBtn');if(gb) gb.textContent=tipo==='egreso'?'💾 Guardar Egreso':'💾 Guardar Ingreso';
@@ -6080,7 +6116,7 @@
         persistirIngGeneral();
         renderCuentasBancarias();
     }
-    function guardarMovBanco() {
+    async function guardarMovBanco() {
         var cuentaId=document.getElementById('movBancoCuenta').value;
         var desc=document.getElementById('movBancoDesc').value.trim();
         var monto=parseFloat(document.getElementById('movBancoMonto').value);
@@ -6093,12 +6129,13 @@
         var obj={tipo:_movBancoTipo==='entrada'?'mov_banco_entrada':'mov_banco_salida',fecha:fecha,cuentaId:cuentaId,
             origen:desc,referencia:ref||'',moneda:cb.moneda||'ARS',monto:monto,medio:medio,origenDest:origen||'',
             esEgreso:_movBancoTipo==='salida',esBancario:true};
-        if(_movBancoEditIdx!==null){ ingGeneral[_movBancoEditIdx]=obj; _movBancoEditIdx=null; }
-        else { ingGeneral.push(obj); }
+        obj.tipoAB='A'; // banco siempre = A
+        if(_movBancoEditIdx!==null){ var origMB=ingGeneral[_movBancoEditIdx]||{}; if(origMB.nroCorrelativo) obj.nroCorrelativo=origMB.nroCorrelativo; ingGeneral[_movBancoEditIdx]=obj; _movBancoEditIdx=null; }
+        else { obj.nroCorrelativo=await obtenerProximoComprobante('A'); ingGeneral.push(obj); }
         persistirIngGeneral();
         document.getElementById('modalMovBanco').classList.remove('active');
         renderCuentasBancarias();
-        alert('✓ Movimiento bancario guardado.');
+        alert('✓ Movimiento bancario guardado' + (obj.nroCorrelativo ? ' — '+obj.nroCorrelativo : '') + '.');
     }
     function cbFiltrosLimpiar(){
         ['cbDesde','cbHasta','cbFiltroBusq','cbFiltroOrigen'].forEach(function(id){
@@ -6679,7 +6716,7 @@
         totalEl.textContent='$'+Math.round(totalRet).toLocaleString('es-AR');
         netoEl.textContent='$'+Math.round(monto-totalRet).toLocaleString('es-AR');
     }
-    function guardarPagoFD() {
+    async function guardarPagoFD() {
         var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
         var mod=document.getElementById('pagoFDMod').value;
         var monto=parseFloat(document.getElementById('pagoFDMonto').value);
@@ -6704,6 +6741,9 @@
         if(mod==='A'&&cuentaId) entry.cuentaId=cuentaId;
         if(mod==='A'&&medio) entry.medioBancario=medio;
         if(mod==='A'&&nroCbteFD.trim()) entry.nroComprobante=nroCbteFD.trim();
+        // Numeración correlativa A/B por empresa+proyecto
+        entry.tipoAB = mod;
+        entry.nroCorrelativo = await obtenerProximoComprobante(mod);
         var itemImp=null;
         if(_pagoFDTab==='fact'){
             var idx=parseInt(val),f=facturas[idx]; if(!f) return;
@@ -7182,7 +7222,7 @@
         recalcularRetenciones();
     }
 
-    document.getElementById('formPagoReg').addEventListener('submit', function(e) {
+    document.getElementById('formPagoReg').addEventListener('submit', async function(e) {
         e.preventDefault();
         const i = parseInt(document.getElementById('pagoPresupuesto').value);
         const capital = parseFloat(document.getElementById('pagoCapital').value) || 0;
@@ -7233,8 +7273,8 @@
         });
 
         // Guardar cuenta bancaria y medio si es pago A
+        const lastPago = datos[i].pagosHistorial[datos[i].pagosHistorial.length - 1];
         if (modalidadPago === 'A') {
-            const lastPago = datos[i].pagosHistorial[datos[i].pagosHistorial.length - 1];
             const cuentaId = document.getElementById('pagoCuentaBancaria')?.value || '';
             const medioBancario = document.getElementById('pagoMedioBancario')?.value || '';
             const nroCbte = (document.getElementById('pagoNroComprobante')?.value || '').trim();
@@ -7242,6 +7282,11 @@
             if (medioBancario) lastPago.medioBancario = medioBancario;
             if (nroCbte)      lastPago.nroComprobante = nroCbte;
         }
+        // Numeración correlativa A/B por empresa+proyecto
+        const nroCorr = await obtenerProximoComprobante(modalidadPago);
+        lastPago.nroCorrelativo = nroCorr;
+        lastPago.tipoAB = modalidadPago;
+        datos[i].reciboCorrelativo = nroCorr;
         const datoPagado = datos[i];
         cerrarPago(); persistir();
         // Sincronizar pago en el Plan de Trabajo
@@ -7354,7 +7399,7 @@
         const fmt    = n => '$ ' + Number(n||0).toLocaleString('es-AR');
         const fmtUsd = n => 'USD ' + (Number(n||0)/exchangeRate).toLocaleString('es-AR',{maximumFractionDigits:2});
         const c      = calcPresupuesto(item);
-        const recibo = item.recibo || generarNumeroRecibo();
+        const recibo = item.reciboCorrelativo || item.recibo || generarNumeroRecibo();
         const emision= new Date().toLocaleDateString('es-AR');
         const hayPago= typeof montoPago === 'number' && montoPago > 0;
         const mod    = modalidadPago || item.modalidad || '';
@@ -10819,13 +10864,13 @@
             const emp = empresas.find(e => e.id === empresaActual.id);
             if (emp && emp.datos) {
                 const d = emp.datos;
-                ['Nombre','Cuit','TipoPersona','CondIva','IIBB','InicioAct','Direccion','Ciudad','Provincia','CP','Telefono','Email','Web','Responsable'].forEach(k => {
+                ['Nombre','Cuit','Codigo','TipoPersona','CondIva','IIBB','InicioAct','Direccion','Ciudad','Provincia','CP','Telefono','Email','Web','Responsable'].forEach(k => {
                     const el = document.getElementById('emp' + k);
                     if (el) el.value = d[k.toLowerCase()] || d[k] || '';
                 });
             }
         } else {
-            ['empNombre','empCuit','empIIBB','empInicioAct','empDireccion','empCiudad','empProvincia','empCP','empTelefono','empEmail','empWeb','empResponsable'].forEach(id => {
+            ['empNombre','empCuit','empCodigo','empIIBB','empInicioAct','empDireccion','empCiudad','empProvincia','empCP','empTelefono','empEmail','empWeb','empResponsable'].forEach(id => {
                 const el = document.getElementById(id); if (el) el.value = '';
             });
         }
@@ -10858,6 +10903,7 @@
         if (!nombre) { alert('Ingresá el nombre de la empresa.'); return; }
         const datos = {
             cuit:         document.getElementById('empCuit').value.trim(),
+            codigo:       (document.getElementById('empCodigo').value || '').trim().toUpperCase(),
             tipoPersona:  document.getElementById('empTipoPersona').value,
             condIva:      document.getElementById('empCondIva').value,
             iibb:         document.getElementById('empIIBB').value.trim(),
@@ -10918,14 +10964,14 @@
             if (proy && proy.datos) {
                 const d = proy.datos;
                 document.getElementById('proyNombre').value = proy.nombre || '';
-                ['Tipo','Estado','Responsable','FechaInicio','FechaFin','Direccion','Ciudad','Provincia','CP','Maps','Web','Descripcion','Superficie','PresupuestoEst','Cliente'].forEach(k => {
+                ['Codigo','Tipo','Estado','Responsable','FechaInicio','FechaFin','Direccion','Ciudad','Provincia','CP','Maps','Web','Descripcion','Superficie','PresupuestoEst','Cliente'].forEach(k => {
                     const el = document.getElementById('proy' + k);
                     if (el) el.value = d[k.toLowerCase()] || d[k] || '';
                 });
             }
         } else {
             document.getElementById('proyNombre').value = '';
-            ['proyTipo','proyEstado','proyResponsable','proyFechaInicio','proyFechaFin','proyDireccion','proyCiudad','proyProvincia','proyCP','proyMaps','proyWeb','proyDescripcion','proySuperficie','proyPresupuestoEst','proyCliente'].forEach(id => {
+            ['proyCodigo','proyTipo','proyEstado','proyResponsable','proyFechaInicio','proyFechaFin','proyDireccion','proyCiudad','proyProvincia','proyCP','proyMaps','proyWeb','proyDescripcion','proySuperficie','proyPresupuestoEst','proyCliente'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el && el.tagName !== 'SELECT') el.value = '';
             });
@@ -10956,6 +11002,7 @@
         if (!nombre) { alert('Ingresá el nombre del proyecto.'); return; }
         if (!empresaActual) { alert('Seleccioná una empresa primero.'); return; }
         const datos = {
+            codigo:        (document.getElementById('proyCodigo').value || '').trim().toUpperCase(),
             tipo:          document.getElementById('proyTipo').value,
             estado:        document.getElementById('proyEstado').value,
             responsable:   document.getElementById('proyResponsable').value.trim(),
@@ -12515,7 +12562,7 @@
 
     function cerrarModalCobroVenta() { document.getElementById('modalCobroVenta').classList.remove('active'); }
 
-    function guardarCobroVenta() {
+    async function guardarCobroVenta() {
         const idx   = parseInt(document.getElementById('cobroVentaIdx').value);
         const comp  = document.getElementById('cobroVentaComponente').value;
         const monto = parseFloat(document.getElementById('cobroVentaMonto').value) || 0;
@@ -12526,14 +12573,15 @@
         if (!fecha) { alert('Ingresá la fecha del cobro.'); return; }
         if (!ventas[idx]) return;
         if (!ventas[idx].cobrosHistorial) ventas[idx].cobrosHistorial = [];
-        const nroRecibo = generarNumeroRecibo();
+        const tipoAB = ((document.getElementById('cobroVentaModalidad')||{}).value) === 'A' ? 'A' : 'B';
+        const nroRecibo = await obtenerProximoComprobante(tipoAB);
         // Número de cuota seleccionada (solo para comp=cuota)
         var nroCuota = null;
         if (comp === 'cuota' || comp === 'cuota_ars_simple' || comp === 'cuota_usd_simple') {
             var selCuota = document.getElementById('cobroVentaNroCuota');
             if (selCuota && selCuota.value) nroCuota = parseInt(selCuota.value);
         }
-        var registro = { fecha: fecha, comp: comp, monto: monto, cac: cac, ref: ref, nroRecibo: nroRecibo };
+        var registro = { fecha: fecha, comp: comp, monto: monto, cac: cac, ref: ref, nroRecibo: nroRecibo, tipoAB: tipoAB };
         if (nroCuota) registro.nroCuota = nroCuota;
         ventas[idx].cobrosHistorial.push(registro);
         // Actualizar acumulados
@@ -12685,7 +12733,7 @@
 
     function cerrarModalCobroCochera() { document.getElementById('modalCobroCochera').classList.remove('active'); }
 
-    function guardarCobroCochera() {
+    async function guardarCobroCochera() {
         var idx   = parseInt(document.getElementById('cobroCocheraIdx').value);
         var v     = ventas[idx];
         if (!cocheraTieneValor(v)) return;
@@ -12703,8 +12751,9 @@
             nroCuota = parseInt(sel.value);
         }
         if (!v.cobrosHistorial) v.cobrosHistorial = [];
-        var nroRecibo = generarNumeroRecibo();
-        var registro = { fecha: fecha, comp: comp, monto: monto, cac: 0, ref: ref, nroRecibo: nroRecibo };
+        var tipoAB = ((document.getElementById('cobroCocheraModalidad')||{}).value) === 'A' ? 'A' : 'B';
+        var nroRecibo = await obtenerProximoComprobante(tipoAB);
+        var registro = { fecha: fecha, comp: comp, monto: monto, cac: 0, ref: ref, nroRecibo: nroRecibo, tipoAB: tipoAB };
         if (nroCuota) registro.nroCuota = nroCuota;
         v.cobrosHistorial.push(registro);
         v.cocheraCobrado = (v.cocheraCobrado || 0) + monto;
@@ -13322,7 +13371,7 @@
 
     function cerrarModalCobroAlquiler() { document.getElementById('modalCobroAlquiler').classList.remove('active'); }
 
-    function guardarCobroAlquiler() {
+    async function guardarCobroAlquiler() {
         var idx     = parseInt(document.getElementById('cobroAlqIdx').value);
         var montoC  = parseFloat(document.getElementById('cobroAlqMonto').value) || 0;
         var fechaC  = document.getElementById('cobroAlqFecha').value;
@@ -13333,11 +13382,13 @@
         if (!fechaC) { alert('Ingresá la fecha del cobro.'); return; }
         if (!alquileres[idx]) return;
         if (!alquileres[idx].cobrosHistorial) alquileres[idx].cobrosHistorial = [];
-        alquileres[idx].cobrosHistorial.push({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC });
+        var tipoAB = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
+        var nroReciboAlq = await obtenerProximoComprobante(tipoAB);
+        alquileres[idx].cobrosHistorial.push({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
         var alqSnap = alquileres[idx];
         cerrarModalCobroAlquiler();
         persistirAlquileres();
-        if (confirm('Cobro registrado. ¿Emitir comprobante?')) imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC);
+        if (confirm('Cobro registrado ('+nroReciboAlq+'). ¿Emitir comprobante?')) imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq);
     }
 
     function eliminarAlquiler(idx) {
@@ -13417,12 +13468,12 @@
         sEl('alqProxActualizacion', proxFecha ? proxFecha.toLocaleDateString('es-AR') : '—');
     }
 
-    function imprimirComprobanteAlquiler(a, monto, fecha, periodo, concepto, ref) {
+    function imprimirComprobanteAlquiler(a, monto, fecha, periodo, concepto, ref, nroRecibo) {
         var fmtN = function(n,mon){ return (mon==='USD'?'USD ':'$ ')+Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var cLabel = {alquiler:'Alquiler mensual',deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'}[concepto]||concepto;
-        var _rh = buildReciboHeader('Comprobante de Cobro', null, emision, {
+        var _rh = buildReciboHeader('Comprobante de Cobro', nroRecibo || null, emision, {
             nombre: a.inquilino||'Inquilino', detalle: (a.unidad||'') + (a.tipo?' — '+a.tipo:'') + (a.direccion?'<br>'+a.direccion:'')
         });
         var html = '<html><head><meta charset="UTF-8"><title>Comprobante Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
@@ -13721,10 +13772,12 @@
             document.getElementById('igMoneda').value      = ig.moneda || 'ARS';
             document.getElementById('igMonto').value       = ig.monto || '';
             document.getElementById('igObs').value         = ig.obs || '';
+            document.getElementById('igModalidad').value    = ig.tipoAB === 'A' ? 'A' : 'B';
         } else {
             document.getElementById('igFecha').valueAsDate = new Date();
             document.getElementById('igMoneda').value = 'ARS';
             document.getElementById('igTipoIngreso').value = 'aporte_socio';
+            document.getElementById('igModalidad').value = 'B';
         }
         document.getElementById('modalIngGeneral').classList.add('active');
     }
@@ -13743,6 +13796,7 @@
         document.getElementById('igMonto').value=ig.monto||'';
         document.getElementById('igMoneda').value=ig.moneda||'ARS';
         document.getElementById('igObs').value=ig.obs||'';
+        document.getElementById('igModalidad').value=ig.tipoAB==='A'?'A':'B';
         var t2=document.getElementById('modalIngGeneralTitle');
         if(t2) t2.textContent=esEgr?'💸 Editar Egreso':'💰 Editar Ingreso';
         var gb=document.getElementById('igGuardarBtn');
@@ -13758,11 +13812,12 @@
     }
 
 
-    function guardarIngGeneral() {
+    async function guardarIngGeneral() {
         var origen = document.getElementById('igOrigen').value.trim();
         var montoI = parseFloat(document.getElementById('igMonto').value) || 0;
         if (!origen) { alert('El origen/descripción es obligatorio.'); return; }
         if (!montoI || montoI <= 0) { alert('Ingresá un monto válido.'); return; }
+        var tipoAB = ((document.getElementById('igModalidad')||{}).value) === 'A' ? 'A' : 'B';
         var nuevo = {
             fecha:      document.getElementById('igFecha').value,
             tipo:       document.getElementById('igTipoIngreso').value,
@@ -13770,13 +13825,19 @@
             referencia: document.getElementById('igReferencia').value.trim(),
             moneda:     document.getElementById('igMoneda').value,
             monto:      montoI,
+            tipoAB:     tipoAB,
             obs:        document.getElementById('igObs').value.trim()
         };
         if(editandoIgIdx>=0){
             var orig=ingGeneral[editandoIgIdx]||{};
             if(orig.esEgreso!==undefined)nuevo.esEgreso=orig.esEgreso;
+            // Conservar el número correlativo ya emitido al editar
+            if(orig.nroCorrelativo){ nuevo.nroCorrelativo=orig.nroCorrelativo; if(orig.tipoAB) nuevo.tipoAB=orig.tipoAB; }
             ingGeneral[editandoIgIdx]=nuevo;
-        } else ingGeneral.push(nuevo);
+        } else {
+            nuevo.nroCorrelativo = await obtenerProximoComprobante(tipoAB);
+            ingGeneral.push(nuevo);
+        }
         var igSnap = JSON.parse(JSON.stringify(nuevo));
         cerrarModalIngGeneral();
         persistirIngGeneral();
@@ -14281,7 +14342,7 @@
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var tLab = {aporte_socio:'Aporte de socio',prestamo_empresa:'Préstamo empresa',prestamo_bancario:'Préstamo bancario',subsidio:'Subsidio/Fondos externos',devolucion:'Devolución/Reintegro',otro:'Otro'};
-        var _rh = buildReciboHeader('Comprobante de Ingreso', null, emision, {
+        var _rh = buildReciboHeader('Comprobante de Ingreso', ig.nroCorrelativo || null, emision, {
             nombre: ig.origen||'—', detalle: ''
         });
         var html = '<html><head><meta charset="UTF-8"><title>Comprobante Ingreso</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
@@ -18219,6 +18280,10 @@
                         <input type="text" id="empCuit" placeholder="XX-XXXXXXXX-X">
                     </div>
                     <div class="form-group">
+                        <label>Código corto <span style="color:var(--text-3);font-weight:400;">(para numeración de comprobantes)</span></label>
+                        <input type="text" id="empCodigo" maxlength="6" placeholder="Ej: RK" style="text-transform:uppercase;">
+                    </div>
+                    <div class="form-group">
                         <label>Tipo de Persona</label>
                         <select id="empTipoPersona">
                             <option value="juridica">Persona Jurídica</option>
@@ -18306,6 +18371,10 @@
                     <div class="form-group">
                         <label>Nombre del Proyecto *</label>
                         <input type="text" id="proyNombre" placeholder="Ej: Torre Palermo — Unidad 3A">
+                    </div>
+                    <div class="form-group">
+                        <label>Código corto <span style="color:var(--text-3);font-weight:400;">(para numeración de comprobantes)</span></label>
+                        <input type="text" id="proyCodigo" maxlength="6" placeholder="Ej: P1" style="text-transform:uppercase;">
                     </div>
                     <div class="form-group">
                         <label>Tipo de Proyecto</label>
@@ -18859,9 +18928,18 @@
             💡 Si el cobro es <strong>parcial</strong>, ingresá el monto que realmente pagaron. La cuota quedará marcada como pagada igual.
           </div>
 
-          <div class="form-group">
-            <label>Referencia / Comprobante</label>
-            <input type="text" id="cobroVentaRef" placeholder="Nº transferencia, cheque, etc.">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label>Comprobante *</label>
+              <select id="cobroVentaModalidad">
+                <option value="B">B — Efectivo</option>
+                <option value="A">A — Banco</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Referencia / Comprobante</label>
+              <input type="text" id="cobroVentaRef" placeholder="Nº transferencia, cheque, etc.">
+            </div>
           </div>
 
           <div class="modal-footer">
@@ -18899,9 +18977,18 @@
             <input type="date" id="cobroCocheraFecha" required>
           </div>
         </div>
-        <div class="form-group">
-          <label>Referencia / Comprobante</label>
-          <input type="text" id="cobroCocheraRef" placeholder="Nº transferencia, cheque, etc.">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group">
+            <label>Comprobante *</label>
+            <select id="cobroCocheraModalidad">
+              <option value="B">B — Efectivo</option>
+              <option value="A">A — Banco</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Referencia / Comprobante</label>
+            <input type="text" id="cobroCocheraRef" placeholder="Nº transferencia, cheque, etc.">
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline" onclick="cerrarModalCobroCochera()">Cancelar</button>
@@ -19400,14 +19487,23 @@
         <div class="form-group"><label>Monto cobrado</label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0"></div>
         <div class="form-group"><label>Referencia / Recibo</label><input type="text" id="cobroAlqRef" placeholder="Opcional"></div>
       </div>
-      <div class="form-group">
-        <label>Concepto</label>
-        <select id="cobroAlqConcepto">
-          <option value="alquiler">Alquiler mensual</option>
-          <option value="deposito">Depósito de garantía</option>
-          <option value="expensas">Expensas</option>
-          <option value="otro">Otro</option>
-        </select>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group">
+          <label>Concepto</label>
+          <select id="cobroAlqConcepto">
+            <option value="alquiler">Alquiler mensual</option>
+            <option value="deposito">Depósito de garantía</option>
+            <option value="expensas">Expensas</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comprobante *</label>
+          <select id="cobroAlqModalidad">
+            <option value="B">B — Efectivo</option>
+            <option value="A">A — Banco</option>
+          </select>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalCobroAlquiler()">Cancelar</button>
@@ -19582,9 +19678,19 @@
           <input type="number" id="igMonto" step="0.01" min="0" placeholder="0">
         </div>
       </div>
-      <div class="form-group">
-        <label>Observaciones</label>
-        <input type="text" id="igObs" placeholder="Opcional">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group">
+          <label>Comprobante *</label>
+          <select id="igModalidad">
+            <option value="B">B — Efectivo</option>
+            <option value="A">A — Banco</option>
+          </select>
+          <div class="form-hint" style="color:var(--text-3);">Define la serie de numeración (A banco / B efectivo).</div>
+        </div>
+        <div class="form-group">
+          <label>Observaciones</label>
+          <input type="text" id="igObs" placeholder="Opcional">
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalIngGeneral()">Cancelar</button>
