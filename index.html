@@ -8167,7 +8167,10 @@
         }
     }
 
-    function cerrarProveedor() { document.getElementById('modalProv').classList.remove('active'); }
+    function cerrarProveedor() {
+        document.getElementById('modalProv').classList.remove('active');
+        document.getElementById('modalProv').style.zIndex = '';
+    }
 
     document.getElementById('formProv').addEventListener('submit', function(e) {
         e.preventDefault();
@@ -8192,6 +8195,10 @@
         if (editandoProvIndex >= 0) { nuevo.id = proveedores[editandoProvIndex].id || ('P-' + Date.now()); proveedores[editandoProvIndex] = nuevo; }
         else { nuevo.id = 'P-' + Date.now(); proveedores.push(nuevo); }
         cerrarProveedor(); persistirProveedores();
+        // Hook genérico: si el alta se disparó desde otro flujo (ej. emitir comprobante), avisarle
+        if (typeof window._provAltaCallback === 'function') {
+            var _cb = window._provAltaCallback; window._provAltaCallback = null; _cb(nuevo);
+        }
     });
 
     function textoBuscador() { const b = document.getElementById('buscadorProv'); return b ? b.value.trim().toLowerCase() : ''; }
@@ -11143,6 +11150,103 @@
         emitActualizarTotal();
     }
 
+    // ── Asignación a proveedor + movimiento de caja/banco ──
+    function emitPoblarProveedores() {
+        var sel = document.getElementById('emitProveedorSel');
+        if (!sel) return;
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">— Seleccionar proveedor —</option>';
+        proveedores.slice().sort(function(a,b){ return (a.razonSocial||'').localeCompare(b.razonSocial||''); }).forEach(function(p){
+            var o = document.createElement('option'); o.value = p.id; o.textContent = p.razonSocial; sel.appendChild(o);
+        });
+        var oNuevo = document.createElement('option'); oNuevo.value = '__nuevo__'; oNuevo.textContent = '＋ Nuevo proveedor…'; sel.appendChild(oNuevo);
+        if (cur && cur !== '__nuevo__') sel.value = cur;
+    }
+
+    function emitPoblarCuentas() {
+        var sel = document.getElementById('emitCuentaBancaria');
+        if (!sel) return;
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">— Seleccionar cuenta —</option>';
+        (cuentasBancarias||[]).forEach(function(cu){
+            var o = document.createElement('option'); o.value = cu.id||cu.banco; o.textContent = cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o);
+        });
+        if (cur) sel.value = cur;
+    }
+
+    function emitToggleCuentaWrap() {
+        var asignado = document.getElementById('emitAsignarProv').checked;
+        var esA = document.getElementById('emitModalidad').value === 'A';
+        var wrap = document.getElementById('emitCuentaWrap');
+        if (wrap) wrap.style.display = (asignado && esA) ? '' : 'none';
+        if (asignado && esA) emitPoblarCuentas();
+    }
+
+    function emitToggleProveedor() {
+        var chk  = document.getElementById('emitAsignarProv');
+        var wrap = document.getElementById('emitProveedorWrap');
+        if (wrap) wrap.style.display = chk.checked ? '' : 'none';
+        var clienteInp = document.getElementById('emitCliente');
+        if (chk.checked) {
+            emitPoblarProveedores();
+            emitToggleCuentaWrap();
+        } else {
+            document.getElementById('emitProveedorSel').value = '';
+            if (clienteInp) { clienteInp.readOnly = false; clienteInp.style.background = ''; }
+            emitToggleCuentaWrap();
+        }
+    }
+
+    function emitOnProveedorChange() {
+        var sel = document.getElementById('emitProveedorSel');
+        if (sel.value === '__nuevo__') { sel.value = ''; emitAltaProveedorRapida(); return; }
+        var p = proveedores.find(function(x){ return x.id === sel.value; });
+        var clienteInp = document.getElementById('emitCliente');
+        if (p) { clienteInp.value = p.razonSocial || ''; clienteInp.readOnly = true; clienteInp.style.background = 'var(--surface-2)'; }
+        else   { clienteInp.readOnly = false; clienteInp.style.background = ''; }
+    }
+
+    // Alta rápida de proveedor sin perder el comprobante que se está armando
+    function emitAltaProveedorRapida() {
+        agregarProveedor();
+        var mp = document.getElementById('modalProv');
+        if (mp) mp.style.zIndex = 600; // por encima de modalEmitir
+        window._provAltaCallback = function(nuevoProv) {
+            emitPoblarProveedores();
+            document.getElementById('emitProveedorSel').value = nuevoProv.id;
+            emitOnProveedorChange();
+        };
+    }
+
+    // Crea/actualiza/elimina el movimiento de caja o banco asociado a un comprobante emitido
+    function _emitSincronizarMovCaja(reg) {
+        for (var i = ingGeneral.length - 1; i >= 0; i--) {
+            if (ingGeneral[i] && ingGeneral[i].origenEmitidoId === reg.id) ingGeneral.splice(i, 1);
+        }
+        if (!reg.proveedorId) return;
+        var esEgreso = reg.movTipo !== 'ingreso';
+        var origenTxt = (reg.tipoDoc === 'factura' ? 'Doc. factura' : 'Recibo') + ' ' + reg.nro + ' — ' + (reg.proveedorNombre || reg.cliente);
+        var mov;
+        if (reg.tipoAB === 'A') {
+            var cb = (cuentasBancarias||[]).find(function(cu){ return (cu.id||cu.banco) === reg.cuentaId; }) || {};
+            mov = {
+                tipo: esEgreso ? 'mov_banco_salida' : 'mov_banco_entrada',
+                fecha: reg.fecha, cuentaId: reg.cuentaId, origen: origenTxt,
+                referencia: reg.nro, moneda: cb.moneda || reg.moneda || 'ARS', monto: reg.total,
+                medio: 'Transferencia', origenDest: reg.proveedorNombre || reg.cliente,
+                esEgreso: esEgreso, esBancario: true, tipoAB: 'A', origenEmitidoId: reg.id
+            };
+        } else {
+            mov = {
+                fecha: reg.fecha, tipo: esEgreso ? 'mov_egreso_caja' : 'mov_ingreso_caja',
+                origen: origenTxt, referencia: reg.nro, moneda: reg.moneda || 'ARS', monto: reg.total,
+                tipoAB: 'B', esEgreso: esEgreso, origenEmitidoId: reg.id
+            };
+        }
+        ingGeneral.push(mov);
+        persistirIngGeneral();
+    }
+
     function abrirModalEmitir(id) {
         editandoEmitidoId = id || null;
         var e = id ? comprobantesEmitidos.find(function(x){ return x.id === id; }) : null;
@@ -11160,12 +11264,22 @@
             document.getElementById('emitObs').value       = e.obs || '';
             _emitItems = (e.items || []).map(function(it){ return { desc:it.desc, cant:it.cant, precio:it.precio }; });
             document.getElementById('emitNroActual').textContent = e.nro ? ('N° ' + e.nro) : '(se asigna al guardar)';
+            document.getElementById('emitAsignarProv').checked = !!e.proveedorId;
+            emitToggleProveedor();
+            if (e.proveedorId) {
+                document.getElementById('emitProveedorSel').value = e.proveedorId;
+                emitOnProveedorChange();
+                document.getElementById('emitMovTipo').value = e.movTipo || 'egreso';
+                if (e.cuentaId) { emitToggleCuentaWrap(); document.getElementById('emitCuentaBancaria').value = e.cuentaId; }
+            }
         } else {
             document.getElementById('emitTipo').value      = 'recibo';
             document.getElementById('emitFecha').valueAsDate = new Date();
             document.getElementById('emitMoneda').value    = 'ARS';
             document.getElementById('emitModalidad').value = 'B';
             document.getElementById('emitNroActual').textContent = '(se asigna al guardar)';
+            document.getElementById('emitAsignarProv').checked = false;
+            emitToggleProveedor();
         }
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
@@ -11184,6 +11298,15 @@
         var tipoAB = document.getElementById('emitModalidad').value === 'A' ? 'A' : 'B';
         var total  = emitTotal();
         if (total <= 0) { alert('El total debe ser mayor a cero.'); return; }
+        var asignaProv = document.getElementById('emitAsignarProv').checked;
+        var provId = asignaProv ? (document.getElementById('emitProveedorSel').value || '') : '';
+        if (asignaProv && (!provId || provId === '__nuevo__')) { alert('Seleccioná un proveedor, o desmarcá "Asignar a un proveedor".'); return; }
+        var cuentaId = '';
+        if (asignaProv && tipoAB === 'A') {
+            cuentaId = document.getElementById('emitCuentaBancaria').value;
+            if (!cuentaId) { alert('Seleccioná la cuenta bancaria del movimiento.'); return; }
+        }
+        var provObj = provId ? proveedores.find(function(p){ return p.id === provId; }) : null;
         var prev = editandoEmitidoId ? comprobantesEmitidos.find(function(x){ return x.id === editandoEmitidoId; }) : null;
         var reg = {
             id:            editandoEmitidoId || ('emit_' + Date.now()),
@@ -11198,22 +11321,38 @@
             items:         _emitItems.filter(function(it){ return String(it.desc||'').trim() || it.precio; }).map(function(it){ return { desc:it.desc||'', cant:it.cant||0, precio:it.precio||0 }; }),
             obs:           document.getElementById('emitObs').value.trim(),
             total:         total,
-            nro:           (prev && prev.nro) ? prev.nro : null
+            nro:           (prev && prev.nro) ? prev.nro : null,
+            proveedorId:   provId || '',
+            proveedorNombre: provObj ? provObj.razonSocial : '',
+            movTipo:       asignaProv ? (document.getElementById('emitMovTipo').value || 'egreso') : '',
+            cuentaId:      cuentaId
         };
         // Asignar número correlativo solo si es nuevo (al editar se conserva el existente)
         if (!reg.nro) { reg.nro = await obtenerProximoComprobante(tipoAB); }
         var idx = comprobantesEmitidos.findIndex(function(x){ return x.id === reg.id; });
         if (idx >= 0) comprobantesEmitidos[idx] = reg; else comprobantesEmitidos.push(reg);
+        _emitSincronizarMovCaja(reg);
         cerrarModalEmitir();
         persistirEmitidos();
         renderEmitidos();
-        if (confirm('Comprobante ' + reg.nro + ' guardado. ¿Imprimir?')) imprimirComprobanteEmitido(reg.id);
+        if (confirm('Comprobante ' + reg.nro + ' guardado' + (reg.proveedorId ? ' — se registró el movimiento de caja/banco' : '') + '. ¿Imprimir?')) imprimirComprobanteEmitido(reg.id);
     }
 
     function eliminarEmitido(id) {
-        if (!confirm('¿Eliminar este comprobante emitido?')) return;
+        var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
+        var tieneMov = e && e.proveedorId;
+        if (!confirm('¿Eliminar este comprobante emitido?' + (tieneMov ? ' También se eliminará el movimiento de caja/banco asociado.' : ''))) return;
         var i = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
-        if (i >= 0) { comprobantesEmitidos.splice(i, 1); persistirEmitidos(); renderEmitidos(); }
+        if (i >= 0) {
+            comprobantesEmitidos.splice(i, 1);
+            persistirEmitidos();
+            var cambio = false;
+            for (var k = ingGeneral.length - 1; k >= 0; k--) {
+                if (ingGeneral[k] && ingGeneral[k].origenEmitidoId === id) { ingGeneral.splice(k, 1); cambio = true; }
+            }
+            if (cambio) persistirIngGeneral();
+            renderEmitidos();
+        }
     }
 
     function renderEmitidos() {
@@ -11243,7 +11382,7 @@
                 '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
                 '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span></td>' +
                 '<td>' + tipoLbl + '</td>' +
-                '<td>' + escHtml(e.cliente||'—') + '</td>' +
+                '<td>' + escHtml(e.cliente||'—') + (e.proveedorId ? '<br><small style="color:var(--text-3);font-size:10px;">🏢 Proveedor · ' + (e.movTipo==='ingreso'?'Ingreso':'Egreso') + '</small>' : '') + '</td>' +
                 '<td>' + escHtml(concepto||'—') + '</td>' +
                 '<td style="text-align:right;">' + mon + Math.round(e.total||0).toLocaleString('es-AR') + '</td>' +
                 '<td><div class="action-btns">' +
@@ -18478,10 +18617,38 @@
                     </div>
                     <div class="form-group">
                         <label>Comprobante</label>
-                        <select id="emitModalidad" style="width:100%;">
+                        <select id="emitModalidad" onchange="emitToggleCuentaWrap()" style="width:100%;">
                             <option value="B">B — Efectivo</option>
                             <option value="A">A — Banco</option>
                         </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="emitAsignarProv" onchange="emitToggleProveedor()" style="width:auto;margin-right:6px;vertical-align:middle;">
+                        Asignar a un proveedor
+                    </label>
+                    <div class="form-hint" style="color:var(--text-3);">Si lo asignás, se genera automáticamente el movimiento de caja/banco correspondiente.</div>
+                </div>
+                <div id="emitProveedorWrap" style="display:none;">
+                    <div class="cac-desglose" style="margin-bottom:12px;">
+                        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Proveedor</label>
+                                <select id="emitProveedorSel" onchange="emitOnProveedorChange()" style="width:100%;"></select>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Movimiento</label>
+                                <select id="emitMovTipo" style="width:100%;">
+                                    <option value="egreso">Egreso (pago al proveedor)</option>
+                                    <option value="ingreso">Ingreso</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group" id="emitCuentaWrap" style="display:none;margin-top:10px;">
+                            <label>Cuenta bancaria</label>
+                            <select id="emitCuentaBancaria" style="width:100%;"></select>
+                        </div>
                     </div>
                 </div>
                 <!-- Recibo: concepto + monto -->
