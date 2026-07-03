@@ -1,6 +1,6 @@
 # Pendientes
 
-> Última actualización: 2026-07-02. Todo el código está mergeado en `main` y
+> Última actualización: 2026-07-03. Todo el código está mergeado en `main` y
 > desplegado (frontend en GitHub Pages, backend en Railway). Lo que queda en su
 > mayoría son **pasos de configuración** (cargar credenciales), no código.
 
@@ -136,6 +136,56 @@ Después de eso, el link del PDF en el mail funciona y queda todo terminado.
 ---
 
 # ✅ Hecho
+
+## ✅ Sesión 2026-07-03: Pizarrón de Tareas por proyecto + Asistente RK más completo
+
+- **Pizarrón de Tareas ya no se comparte:** antes vivía en `global/tareas`
+  (compartido por TODOS). Pasó primero a ser por empresa
+  (`empresas/<id>/tareas`) y en la misma sesión se ajustó a **por proyecto**
+  (`empresas/<id>/proyectos/<id>/tareas`, mismo `getBasePath()` que el resto
+  de los datos), a pedido del usuario. Migración automática en cascada
+  (global → empresa → proyecto activo) la primera vez que carga cada
+  proyecto, sin perder tareas viejas.
+- **Pizarrón — editar tarea:** el widget solo dejaba crear/completar/eliminar/
+  mandar recordatorio; faltaba poder editar una tarea ya cargada. Se agregó
+  botón ✏️ que reabre el modal "Nueva Tarea" en modo edición (reutiliza
+  `abrirModalTarea`/`guardarTarea` con `editandoTareaIndex`).
+- **Asistente RK — deja de ser solo "de la app":** el system prompt ahora lo
+  habilita a responder cualquier pregunta (conocimiento general, cálculos,
+  consejos, etc.), no solo temas del sistema.
+- **Asistente RK — más inteligente:** `gemini-2.5-pro` como modelo primario
+  del chat, con fallback automático a los `flash` si falla por cuota/
+  saturación. Detecta específicamente el error de API key inválida/revocada
+  y corta el reintento en vano, mostrando el link para generar una key
+  nueva.
+- **Asistente RK — búsqueda en Google (grounding):** tool `google_search`
+  habilitado en el chat para responder preguntas de info actual (resultados
+  deportivos, cotizaciones, noticias, clima, etc.) en vez de decir que no
+  tiene acceso a internet.
+- **Asistente RK — reconoce las empresas del sistema:** el system prompt
+  incluye ahora la lista completa de empresas y proyectos dados de alta (no
+  solo los datos del proyecto activo).
+- **Asistente RK — audio a tareas:** nuevo botón 🎤 en el chat para adjuntar
+  un audio (ej. nota de voz de WhatsApp exportada como archivo). Gemini lo
+  transcribe y extrae las tareas/pendientes mencionados; se abre un modal de
+  revisión donde cada tarea es editable (título, responsable, fecha), se
+  pueden quitar o agregar filas a mano, y hay selector de empresa **y**
+  proyecto destino antes de cargarlas — nunca se cargan directo sin revisar.
+- **Asistente RK — dar de alta un proveedor:** dos caminos, los dos abren el
+  formulario real de Proveedores precargado (nunca guarda solo):
+  1. Charlando: si el usuario pide cargar un proveedor, el asistente
+     pregunta los datos de a uno (razón social, CUIT, condición de IVA,
+     rubro, teléfono, dirección, email) usando un marcador interno
+     (`###PROVEEDOR_LISTO:{...}###`) que no se le muestra al usuario.
+  2. Con PDF: la extracción que ya existía para facturas (adjuntar PDF en el
+     chat) ahora también reconoce constancias de inscripción/CUIT de AFIP y
+     ofrece "Cargar como proveedor".
+- **Pendiente de confirmar con el usuario:** reportó que el botón ✏️ de
+  editar tarea "no aparece" después de mergeado — el código está verificado
+  en `main` (mismo guard `puedeEditar` que el botón 🗑, que sí le
+  funcionaba), así que probablemente sea caché del navegador/PWA. Se le
+  pidió hacer hard refresh / cerrar y reabrir la app. **Falta confirmar que
+  lo solucionó.**
 
 ## ✅ Sesión 2026-07-02: Ventas → Desarrollos + m² + costo de construcción
 
