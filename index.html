@@ -6795,8 +6795,9 @@
             itemImp={tipo:'doc',item:d};
         }
         cerrarPagoFD(); renderFacturas(); renderDocumentos();
-        if(confirm('Pago registrado. ¿Imprimir comprobante?')){
-            if(itemImp.tipo==='fact') imprimirReciboFactura(itemImp.item,monto,fecha,mod,rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet);
+        if(confirm('Pago registrado ('+(entry.nroCorrelativo||'')+'). ¿Imprimir comprobante de pago?')){
+            // Tanto facturas como documentos-proveedor emiten Comprobante de Pago con el número A/B
+            imprimirReciboFactura(itemImp.item,monto,fecha,mod,rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet,entry.nroCorrelativo);
         }
     }
     function abrirHistorialPagosDoc(docId) {
@@ -9872,12 +9873,12 @@
         }
     });
 
-    function imprimirReciboFactura(f, monto, fecha, mod, rets, totalRet) {
+    function imprimirReciboFactura(f, monto, fecha, mod, rets, totalRet, nroComprobante) {
         var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR'); };
         var modLabel = mod==='A' ? 'Bancarizado — Modalidad A' : 'Efectivo — Modalidad B';
         var neto  = monto - (totalRet||0);
         var emision = new Date().toLocaleDateString('es-AR');
-        var nroDoc  = f.numero || f.id || generarNumeroRecibo();
+        var nroDoc  = nroComprobante || f.numero || f.id || generarNumeroRecibo();
         var emp = getEmpresaParaRecibo();
         var retsBlock = '';
         if (totalRet > 0) {
@@ -13856,12 +13857,13 @@
         document.getElementById('cobroSrvMonto').value = Math.round(pend) || '';
         document.getElementById('cobroSrvRef').value   = '';
         document.getElementById('cobroSrvConcepto').value = 'honorarios';
+        var srvMod = document.getElementById('cobroSrvModalidad'); if (srvMod) srvMod.value = 'B';
         document.getElementById('modalCobroServicio').classList.add('active');
     }
 
     function cerrarModalCobroServicio() { document.getElementById('modalCobroServicio').classList.remove('active'); }
 
-    function guardarCobroServicio() {
+    async function guardarCobroServicio() {
         var idx    = parseInt(document.getElementById('cobroSrvIdx').value);
         var montoS = parseFloat(document.getElementById('cobroSrvMonto').value) || 0;
         var fechaS = document.getElementById('cobroSrvFecha').value;
@@ -13870,13 +13872,15 @@
         if (!montoS || montoS <= 0) { alert('Ingresá un monto válido.'); return; }
         if (!fechaS) { alert('Ingresá la fecha del cobro.'); return; }
         if (!servicios[idx]) return;
+        var tipoAB = ((document.getElementById('cobroSrvModalidad')||{}).value) === 'A' ? 'A' : 'B';
+        var nroReciboSrv = await obtenerProximoComprobante(tipoAB);
         servicios[idx].cobrado = (servicios[idx].cobrado || 0) + montoS;
         if (!servicios[idx].cobrosHistorial) servicios[idx].cobrosHistorial = [];
-        servicios[idx].cobrosHistorial.push({ fecha: fechaS, monto: montoS, concepto: concS, ref: refS });
+        servicios[idx].cobrosHistorial.push({ fecha: fechaS, monto: montoS, concepto: concS, ref: refS, nroRecibo: nroReciboSrv, tipoAB: tipoAB });
         var srvSnap = JSON.parse(JSON.stringify(servicios[idx]));
         cerrarModalCobroServicio();
         persistirServicios();
-        if (confirm('Cobro registrado. ¿Emitir comprobante?')) imprimirComprobanteServicio(srvSnap, montoS, fechaS, concS, refS);
+        if (confirm('Cobro registrado ('+nroReciboSrv+'). ¿Emitir comprobante?')) imprimirComprobanteServicio(srvSnap, montoS, fechaS, concS, refS, nroReciboSrv);
     }
 
     function eliminarServicio(idx) {
@@ -13981,12 +13985,12 @@
         w.document.write(html); w.document.close();
     }
 
-    function imprimirComprobanteServicio(s, monto, fecha, concepto, ref) {
+    function imprimirComprobanteServicio(s, monto, fecha, concepto, ref, nroRecibo) {
         var fmt4 = function(n){ return '$ '+Math.round(n||0).toLocaleString('es-AR'); };
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var cLab = {honorarios:'Honorarios profesionales',adicional:'Adicional',anticipo:'Anticipo',otro:'Otro'}[concepto]||concepto;
-        var _rh = buildReciboHeader('Comprobante de Cobro', null, emision, {
+        var _rh = buildReciboHeader('Comprobante de Cobro', nroRecibo || null, emision, {
             nombre: s.cliente||'Cliente', detalle: s.descripcion||''
         });
         var html = '<html><head><meta charset="UTF-8"><title>Comprobante Honorarios</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
@@ -19963,6 +19967,13 @@
           </select>
         </div>
         <div class="form-group"><label>Referencia / Nº recibo</label><input type="text" id="cobroSrvRef" placeholder="Opcional"></div>
+      </div>
+      <div class="form-group">
+        <label>Comprobante *</label>
+        <select id="cobroSrvModalidad" style="width:100%;">
+          <option value="B">B — Efectivo</option>
+          <option value="A">A — Banco</option>
+        </select>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalCobroServicio()">Cancelar</button>
