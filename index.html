@@ -6801,7 +6801,7 @@
         add('Facturas',(snap.facturas||[]).map(function(f){return{Proveedor:f.proveedor,Numero:f.numero,Fecha:f.fecha,Descripcion:f.descripcion,Importe:f.importe,Pagado:f.pagado,Estado:f.estado};}));
         add('Proveedores',(snap.proveedores||[]).map(function(p){return{Grupo:p.grupo,RazonSocial:p.razonSocial,CUIT:p.cuit,CondIVA:p.condicionIVA,Rubro:p.rubro,Tel:p.telefono,Dir:p.direccion};}));
         add('Ingresos Generales',(snap.ingresosGenerales||[]).map(function(i){return{Fecha:i.fecha,Tipo:i.tipo,Origen:i.origen,Ref:i.referencia,Moneda:i.moneda,Monto:i.monto};}));
-        add('Ventas UF',(snap.ventas||[]).map(function(v){var r=resumenVenta(v);return{UF:v.uf,Tipo:v.tipo,Comprador:v.comprador,Modalidad:v.modalidad,Fecha:v.fecha,PrecioUSD:r.precioUSD,CobUSD:r.cobradoUSD,PrecioARS:r.precioARS,CobARS:r.cobradoARS,Cochera:v.incluyeCochera?(v.cocheraNro||'Sí'):'',Cuotas:(v.cuotasSimple&&v.cuotasSimple.activo)?v.cuotasSimple.nro+' ('+v.cuotasSimple.moneda.toUpperCase()+')':(v.modalidad==='cuotas_cac'?(v.nroCuotas||''):'')};}));
+        add('Ventas UF',(snap.ventas||[]).map(function(v){var r=resumenVenta(v);return{UF:v.uf,Tipo:v.tipo,Comprador:v.comprador,Modalidad:v.modalidad,Fecha:v.fecha,PrecioUSD:r.precioUSD,CobUSD:r.cobradoUSD,PrecioARS:r.precioARS,CobARS:r.cobradoARS,Cochera:v.incluyeCochera?((v.cocheraNro||'Sí')+((v.cocheraValorTipo==='aparte'&&(v.cocheraValor||0)>0)?(' - '+(v.cocheraMoneda==='usd'?'USD ':'$')+v.cocheraValor+(v.cocheraFormaPago==='cuotas'?(' en '+(v.cocheraNroCuotas||0)+' cuotas'):' pago único')):' (incluida)')):'',Cuotas:(v.cuotasSimple&&v.cuotasSimple.activo)?v.cuotasSimple.nro+' ('+v.cuotasSimple.moneda.toUpperCase()+')':(v.modalidad==='cuotas_cac'?(v.nroCuotas||''):'')};}));
         add('Alquileres',(snap.alquileres||[]).map(function(a){var cob=(a.cobrosHistorial||[]).reduce(function(s,x){return s+(x.monto||0);},0);return{Unidad:a.unidad,Inquilino:a.inquilino,Inicio:a.inicio,Fin:a.fin,Canon:a.canonActual||a.canon,Moneda:a.moneda,TotalCobrado:cob};}));
         add('Servicios',(snap.servicios||[]).map(function(s){return{Fecha:s.fecha,Cliente:s.cliente,Descripcion:s.descripcion,Base:s.base,Avance:s.avance,Cobrado:s.cobrado};}));
         add('Cuentas Bancarias',(snap.cuentasBancarias||[]).map(function(cb){return{Banco:cb.banco,Tipo:cb.tipo,Alias:cb.alias,CBU:cb.cbu,Moneda:cb.moneda,Saldo:cb.saldo};}));
@@ -11638,8 +11638,96 @@
 
     function ventaToggleCochera() {
         var chk  = document.getElementById('ventaIncluyeCochera');
-        var wrap = document.getElementById('ventaCocheraNroWrap');
+        var wrap = document.getElementById('ventaCocheraBloque');
         if (wrap) wrap.style.display = (chk && chk.checked) ? '' : 'none';
+        ventaToggleCocheraValor();
+    }
+
+    function ventaToggleCocheraValor() {
+        var tipo   = (document.getElementById('ventaCocheraValorTipo')||{}).value || 'incluida';
+        var campos = document.getElementById('ventaCocheraValorCampos');
+        if (campos) campos.style.display = (tipo === 'aparte') ? '' : 'none';
+        ventaToggleCocheraFormaPago();
+    }
+
+    function ventaToggleCocheraFormaPago() {
+        var forma  = (document.getElementById('ventaCocheraFormaPago')||{}).value || 'unico';
+        var campos = document.getElementById('ventaCocheraCuotasCampos');
+        if (campos) campos.style.display = (forma === 'cuotas') ? '' : 'none';
+        ventaGenerarPlanCochera();
+    }
+
+    // Leer fechas personalizadas del plan de cuotas de la cochera
+    function ventaLeerFechasPlanCochera() {
+        var fechas = [];
+        var tbody = document.getElementById('ventaCocheraPlanBody');
+        if (!tbody) return fechas;
+        tbody.querySelectorAll('.vpc-fecha-input').forEach(function(inp){ fechas.push(inp.value||''); });
+        return fechas;
+    }
+
+    // Genera el plan de cuotas de la cochera (monto = valor / N, sin ajuste)
+    function ventaGenerarPlanCochera() {
+        var wrap  = document.getElementById('ventaCocheraPlanWrap');
+        var tbody = document.getElementById('ventaCocheraPlanBody');
+        var forma = (document.getElementById('ventaCocheraFormaPago')||{}).value || 'unico';
+        if (!wrap || !tbody) return;
+        if (forma !== 'cuotas') { wrap.style.display = 'none'; return; }
+        var nc    = parseInt(document.getElementById('ventaCocheraNroCuotas').value) || 0;
+        var venc1 = document.getElementById('ventaCocheraFecha1').value || '';
+        var total = parseFloat(document.getElementById('ventaCocheraValor').value) || 0;
+        var esUSD = (document.getElementById('ventaCocheraMoneda').value === 'usd');
+        if (!nc || !venc1 || !total) { wrap.style.display = 'none'; return; }
+        wrap.style.display = '';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtNum = function(n) { return prefix + Math.round(n).toLocaleString('es-AR'); };
+        // Fechas guardadas y cobros ya registrados (si estamos editando)
+        var fechasGuardadas = [];
+        var cobros = [];
+        if (typeof editandoVentaIdx !== 'undefined' && editandoVentaIdx >= 0 && ventas && ventas[editandoVentaIdx]) {
+            var vEdit = ventas[editandoVentaIdx];
+            fechasGuardadas = vEdit.cocheraFechas || [];
+            cobros = (vEdit.cobrosHistorial || []).filter(function(c){ return c.comp === 'cochera_ars' || c.comp === 'cochera_usd'; });
+        }
+        var fechasDOM = [];
+        tbody.querySelectorAll('.vpc-fecha-input').forEach(function(inp){ fechasDOM.push(inp.value||''); });
+
+        tbody.innerHTML = '';
+        var d0 = new Date(venc1 + 'T00:00:00');
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var montoBase = Math.floor((total / nc) * 100) / 100;
+        var acumulado = 0;
+        for (var i = 0; i < nc; i++) {
+            var dDefault = new Date(d0);
+            dDefault.setMonth(dDefault.getMonth() + i);
+            var defaultISO = dDefault.toISOString().slice(0,10);
+            var fechaVal = (fechasDOM[i] && fechasDOM[i] !== '') ? fechasDOM[i]
+                         : (fechasGuardadas[i] && fechasGuardadas[i] !== '') ? fechasGuardadas[i]
+                         : defaultISO;
+            var nroCuota = i + 1;
+            var monto = (i === nc - 1) ? (total - acumulado) : montoBase;
+            acumulado += monto;
+            var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
+            var dV = new Date(fechaVal + 'T00:00:00');
+            var vencida = !pagada && dV < hoy;
+            var estado = pagada
+                ? '<span style="color:#1E8E3E;font-weight:500;font-size:11px;">✓ Pagada</span>'
+                : vencida
+                    ? '<span style="color:#D93025;font-weight:500;font-size:11px;">Vencida</span>'
+                    : '<span style="color:#9AA0A6;font-size:11px;">Pendiente</span>';
+            var trStyle = pagada ? 'background:#F0FFF4;' : vencida ? 'background:#FFF5F5;' : '';
+            var tr = document.createElement('tr');
+            tr.style.cssText = trStyle;
+            var inputStyle = 'padding:4px 6px;border:1px solid '+(vencida?'#FFCDD2':pagada?'#C8E6C9':'#DADCE0')+';border-radius:4px;font-size:11px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;background:transparent;width:118px;'+(pagada?'opacity:.5;':'');
+            tr.innerHTML =
+                '<td style="padding:5px 10px;text-align:center;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-2);font-size:12px;">' + nroCuota + '</td>' +
+                '<td style="padding:5px 10px;">' +
+                    '<input type="date" class="vpc-fecha-input" data-cuota="'+nroCuota+'" value="'+fechaVal+'" style="'+inputStyle+'" '+(pagada?'disabled':'')+'>' +
+                '</td>' +
+                '<td style="padding:5px 10px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500;color:var(--text-1);font-size:12px;">' + fmtNum(monto) + '</td>' +
+                '<td style="padding:5px 10px;text-align:center;">' + estado + '</td>';
+            tbody.appendChild(tr);
+        }
     }
 
     function ventaToggleCuotasSimple() {
@@ -11761,6 +11849,7 @@
         // Limpiar tablas de planes de cuotas para que no queden filas de una venta previamente abierta
         document.getElementById('ventaPlanCuotasBody').innerHTML = '';
         document.getElementById('ventaCuotasSimpleBody').innerHTML = '';
+        document.getElementById('ventaCocheraPlanBody').innerHTML = '';
         selModalidadVenta(v ? (v.modalidad || 'total_usd') : 'total_usd');
         if (v) {
             document.getElementById('ventaUF').value         = v.uf || '';
@@ -11821,6 +11910,12 @@
         // Cochera
         document.getElementById('ventaIncluyeCochera').checked = !!(v && v.incluyeCochera);
         document.getElementById('ventaCocheraNro').value = (v && v.cocheraNro) || '';
+        document.getElementById('ventaCocheraValorTipo').value = (v && v.cocheraValorTipo) || 'incluida';
+        document.getElementById('ventaCocheraMoneda').value    = (v && v.cocheraMoneda) || 'ars';
+        document.getElementById('ventaCocheraValor').value     = (v && v.cocheraValor) || '';
+        document.getElementById('ventaCocheraFormaPago').value = (v && v.cocheraFormaPago) || 'unico';
+        document.getElementById('ventaCocheraNroCuotas').value = (v && v.cocheraNroCuotas) || '';
+        document.getElementById('ventaCocheraFecha1').value    = (v && v.cocheraFecha1) || '';
         ventaToggleCochera();
         // Plan de cuotas simples (total_usd / total_ars / mixto)
         var cs = v && v.cuotasSimple;
@@ -11923,6 +12018,28 @@
             cocheraNro:  document.getElementById('ventaIncluyeCochera').checked ? document.getElementById('ventaCocheraNro').value.trim() : '',
             cobrosHistorial: (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].cobrosHistorial) || []
         };
+        // ── Cochera: valor propio (o incluida) y forma de pago ──
+        if (nuevo.incluyeCochera) {
+            var cocheraTipo = document.getElementById('ventaCocheraValorTipo').value || 'incluida';
+            nuevo.cocheraValorTipo = cocheraTipo;
+            if (cocheraTipo === 'aparte') {
+                nuevo.cocheraMoneda = document.getElementById('ventaCocheraMoneda').value || 'ars';
+                nuevo.cocheraValor  = parseFloat(document.getElementById('ventaCocheraValor').value) || 0;
+                var cocheraForma = document.getElementById('ventaCocheraFormaPago').value || 'unico';
+                nuevo.cocheraFormaPago = cocheraForma;
+                // Conservar lo ya cobrado de la cochera si estamos editando
+                nuevo.cocheraCobrado = (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].cocheraCobrado) || 0;
+                if (cocheraForma === 'cuotas') {
+                    var ncCochera = parseInt(document.getElementById('ventaCocheraNroCuotas').value) || 0;
+                    var venc1Cochera = document.getElementById('ventaCocheraFecha1').value || '';
+                    if (ncCochera > 0 && venc1Cochera) {
+                        nuevo.cocheraNroCuotas = ncCochera;
+                        nuevo.cocheraFecha1    = venc1Cochera;
+                        nuevo.cocheraFechas    = ventaLeerFechasPlanCochera();
+                    }
+                }
+            }
+        }
         if (mod === 'total_ars') {
             nuevo.precioARS  = parseFloat(document.getElementById('ventaPrecioARSTotal').value)  || 0;
             nuevo.cobradoARS = parseFloat(document.getElementById('ventaCobradoARSTotal').value) || 0;
@@ -12436,8 +12553,8 @@
     }
 
     function imprimirReciboCobroVenta(v, monto, fecha, comp, cac, ref, nroRecibo, nroCuota) {
-        const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS — Cuota', cuota_usd_simple:'USD — Cuota'};
-        const fmtM = n => ((comp==='usd'||comp==='cuota_usd_simple')?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
+        const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS — Cuota', cuota_usd_simple:'USD — Cuota', cochera_ars:'🚗 Cochera (ARS)', cochera_usd:'🚗 Cochera (USD)'};
+        const fmtM = n => ((comp==='usd'||comp==='cuota_usd_simple'||comp==='cochera_usd')?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
         const fmtARS = n => '$ ' + Number(n||0).toLocaleString('es-AR');
         const emision = new Date().toLocaleDateString('es-AR');
         const emp = getEmpresaParaRecibo();
@@ -12472,20 +12589,156 @@
         if (confirm('¿Eliminar esta UF de ventas?')) { ventas.splice(idx, 1); persistirVentas(); }
     }
 
+    // ══════════════════════════════════════════════════════════
+    // COBRO DE LA COCHERA (valor aparte, pago único o en cuotas)
+    // ══════════════════════════════════════════════════════════
+    function cocheraTieneValor(v) {
+        return v && v.incluyeCochera && v.cocheraValorTipo === 'aparte' && (v.cocheraValor||0) > 0;
+    }
+
+    // Devuelve los montos por cuota de la cochera (array), cerrando el redondeo en la última
+    function cocheraMontosCuotas(v) {
+        var nc = v.cocheraNroCuotas || 0;
+        var total = v.cocheraValor || 0;
+        if (nc <= 0) return [];
+        var base = Math.floor((total / nc) * 100) / 100;
+        var montos = [], acum = 0;
+        for (var k = 0; k < nc; k++) { var m = (k === nc-1) ? (total - acum) : base; montos.push(m); acum += m; }
+        return montos;
+    }
+
+    function abrirCobroCochera(idx) {
+        var v = ventas[idx];
+        if (!cocheraTieneValor(v)) { alert('Esta unidad no tiene una cochera con valor aparte para cobrar.'); return; }
+        document.getElementById('cobroCocheraIdx').value = idx;
+        document.getElementById('cobroCocheraUFLabel').textContent = (v.uf||'') + (v.cocheraNro ? ' · Cochera N° '+v.cocheraNro : '');
+        var esUSD = v.cocheraMoneda === 'usd';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtN = function(n){ return prefix + Math.round(n||0).toLocaleString('es-AR'); };
+        var saldo = Math.max((v.cocheraValor||0) - (v.cocheraCobrado||0), 0);
+        document.getElementById('cobroCocheraResumen').innerHTML =
+            'Valor: <strong>'+fmtN(v.cocheraValor)+'</strong> · Cobrado: <strong style="color:var(--success)">'+fmtN(v.cocheraCobrado||0)+'</strong> · Saldo: <strong style="color:var(--danger)">'+fmtN(saldo)+'</strong>';
+        var f = document.getElementById('formCobroCochera'); if (f) f.reset();
+        document.getElementById('cobroCocheraFecha').valueAsDate = new Date();
+        // Selector de cuota (solo si es en cuotas)
+        var grpCuota = document.getElementById('cobroCocheraCuotaGrp');
+        var sel = document.getElementById('cobroCocheraNroCuota');
+        if (v.cocheraFormaPago === 'cuotas' && (v.cocheraNroCuotas||0) > 0) {
+            grpCuota.style.display = '';
+            cocheraPoblarSelectorCuotas(idx);
+        } else {
+            grpCuota.style.display = 'none';
+            sel.innerHTML = '';
+            document.getElementById('cobroCocheraMonto').value = saldo > 0 ? Math.round(saldo) : '';
+        }
+        document.getElementById('modalCobroCochera').classList.add('active');
+    }
+
+    function cocheraPoblarSelectorCuotas(idx) {
+        var v = ventas[idx];
+        var nc = v.cocheraNroCuotas || 0;
+        var esUSD = v.cocheraMoneda === 'usd';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtN = function(n){ return prefix + Math.round(n||0).toLocaleString('es-AR'); };
+        var montos = cocheraMontosCuotas(v);
+        var d0 = v.cocheraFecha1 ? new Date(v.cocheraFecha1+'T00:00:00') : null;
+        var fechas = v.cocheraFechas || [];
+        var compKey = esUSD ? 'cochera_usd' : 'cochera_ars';
+        var cobros = (v.cobrosHistorial||[]).filter(function(c){ return c.comp === compKey; });
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var sel = document.getElementById('cobroCocheraNroCuota');
+        sel.innerHTML = '';
+        var hayPend = false;
+        for (var i = 0; i < nc; i++) {
+            var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
+            if (pagada) continue;
+            hayPend = true;
+            var monto = montos[i];
+            var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
+            var dV = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
+            var vencida = dV && dV < hoy;
+            var labelFecha = fechaISO ? ' — vto. '+fechaISO.split('-').reverse().join('/') : '';
+            var opt = document.createElement('option');
+            opt.value = i+1;
+            opt.dataset.monto = Math.round(monto);
+            opt.dataset.fecha = fechaISO;
+            opt.textContent = 'Cuota '+(i+1)+labelFecha+' ('+fmtN(monto)+')'+(vencida?' ⚠️':'');
+            sel.appendChild(opt);
+        }
+        if (!hayPend) {
+            sel.innerHTML = '<option value="">— Todas las cuotas están pagadas —</option>';
+            document.getElementById('cobroCocheraMonto').value = '';
+        } else {
+            cocheraCobroOnCuotaChange();
+        }
+    }
+
+    function cocheraCobroOnCuotaChange() {
+        var sel = document.getElementById('cobroCocheraNroCuota');
+        var opt = sel.options[sel.selectedIndex];
+        var monto = opt ? (opt.dataset.monto || '') : '';
+        var fecha = opt ? (opt.dataset.fecha || '') : '';
+        if (monto) document.getElementById('cobroCocheraMonto').value = monto;
+        var fInput = document.getElementById('cobroCocheraFecha');
+        if (fInput && fecha) fInput.value = fecha;
+    }
+
+    function cerrarModalCobroCochera() { document.getElementById('modalCobroCochera').classList.remove('active'); }
+
+    function guardarCobroCochera() {
+        var idx   = parseInt(document.getElementById('cobroCocheraIdx').value);
+        var v     = ventas[idx];
+        if (!cocheraTieneValor(v)) return;
+        var monto = parseFloat(document.getElementById('cobroCocheraMonto').value) || 0;
+        var fecha = document.getElementById('cobroCocheraFecha').value;
+        var ref   = (document.getElementById('cobroCocheraRef').value||'').trim();
+        if (!monto || monto <= 0) { alert('Ingresá un monto válido.'); return; }
+        if (!fecha) { alert('Ingresá la fecha del cobro.'); return; }
+        var esUSD = v.cocheraMoneda === 'usd';
+        var comp  = esUSD ? 'cochera_usd' : 'cochera_ars';
+        var nroCuota = null;
+        if (v.cocheraFormaPago === 'cuotas') {
+            var sel = document.getElementById('cobroCocheraNroCuota');
+            if (!sel || !sel.value) { alert('Seleccioná la cuota de la cochera a cobrar.'); return; }
+            nroCuota = parseInt(sel.value);
+        }
+        if (!v.cobrosHistorial) v.cobrosHistorial = [];
+        var nroRecibo = generarNumeroRecibo();
+        var registro = { fecha: fecha, comp: comp, monto: monto, cac: 0, ref: ref, nroRecibo: nroRecibo };
+        if (nroCuota) registro.nroCuota = nroCuota;
+        v.cobrosHistorial.push(registro);
+        v.cocheraCobrado = (v.cocheraCobrado || 0) + monto;
+        var ventaSnap = JSON.parse(JSON.stringify(v));
+        cerrarModalCobroCochera();
+        persistirVentas();
+        if (confirm('Cobro de cochera registrado. ¿Imprimir recibo?')) {
+            imprimirReciboCobroVenta(ventaSnap, monto, fecha, comp, 0, ref, nroRecibo, nroCuota);
+        }
+    }
+
     function resumenVenta(v) {
-        // Retorna { precioTotal, cobrado, moneda }
-        if (v.modalidad === 'total_ars') return { precioUSD: 0, cobradoUSD: 0, precioARS: v.precioARS||0, cobradoARS: v.cobradoARS||0 };
-        if (v.modalidad === 'total_usd') return { precioUSD: v.precioUSD||0, cobradoUSD: v.cobradoUSD||0, precioARS:0, cobradoARS:0 };
-        if (v.modalidad === 'mixto')     return { precioUSD: v.precioUSD||0, cobradoUSD: v.cobradoUSD||0, precioARS: v.precioARS||0, cobradoARS: v.cobradoARS||0 };
-        // cuotas_cac
-        const constBase   = v.construccionBase   || 0;
-        const constCob    = v.construccionCobrado || 0;
-        const constPend   = Math.max(constBase - constCob, 0);
-        const mayores     = calcMayoresCAC(constPend, v.cacBase, v.cacActual);
-        return {
-            precioUSD: v.terrenoUSD||0, cobradoUSD: v.terrenoCobrado||0,
-            precioARS: constBase + mayores, cobradoARS: constCob
-        };
+        // Retorna { precioUSD, cobradoUSD, precioARS, cobradoARS } — incluye el valor de la cochera si tiene valor aparte
+        var res;
+        if (v.modalidad === 'total_ars')      res = { precioUSD: 0, cobradoUSD: 0, precioARS: v.precioARS||0, cobradoARS: v.cobradoARS||0 };
+        else if (v.modalidad === 'total_usd') res = { precioUSD: v.precioUSD||0, cobradoUSD: v.cobradoUSD||0, precioARS:0, cobradoARS:0 };
+        else if (v.modalidad === 'mixto')     res = { precioUSD: v.precioUSD||0, cobradoUSD: v.cobradoUSD||0, precioARS: v.precioARS||0, cobradoARS: v.cobradoARS||0 };
+        else {
+            // cuotas_cac
+            var constBase   = v.construccionBase   || 0;
+            var constCob    = v.construccionCobrado || 0;
+            var constPend   = Math.max(constBase - constCob, 0);
+            var mayores     = calcMayoresCAC(constPend, v.cacBase, v.cacActual);
+            res = {
+                precioUSD: v.terrenoUSD||0, cobradoUSD: v.terrenoCobrado||0,
+                precioARS: constBase + mayores, cobradoARS: constCob
+            };
+        }
+        // ── Cochera con valor aparte: se suma al total según su moneda ──
+        if (v.incluyeCochera && v.cocheraValorTipo === 'aparte' && (v.cocheraValor||0) > 0) {
+            if (v.cocheraMoneda === 'usd') { res.precioUSD += (v.cocheraValor||0); res.cobradoUSD += (v.cocheraCobrado||0); }
+            else                           { res.precioARS += (v.cocheraValor||0); res.cobradoARS += (v.cocheraCobrado||0); }
+        }
+        return res;
     }
 
     function renderVentas() {
@@ -12546,8 +12799,13 @@
                 var docsBtns = '';
                 if (v.boletoDocId) docsBtns += '<button class="btn btn-outline btn-sm" title="Ver boleto de compraventa" onclick="descargarDoc(\'' + v.boletoDocId + '\',\'' + (v.boletoNombre||'boleto').replace(/'/g,'') + '\')">📄</button> ';
                 if (v.planoDocId)  docsBtns += '<button class="btn btn-outline btn-sm" title="Ver plano" onclick="descargarDoc(\'' + v.planoDocId + '\',\'' + (v.planoNombre||'plano').replace(/'/g,'') + '\')">📐</button> ';
+                var btnCochera = '';
+                if (cocheraTieneValor(v) && Math.max((v.cocheraValor||0)-(v.cocheraCobrado||0),0) > 0) {
+                    btnCochera = '<button class="btn btn-outline btn-sm" title="Registrar cobro de la cochera" onclick="abrirCobroCochera(' + idx + ')">🚗 Cochera</button> ';
+                }
                 const acciones = puedeEditar
                     ? '<button class="btn btn-gold btn-sm" title="Registrar cobro de esta UF" onclick="abrirCobroVenta(' + idx + ')">💵 Cobrar</button> ' +
+                      btnCochera +
                       '<button class="btn btn-outline btn-sm" title="Estado de cuenta del inversor" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' +
                       docsBtns +
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosVenta(' + idx + ')">🖨️</button> ' +
@@ -14054,6 +14312,71 @@
         modal.classList.add('active');
     }
 
+    // Panel de cochera dentro del estado de cuenta (valor, cobrado, saldo, cuotas)
+    function _renderCocheraEstadoCuenta(v) {
+        var info = document.getElementById('ecCocheraValorInfo');
+        var btn  = document.getElementById('ecCocheraCobrarBtn');
+        var cuotasWrap = document.getElementById('ecCocheraCuotasWrap');
+        var tbody = document.getElementById('ecCocheraCuotasBody');
+        if (!info) return;
+        if (!v.incluyeCochera) { if (btn) btn.style.display='none'; if (cuotasWrap) cuotasWrap.style.display='none'; return; }
+        if (v.cocheraValorTipo !== 'aparte' || (v.cocheraValor||0) <= 0) {
+            info.textContent = ' · Incluida en el precio total';
+            if (btn) btn.style.display = 'none';
+            if (cuotasWrap) cuotasWrap.style.display = 'none';
+            return;
+        }
+        var esUSD = v.cocheraMoneda === 'usd';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtN = function(n){ return prefix + Math.round(n||0).toLocaleString('es-AR'); };
+        var cobrado = v.cocheraCobrado || 0;
+        var saldo = Math.max((v.cocheraValor||0) - cobrado, 0);
+        var formaTxt = v.cocheraFormaPago === 'cuotas' ? ((v.cocheraNroCuotas||0)+' cuotas') : 'pago único';
+        info.innerHTML = ' · Valor <strong>'+fmtN(v.cocheraValor)+'</strong> ('+formaTxt+') · Cobrado <span style="color:var(--success)">'+fmtN(cobrado)+'</span> · Saldo <span style="color:var(--danger)">'+fmtN(saldo)+'</span>';
+        if (btn) btn.style.display = (typeof puedeEditar !== 'undefined' && puedeEditar && saldo > 0) ? '' : 'none';
+        if (v.cocheraFormaPago === 'cuotas' && (v.cocheraNroCuotas||0) > 0 && tbody) {
+            cuotasWrap.style.display = '';
+            var montos = cocheraMontosCuotas(v);
+            var d0 = v.cocheraFecha1 ? new Date(v.cocheraFecha1+'T00:00:00') : null;
+            var fechas = v.cocheraFechas || [];
+            var compKey = esUSD ? 'cochera_usd' : 'cochera_ars';
+            var cobros = (v.cobrosHistorial||[]).filter(function(c){ return c.comp === compKey; });
+            var hoy = new Date(); hoy.setHours(0,0,0,0);
+            var fmtF = function(s){ if(!s) return '—'; var p=s.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; };
+            var mono = 'SF Mono,SFMono-Regular,Menlo,Consolas,monospace';
+            tbody.innerHTML = '';
+            for (var i = 0; i < v.cocheraNroCuotas; i++) {
+                var monto = montos[i];
+                var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
+                var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
+                var dV = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
+                var vencida = !pagada && dV && dV < hoy;
+                var estadoHtml = pagada
+                    ? '<span style="color:#1E8E3E;font-weight:600;font-size:10px;">✓ Pagada</span>'
+                    : vencida
+                        ? '<span style="color:#D93025;font-weight:600;font-size:10px;">⚠ Vencida</span>'
+                        : '<span style="color:#5F6368;font-size:10px;">⏳ Pendiente</span>';
+                var trBg = pagada ? '#F8FFF8' : vencida ? '#FFF8F8' : '';
+                var tr = document.createElement('tr');
+                tr.style.background = trBg;
+                tr.innerHTML =
+                    '<td style="padding:6px 10px;text-align:center;font-family:'+mono+';font-size:12px;color:var(--text-2);">'+(i+1)+'</td>'+
+                    '<td style="padding:6px 10px;font-family:'+mono+';font-size:12px;">'+fmtF(fechaISO)+'</td>'+
+                    '<td style="padding:6px 10px;text-align:right;font-family:'+mono+';font-size:12px;'+(pagada?'color:#9AA0A6;':'')+'">'+fmtN(monto)+'</td>'+
+                    '<td style="padding:6px 10px;text-align:center;">'+estadoHtml+'</td>';
+                tbody.appendChild(tr);
+            }
+        } else if (cuotasWrap) {
+            cuotasWrap.style.display = 'none';
+        }
+    }
+
+    function ecCobrarCochera() {
+        var idx = parseInt(document.getElementById('ecIdx').value);
+        document.getElementById('modalEstadoCuenta').classList.remove('active');
+        abrirCobroCochera(idx);
+    }
+
     function _renderEstadoCuenta(v) {
         var nc         = v.nroCuotas || 0;
         var montoBase  = v.construccionBase || 0;
@@ -14078,7 +14401,8 @@
         var ecCocheraWrap = document.getElementById('ecCocheraWrap');
         if (ecCocheraWrap) {
             ecCocheraWrap.style.display = v.incluyeCochera ? '' : 'none';
-            document.getElementById('ecCocheraNro').textContent = v.cocheraNro || '—';
+            document.getElementById('ecCocheraNro').textContent = v.cocheraNro ? ('N° '+v.cocheraNro) : '';
+            _renderCocheraEstadoCuenta(v);
         }
 
         // ── Resumen financiero ──
@@ -14333,8 +14657,8 @@
 
         // Cobros historial
         var histRows = cobrosAll.map(function(c){
-            var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Constr.', cuota:'ARS Cuota N°'+(c.nroCuota||''), ars_general:'ARS General', cuota_ars_simple:'ARS Cuota N°'+(c.nroCuota||''), cuota_usd_simple:'USD Cuota N°'+(c.nroCuota||'')}[c.comp]||c.comp;
-            var monSym = (c.comp==='usd' || c.comp==='cuota_usd_simple') ? 'USD ' : '$ ';
+            var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Constr.', cuota:'ARS Cuota N°'+(c.nroCuota||''), ars_general:'ARS General', cuota_ars_simple:'ARS Cuota N°'+(c.nroCuota||''), cuota_usd_simple:'USD Cuota N°'+(c.nroCuota||''), cochera_ars:'Cochera ARS'+(c.nroCuota?' Cuota N°'+c.nroCuota:''), cochera_usd:'Cochera USD'+(c.nroCuota?' Cuota N°'+c.nroCuota:'')}[c.comp]||c.comp;
+            var monSym = (c.comp==='usd' || c.comp==='cuota_usd_simple' || c.comp==='cochera_usd') ? 'USD ' : '$ ';
             return '<tr><td style="padding:6px 10px;">'+fmtF(c.fecha)+'</td>'+
                 '<td style="padding:6px 10px;">'+compLabel+'</td>'+
                 '<td style="padding:6px 10px;text-align:right;font-weight:700;color:#1A6640;">'+monSym+Number(c.monto||0).toLocaleString('es-AR',{maximumFractionDigits:2})+'</td>'+
@@ -14378,7 +14702,7 @@
         '<div class="kv"><span class="k">Modalidad</span><span class="v">'+(modLabels[v.modalidad]||v.modalidad)+'</span></div>'+
         '<div class="kv"><span class="k">Boleto / Escritura</span><span class="v">'+fmtF(v.fecha)+'</span></div>'+
         (v.modalidad==='cuotas_cac' ? '<div class="kv"><span class="k">CAC Base</span><span class="v">'+(v.cacBase||'—')+'</span></div><div class="kv"><span class="k">CAC Actual</span><span class="v">'+(v.cacActual||'—')+'</span></div>' : '')+
-        (v.incluyeCochera ? '<div class="kv"><span class="k">Cochera</span><span class="v">N° '+(v.cocheraNro||'—')+'</span></div>' : '')+
+        (v.incluyeCochera ? '<div class="kv"><span class="k">Cochera</span><span class="v">'+(v.cocheraNro?'N° '+v.cocheraNro:'Sí')+((v.cocheraValorTipo==='aparte'&&(v.cocheraValor||0)>0)?(' — '+(v.cocheraMoneda==='usd'?'USD ':'$ ')+Number(v.cocheraValor).toLocaleString('es-AR')+(v.cocheraFormaPago==='cuotas'?(' ('+(v.cocheraNroCuotas||0)+' cuotas)'):' (pago único)')):' (incluida en el total)')+'</span></div>' : '')+
         '</div>'+
         // Resumen financiero
         '<h2>Resumen financiero</h2>'+
@@ -14423,15 +14747,15 @@
         var hist = v.cobrosHistorial || [];
         if (!hist.length) { alert('Esta UF no tiene cobros registrados aún.'); return; }
         var lista = hist.map(function(c, i) {
-            var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple') ? 'USD ' : '$ ';
-            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota'}[c.comp]||c.comp) + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
+            var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple' || c.comp === 'cochera_usd') ? 'USD ' : '$ ';
+            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota', cochera_ars:'Cochera ARS', cochera_usd:'Cochera USD'}[c.comp]||c.comp) + (c.nroCuota?' Cuota '+c.nroCuota:'') + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
         }).join('\n');
         var sel = prompt('Cobros de ' + (v.uf||'UF') + ':\n\n' + lista + '\n\nNúmero a reimprimir (1-' + hist.length + '):');
         if (!sel) return;
         var i = parseInt(sel) - 1;
         if (isNaN(i) || i < 0 || i >= hist.length) { alert('Número inválido.'); return; }
         var c = hist[i];
-        imprimirReciboCobroVenta(v, c.monto, c.fecha, c.comp, c.cac, c.ref, c.nroRecibo || generarNumeroRecibo());
+        imprimirReciboCobroVenta(v, c.monto, c.fecha, c.comp, c.cac, c.ref, c.nroRecibo || generarNumeroRecibo(), c.nroCuota);
     }
 
     function abrirHistorialCobrosAlquiler(idx) {
@@ -18106,16 +18430,80 @@
           <label>Comprador / Titular</label>
           <input type="text" id="ventaComprador" placeholder="Nombre completo o razón social">
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-          <div class="form-group">
-            <label>
-              <input type="checkbox" id="ventaIncluyeCochera" onchange="ventaToggleCochera()" style="width:auto;margin-right:6px;vertical-align:middle;">
-              🚗 Incluye cochera
-            </label>
-          </div>
-          <div class="form-group" id="ventaCocheraNroWrap" style="display:none;">
-            <label>N° de cochera</label>
-            <input type="text" id="ventaCocheraNro" placeholder="Ej: 15, Subsuelo 2 - B12">
+        <div class="form-group" style="margin-bottom:6px;">
+          <label>
+            <input type="checkbox" id="ventaIncluyeCochera" onchange="ventaToggleCochera()" style="width:auto;margin-right:6px;vertical-align:middle;">
+            🚗 Incluye cochera
+          </label>
+        </div>
+        <!-- Bloque cochera: N°, valor (incluida/aparte) y forma de pago -->
+        <div id="ventaCocheraBloque" style="display:none;">
+          <div class="cac-desglose" style="margin-bottom:12px;">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              <div class="form-group" style="margin:0;">
+                <label>N° de cochera</label>
+                <input type="text" id="ventaCocheraNro" placeholder="Ej: 15, Subsuelo 2 - B12">
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label>Valor de la cochera</label>
+                <select id="ventaCocheraValorTipo" onchange="ventaToggleCocheraValor()" style="width:100%;">
+                  <option value="incluida">Incluida en el precio total</option>
+                  <option value="aparte">Con valor aparte (se suma al total)</option>
+                </select>
+              </div>
+            </div>
+            <!-- Valor aparte -->
+            <div id="ventaCocheraValorCampos" style="display:none; margin-top:10px;">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="form-group" style="margin:0;">
+                  <label>Moneda de la cochera</label>
+                  <select id="ventaCocheraMoneda" onchange="ventaGenerarPlanCochera()" style="width:100%;">
+                    <option value="ars">ARS (pesos)</option>
+                    <option value="usd">USD (dólares)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>Valor</label>
+                  <input type="number" id="ventaCocheraValor" step="0.01" min="0" placeholder="0" oninput="ventaGenerarPlanCochera()">
+                </div>
+              </div>
+              <div class="form-group" style="margin:10px 0 0;">
+                <label>Forma de pago de la cochera</label>
+                <select id="ventaCocheraFormaPago" onchange="ventaToggleCocheraFormaPago()" style="width:100%;">
+                  <option value="unico">Pago único</option>
+                  <option value="cuotas">En cuotas</option>
+                </select>
+              </div>
+              <!-- Cuotas de la cochera -->
+              <div id="ventaCocheraCuotasCampos" style="display:none; margin-top:10px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <div class="form-group" style="margin:0;">
+                    <label>N° de cuotas</label>
+                    <input type="number" id="ventaCocheraNroCuotas" step="1" min="1" placeholder="Ej: 6" oninput="ventaGenerarPlanCochera()">
+                  </div>
+                  <div class="form-group" style="margin:0;">
+                    <label>Fecha 1° vencimiento</label>
+                    <input type="date" id="ventaCocheraFecha1" oninput="ventaGenerarPlanCochera()">
+                  </div>
+                </div>
+                <div id="ventaCocheraPlanWrap" style="display:none;">
+                  <div class="ret-panel-title" style="margin-top:4px;">Plan de cuotas de la cochera</div>
+                  <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                      <thead>
+                        <tr style="background:var(--surface-2);">
+                          <th style="padding:7px 10px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">N°</th>
+                          <th style="padding:7px 10px;text-align:left;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Vencimiento</th>
+                          <th style="padding:7px 10px;text-align:right;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto</th>
+                          <th style="padding:7px 10px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody id="ventaCocheraPlanBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="form-group">
@@ -18486,6 +18874,43 @@
     </div>
   </div>
 </div>
+<!-- ═══════════════ MODAL: COBRO DE COCHERA ═══════════════ -->
+<div class="modal" id="modalCobroCochera">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-head">
+      <h2>🚗 Cobro cochera — <span id="cobroCocheraUFLabel" style="color:var(--gold);"></span></h2>
+      <button class="modal-close" onclick="cerrarModalCobroCochera()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="cobroCocheraIdx">
+      <div id="cobroCocheraResumen" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--text-2);"></div>
+      <form id="formCobroCochera">
+        <div class="form-group" id="cobroCocheraCuotaGrp" style="display:none;">
+          <label>Cuota de la cochera a imputar *</label>
+          <select id="cobroCocheraNroCuota" style="width:100%;" onchange="cocheraCobroOnCuotaChange()"></select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group">
+            <label>Monto cobrado *</label>
+            <input type="number" id="cobroCocheraMonto" step="0.01" min="0" required placeholder="0" style="font-size:15px;font-weight:600;">
+          </div>
+          <div class="form-group">
+            <label>Fecha del cobro *</label>
+            <input type="date" id="cobroCocheraFecha" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Referencia / Comprobante</label>
+          <input type="text" id="cobroCocheraRef" placeholder="Nº transferencia, cheque, etc.">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="cerrarModalCobroCochera()">Cancelar</button>
+          <button type="button" class="btn btn-gold" onclick="guardarCobroCochera()">💾 Registrar Cobro</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 <!-- ═══════════════ MODAL: ESTADO DE CUENTA UF ═══════════════ -->
 <div class="modal" id="modalEstadoCuenta">
   <div class="modal-box modal-box-wide" style="max-width:700px;max-height:92vh;">
@@ -18520,8 +18945,27 @@
         </div>
       </div>
 
-      <div id="ecCocheraWrap" style="display:none;margin-bottom:18px;font-size:12px;color:var(--text-2);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 14px;">
-        🚗 Incluye cochera N° <strong id="ecCocheraNro" style="color:var(--gold);"></strong>
+      <div id="ecCocheraWrap" style="display:none;margin-bottom:18px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="font-size:12px;color:var(--text-2);">
+            🚗 Cochera <strong id="ecCocheraNro" style="color:var(--gold);"></strong>
+            <span id="ecCocheraValorInfo" style="color:var(--text-3);"></span>
+          </div>
+          <button type="button" id="ecCocheraCobrarBtn" class="btn btn-outline btn-sm" style="display:none;" onclick="ecCobrarCochera()">🚗 Cobrar cochera</button>
+        </div>
+        <div id="ecCocheraCuotasWrap" style="display:none;margin-top:10px;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:var(--surface-2);">
+                <th style="padding:6px 10px;text-align:center;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">N°</th>
+                <th style="padding:6px 10px;text-align:left;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Vencimiento</th>
+                <th style="padding:6px 10px;text-align:right;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto</th>
+                <th style="padding:6px 10px;text-align:center;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Estado</th>
+              </tr>
+            </thead>
+            <tbody id="ecCocheraCuotasBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- Resumen financiero — Cuotas CAC -->
