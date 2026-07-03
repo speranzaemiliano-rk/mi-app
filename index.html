@@ -11633,6 +11633,88 @@
         return fechas;
     }
 
+    // ── Plan de cuotas ARS Total ──────────────────────────────────
+    function arsCalcMontoPorCuota() {
+        var total = parseFloat((document.getElementById('ventaPrecioARSTotal')||{}).value) || 0;
+        var nc    = parseInt((document.getElementById('ventaArsNroCuotas')||{}).value) || 0;
+        var block = document.getElementById('ventaArsCuotasBlock');
+        if (block) block.style.display = nc > 0 ? '' : 'none';
+        var baseEl = document.getElementById('ventaArsMontoPorCuota');
+        if (baseEl && total > 0 && nc > 0) baseEl.value = (total / nc).toFixed(2);
+        arsGenerarPlan();
+    }
+
+    function arsActualizarCampos() {
+        var mode = (document.getElementById('ventaArsCACMode')||{}).value || 'fijo';
+        var cacFields = document.getElementById('ventaArsCACFields');
+        if (cacFields) cacFields.style.display = mode === 'cac' ? 'grid' : 'none';
+        arsGenerarPlan();
+    }
+
+    function arsGenerarPlan() {
+        var nc    = parseInt((document.getElementById('ventaArsNroCuotas')||{}).value) || 0;
+        var base  = parseFloat((document.getElementById('ventaArsMontoPorCuota')||{}).value) || 0;
+        var venc1 = (document.getElementById('ventaArsCuota1Venc')||{}).value || '';
+        var mode  = (document.getElementById('ventaArsCACMode')||{}).value || 'fijo';
+        var cacBase   = parseFloat((document.getElementById('ventaArsCACBase')||{}).value) || 0;
+        var cacActual = parseFloat((document.getElementById('ventaArsCACActual')||{}).value) || 0;
+        var wrap  = document.getElementById('ventaArsPlanWrap');
+        var tbody = document.getElementById('ventaArsPlanBody');
+        if (!wrap || !tbody) return;
+        if (!nc || !venc1) { wrap.style.display = 'none'; return; }
+        wrap.style.display = '';
+        var factorCAC = (mode === 'cac' && cacBase > 0 && cacActual > 0) ? (cacActual / cacBase) : null;
+        var fmtNum = function(n) { return '$ ' + Math.round(n).toLocaleString('es-AR'); };
+        var fechasGuardadas = [];
+        var cobros = [];
+        if (typeof editandoVentaIdx !== 'undefined' && editandoVentaIdx >= 0 && ventas && ventas[editandoVentaIdx]) {
+            fechasGuardadas = ventas[editandoVentaIdx].arsCuotaFechas || [];
+            cobros = (ventas[editandoVentaIdx].cobrosHistorial || []).filter(function(c){ return c.comp === 'ars_cuota'; });
+        }
+        var fechasDOM = [];
+        tbody.querySelectorAll('.ars-vp-fecha').forEach(function(inp){ fechasDOM.push(inp.value||''); });
+        tbody.innerHTML = '';
+        var d0 = new Date(venc1 + 'T00:00:00');
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        for (var i = 0; i < nc; i++) {
+            var dDef = new Date(d0); dDef.setMonth(dDef.getMonth() + i);
+            var defISO = dDef.toISOString().slice(0,10);
+            var fechaVal = (fechasDOM[i]||'') || (fechasGuardadas[i]||'') || defISO;
+            var pagada   = cobros.some(function(c){ return c.nroCuota === i+1; });
+            var dV       = new Date(fechaVal + 'T00:00:00');
+            var vencida  = !pagada && dV < hoy;
+            var aplica   = factorCAC !== null && !pagada;
+            var monto    = aplica ? base * factorCAC : base;
+            var montoCell = aplica
+                ? fmtNum(monto) + ' <span style="font-size:10px;color:#1A73E8;margin-left:4px;">×'+factorCAC.toFixed(3)+'</span>'
+                : fmtNum(monto);
+            var estado = pagada
+                ? '<span style="color:#1E8E3E;font-weight:500;font-size:11px;">✓ Pagada</span>'
+                : vencida ? '<span style="color:#D93025;font-weight:500;font-size:11px;">Vencida</span>'
+                : aplica  ? '<span style="color:#1A73E8;font-size:11px;">⬆ Ajusta</span>'
+                :           '<span style="color:#9AA0A6;font-size:11px;">Pendiente</span>';
+            var trStyle = pagada ? 'background:#F0FFF4;' : aplica ? 'background:#EBF3FE;' : vencida ? 'background:#FFF5F5;' : '';
+            var borderColor = vencida ? '#FFCDD2' : pagada ? '#C8E6C9' : aplica ? '#A8C7FA' : '#DADCE0';
+            var inputStyle = 'padding:4px 6px;border:1px solid '+borderColor+';border-radius:4px;font-size:11px;font-family:\'DM Mono\',monospace;background:transparent;width:118px;'+(pagada?'opacity:.5;':'');
+            var tr = document.createElement('tr');
+            tr.style.cssText = trStyle;
+            tr.innerHTML =
+                '<td style="padding:5px 10px;text-align:center;font-family:\'DM Mono\',monospace;color:var(--text-2);font-size:12px;">'+(i+1)+'</td>'+
+                '<td style="padding:5px 10px;"><input type="date" class="ars-vp-fecha" value="'+fechaVal+'" style="'+inputStyle+'" '+(pagada?'disabled':'')+'></td>'+
+                '<td style="padding:5px 10px;text-align:right;font-family:\'DM Mono\',monospace;font-weight:500;color:var(--text-1);font-size:12px;">'+montoCell+'</td>'+
+                '<td style="padding:5px 10px;text-align:center;">'+estado+'</td>';
+            tbody.appendChild(tr);
+        }
+    }
+
+    function arsLeerFechasPlan() {
+        var fechas = [];
+        var tbody = document.getElementById('ventaArsPlanBody');
+        if (!tbody) return fechas;
+        tbody.querySelectorAll('.ars-vp-fecha').forEach(function(inp){ fechas.push(inp.value||''); });
+        return fechas;
+    }
+
     function selModalidadVenta(m) {
         document.getElementById('ventaModalidad').value = m;
         const btns = { total_usd: 'ventaMod1Btn', mixto: 'ventaMod2Btn', cuotas_cac: 'ventaMod3Btn', total_ars: 'ventaMod4Btn' };
@@ -11676,6 +11758,19 @@
             if (v.modalidad === 'total_ars') {
                 document.getElementById('ventaPrecioARSTotal').value  = v.precioARS  || '';
                 document.getElementById('ventaCobradoARSTotal').value = v.cobradoARS || '';
+                document.getElementById('ventaArsNroCuotas').value    = v.arsNroCuotas || '';
+                var arsBlock = document.getElementById('ventaArsCuotasBlock');
+                if (v.arsNroCuotas > 0) {
+                    if (arsBlock) arsBlock.style.display = '';
+                    document.getElementById('ventaArsMontoPorCuota').value = v.arsMontoPorCuota || '';
+                    document.getElementById('ventaArsCACMode').value       = v.arsCACMode || 'fijo';
+                    document.getElementById('ventaArsCACBase').value       = v.arsCACBase   || '';
+                    document.getElementById('ventaArsCACActual').value     = v.arsCACActual || '';
+                    document.getElementById('ventaArsCuota1Venc').value    = v.arsCuota1Venc || '';
+                    arsActualizarCampos();
+                } else {
+                    if (arsBlock) arsBlock.style.display = 'none';
+                }
             } else if (v.modalidad === 'total_usd') {
                 document.getElementById('ventaPrecioUSD').value  = v.precioUSD || '';
                 document.getElementById('ventaCobradoUSD').value = v.cobradoUSD || '';
@@ -11818,6 +11913,17 @@
         if (mod === 'total_ars') {
             nuevo.precioARS  = parseFloat(document.getElementById('ventaPrecioARSTotal').value)  || 0;
             nuevo.cobradoARS = parseFloat(document.getElementById('ventaCobradoARSTotal').value) || 0;
+            var arsNc = parseInt(document.getElementById('ventaArsNroCuotas').value) || 0;
+            if (arsNc > 0) {
+                nuevo.arsNroCuotas     = arsNc;
+                nuevo.arsMontoPorCuota = parseFloat(document.getElementById('ventaArsMontoPorCuota').value) || 0;
+                nuevo.arsCACMode       = document.getElementById('ventaArsCACMode').value || 'fijo';
+                nuevo.arsCACBase       = parseFloat(document.getElementById('ventaArsCACBase').value)   || 0;
+                nuevo.arsCACActual     = parseFloat(document.getElementById('ventaArsCACActual').value) || 0;
+                nuevo.arsCuota1Venc    = document.getElementById('ventaArsCuota1Venc').value || '';
+                var arsFechas = arsLeerFechasPlan();
+                if (arsFechas.some(function(f){ return f; })) nuevo.arsCuotaFechas = arsFechas;
+            }
         } else if (mod === 'total_usd') {
             nuevo.precioUSD  = parseFloat(document.getElementById('ventaPrecioUSD').value)  || 0;
             nuevo.cobradoUSD = parseFloat(document.getElementById('ventaCobradoUSD').value) || 0;
@@ -17775,9 +17881,72 @@
         </div>
         <!-- ARS Total -->
         <div id="ventaBloqueARS" style="display:none;">
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-            <div class="form-group"><label>Precio total ($)</label><input type="number" id="ventaPrecioARSTotal" step="0.01" min="0" placeholder="0"></div>
-            <div class="form-group"><label>Cobrado hasta hoy ($)</label><input type="number" id="ventaCobradoARSTotal" step="0.01" min="0" placeholder="0"></div>
+          <div class="cac-desglose" style="margin-bottom:12px;">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px;">
+              <div class="form-group" style="margin:0;">
+                <label>Precio total ($)</label>
+                <input type="number" id="ventaPrecioARSTotal" step="0.01" min="0" placeholder="0" oninput="arsCalcMontoPorCuota()">
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label>N° de cuotas <span style="font-size:10px;color:var(--text-3)">(0 = pago único)</span></label>
+                <input type="number" id="ventaArsNroCuotas" step="1" min="0" placeholder="0" oninput="arsCalcMontoPorCuota()">
+              </div>
+            </div>
+
+            <!-- Detalle cuotas -->
+            <div id="ventaArsCuotasBlock" style="display:none;">
+              <div class="ret-panel-title" style="margin-top:4px;">Cuotas en pesos</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin:8px 0;">
+                <div class="form-group" style="margin:0;">
+                  <label>Monto por cuota ($)</label>
+                  <input type="number" id="ventaArsMontoPorCuota" step="0.01" min="0" placeholder="Auto" oninput="arsGenerarPlan()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>Ajuste</label>
+                  <select id="ventaArsCACMode" onchange="arsActualizarCampos()" style="width:100%;">
+                    <option value="fijo">$ Monto fijo</option>
+                    <option value="cac">📊 Ajuste CAC</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>Fecha 1° vencimiento</label>
+                  <input type="date" id="ventaArsCuota1Venc" oninput="arsGenerarPlan()">
+                </div>
+              </div>
+              <div id="ventaArsCACFields" style="display:none; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                <div class="form-group" style="margin:0;">
+                  <label>Índice CAC base &nbsp;<a href="https://www.cifrasonline.com.ar/indice-cac/" target="_blank" style="font-size:10px;color:var(--gold);text-decoration:none;">🔗 CAC</a></label>
+                  <input type="number" id="ventaArsCACBase" step="0.01" min="0" placeholder="Ej: 5234.50" oninput="arsGenerarPlan()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>Índice CAC actual &nbsp;<a href="https://www.cifrasonline.com.ar/indice-cac/" target="_blank" style="font-size:10px;color:var(--gold);text-decoration:none;">🔗 CAC</a></label>
+                  <input type="number" id="ventaArsCACActual" step="0.01" min="0" placeholder="Ej: 5891.20" oninput="arsGenerarPlan()">
+                </div>
+              </div>
+              <!-- Plan visual -->
+              <div id="ventaArsPlanWrap" style="display:none;">
+                <div class="ret-panel-title" style="margin-top:4px;">Plan de cuotas</div>
+                <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px;">
+                  <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                      <tr style="background:var(--surface-2);">
+                        <th style="padding:7px 10px;text-align:center;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">N°</th>
+                        <th style="padding:7px 10px;text-align:left;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Vencimiento</th>
+                        <th style="padding:7px 10px;text-align:right;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto</th>
+                        <th style="padding:7px 10px;text-align:center;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody id="ventaArsPlanBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Cobrado -->
+            <div class="form-group" style="margin-top:10px;">
+              <label>Cobrado hasta hoy ($)</label>
+              <input type="number" id="ventaCobradoARSTotal" step="0.01" min="0" placeholder="0">
+            </div>
           </div>
         </div>
         <!-- Mixto USD + ARS -->
