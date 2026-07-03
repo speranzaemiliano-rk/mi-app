@@ -186,6 +186,14 @@ Después de eso, el link del PDF en el mail funciona y queda todo terminado.
   funcionaba), así que probablemente sea caché del navegador/PWA. Se le
   pidió hacer hard refresh / cerrar y reabrir la app. **Falta confirmar que
   lo solucionó.**
+- **Resuelto — API key de Gemini inválida:** después del cambio a
+  `gemini-2.5-pro`, el usuario reportó el error de Gemini "Request had
+  invalid authentication credentials..." al usar el Asistente RK. No era un
+  bug de código (la detección de este error específico, agregada esta misma
+  sesión, funcionó correctamente y avisó al toque) — la API key configurada
+  en Config → Gemini estaba vencida/revocada. Se guio al usuario a generar
+  una key nueva en https://aistudio.google.com/apikey y recargarla; **confirmó
+  que ya le funciona.**
 
 ## ✅ Sesión 2026-07-02: Ventas → Desarrollos + m² + costo de construcción
 
