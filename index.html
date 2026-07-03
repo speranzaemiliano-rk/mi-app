@@ -10601,7 +10601,7 @@
             var cId = ig.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             var esS = ig.esEgreso || ig.tipo === 'mov_banco_salida';
-            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: ig.origen||'—', origen: ig.origenDest||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx });
+            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx });
         });
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
@@ -10681,7 +10681,7 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:ig.origen||ig.referencia||'—',origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:esMov?igIdx:-1});
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:esMov?igIdx:-1});
         });
         // Cobros Ventas UF en ARS
         ventas.forEach(v => {
@@ -10800,7 +10800,7 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:ig.origen||ig.referencia||'—',origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:esMov?igIdx:-1});
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:esMov?igIdx:-1});
         });
         ventas.forEach(v => {
             (v.cobrosHistorial||[]).forEach(c => {
@@ -11248,16 +11248,32 @@
                 tipoAB: 'B', esEgreso: esEgreso, origenEmitidoId: reg.id
             };
         }
+        if (reg.confidencial) mov.confidencial = true;
         ingGeneral.push(mov);
         persistirIngGeneral();
     }
 
+    // Enmascara el detalle de un movimiento de caja/banco confidencial para quien no sea Super Usuario
+    function _cajaOculto(ig) {
+        return !!(ig && ig.confidencial && !(typeof esSuperAdmin !== 'undefined' && esSuperAdmin));
+    }
+    function _cajaDescMask(ig, textoReal) {
+        if (_cajaOculto(ig)) return ig.esBancario ? 'Movimiento bancario' : 'Movimiento de caja';
+        return textoReal;
+    }
+
     function abrirModalEmitir(id) {
+        var eChequeo = id ? comprobantesEmitidos.find(function(x){ return x.id === id; }) : null;
+        if (eChequeo && eChequeo.confidencial && !(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) {
+            alert('Este comprobante es confidencial. Solo el Super Usuario puede verlo o editarlo.');
+            return;
+        }
         editandoEmitidoId = id || null;
         var e = id ? comprobantesEmitidos.find(function(x){ return x.id === id; }) : null;
         var f = document.getElementById('formEmitir'); if (f) f.reset();
         _emitItems = [];
         if (e) {
+            document.getElementById('emitConfidencial').checked = !!e.confidencial;
             document.getElementById('emitTipo').value      = e.tipoDoc || 'recibo';
             document.getElementById('emitFecha').value     = e.fecha || '';
             document.getElementById('emitCliente').value   = e.cliente || '';
@@ -11282,6 +11298,7 @@
                 if (e.cuentaId) document.getElementById('emitCuentaBancaria').value = e.cuentaId;
             }
         } else {
+            document.getElementById('emitConfidencial').checked = false;
             document.getElementById('emitTipo').value      = 'recibo';
             document.getElementById('emitFecha').valueAsDate = new Date();
             document.getElementById('emitMoneda').value    = 'ARS';
@@ -11336,6 +11353,7 @@
             nro:           (prev && prev.nro) ? prev.nro : null,
             proveedorId:   provId || '',
             proveedorNombre: provObj ? provObj.razonSocial : '',
+            confidencial:  document.getElementById('emitConfidencial').checked,
             afectaCaja:    afectaCaja,
             movTipo:       afectaCaja ? (document.getElementById('emitMovTipo').value || 'egreso') : '',
             cuentaId:      cuentaId
@@ -11353,6 +11371,10 @@
 
     function eliminarEmitido(id) {
         var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
+        if (e && e.confidencial && !(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) {
+            alert('Este comprobante es confidencial. Solo el Super Usuario puede eliminarlo.');
+            return;
+        }
         var tieneMov = e && e.afectaCaja;
         if (!confirm('¿Eliminar este comprobante emitido?' + (tieneMov ? ' También se eliminará el movimiento de caja/banco asociado.' : ''))) return;
         var i = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
@@ -11384,16 +11406,28 @@
         if (!list.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay comprobantes emitidos.</td></tr>'; return; }
         var editable = (typeof puedeEditar !== 'undefined') ? puedeEditar : true;
         tbody.innerHTML = '';
+        var esSA = (typeof esSuperAdmin !== 'undefined' && esSuperAdmin);
         list.forEach(function(e){
+            var tr = document.createElement('tr');
+            if (e.confidencial && !esSA) {
+                tr.innerHTML =
+                    '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
+                    '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span></td>' +
+                    '<td colspan="4" style="color:var(--text-3);font-style:italic;">🔒 Comprobante confidencial — visible solo para el Super Usuario</td>' +
+                    '<td></td>';
+                tbody.appendChild(tr);
+                return;
+            }
             var mon = e.moneda === 'USD' ? 'USD ' : '$ ';
             var tipoLbl = e.tipoDoc === 'factura' ? 'Doc. factura' : 'Recibo';
             var concepto = e.tipoDoc === 'factura'
                 ? ((e.items && e.items.length ? (e.items[0].desc||'') : '') + (e.items && e.items.length > 1 ? ' +' + (e.items.length-1) + ' ítem(s)' : ''))
                 : (e.concepto || '');
-            var tr = document.createElement('tr');
             tr.innerHTML =
                 '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
-                '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span></td>' +
+                '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span>' +
+                    (e.confidencial ? ' <span title="Solo visible para Super Usuario">🔒</span>' : '') +
+                '</td>' +
                 '<td>' + tipoLbl + '</td>' +
                 '<td>' + escHtml(e.cliente||'—') +
                     (e.proveedorId ? '<br><small style="color:var(--text-3);font-size:10px;">🏢 Proveedor</small>' : '') +
@@ -11413,6 +11447,10 @@
     function imprimirComprobanteEmitido(id) {
         var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
         if (!e) return;
+        if (e.confidencial && !(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) {
+            alert('Este comprobante es confidencial. Solo el Super Usuario puede imprimirlo.');
+            return;
+        }
         var emp = getEmpresaParaRecibo();
         var emision = new Date().toLocaleDateString('es-AR');
         var moneda = e.moneda;
@@ -15319,7 +15357,7 @@
             var esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             var esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
             var tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco entrada',mov_banco_salida:'Banco salida'};
-            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:ig.origen||ig.referencia||'—',origen:tL[ig.tipo]||ig.tipo||'—',medio:(ig.tipo==='mov_banco_salida'?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1});
+            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',medio:(ig.tipo==='mov_banco_salida'?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1});
         });
 
         // 2. Cobros de Ventas UF
@@ -18638,6 +18676,13 @@
                             <option value="A">A — Banco</option>
                         </select>
                     </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="emitConfidencial" style="width:auto;margin-right:6px;vertical-align:middle;">
+                        🔒 Solo visible para Super Usuario
+                    </label>
+                    <div class="form-hint" style="color:var(--text-3);">Los demás usuarios verán este comprobante bloqueado, sin ver sus datos. En la caja/banco, el movimiento asociado solo mostrará "Movimiento de caja/banco" (el monto se ve igual para todos).</div>
                 </div>
                 <div class="form-group">
                     <label>
