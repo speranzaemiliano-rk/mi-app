@@ -6810,7 +6810,7 @@
         add('Facturas',(snap.facturas||[]).map(function(f){return{Proveedor:f.proveedor,Numero:f.numero,Fecha:f.fecha,Descripcion:f.descripcion,Importe:f.importe,Pagado:f.pagado,Estado:f.estado};}));
         add('Proveedores',(snap.proveedores||[]).map(function(p){return{Grupo:p.grupo,RazonSocial:p.razonSocial,CUIT:p.cuit,CondIVA:p.condicionIVA,Rubro:p.rubro,Tel:p.telefono,Dir:p.direccion};}));
         add('Ingresos Generales',(snap.ingresosGenerales||[]).map(function(i){return{Fecha:i.fecha,Tipo:i.tipo,Origen:i.origen,Ref:i.referencia,Moneda:i.moneda,Monto:i.monto};}));
-        add('Ventas UF',(snap.ventas||[]).map(function(v){var r=resumenVenta(v);return{UF:v.uf,Tipo:v.tipo,Comprador:v.comprador,Modalidad:v.modalidad,Fecha:v.fecha,PrecioUSD:r.precioUSD,CobUSD:r.cobradoUSD,PrecioARS:r.precioARS,CobARS:r.cobradoARS};}));
+        add('Ventas UF',(snap.ventas||[]).map(function(v){var r=resumenVenta(v);return{UF:v.uf,Tipo:v.tipo,Comprador:v.comprador,Modalidad:v.modalidad,Fecha:v.fecha,PrecioUSD:r.precioUSD,CobUSD:r.cobradoUSD,PrecioARS:r.precioARS,CobARS:r.cobradoARS,Cochera:v.incluyeCochera?(v.cocheraNro||'Sí'):'',Cuotas:(v.cuotasSimple&&v.cuotasSimple.activo)?v.cuotasSimple.nro+' ('+v.cuotasSimple.moneda.toUpperCase()+')':(v.modalidad==='cuotas_cac'?(v.nroCuotas||''):'')};}));
         add('Alquileres',(snap.alquileres||[]).map(function(a){var cob=(a.cobrosHistorial||[]).reduce(function(s,x){return s+(x.monto||0);},0);return{Unidad:a.unidad,Inquilino:a.inquilino,Inicio:a.inicio,Fin:a.fin,Canon:a.canonActual||a.canon,Moneda:a.moneda,TotalCobrado:cob};}));
         add('Servicios',(snap.servicios||[]).map(function(s){return{Fecha:s.fecha,Cliente:s.cliente,Descripcion:s.descripcion,Base:s.base,Avance:s.avance,Cobrado:s.cobrado};}));
         add('Cuentas Bancarias',(snap.cuentasBancarias||[]).map(function(cb){return{Banco:cb.banco,Tipo:cb.tipo,Alias:cb.alias,CBU:cb.cbu,Moneda:cb.moneda,Saldo:cb.saldo};}));
@@ -11635,7 +11635,118 @@
         document.getElementById('ventaBloqueMixto').style.display  = m === 'mixto'      ? '' : 'none';
         document.getElementById('ventaBloqueCAC').style.display    = m === 'cuotas_cac' ? '' : 'none';
         document.getElementById('ventaBloqueARS').style.display    = m === 'total_ars'  ? '' : 'none';
+        var esConCuotasSimples = (m === 'total_usd' || m === 'total_ars' || m === 'mixto');
+        document.getElementById('ventaBloqueCuotasSimple').style.display = esConCuotasSimples ? '' : 'none';
+        var monedaWrap = document.getElementById('ventaCuotasSimpleMonedaWrap');
+        if (monedaWrap) monedaWrap.style.display = (m === 'mixto') ? '' : 'none';
+        if (m === 'total_ars') document.getElementById('ventaCuotasSimpleMoneda').value = 'ars';
+        if (m === 'total_usd') document.getElementById('ventaCuotasSimpleMoneda').value = 'usd';
         if (m === 'cuotas_cac') ventaActualizarCampos();
+        if (esConCuotasSimples) ventaGenerarPlanSimple();
+    }
+
+    function ventaToggleCochera() {
+        var chk  = document.getElementById('ventaIncluyeCochera');
+        var wrap = document.getElementById('ventaCocheraNroWrap');
+        if (wrap) wrap.style.display = (chk && chk.checked) ? '' : 'none';
+    }
+
+    function ventaToggleCuotasSimple() {
+        var chk     = document.getElementById('ventaCuotasSimpleChk');
+        var campos  = document.getElementById('ventaCuotasSimpleCampos');
+        if (campos) campos.style.display = (chk && chk.checked) ? '' : 'none';
+        ventaGenerarPlanSimple();
+    }
+
+    // Precio total sobre el que aplica el plan de cuotas simples, según la modalidad activa
+    function ventaObtenerPrecioTotalCuotasSimple() {
+        var mod = document.getElementById('ventaModalidad').value;
+        if (mod === 'total_ars') return { moneda: 'ars', total: parseFloat(document.getElementById('ventaPrecioARSTotal').value) || 0 };
+        if (mod === 'total_usd') return { moneda: 'usd', total: parseFloat(document.getElementById('ventaPrecioUSD').value) || 0 };
+        if (mod === 'mixto') {
+            var moneda = (document.getElementById('ventaCuotasSimpleMoneda')||{}).value || 'ars';
+            var total = moneda === 'usd'
+                ? (parseFloat(document.getElementById('ventaMixtoUSD').value) || 0)
+                : (parseFloat(document.getElementById('ventaMixtoARS').value) || 0);
+            return { moneda: moneda, total: total };
+        }
+        return { moneda: 'ars', total: 0 };
+    }
+
+    // Leer fechas personalizadas del DOM del plan de cuotas simples
+    function ventaLeerFechasPlanSimple() {
+        var fechas = [];
+        var tbody = document.getElementById('ventaCuotasSimpleBody');
+        if (!tbody) return fechas;
+        tbody.querySelectorAll('.vps-fecha-input').forEach(function(inp){ fechas.push(inp.value||''); });
+        return fechas;
+    }
+
+    // Genera el plan de cuotas simples (monto = total / N, sin ajuste por índice)
+    function ventaGenerarPlanSimple() {
+        var wrap  = document.getElementById('ventaCuotasSimplePlanWrap');
+        var tbody = document.getElementById('ventaCuotasSimpleBody');
+        var chk   = document.getElementById('ventaCuotasSimpleChk');
+        if (!wrap || !tbody) return;
+        if (!chk || !chk.checked) { wrap.style.display = 'none'; return; }
+        var nc    = parseInt(document.getElementById('ventaCuotasSimpleNro').value) || 0;
+        var venc1 = document.getElementById('ventaCuotasSimpleFecha1').value || '';
+        var info  = ventaObtenerPrecioTotalCuotasSimple();
+        var total = info.total;
+        var esUSD = info.moneda === 'usd';
+        if (!nc || !venc1 || !total) { wrap.style.display = 'none'; return; }
+        wrap.style.display = '';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtNum = function(n) { return prefix + Math.round(n).toLocaleString('es-AR'); };
+        var compKey = esUSD ? 'cuota_usd_simple' : 'cuota_ars_simple';
+        // Fechas guardadas y cobros ya registrados (si estamos editando)
+        var fechasGuardadas = [];
+        var cobros = [];
+        if (typeof editandoVentaIdx !== 'undefined' && editandoVentaIdx >= 0 && ventas && ventas[editandoVentaIdx]) {
+            var vEdit = ventas[editandoVentaIdx];
+            if (vEdit.cuotasSimple) fechasGuardadas = vEdit.cuotasSimple.fechas || [];
+            cobros = (vEdit.cobrosHistorial || []).filter(function(c){ return c.comp === compKey; });
+        }
+        // Preservar fechas que el usuario ya modificó manualmente en el DOM actual
+        var fechasDOM = [];
+        tbody.querySelectorAll('.vps-fecha-input').forEach(function(inp){ fechasDOM.push(inp.value||''); });
+
+        tbody.innerHTML = '';
+        var d0 = new Date(venc1 + 'T00:00:00');
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var montoBase = Math.floor((total / nc) * 100) / 100;
+        var acumulado = 0;
+        for (var i = 0; i < nc; i++) {
+            var dDefault = new Date(d0);
+            dDefault.setMonth(dDefault.getMonth() + i);
+            var defaultISO = dDefault.toISOString().slice(0,10);
+            var fechaVal = (fechasDOM[i] && fechasDOM[i] !== '') ? fechasDOM[i]
+                         : (fechasGuardadas[i] && fechasGuardadas[i] !== '') ? fechasGuardadas[i]
+                         : defaultISO;
+            var nroCuota = i + 1;
+            var monto = (i === nc - 1) ? (total - acumulado) : montoBase;
+            acumulado += monto;
+            var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
+            var dV = new Date(fechaVal + 'T00:00:00');
+            var vencida = !pagada && dV < hoy;
+            var estado = pagada
+                ? '<span style="color:#1E8E3E;font-weight:500;font-size:11px;">✓ Pagada</span>'
+                : vencida
+                    ? '<span style="color:#D93025;font-weight:500;font-size:11px;">Vencida</span>'
+                    : '<span style="color:#9AA0A6;font-size:11px;">Pendiente</span>';
+            var trStyle = pagada ? 'background:#F0FFF4;' : vencida ? 'background:#FFF5F5;' : '';
+            var tr = document.createElement('tr');
+            tr.style.cssText = trStyle;
+            var inputStyle = 'padding:4px 6px;border:1px solid '+(vencida?'#FFCDD2':pagada?'#C8E6C9':'#DADCE0')+';border-radius:4px;font-size:11px;font-family:\'DM Mono\',monospace;background:transparent;width:118px;'+(pagada?'opacity:.5;':'');
+            tr.innerHTML =
+                '<td style="padding:5px 10px;text-align:center;font-family:\'DM Mono\',monospace;color:var(--text-2);font-size:12px;">' + nroCuota + '</td>' +
+                '<td style="padding:5px 10px;">' +
+                    '<input type="date" class="vps-fecha-input" data-cuota="'+nroCuota+'" value="'+fechaVal+'" style="'+inputStyle+'" '+(pagada?'disabled':'')+'>' +
+                '</td>' +
+                '<td style="padding:5px 10px;text-align:right;font-family:\'DM Mono\',monospace;font-weight:500;color:var(--text-1);font-size:12px;">' + fmtNum(monto) + '</td>' +
+                '<td style="padding:5px 10px;text-align:center;">' + estado + '</td>';
+            tbody.appendChild(tr);
+        }
     }
 
     function calcAjusteVentaCAC() {
@@ -11656,6 +11767,9 @@
         const v = editandoVentaIdx >= 0 ? ventas[editandoVentaIdx] : null;
         document.getElementById('modalVentaTitle').textContent = v ? '🏠 Editar UF — Venta' : '🏠 Nueva UF — Venta';
         document.getElementById('formVenta').reset();
+        // Limpiar tablas de planes de cuotas para que no queden filas de una venta previamente abierta
+        document.getElementById('ventaPlanCuotasBody').innerHTML = '';
+        document.getElementById('ventaCuotasSimpleBody').innerHTML = '';
         selModalidadVenta(v ? (v.modalidad || 'total_usd') : 'total_usd');
         if (v) {
             document.getElementById('ventaUF').value         = v.uf || '';
@@ -11713,6 +11827,17 @@
         } else {
             document.getElementById('ventaFecha').valueAsDate = new Date();
         }
+        // Cochera
+        document.getElementById('ventaIncluyeCochera').checked = !!(v && v.incluyeCochera);
+        document.getElementById('ventaCocheraNro').value = (v && v.cocheraNro) || '';
+        ventaToggleCochera();
+        // Plan de cuotas simples (total_usd / total_ars / mixto)
+        var cs = v && v.cuotasSimple;
+        document.getElementById('ventaCuotasSimpleChk').checked = !!(cs && cs.activo);
+        document.getElementById('ventaCuotasSimpleNro').value = (cs && cs.nro) || '';
+        document.getElementById('ventaCuotasSimpleFecha1').value = (cs && cs.fecha1) || '';
+        if (cs && cs.moneda) document.getElementById('ventaCuotasSimpleMoneda').value = cs.moneda;
+        ventaToggleCuotasSimple();
         // Desarrollo vinculado y m²
         poblarSelectDesarrollos('ventaDesarrolloId', v && v.desarrolloId);
         document.getElementById('ventaM2Unidad').value    = v ? (v.m2Unidad    || '') : '';
@@ -11803,6 +11928,8 @@
             desarrolloId: document.getElementById('ventaDesarrolloId').value || '',
             m2Unidad:    parseFloat(document.getElementById('ventaM2Unidad').value) || 0,
             m2Amenities: parseFloat(document.getElementById('ventaM2Amenities').value) || 0,
+            incluyeCochera: document.getElementById('ventaIncluyeCochera').checked,
+            cocheraNro:  document.getElementById('ventaIncluyeCochera').checked ? document.getElementById('ventaCocheraNro').value.trim() : '',
             cobrosHistorial: (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].cobrosHistorial) || []
         };
         if (mod === 'total_ars') {
@@ -11833,6 +11960,26 @@
                 // Guardar las fechas personalizadas por cuota del plan
                 var fechas = ventaLeerFechasPlan();
                 if (fechas.some(function(f){ return f; })) nuevo.cuotaFechas = fechas;
+            }
+        }
+        // ── Plan de pagos en cuotas simples (sin ajuste), para total_ars / total_usd / mixto ──
+        if (mod === 'total_ars' || mod === 'total_usd' || mod === 'mixto') {
+            var csChk = document.getElementById('ventaCuotasSimpleChk');
+            if (csChk && csChk.checked) {
+                var ncSimple = parseInt(document.getElementById('ventaCuotasSimpleNro').value) || 0;
+                var venc1Simple = document.getElementById('ventaCuotasSimpleFecha1').value || '';
+                if (ncSimple > 0 && venc1Simple) {
+                    var monedaCuotas = mod === 'total_ars' ? 'ars'
+                        : mod === 'total_usd' ? 'usd'
+                        : (document.getElementById('ventaCuotasSimpleMoneda').value || 'ars');
+                    nuevo.cuotasSimple = {
+                        activo: true,
+                        moneda: monedaCuotas,
+                        nro: ncSimple,
+                        fecha1: venc1Simple,
+                        fechas: ventaLeerFechasPlanSimple()
+                    };
+                }
             }
         }
         // ── Adjuntos: subir boleto / plano nuevos y conservar referencias ──
@@ -11869,6 +12016,11 @@
 
     function abrirCobroVenta(idx) {
         const v = ventas[idx];
+        // Si tiene un plan de cuotas simples activo, abrimos el selector de cuotas (sin ajuste CAC)
+        if (v && v.cuotasSimple && v.cuotasSimple.activo) {
+            _abrirCobroVentaCuotasSimple(idx);
+            return;
+        }
         // Si NO es cuotas_cac, abrimos el modal legacy simplificado (USD / ARS general)
         if (!v || v.modalidad !== 'cuotas_cac') {
             _abrirCobroVentaSimple(idx);
@@ -11931,6 +12083,76 @@
             : v.modalidad === 'mixto'   ? 'Ingresá USD o ARS según corresponda'
             : '';
         document.getElementById('modalCobroVenta').classList.add('active');
+    }
+
+    // ── Cobro para ventas con plan de cuotas simples (sin ajuste CAC) ──
+    function _abrirCobroVentaCuotasSimple(idx) {
+        const v = ventas[idx];
+        document.getElementById('cobroVentaIdx').value = idx;
+        document.getElementById('cobroVentaUFLabel').textContent = v.uf || '';
+        // No hay paso de índices: vamos directo al paso 2, pero con selector de cuota visible
+        document.getElementById('cvPaso1').style.display = 'none';
+        document.getElementById('cvPaso2').style.display = '';
+        var f = document.getElementById('formCobroVenta'); if (f) f.reset();
+        document.getElementById('cobroVentaFecha').valueAsDate = new Date();
+        document.getElementById('grupoCobroCAC').style.display = 'none';
+        document.getElementById('cvParcialInfo').style.display = '';
+        var grupoMixto = document.getElementById('grupoCompMixto');
+        if (grupoMixto) grupoMixto.style.display = 'none';
+        const esUSD = v.cuotasSimple.moneda === 'usd';
+        document.getElementById('cobroVentaComponente').value = esUSD ? 'cuota_usd_simple' : 'cuota_ars_simple';
+        var selCuotaGrp = document.getElementById('cobroVentaNroCuota').closest('.form-group');
+        if (selCuotaGrp) selCuotaGrp.style.display = '';
+        document.getElementById('cobroVentaNroCuota').style.display = '';
+        cvPoblarSelectorCuotasSimple(idx);
+        document.getElementById('modalCobroVenta').classList.add('active');
+    }
+
+    function cvPoblarSelectorCuotasSimple(idx) {
+        var v = ventas[idx];
+        var cs = v.cuotasSimple || {};
+        var nc = cs.nro || 0;
+        var esUSD = cs.moneda === 'usd';
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtN = function(n){ return prefix + Math.round(n||0).toLocaleString('es-AR'); };
+        var total = esUSD ? (v.precioUSD || 0) : (v.precioARS || 0);
+        var montoBase = nc > 0 ? Math.floor((total / nc) * 100) / 100 : 0;
+        var d0 = cs.fecha1 ? new Date(cs.fecha1+'T00:00:00') : null;
+        var fechas = cs.fechas || [];
+        var compKey = esUSD ? 'cuota_usd_simple' : 'cuota_ars_simple';
+        var cobros = (v.cobrosHistorial||[]).filter(function(c){ return c.comp === compKey; });
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var sel = document.getElementById('cobroVentaNroCuota');
+        sel.innerHTML = '';
+
+        // Montos por cuota: iguales, con la última ajustando el redondeo para cerrar el total exacto
+        var montos = [];
+        var acumulado = 0;
+        for (var k = 0; k < nc; k++) { var m = (k === nc-1) ? (total - acumulado) : montoBase; montos.push(m); acumulado += m; }
+
+        var hayPendientes = false;
+        for (var i = 0; i < nc; i++) {
+            var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
+            if (pagada) continue;
+            hayPendientes = true;
+            var monto = montos[i];
+            var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
+            var dV = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
+            var vencida = dV && dV < hoy;
+            var labelFecha = fechaISO ? ' — vto. '+fechaISO.split('-').reverse().join('/') : '';
+            var opt = document.createElement('option');
+            opt.value = i+1;
+            opt.dataset.monto = Math.round(monto);
+            opt.dataset.fecha = fechaISO;
+            opt.textContent = 'Cuota '+(i+1)+labelFecha+' ('+fmtN(monto)+')'+(vencida?' ⚠️':'');
+            sel.appendChild(opt);
+        }
+        if (!hayPendientes) {
+            sel.innerHTML = '<option value="">— Todas las cuotas están pagadas —</option>';
+            document.getElementById('cvCuotaHint').textContent = 'No hay cuotas pendientes para esta UF.';
+        } else {
+            cvOnCuotaChange();
+        }
     }
 
     // ── Recalcular plan con índices actuales ──
@@ -12199,7 +12421,7 @@
         const nroRecibo = generarNumeroRecibo();
         // Número de cuota seleccionada (solo para comp=cuota)
         var nroCuota = null;
-        if (comp === 'cuota') {
+        if (comp === 'cuota' || comp === 'cuota_ars_simple' || comp === 'cuota_usd_simple') {
             var selCuota = document.getElementById('cobroVentaNroCuota');
             if (selCuota && selCuota.value) nroCuota = parseInt(selCuota.value);
         }
@@ -12212,6 +12434,8 @@
         if (comp === 'ars_construccion'){ v.construccionCobrado = (v.construccionCobrado  || 0) + monto; if (cac>0) v.cacActual = cac; }
         if (comp === 'cuota')           { v.construccionCobrado = (v.construccionCobrado  || 0) + monto; if (cac>0) v.cacActual = cac; }
         if (comp === 'ars_general')     { v.cobradoARS          = (v.cobradoARS           || 0) + monto; }
+        if (comp === 'cuota_ars_simple'){ v.cobradoARS          = (v.cobradoARS           || 0) + monto; }
+        if (comp === 'cuota_usd_simple'){ v.cobradoUSD          = (v.cobradoUSD           || 0) + monto; }
         const ventaSnap = JSON.parse(JSON.stringify(v));
         cerrarModalCobroVenta();
         persistirVentas();
@@ -12221,8 +12445,8 @@
     }
 
     function imprimirReciboCobroVenta(v, monto, fecha, comp, cac, ref, nroRecibo, nroCuota) {
-        const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General'};
-        const fmtM = n => (comp==='usd'?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
+        const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS — Cuota', cuota_usd_simple:'USD — Cuota'};
+        const fmtM = n => ((comp==='usd'||comp==='cuota_usd_simple')?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
         const fmtARS = n => '$ ' + Number(n||0).toLocaleString('es-AR');
         const emision = new Date().toLocaleDateString('es-AR');
         const emp = getEmpresaParaRecibo();
@@ -12242,7 +12466,7 @@
         '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+ref:'') + '</td><td class="tr">' + fmtM(monto) + '</td></tr></tfoot>' +
         '</table>' +
         '<div class="bottom">' +
-        '<div class="instrucciones"><div class="instr-titulo">Modalidad de venta</div><div class="instr-body">' + ({total_usd:'USD Total',mixto:'USD + ARS',cuotas_cac:'Terreno + Cuotas CAC'}[v.modalidad]||v.modalidad) + (v.fecha?'<br>Boleto/Escritura: '+formatearFecha(v.fecha):'') + '</div></div>' +
+        '<div class="instrucciones"><div class="instr-titulo">Modalidad de venta</div><div class="instr-body">' + ({total_usd:'USD Total',total_ars:'$ ARS Total',mixto:'USD + ARS',cuotas_cac:'Terreno + Cuotas CAC'}[v.modalidad]||v.modalidad) + (v.fecha?'<br>Boleto/Escritura: '+formatearFecha(v.fecha):'') + '</div></div>' +
         '<div class="totales">' + saldoRows + '<div class="tot-final"><span>Cobrado este pago</span><span>' + fmtM(monto) + '</span></div></div>' +
         '</div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (v.comprador||'Comprador') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
@@ -12314,7 +12538,9 @@
                 const pendStr    = pendUSD > 0 ? fmtUSD(pendUSD) + (pendARS > 0 ? ' + ' + fmt(pendARS) : '') : fmt(pendARS);
                 const cuotasCell = v.modalidad === 'cuotas_cac' && v.nroCuotas
                     ? '<span class="pill" style="font-size:10px;">' + v.nroCuotas + ' cuotas</span>'
-                    : '—';
+                    : (v.cuotasSimple && v.cuotasSimple.activo
+                        ? '<span class="pill" style="font-size:10px;">' + v.cuotasSimple.nro + ' cuotas ' + (v.cuotasSimple.moneda==='usd'?'USD':'ARS') + '</span>'
+                        : '—');
                 var desVinc = '';
                 if (v.desarrolloId) {
                     var dv = desarrollos.find(function(x){ return x.id === v.desarrolloId; });
@@ -12322,6 +12548,9 @@
                         var m2Tot = (parseFloat(v.m2Unidad)||0) + (parseFloat(v.m2Amenities)||0);
                         desVinc = '<br><small style="color:var(--text-3);font-size:10px;">🏗 ' + escHtml(dv.nombre) + (m2Tot ? ' · ' + m2Tot.toLocaleString('es-AR',{maximumFractionDigits:2}) + ' m²' : '') + '</small>';
                     }
+                }
+                if (v.incluyeCochera) {
+                    desVinc += '<br><small style="color:var(--text-3);font-size:10px;">🚗 Cochera' + (v.cocheraNro ? ' N° ' + escHtml(v.cocheraNro) : '') + '</small>';
                 }
                 var docsBtns = '';
                 if (v.boletoDocId) docsBtns += '<button class="btn btn-outline btn-sm" title="Ver boleto de compraventa" onclick="descargarDoc(\'' + v.boletoDocId + '\',\'' + (v.boletoNombre||'boleto').replace(/'/g,'') + '\')">📄</button> ';
@@ -12373,7 +12602,7 @@
 
     function _buildResumenVentas(){
         var tipos = {departamento:'Depto.',casa:'Casa',local:'Local',cochera:'Cochera',oficina:'Oficina',otro:'Otro'};
-        var modLabels = {total_usd:'USD Total',mixto:'USD+ARS',cuotas_cac:'Terreno+CAC'};
+        var modLabels = {total_usd:'USD Total',total_ars:'$ ARS Total',mixto:'USD+ARS',cuotas_cac:'Terreno+CAC'};
         var totUSD=0,totCobUSD=0,totARS=0,totCobARS=0,nVend=0;
         var porTipo={}, porMod={};
         var labels=[],avancePct=[],avanceColors=[];
@@ -13849,12 +14078,17 @@
         var fechas = v.cuotaFechas || [];
 
         // ── Cabecera ──
-        var modLabels = { total_usd:'USD Total', mixto:'USD + ARS', cuotas_cac:'Terreno + Cuotas CAC' };
+        var modLabels = { total_usd:'USD Total', total_ars:'$ ARS Total', mixto:'USD + ARS', cuotas_cac:'Terreno + Cuotas CAC' };
         document.getElementById('ecUFLabel').textContent    = v.uf || '—';
         document.getElementById('ecComprador').textContent  = v.comprador || '—';
         document.getElementById('ecModalidad').textContent  = modLabels[v.modalidad] || v.modalidad;
         document.getElementById('ecFecha').textContent      = fmtF(v.fecha);
         document.getElementById('ecTipo').textContent       = ({departamento:'Departamento',casa:'Casa',local:'Local',cochera:'Cochera',oficina:'Oficina',otro:'Otro'}[v.tipo]||v.tipo||'—');
+        var ecCocheraWrap = document.getElementById('ecCocheraWrap');
+        if (ecCocheraWrap) {
+            ecCocheraWrap.style.display = v.incluyeCochera ? '' : 'none';
+            document.getElementById('ecCocheraNro').textContent = v.cocheraNro || '—';
+        }
 
         // ── Resumen financiero ──
         var r = resumenVenta(v);
@@ -13909,8 +14143,61 @@
         // ── Tabla de cuotas ──
         var tbody = document.getElementById('ecCuotasBody');
         var wrapCuotas = document.getElementById('ecCuotasTablaWrap');
-        if (wrapCuotas) wrapCuotas.style.display = (v.modalidad === 'cuotas_cac' && nc > 0) ? '' : 'none';
-        if (tbody && v.modalidad === 'cuotas_cac') {
+        var csEC = v.cuotasSimple && v.cuotasSimple.activo ? v.cuotasSimple : null;
+        if (wrapCuotas) wrapCuotas.style.display = ((v.modalidad === 'cuotas_cac' && nc > 0) || csEC) ? '' : 'none';
+        if (tbody && csEC) {
+            var ncSimple  = csEC.nro || 0;
+            var esUSDSimple = csEC.moneda === 'usd';
+            var totalSimple = esUSDSimple ? (v.precioUSD || 0) : (v.precioARS || 0);
+            var prefixSimple = esUSDSimple ? 'USD ' : '$ ';
+            var fmtNSimple = function(n){ return prefixSimple + Math.round(n||0).toLocaleString('es-AR'); };
+            var compKeySimple = esUSDSimple ? 'cuota_usd_simple' : 'cuota_ars_simple';
+            var cobrosSimple = (v.cobrosHistorial||[]).filter(function(c){ return c.comp === compKeySimple; });
+            var d0Simple = csEC.fecha1 ? new Date(csEC.fecha1+'T00:00:00') : null;
+            var fechasSimple = csEC.fechas || [];
+            var montoBaseSimple = ncSimple > 0 ? Math.floor((totalSimple / ncSimple) * 100) / 100 : 0;
+            var acumSimple = 0;
+            tbody.innerHTML = '';
+            for (var j = 0; j < ncSimple; j++) {
+                var nroCuotaS = j + 1;
+                var montoS = (j === ncSimple - 1) ? (totalSimple - acumSimple) : montoBaseSimple;
+                acumSimple += montoS;
+                var fechaISOS = fechasSimple[j] || (d0Simple ? (function(j2){ var d=new Date(d0Simple); d.setMonth(d.getMonth()+j2); return d.toISOString().slice(0,10); })(j) : '');
+                var pagadaS = cobrosSimple.some(function(c){ return c.nroCuota === nroCuotaS; });
+                var cobroRegS = cobrosSimple.find(function(c){ return c.nroCuota === nroCuotaS; });
+                var dVS = fechaISOS ? new Date(fechaISOS+'T00:00:00') : null;
+                var vencidaS = !pagadaS && dVS && dVS < hoy;
+                var diasRestantesS = (!pagadaS && dVS) ? Math.ceil((dVS - hoy) / 86400000) : null;
+
+                var estadoHtmlS, trBgS;
+                if (pagadaS) {
+                    estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
+                    trBgS = '#F8FFF8';
+                } else if (vencidaS) {
+                    estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida hace '+Math.abs(diasRestantesS)+' Días</span>';
+                    trBgS = '#FFF8F8';
+                } else {
+                    var labelS = diasRestantesS !== null ? (diasRestantesS === 0 ? 'Hoy' : 'en '+diasRestantesS+' Días') : 'Pendiente';
+                    estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#F1F3F4;color:#5F6368;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500;">⏳ '+labelS+'</span>';
+                    trBgS = '';
+                }
+                var montoHtmlS = pagadaS
+                    ? '<span style="color:#9AA0A6;">'+fmtNSimple(montoS)+'</span>'
+                    : vencidaS
+                        ? '<strong style="color:#D93025;">'+fmtNSimple(montoS)+'</strong>'
+                        : '<strong style="color:var(--blue);">'+fmtNSimple(montoS)+'</strong>';
+                var fechaCobroS = (pagadaS && cobroRegS) ? fmtF(cobroRegS.fecha) : '—';
+                var trS = document.createElement('tr');
+                trS.style.background = trBgS;
+                trS.innerHTML =
+                    '<td style="padding:8px 12px;text-align:center;font-family:\'DM Mono\',monospace;font-size:12px;font-weight:600;color:var(--text-2);">'+nroCuotaS+'</td>'+
+                    '<td style="padding:8px 12px;font-family:\'DM Mono\',monospace;font-size:12px;">'+fmtF(fechaISOS)+'</td>'+
+                    '<td style="padding:8px 12px;text-align:right;font-size:12px;">'+montoHtmlS+'</td>'+
+                    '<td style="padding:8px 12px;text-align:center;font-family:\'DM Mono\',monospace;font-size:11px;color:var(--text-3);">'+fechaCobroS+'</td>'+
+                    '<td style="padding:8px 12px;text-align:center;">'+estadoHtmlS+'</td>';
+                tbody.appendChild(trS);
+            }
+        } else if (tbody && v.modalidad === 'cuotas_cac') {
             tbody.innerHTML = '';
             for (var i = 0; i < nc; i++) {
                 var nroCuota = i + 1;
@@ -13960,8 +14247,8 @@
         if (histBody) {
             histBody.innerHTML = '';
             histAll.forEach(function(c, i) {
-                var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General'}[c.comp] || c.comp;
-                var monSym = c.comp === 'usd' ? 'USD ' : '$ ';
+                var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota'}[c.comp] || c.comp;
+                var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple') ? 'USD ' : '$ ';
                 var nroCuotaLabel = c.nroCuota ? ' · Cuota N°'+c.nroCuota : '';
                 var tr = document.createElement('tr');
                 tr.innerHTML =
@@ -13993,10 +14280,12 @@
         var d0 = v.cuota1Venc ? new Date(v.cuota1Venc+'T00:00:00') : null;
         var fechas = v.cuotaFechas || [];
         var emision = new Date().toLocaleDateString('es-AR');
-        var modLabels = { total_usd:'USD Total', mixto:'USD + ARS', cuotas_cac:'Terreno + Cuotas CAC' };
+        var modLabels = { total_usd:'USD Total', total_ars:'$ ARS Total', mixto:'USD + ARS', cuotas_cac:'Terreno + Cuotas CAC' };
 
         // Cuotas HTML para impresión
         var cuotasRows = '';
+        var csImp = v.cuotasSimple && v.cuotasSimple.activo ? v.cuotasSimple : null;
+        var ncPlanImp = nc;
         if (v.modalidad === 'cuotas_cac' && nc > 0) {
             for (var i = 0; i < nc; i++) {
                 var nroCuota = i + 1;
@@ -14017,12 +14306,44 @@
                     '<td style="padding:7px 10px;text-align:center;font-weight:700;color:'+estadoColor+';">'+estadoTxt+'</td>'+
                     '</tr>';
             }
+        } else if (csImp) {
+            ncPlanImp = csImp.nro || 0;
+            var esUSDImp = csImp.moneda === 'usd';
+            var totalImp = esUSDImp ? (v.precioUSD || 0) : (v.precioARS || 0);
+            var prefixImp = esUSDImp ? 'USD ' : '$ ';
+            var fmtNImp = function(n){ return prefixImp + Math.round(n||0).toLocaleString('es-AR'); };
+            var compKeyImp = esUSDImp ? 'cuota_usd_simple' : 'cuota_ars_simple';
+            var cobrosImp = cobrosAll.filter(function(c){ return c.comp === compKeyImp; });
+            var d0Imp = csImp.fecha1 ? new Date(csImp.fecha1+'T00:00:00') : null;
+            var fechasImp = csImp.fechas || [];
+            var montoBaseImp = ncPlanImp > 0 ? Math.floor((totalImp / ncPlanImp) * 100) / 100 : 0;
+            var acumImp = 0;
+            for (var k = 0; k < ncPlanImp; k++) {
+                var nroCuotaImp = k + 1;
+                var montoImp = (k === ncPlanImp - 1) ? (totalImp - acumImp) : montoBaseImp;
+                acumImp += montoImp;
+                var fechaISOImp = fechasImp[k] || (d0Imp ? (function(k2){ var d=new Date(d0Imp); d.setMonth(d.getMonth()+k2); return d.toISOString().slice(0,10); })(k) : '');
+                var pagadaImp = cobrosImp.some(function(c){ return c.nroCuota === nroCuotaImp; });
+                var cobroRegImp = cobrosImp.find(function(c){ return c.nroCuota === nroCuotaImp; });
+                var dVImp = fechaISOImp ? new Date(fechaISOImp+'T00:00:00') : null;
+                var vencidaImp = !pagadaImp && dVImp && dVImp < hoy;
+                var estadoColorImp = pagadaImp ? '#1E8E3E' : vencidaImp ? '#D93025' : '#1A73E8';
+                var estadoTxtImp = pagadaImp ? '✓ Pagada' : vencidaImp ? '⚠ Vencida' : 'Pendiente';
+                var rowBgImp = pagadaImp ? '#F0FFF4' : vencidaImp ? '#FFF5F5' : (k%2===0 ? '#FAFAFA' : '#fff');
+                cuotasRows += '<tr style="background:'+rowBgImp+'">'+
+                    '<td style="padding:7px 10px;text-align:center;font-weight:700;">'+nroCuotaImp+'</td>'+
+                    '<td style="padding:7px 10px;">'+fmtF(fechaISOImp)+'</td>'+
+                    '<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+(pagadaImp?'#9AA0A6':vencidaImp?'#D93025':'#1A3A6B')+';">'+fmtNImp(montoImp)+'</td>'+
+                    '<td style="padding:7px 10px;text-align:center;color:#555;">'+((pagadaImp && cobroRegImp) ? fmtF(cobroRegImp.fecha) : '—')+'</td>'+
+                    '<td style="padding:7px 10px;text-align:center;font-weight:700;color:'+estadoColorImp+';">'+estadoTxtImp+'</td>'+
+                    '</tr>';
+            }
         }
 
         // Cobros historial
         var histRows = cobrosAll.map(function(c){
-            var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Constr.', cuota:'ARS Cuota N°'+(c.nroCuota||''), ars_general:'ARS General'}[c.comp]||c.comp;
-            var monSym = c.comp==='usd' ? 'USD ' : '$ ';
+            var compLabel = {usd:'USD Terreno', ars_construccion:'ARS Constr.', cuota:'ARS Cuota N°'+(c.nroCuota||''), ars_general:'ARS General', cuota_ars_simple:'ARS Cuota N°'+(c.nroCuota||''), cuota_usd_simple:'USD Cuota N°'+(c.nroCuota||'')}[c.comp]||c.comp;
+            var monSym = (c.comp==='usd' || c.comp==='cuota_usd_simple') ? 'USD ' : '$ ';
             return '<tr><td style="padding:6px 10px;">'+fmtF(c.fecha)+'</td>'+
                 '<td style="padding:6px 10px;">'+compLabel+'</td>'+
                 '<td style="padding:6px 10px;text-align:right;font-weight:700;color:#1A6640;">'+monSym+Number(c.monto||0).toLocaleString('es-AR',{maximumFractionDigits:2})+'</td>'+
@@ -14066,6 +14387,7 @@
         '<div class="kv"><span class="k">Modalidad</span><span class="v">'+(modLabels[v.modalidad]||v.modalidad)+'</span></div>'+
         '<div class="kv"><span class="k">Boleto / Escritura</span><span class="v">'+fmtF(v.fecha)+'</span></div>'+
         (v.modalidad==='cuotas_cac' ? '<div class="kv"><span class="k">CAC Base</span><span class="v">'+(v.cacBase||'—')+'</span></div><div class="kv"><span class="k">CAC Actual</span><span class="v">'+(v.cacActual||'—')+'</span></div>' : '')+
+        (v.incluyeCochera ? '<div class="kv"><span class="k">Cochera</span><span class="v">N° '+(v.cocheraNro||'—')+'</span></div>' : '')+
         '</div>'+
         // Resumen financiero
         '<h2>Resumen financiero</h2>'+
@@ -14085,7 +14407,7 @@
         )+
         '</div>'+
         // Plan de cuotas
-        (v.modalidad==='cuotas_cac' && nc > 0 ?
+        ((v.modalidad==='cuotas_cac' && nc > 0) || (csImp && ncPlanImp > 0) ?
             '<h2>Plan de cuotas</h2>'+
             '<table><thead><tr>'+
             '<th class="c">N°</th><th>Vencimiento</th><th class="r">Monto</th><th class="c">Fecha cobro</th><th class="c">Estado</th>'+
@@ -14110,8 +14432,8 @@
         var hist = v.cobrosHistorial || [];
         if (!hist.length) { alert('Esta UF no tiene cobros registrados aún.'); return; }
         var lista = hist.map(function(c, i) {
-            var monSym = c.comp === 'usd' ? 'USD ' : '$ ';
-            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', ars_general:'ARS General'}[c.comp]||c.comp) + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
+            var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple') ? 'USD ' : '$ ';
+            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota'}[c.comp]||c.comp) + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
         }).join('\n');
         var sel = prompt('Cobros de ' + (v.uf||'UF') + ':\n\n' + lista + '\n\nNúmero a reimprimir (1-' + hist.length + '):');
         if (!sel) return;
@@ -17793,6 +18115,18 @@
           <label>Comprador / Titular</label>
           <input type="text" id="ventaComprador" placeholder="Nombre completo o razón social">
         </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="ventaIncluyeCochera" onchange="ventaToggleCochera()" style="width:auto;margin-right:6px;vertical-align:middle;">
+              🚗 Incluye cochera
+            </label>
+          </div>
+          <div class="form-group" id="ventaCocheraNroWrap" style="display:none;">
+            <label>N° de cochera</label>
+            <input type="text" id="ventaCocheraNro" placeholder="Ej: 15, Subsuelo 2 - B12">
+          </div>
+        </div>
         <div class="form-group">
           <label>Modalidad de venta</label>
           <div class="modalidad-toggle">
@@ -17806,14 +18140,14 @@
         <!-- USD Total -->
         <div id="ventaBloqueUSD">
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-            <div class="form-group"><label>Precio total (USD)</label><input type="number" id="ventaPrecioUSD" step="0.01" min="0" placeholder="0"></div>
+            <div class="form-group"><label>Precio total (USD)</label><input type="number" id="ventaPrecioUSD" step="0.01" min="0" placeholder="0" oninput="ventaGenerarPlanSimple()"></div>
             <div class="form-group"><label>Cobrado hasta hoy (USD)</label><input type="number" id="ventaCobradoUSD" step="0.01" min="0" placeholder="0"></div>
           </div>
         </div>
         <!-- ARS Total -->
         <div id="ventaBloqueARS" style="display:none;">
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-            <div class="form-group"><label>Precio total ($)</label><input type="number" id="ventaPrecioARSTotal" step="0.01" min="0" placeholder="0"></div>
+            <div class="form-group"><label>Precio total ($)</label><input type="number" id="ventaPrecioARSTotal" step="0.01" min="0" placeholder="0" oninput="ventaGenerarPlanSimple()"></div>
             <div class="form-group"><label>Cobrado hasta hoy ($)</label><input type="number" id="ventaCobradoARSTotal" step="0.01" min="0" placeholder="0"></div>
           </div>
         </div>
@@ -17822,13 +18156,60 @@
           <div class="cac-desglose" style="margin-bottom:12px;">
             <div class="ret-panel-title">Componente USD</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-              <div class="form-group" style="margin:0;"><label>Precio (USD)</label><input type="number" id="ventaMixtoUSD" step="0.01" min="0" placeholder="0"></div>
+              <div class="form-group" style="margin:0;"><label>Precio (USD)</label><input type="number" id="ventaMixtoUSD" step="0.01" min="0" placeholder="0" oninput="ventaGenerarPlanSimple()"></div>
               <div class="form-group" style="margin:0;"><label>Cobrado (USD)</label><input type="number" id="ventaMixtoCobradoUSD" step="0.01" min="0" placeholder="0"></div>
             </div>
             <div class="ret-panel-title" style="margin-top:12px;">Componente ARS</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-              <div class="form-group" style="margin:0;"><label>Precio (ARS)</label><input type="number" id="ventaMixtoARS" step="0.01" min="0" placeholder="0"></div>
+              <div class="form-group" style="margin:0;"><label>Precio (ARS)</label><input type="number" id="ventaMixtoARS" step="0.01" min="0" placeholder="0" oninput="ventaGenerarPlanSimple()"></div>
               <div class="form-group" style="margin:0;"><label>Cobrado (ARS)</label><input type="number" id="ventaMixtoCobradoARS" step="0.01" min="0" placeholder="0"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Pago en cuotas (sin ajuste) para USD Total / ARS Total / Mixto -->
+        <div id="ventaBloqueCuotasSimple" style="display:none;">
+          <div class="cac-desglose" style="margin-bottom:12px;">
+            <div class="ret-panel-title">💳 Plan de pagos en cuotas</div>
+            <div class="form-group" style="margin:8px 0 10px;">
+              <label>
+                <input type="checkbox" id="ventaCuotasSimpleChk" onchange="ventaToggleCuotasSimple()" style="width:auto;margin-right:6px;vertical-align:middle;">
+                Esta venta se paga en cuotas (no es un pago único)
+              </label>
+            </div>
+            <div id="ventaCuotasSimpleCampos" style="display:none;">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+                <div class="form-group" style="margin:0;" id="ventaCuotasSimpleMonedaWrap">
+                  <label>Moneda de las cuotas</label>
+                  <select id="ventaCuotasSimpleMoneda" onchange="ventaGenerarPlanSimple()" style="width:100%;">
+                    <option value="ars">ARS (pesos)</option>
+                    <option value="usd">USD (dólares)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>N° de cuotas</label>
+                  <input type="number" id="ventaCuotasSimpleNro" step="1" min="1" placeholder="Ej: 6" oninput="ventaGenerarPlanSimple()">
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label>Fecha 1° vencimiento</label>
+                  <input type="date" id="ventaCuotasSimpleFecha1" oninput="ventaGenerarPlanSimple()">
+                </div>
+              </div>
+              <div id="ventaCuotasSimplePlanWrap" style="display:none;">
+                <div class="ret-panel-title" style="margin-top:4px;">Plan de cuotas</div>
+                <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px;">
+                  <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                      <tr style="background:var(--surface-2);">
+                        <th style="padding:7px 10px;text-align:center;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">N°</th>
+                        <th style="padding:7px 10px;text-align:left;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Vencimiento</th>
+                        <th style="padding:7px 10px;text-align:right;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto</th>
+                        <th style="padding:7px 10px;text-align:center;font-family:'Josefin Sans',sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody id="ventaCuotasSimpleBody"></tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -18146,6 +18527,10 @@
           <div style="font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--text-3);font-family:'Josefin Sans',sans-serif;margin-bottom:4px;">Boleto / Escritura</div>
           <div id="ecFecha" style="font-size:13px;font-weight:500;color:var(--text-1);font-family:'DM Mono',monospace;"></div>
         </div>
+      </div>
+
+      <div id="ecCocheraWrap" style="display:none;margin-bottom:18px;font-size:12px;color:var(--text-2);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 14px;">
+        🚗 Incluye cochera N° <strong id="ecCocheraNro" style="color:var(--gold);"></strong>
       </div>
 
       <!-- Resumen financiero — Cuotas CAC -->
