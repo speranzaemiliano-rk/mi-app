@@ -2935,6 +2935,29 @@
   </div>
 </div>
 
+<!-- Modal: revisar/editar tareas detectadas en un audio antes de cargarlas -->
+<div class="modal" id="modalTareasAudio">
+  <div class="modal-box" style="max-width:560px;">
+    <div class="modal-head">
+      <h2>🎤 Tareas detectadas en el audio</h2>
+      <button class="modal-close" onclick="cerrarModalTareasAudio()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Cargar en la empresa</label>
+        <select id="taAudioEmpresa"></select>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin:-4px 0 10px;">Revisá, editá o quitá las tareas antes de cargarlas. El Pizarrón de Tareas es propio de cada empresa.</div>
+      <div id="taAudioLista"></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="rkAgregarFilaTareaAudio()" style="margin-top:4px;">+ Agregar tarea</button>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+        <button class="btn btn-outline" onclick="cerrarModalTareasAudio()">Cancelar</button>
+        <button class="btn btn-gold" onclick="guardarTareasAudioRevisadas()">💾 Cargar tareas</button>
+      </div>
+    </div>
+  </div>
+</div>
+
             </div><!-- /panelHome -->
 
             <!-- TAB: DESARROLLOS INMOBILIARIOS -->
@@ -20014,9 +20037,9 @@
     }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
-      btnT.textContent = '📋 Cargar ' + tareasDatos.tareas.length + (tareasDatos.tareas.length === 1 ? ' tarea al Pizarrón' : ' tareas al Pizarrón');
+      btnT.textContent = '📋 Revisar ' + tareasDatos.tareas.length + (tareasDatos.tareas.length === 1 ? ' tarea detectada' : ' tareas detectadas');
       btnT.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#4CAF82,#2E9E68);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
-      btnT.onclick = function() { rkCargarTareasDesdeAudio(tareasDatos.tareas); btnT.textContent = '✓ Cargadas'; btnT.disabled = true; };
+      btnT.onclick = function() { rkAbrirRevisionTareasAudio(tareasDatos.tareas); };
       div.appendChild(btnT);
     }
     cont.appendChild(div);
@@ -20024,29 +20047,93 @@
     return div;
   }
 
-  // Vuelca las tareas extraídas de un audio al Pizarrón de Tareas de la empresa activa
-  // (mismo REF_TAREAS/array "tareas" que usa el widget de Home; ver sección PIZARRÓN DE TAREAS).
-  window.rkCargarTareasDesdeAudio = function(lista) {
-    if (typeof tareas === 'undefined') { alert('No se pudo acceder al Pizarrón de Tareas.'); return; }
-    lista.forEach(function(t) {
-      tareas.push({
-        titulo: t.titulo || 'Tarea sin título',
-        responsable: t.responsable || 'Sin asignar',
+  function _rkEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  function _rkFilaTareaAudioHTML(t) {
+    t = t || {};
+    return '<div class="ta-audio-fila" style="border:1px solid var(--border-soft);border-radius:8px;padding:10px;margin-bottom:8px;">'
+      + '<div style="display:flex;gap:8px;align-items:flex-start;">'
+        + '<div style="flex:1;">'
+          + '<input type="text" class="ta-audio-titulo" placeholder="Tarea" value="' + _rkEsc(t.titulo) + '" style="width:100%;margin-bottom:6px;">'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">'
+            + '<input type="text" class="ta-audio-resp" placeholder="Responsable" value="' + _rkEsc(t.responsable) + '">'
+            + '<input type="date" class="ta-audio-fecha" value="' + _rkEsc(t.fechaVencimiento) + '">'
+          + '</div>'
+        + '</div>'
+        + '<button type="button" onclick="this.closest(\'.ta-audio-fila\').remove()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;padding:2px 4px;" title="Quitar">✕</button>'
+      + '</div>'
+    + '</div>';
+  }
+
+  // Abre el modal de revisión: elegir empresa destino y editar/quitar tareas antes de cargarlas.
+  window.rkAbrirRevisionTareasAudio = function(lista) {
+    var selEmp = document.getElementById('taAudioEmpresa');
+    selEmp.innerHTML = '';
+    (typeof empresas !== 'undefined' ? empresas : []).forEach(function(e) {
+      var o = document.createElement('option');
+      o.value = e.id; o.textContent = e.nombre;
+      if (typeof empresaActual !== 'undefined' && empresaActual && e.id === empresaActual.id) o.selected = true;
+      selEmp.appendChild(o);
+    });
+    var cont = document.getElementById('taAudioLista');
+    cont.innerHTML = lista.map(_rkFilaTareaAudioHTML).join('');
+
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    document.getElementById('modalTareasAudio').classList.add('active');
+  };
+
+  window.rkAgregarFilaTareaAudio = function() {
+    document.getElementById('taAudioLista').insertAdjacentHTML('beforeend', _rkFilaTareaAudioHTML({}));
+  };
+
+  window.cerrarModalTareasAudio = function() {
+    document.getElementById('modalTareasAudio').classList.remove('active');
+  };
+
+  // Lee las filas editadas del modal y agrega las tareas a empresas/<id>/tareas
+  // de la empresa elegida (no necesariamente la activa).
+  window.guardarTareasAudioRevisadas = function() {
+    var empId = document.getElementById('taAudioEmpresa').value;
+    if (!empId) { alert('Elegí una empresa.'); return; }
+    var filas = document.querySelectorAll('#taAudioLista .ta-audio-fila');
+    var nuevas = [];
+    filas.forEach(function(fila) {
+      var titulo = fila.querySelector('.ta-audio-titulo').value.trim();
+      if (!titulo) return;
+      nuevas.push({
+        titulo: titulo,
+        responsable: fila.querySelector('.ta-audio-resp').value.trim() || 'Sin asignar',
         emailResponsable: '',
         controlador: '',
         emailControlador: '',
-        fechaVencimiento: t.fechaVencimiento || '',
+        fechaVencimiento: fila.querySelector('.ta-audio-fecha').value || '',
         intervaloDias: 3,
         estado: 'pendiente',
         creadaEn: Date.now(),
         ultimoRecordatorio: null
       });
     });
-    if (typeof REF_TAREAS !== 'undefined' && REF_TAREAS) REF_TAREAS.set(tareas);
-    if (typeof renderTareas === 'function') renderTareas();
-    _rkAbierto = false;
-    document.getElementById('rk-agente-panel').classList.remove('abierto');
-    if (typeof mostrarTab === 'function') mostrarTab('Home');
+    if (!nuevas.length) { alert('No hay ninguna tarea con título para cargar.'); return; }
+    if (typeof db === 'undefined' || !db) { alert('No hay conexión con la base de datos.'); return; }
+
+    var ref = db.ref('empresas/' + empId + '/tareas');
+    ref.once('value').then(function(snap) {
+      var actuales = [];
+      var v = snap.val();
+      if (v) { if (Array.isArray(v)) actuales = v; else Object.keys(v).forEach(function(k){ actuales.push(v[k]); }); }
+      return ref.set(actuales.concat(nuevas));
+    }).then(function() {
+      cerrarModalTareasAudio();
+      var emp = (typeof empresas !== 'undefined' ? empresas : []).find(function(e){ return e.id === empId; });
+      alert('✅ ' + nuevas.length + (nuevas.length === 1 ? ' tarea cargada' : ' tareas cargadas') + ' en "' + (emp ? emp.nombre : empId) + '".');
+      // Si la empresa elegida es la activa, refrescamos el Pizarrón que se ve en Home al toque
+      if (typeof empresaActual !== 'undefined' && empresaActual && empresaActual.id === empId && typeof mostrarTab === 'function') {
+        mostrarTab('Home');
+      }
+    }).catch(function(err) {
+      alert('❌ Error al cargar las tareas: ' + (err && err.message ? err.message : err));
+    });
   };
 
   window.rkCargarFactura = function(f) {
