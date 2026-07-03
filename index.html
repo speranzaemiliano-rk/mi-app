@@ -3345,6 +3345,38 @@
                         </table>
                     </div>
                 </div>
+
+                <!-- ── Comprobantes emitidos (recibos / facturas-tipo que emite el estudio) ── -->
+                <div class="table-card" style="margin-top:18px;">
+                    <div class="table-card-head">
+                        <h3>Comprobantes emitidos <span style="font-weight:400;color:var(--text-3);font-size:12px;">(recibos y documentos que emitís e imprimís)</span></h3>
+                        <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir()">＋ Emitir recibo / documento</button>
+                    </div>
+                    <div class="search-row">
+                        <input type="text" class="search-input" id="buscadorEmitido" oninput="renderEmitidos()" placeholder="Buscar por cliente, número, concepto…">
+                        <select id="filtroEmitidoTipo" onchange="renderEmitidos()" style="width:auto; min-width:140px;">
+                            <option value="">Todos los tipos</option>
+                            <option value="recibo">Recibos</option>
+                            <option value="factura">Documentos tipo factura</option>
+                        </select>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Número</th>
+                                    <th>Tipo</th>
+                                    <th>Cliente</th>
+                                    <th>Concepto</th>
+                                    <th style="text-align:right;">Total</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="emitidosBody"><tr><td colspan="7" class="empty-msg">No hay comprobantes emitidos.</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
             </div><!-- /panelDocumentos -->
 
             <!-- TAB: RESUMEN INGRESOS -->
@@ -7586,7 +7618,7 @@
         if (nombre === 'CuentasBancarias') renderCuentasBancarias();
         if (nombre === 'Tesoreria')       renderTesoreria();
         if (nombre === 'Reportes')        rptInit();
-        if (nombre === 'Documentos')       renderDocumentos();
+        if (nombre === 'Documentos')       { renderDocumentos(); renderEmitidos(); }
         if (nombre === 'Ventas')           renderVentas();
         if (nombre === 'Alquileres')       renderAlquileres();
         if (nombre === 'Servicios')        renderServicios();
@@ -11049,6 +11081,218 @@
     let documentos = [];
     let editandoDocId = null;
     let docModalidadActual = 'B';
+    // Comprobantes emitidos (recibos / facturas-tipo que emite el estudio)
+    let comprobantesEmitidos = [];
+    let editandoEmitidoId = null;
+    var REF_EMITIDOS = null;
+    function persistirEmitidos() { if (REF_EMITIDOS) REF_EMITIDOS.set(comprobantesEmitidos); }
+
+    var _emitItems = []; // ítems para el documento tipo factura
+
+    function emitFmt(n, moneda) { return (moneda === 'USD' ? 'USD ' : '$ ') + Math.round(n||0).toLocaleString('es-AR'); }
+
+    function emitTotal() {
+        var tipo = document.getElementById('emitTipo').value;
+        if (tipo === 'recibo') return parseFloat(document.getElementById('emitMonto').value) || 0;
+        return _emitItems.reduce(function(s, it){ return s + ((it.cant||0) * (it.precio||0)); }, 0);
+    }
+
+    function emitActualizarTotal() {
+        var moneda = document.getElementById('emitMoneda').value;
+        var el = document.getElementById('emitTotalLbl');
+        if (el) el.textContent = emitFmt(emitTotal(), moneda);
+    }
+
+    function emitToggleTipo() {
+        var tipo = document.getElementById('emitTipo').value;
+        document.getElementById('emitBloqueRecibo').style.display  = tipo === 'recibo'  ? '' : 'none';
+        document.getElementById('emitBloqueFactura').style.display = tipo === 'factura' ? '' : 'none';
+        var t = document.getElementById('modalEmitirTitle');
+        if (t) t.textContent = editandoEmitidoId ? '✏ Editar comprobante emitido' : (tipo === 'recibo' ? '🧾 Emitir recibo' : '📄 Emitir documento tipo factura');
+        emitActualizarTotal();
+    }
+
+    function emitAgregarItem() { _emitItems.push({ desc:'', cant:1, precio:0 }); emitRenderItems(); }
+    function emitQuitarItem(i) { _emitItems.splice(i, 1); emitRenderItems(); }
+    function emitItemInput(i, campo, val) {
+        if (!_emitItems[i]) return;
+        if (campo === 'desc') _emitItems[i].desc = val;
+        else _emitItems[i][campo] = parseFloat(val) || 0;
+        // Recalcular solo el subtotal de la fila + total (sin re-render para no perder foco)
+        var celda = document.getElementById('emitSub_' + i);
+        if (celda) celda.textContent = emitFmt((_emitItems[i].cant||0) * (_emitItems[i].precio||0), document.getElementById('emitMoneda').value);
+        emitActualizarTotal();
+    }
+
+    function emitRenderItems() {
+        var tbody = document.getElementById('emitItemsBody');
+        if (!tbody) return;
+        var moneda = document.getElementById('emitMoneda').value;
+        tbody.innerHTML = '';
+        _emitItems.forEach(function(it, i) {
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td style="padding:4px;"><input type="text" value="'+String(it.desc||'').replace(/"/g,'&quot;')+'" oninput="emitItemInput('+i+',\'desc\',this.value)" style="width:100%;" placeholder="Descripción del ítem"></td>'+
+                '<td style="padding:4px;"><input type="number" value="'+(it.cant||0)+'" min="0" step="0.01" oninput="emitItemInput('+i+',\'cant\',this.value)" style="width:64px;"></td>'+
+                '<td style="padding:4px;"><input type="number" value="'+(it.precio||0)+'" min="0" step="0.01" oninput="emitItemInput('+i+',\'precio\',this.value)" style="width:110px;"></td>'+
+                '<td id="emitSub_'+i+'" style="padding:4px 8px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;">'+emitFmt((it.cant||0)*(it.precio||0), moneda)+'</td>'+
+                '<td style="padding:4px;text-align:center;"><button type="button" class="btn btn-outline btn-sm" onclick="emitQuitarItem('+i+')">✕</button></td>';
+            tbody.appendChild(tr);
+        });
+        emitActualizarTotal();
+    }
+
+    function abrirModalEmitir(id) {
+        editandoEmitidoId = id || null;
+        var e = id ? comprobantesEmitidos.find(function(x){ return x.id === id; }) : null;
+        var f = document.getElementById('formEmitir'); if (f) f.reset();
+        _emitItems = [];
+        if (e) {
+            document.getElementById('emitTipo').value      = e.tipoDoc || 'recibo';
+            document.getElementById('emitFecha').value     = e.fecha || '';
+            document.getElementById('emitCliente').value   = e.cliente || '';
+            document.getElementById('emitClienteDet').value= e.clienteDetalle || '';
+            document.getElementById('emitMoneda').value    = e.moneda || 'ARS';
+            document.getElementById('emitModalidad').value = e.tipoAB === 'A' ? 'A' : 'B';
+            document.getElementById('emitConcepto').value  = e.concepto || '';
+            document.getElementById('emitMonto').value     = e.monto || '';
+            document.getElementById('emitObs').value       = e.obs || '';
+            _emitItems = (e.items || []).map(function(it){ return { desc:it.desc, cant:it.cant, precio:it.precio }; });
+            document.getElementById('emitNroActual').textContent = e.nro ? ('N° ' + e.nro) : '(se asigna al guardar)';
+        } else {
+            document.getElementById('emitTipo').value      = 'recibo';
+            document.getElementById('emitFecha').valueAsDate = new Date();
+            document.getElementById('emitMoneda').value    = 'ARS';
+            document.getElementById('emitModalidad').value = 'B';
+            document.getElementById('emitNroActual').textContent = '(se asigna al guardar)';
+        }
+        if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
+        emitRenderItems();
+        emitToggleTipo();
+        document.getElementById('modalEmitir').classList.add('active');
+    }
+
+    function cerrarModalEmitir() { document.getElementById('modalEmitir').classList.remove('active'); }
+
+    async function guardarComprobanteEmitido() {
+        var tipo    = document.getElementById('emitTipo').value;
+        var cliente = document.getElementById('emitCliente').value.trim();
+        var fecha   = document.getElementById('emitFecha').value;
+        if (!cliente) { alert('Ingresá el cliente / destinatario.'); return; }
+        if (!fecha)   { alert('Ingresá la fecha.'); return; }
+        var tipoAB = document.getElementById('emitModalidad').value === 'A' ? 'A' : 'B';
+        var total  = emitTotal();
+        if (total <= 0) { alert('El total debe ser mayor a cero.'); return; }
+        var prev = editandoEmitidoId ? comprobantesEmitidos.find(function(x){ return x.id === editandoEmitidoId; }) : null;
+        var reg = {
+            id:            editandoEmitidoId || ('emit_' + Date.now()),
+            tipoDoc:       tipo,
+            fecha:         fecha,
+            cliente:       cliente,
+            clienteDetalle:document.getElementById('emitClienteDet').value.trim(),
+            moneda:        document.getElementById('emitMoneda').value,
+            tipoAB:        tipoAB,
+            concepto:      document.getElementById('emitConcepto').value.trim(),
+            monto:         parseFloat(document.getElementById('emitMonto').value) || 0,
+            items:         _emitItems.filter(function(it){ return String(it.desc||'').trim() || it.precio; }).map(function(it){ return { desc:it.desc||'', cant:it.cant||0, precio:it.precio||0 }; }),
+            obs:           document.getElementById('emitObs').value.trim(),
+            total:         total,
+            nro:           (prev && prev.nro) ? prev.nro : null
+        };
+        // Asignar número correlativo solo si es nuevo (al editar se conserva el existente)
+        if (!reg.nro) { reg.nro = await obtenerProximoComprobante(tipoAB); }
+        var idx = comprobantesEmitidos.findIndex(function(x){ return x.id === reg.id; });
+        if (idx >= 0) comprobantesEmitidos[idx] = reg; else comprobantesEmitidos.push(reg);
+        cerrarModalEmitir();
+        persistirEmitidos();
+        renderEmitidos();
+        if (confirm('Comprobante ' + reg.nro + ' guardado. ¿Imprimir?')) imprimirComprobanteEmitido(reg.id);
+    }
+
+    function eliminarEmitido(id) {
+        if (!confirm('¿Eliminar este comprobante emitido?')) return;
+        var i = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
+        if (i >= 0) { comprobantesEmitidos.splice(i, 1); persistirEmitidos(); renderEmitidos(); }
+    }
+
+    function renderEmitidos() {
+        var tbody = document.getElementById('emitidosBody');
+        if (!tbody) return;
+        var busq  = ((document.getElementById('buscadorEmitido')||{}).value || '').toLowerCase();
+        var ftipo = (document.getElementById('filtroEmitidoTipo')||{}).value || '';
+        var list = (comprobantesEmitidos || []).filter(function(e){
+            if (!e) return false;
+            if (ftipo && e.tipoDoc !== ftipo) return false;
+            var txt = ((e.cliente||'') + (e.nro||'') + (e.concepto||'')).toLowerCase();
+            if (busq && txt.indexOf(busq) < 0) return false;
+            return true;
+        });
+        list.sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+        if (!list.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay comprobantes emitidos.</td></tr>'; return; }
+        var editable = (typeof puedeEditar !== 'undefined') ? puedeEditar : true;
+        tbody.innerHTML = '';
+        list.forEach(function(e){
+            var mon = e.moneda === 'USD' ? 'USD ' : '$ ';
+            var tipoLbl = e.tipoDoc === 'factura' ? 'Doc. factura' : 'Recibo';
+            var concepto = e.tipoDoc === 'factura'
+                ? ((e.items && e.items.length ? (e.items[0].desc||'') : '') + (e.items && e.items.length > 1 ? ' +' + (e.items.length-1) + ' ítem(s)' : ''))
+                : (e.concepto || '');
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
+                '<td><strong>' + escHtml(e.nro||'—') + '</strong> <span class="pill pill-' + (e.tipoAB||'B') + '">' + (e.tipoAB||'B') + '</span></td>' +
+                '<td>' + tipoLbl + '</td>' +
+                '<td>' + escHtml(e.cliente||'—') + '</td>' +
+                '<td>' + escHtml(concepto||'—') + '</td>' +
+                '<td style="text-align:right;">' + mon + Math.round(e.total||0).toLocaleString('es-AR') + '</td>' +
+                '<td><div class="action-btns">' +
+                    '<button class="btn btn-outline btn-sm" title="Imprimir" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')">🖨️</button> ' +
+                    (editable ? '<button class="btn btn-outline btn-sm" title="Editar" onclick="abrirModalEmitir(\'' + e.id + '\')">✏</button> ' +
+                                '<button class="btn btn-outline btn-sm" title="Eliminar" onclick="eliminarEmitido(\'' + e.id + '\')">🗑</button>' : '') +
+                '</div></td>';
+            tbody.appendChild(tr);
+        });
+    }
+
+    function imprimirComprobanteEmitido(id) {
+        var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
+        if (!e) return;
+        var emp = getEmpresaParaRecibo();
+        var emision = new Date().toLocaleDateString('es-AR');
+        var moneda = e.moneda;
+        var fmtM = function(n){ return (moneda==='USD'?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
+        var titulo = e.tipoDoc === 'factura' ? 'Documento (formato factura)' : 'Recibo de Cobro';
+        var _rh = buildReciboHeader(titulo, e.nro || null, e.fecha ? formatearFecha(e.fecha) : emision, {
+            label: 'Cliente', nombre: e.cliente || '—', detalle: e.clienteDetalle || ''
+        });
+        var tabla;
+        if (e.tipoDoc === 'factura' && e.items && e.items.length) {
+            var filas = '';
+            e.items.forEach(function(it){
+                var sub = (it.cant||0) * (it.precio||0);
+                filas += '<tr><td>' + (it.desc||'—') + '</td><td class="tr">' + (it.cant||0) + '</td><td class="tr">' + fmtM(it.precio) + '</td><td class="tr">' + fmtM(sub) + '</td></tr>';
+            });
+            tabla = '<table class="tbl"><thead><tr><th>Descripción</th><th class="tr">Cant.</th><th class="tr">P. unit.</th><th class="tr">Subtotal</th></tr></thead>' +
+                '<tbody>' + filas + '</tbody>' +
+                '<tfoot><tr><td colspan="3">Total</td><td class="tr">' + fmtM(e.total) + '</td></tr></tfoot></table>';
+        } else {
+            tabla = '<table class="tbl"><thead><tr><th>Concepto</th><th class="tr">Monto</th></tr></thead>' +
+                '<tbody><tr><td>' + (e.concepto||'—') + '</td><td class="tr">' + fmtM(e.monto||e.total) + '</td></tr></tbody>' +
+                '<tfoot><tr><td>Total</td><td class="tr">' + fmtM(e.total) + '</td></tr></tfoot></table>';
+        }
+        var html = '<html><head><meta charset="UTF-8"><title>' + titulo + ' ' + (e.nro||'') + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
+            tabla +
+            '<div class="bottom">' +
+            '<div class="instrucciones"><div class="instr-titulo">Detalle</div><div class="instr-body">' + (e.obs ? e.obs.replace(/</g,'&lt;') : 'Documento no fiscal emitido por ' + emp.nombre + '.') + '</div></div>' +
+            '<div class="totales"><div class="tot-final"><span>Total</span><span>' + fmtM(e.total) + '</span></div></div>' +
+            '</div>' +
+            '<div class="firmas"><div class="fi">Recibí conforme — ' + (e.cliente||'Cliente') + '</div><div class="fi">Emitió — ' + emp.nombre + '</div></div>' +
+            '<div class="pie">' + (e.nro ? e.nro + ' · ' : '') + 'Documento no fiscal · Generado el ' + emision + ' · ' + emp.nombre + '</div>' +
+            '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+        var w = window.open('', '_blank', 'width=780,height=950');
+        if (!w) { alert('Permití las ventanas emergentes.'); return; }
+        w.document.write(html); w.document.close();
+    }
 
     function setDocModalidad(m) {
         docModalidadActual = m;
@@ -11464,6 +11708,7 @@
         REF_PLAN        = db.ref(base + '/planTrabajo');
         REF_DESARROLLOS = db.ref(base + '/desarrollos');
         REF_APORTANTES  = db.ref(base + '/aportantes');
+        REF_EMITIDOS    = db.ref(base + '/comprobantesEmitidos');
     }
 
     // Helper: carga con listener .on() reactivo
@@ -11486,6 +11731,7 @@
         _cargarConListener(REF_ING_GENERAL, function(v) { ingGeneral = v; renderIngGeneral(); });
         _cargarConListener(REF_DESARROLLOS, function(v) { desarrollos = v; if (typeof renderDesarrollos==='function') renderDesarrollos(); if (typeof renderAportantes==='function') renderAportantes(); });
         _cargarConListener(REF_APORTANTES,  function(v) { aportantes  = v; if (typeof renderAportantes==='function') renderAportantes(); });
+        _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; if (typeof renderEmitidos==='function') renderEmitidos(); });
         if (REF_PLAN) {
             REF_PLAN.on('value', function(snap) {
                 var val = snap.val();
@@ -18187,6 +18433,102 @@
 
 
 <!-- ── MODAL: DOCUMENTO / COMPROBANTE ── -->
+<!-- ═══════════════ MODAL: EMITIR RECIBO / DOCUMENTO ═══════════════ -->
+<div class="modal" id="modalEmitir">
+    <div class="modal-box modal-box-wide" style="max-width:640px;">
+        <div class="modal-head">
+            <h2 id="modalEmitirTitle">🧾 Emitir recibo</h2>
+            <button class="modal-close" onclick="cerrarModalEmitir()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="formEmitir">
+                <div class="form-group">
+                    <label>Tipo de comprobante</label>
+                    <select id="emitTipo" onchange="emitToggleTipo()" style="width:100%;">
+                        <option value="recibo">Recibo (un concepto y un monto)</option>
+                        <option value="factura">Documento tipo factura (con ítems)</option>
+                    </select>
+                    <div class="form-hint" style="color:var(--text-3);">Documento no fiscal — no reemplaza una factura ARCA. Número asignado: <strong id="emitNroActual">(se asigna al guardar)</strong></div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label>Cliente / Destinatario *</label>
+                        <input type="text" id="emitCliente" placeholder="Nombre o razón social">
+                    </div>
+                    <div class="form-group">
+                        <label>Datos del cliente <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                        <input type="text" id="emitClienteDet" placeholder="CUIT, dirección, etc.">
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label>Fecha *</label>
+                        <input type="date" id="emitFecha">
+                    </div>
+                    <div class="form-group">
+                        <label>Moneda</label>
+                        <select id="emitMoneda" onchange="emitRenderItems();emitActualizarTotal();" style="width:100%;">
+                            <option value="ARS">ARS — Pesos</option>
+                            <option value="USD">USD — Dólares</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Comprobante</label>
+                        <select id="emitModalidad" style="width:100%;">
+                            <option value="B">B — Efectivo</option>
+                            <option value="A">A — Banco</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- Recibo: concepto + monto -->
+                <div id="emitBloqueRecibo">
+                    <div style="display:grid; grid-template-columns:2fr 1fr; gap:12px;">
+                        <div class="form-group">
+                            <label>Concepto *</label>
+                            <input type="text" id="emitConcepto" placeholder="Ej: Seña, honorarios, alquiler…">
+                        </div>
+                        <div class="form-group">
+                            <label>Monto *</label>
+                            <input type="number" id="emitMonto" step="0.01" min="0" placeholder="0" oninput="emitActualizarTotal()">
+                        </div>
+                    </div>
+                </div>
+                <!-- Factura: ítems -->
+                <div id="emitBloqueFactura" style="display:none;">
+                    <div class="ret-panel-title" style="margin-bottom:6px;">Ítems</div>
+                    <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                            <thead>
+                                <tr style="background:var(--surface-2);">
+                                    <th style="padding:6px 8px;text-align:left;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Descripción</th>
+                                    <th style="padding:6px 8px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Cant.</th>
+                                    <th style="padding:6px 8px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:400;">P. unit.</th>
+                                    <th style="padding:6px 8px;text-align:right;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Subtotal</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="emitItemsBody"></tbody>
+                        </table>
+                    </div>
+                    <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="emitAgregarItem()">＋ Agregar ítem</button>
+                </div>
+                <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+                    <span style="font-size:12px;color:var(--text-3);text-transform:uppercase;letter-spacing:.1em;">Total</span>
+                    <strong id="emitTotalLbl" style="font-size:18px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;">$ 0</strong>
+                </div>
+                <div class="form-group" style="margin-top:10px;">
+                    <label>Observaciones / detalle</label>
+                    <textarea id="emitObs" rows="2" style="width:100%;resize:vertical;" placeholder="Texto libre que aparece en el comprobante"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="cerrarModalEmitir()">Cancelar</button>
+                    <button type="button" class="btn btn-gold" onclick="guardarComprobanteEmitido()">💾 Guardar e imprimir</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <div class="modal" id="modalDoc">
     <div class="modal-box modal-box-wide">
         <div class="modal-head">
