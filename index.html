@@ -2943,11 +2943,17 @@
       <button class="modal-close" onclick="cerrarModalTareasAudio()">✕</button>
     </div>
     <div class="modal-body">
-      <div class="form-group">
-        <label>Cargar en la empresa</label>
-        <select id="taAudioEmpresa"></select>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label>Empresa</label>
+          <select id="taAudioEmpresa" onchange="rkPoblarProyectosAudio()"></select>
+        </div>
+        <div class="form-group">
+          <label>Proyecto</label>
+          <select id="taAudioProyecto"></select>
+        </div>
       </div>
-      <div style="font-size:11px;color:var(--text-3);margin:-4px 0 10px;">Revisá, editá o quitá las tareas antes de cargarlas. El Pizarrón de Tareas es propio de cada empresa.</div>
+      <div style="font-size:11px;color:var(--text-3);margin:-4px 0 10px;">Revisá, editá o quitá las tareas antes de cargarlas. El Pizarrón de Tareas es propio de cada proyecto.</div>
       <div id="taAudioLista"></div>
       <button type="button" class="btn btn-outline btn-sm" onclick="rkAgregarFilaTareaAudio()" style="margin-top:4px;">+ Agregar tarea</button>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
@@ -15709,7 +15715,8 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // PIZARRÓN DE TAREAS (por empresa: NO se comparte entre empresas)
+    // PIZARRÓN DE TAREAS (por proyecto, dentro de cada empresa: NO se comparte
+    // ni entre empresas ni entre proyectos de una misma empresa)
     // ══════════════════════════════════════════════════════════
     var REF_TAREAS = null;
     var tareas = [];
@@ -15719,11 +15726,11 @@
     function actualizarRefTareas() {
         if (REF_TAREAS) REF_TAREAS.off();
         tareas = [];
-        if (!db || !empresaActual) { REF_TAREAS = null; renderTareas(); return; }
-        REF_TAREAS = db.ref('empresas/' + empresaActual.id + '/tareas');
+        if (!db || !empresaActual || !proyectoActual) { REF_TAREAS = null; renderTareas(); return; }
+        REF_TAREAS = db.ref(getBasePath() + '/tareas');
         if (!_tareasMigracionIntentada) {
             _tareasMigracionIntentada = true;
-            _migrarTareasGlobalesAEmpresa();
+            _migrarTareasLegacy();
         }
         REF_TAREAS.on('value', function(snap) {
             tareas = [];
@@ -15734,19 +15741,24 @@
         });
     }
 
-    // Migración única: las tareas viejas vivían en global/tareas (compartidas entre
-    // todas las empresas). Se mudan una sola vez a la primera empresa que se cargue,
-    // y solo si esa empresa todavía no tiene tareas propias.
-    function _migrarTareasGlobalesAEmpresa() {
-        var oldRef = db.ref('global/tareas');
-        oldRef.once('value').then(function(snapVieja) {
-            var v = snapVieja.val();
-            if (!v) return;
-            REF_TAREAS.once('value').then(function(snapNueva) {
-                if (snapNueva.val()) return; // la empresa ya tiene tareas propias: no pisar
-                REF_TAREAS.set(v).then(function() { oldRef.remove(); });
+    // Migración única: las tareas vivieron primero en global/tareas (compartidas entre
+    // TODAS las empresas) y después en empresas/<id>/tareas (compartidas entre los
+    // proyectos de una misma empresa). Se mudan al proyecto activo la primera vez que
+    // se cargue, y solo si ese proyecto todavía no tiene tareas propias.
+    function _migrarTareasLegacy() {
+        REF_TAREAS.once('value').then(function(snapNueva) {
+            if (snapNueva.val()) return; // el proyecto ya tiene tareas propias: no pisar
+            var refEmpresa = db.ref('empresas/' + empresaActual.id + '/tareas');
+            refEmpresa.once('value').then(function(snapEmpresa) {
+                var vEmpresa = snapEmpresa.val();
+                if (vEmpresa) { REF_TAREAS.set(vEmpresa).then(function() { refEmpresa.remove(); }); return; }
+                var refGlobal = db.ref('global/tareas');
+                refGlobal.once('value').then(function(snapGlobal) {
+                    var vGlobal = snapGlobal.val();
+                    if (vGlobal) REF_TAREAS.set(vGlobal).then(function() { refGlobal.remove(); });
+                });
             });
-        }).catch(function(err) { console.warn('No se pudo migrar tareas globales:', err); });
+        }).catch(function(err) { console.warn('No se pudo migrar tareas legacy:', err); });
     }
 
     function renderTareas() {
@@ -20023,17 +20035,31 @@
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
     div.textContent = texto;
-    if (factDatos && factDatos.esFactura) {
+    if (factDatos && factDatos.tipo === 'factura') {
       var btn = document.createElement('button');
       btn.textContent = '📥 Cargar en Facturas';
       btn.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
       btn.onclick = function() { rkCargarFactura(factDatos); btn.textContent = '✓ Abriendo formulario…'; btn.disabled = true; };
       div.appendChild(btn);
+    }
+    if (factDatos && factDatos.tipo === 'constanciaAfip') {
+      var btnP = document.createElement('button');
+      btnP.textContent = '🏢 Cargar como proveedor';
+      btnP.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnP.onclick = function() { rkAbrirProveedorPrefill(factDatos); btnP.textContent = '✓ Abriendo formulario…'; btnP.disabled = true; };
+      div.appendChild(btnP);
+    }
+    if (provDatos && provDatos.razonSocial) {
+      var btnP2 = document.createElement('button');
+      btnP2.textContent = '🏢 Cargar proveedor';
+      btnP2.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnP2.onclick = function() { rkAbrirProveedorPrefill(provDatos); btnP2.textContent = '✓ Abriendo formulario…'; btnP2.disabled = true; };
+      div.appendChild(btnP2);
     }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
@@ -20065,7 +20091,7 @@
     + '</div>';
   }
 
-  // Abre el modal de revisión: elegir empresa destino y editar/quitar tareas antes de cargarlas.
+  // Abre el modal de revisión: elegir empresa/proyecto destino y editar/quitar tareas antes de cargarlas.
   window.rkAbrirRevisionTareasAudio = function(lista) {
     var selEmp = document.getElementById('taAudioEmpresa');
     selEmp.innerHTML = '';
@@ -20075,12 +20101,28 @@
       if (typeof empresaActual !== 'undefined' && empresaActual && e.id === empresaActual.id) o.selected = true;
       selEmp.appendChild(o);
     });
+    rkPoblarProyectosAudio();
     var cont = document.getElementById('taAudioLista');
     cont.innerHTML = lista.map(_rkFilaTareaAudioHTML).join('');
 
     _rkAbierto = false;
     document.getElementById('rk-agente-panel').classList.remove('abierto');
     document.getElementById('modalTareasAudio').classList.add('active');
+  };
+
+  // Repuebla el select de proyectos según la empresa elegida (se llama al abrir el modal y al cambiar de empresa)
+  window.rkPoblarProyectosAudio = function() {
+    var empId = document.getElementById('taAudioEmpresa').value;
+    var emp = (typeof empresas !== 'undefined' ? empresas : []).find(function(e){ return e.id === empId; });
+    var selProy = document.getElementById('taAudioProyecto');
+    selProy.innerHTML = '';
+    (emp && emp.proyectos || []).forEach(function(p) {
+      var o = document.createElement('option');
+      o.value = p.id; o.textContent = p.nombre;
+      if (typeof proyectoActual !== 'undefined' && proyectoActual && p.id === proyectoActual.id
+          && typeof empresaActual !== 'undefined' && empresaActual && empId === empresaActual.id) o.selected = true;
+      selProy.appendChild(o);
+    });
   };
 
   window.rkAgregarFilaTareaAudio = function() {
@@ -20091,11 +20133,12 @@
     document.getElementById('modalTareasAudio').classList.remove('active');
   };
 
-  // Lee las filas editadas del modal y agrega las tareas a empresas/<id>/tareas
-  // de la empresa elegida (no necesariamente la activa).
+  // Lee las filas editadas del modal y agrega las tareas a empresas/<empId>/proyectos/<proyId>/tareas
+  // del proyecto elegido (no necesariamente el activo).
   window.guardarTareasAudioRevisadas = function() {
     var empId = document.getElementById('taAudioEmpresa').value;
-    if (!empId) { alert('Elegí una empresa.'); return; }
+    var proyId = document.getElementById('taAudioProyecto').value;
+    if (!empId || !proyId) { alert('Elegí una empresa y un proyecto.'); return; }
     var filas = document.querySelectorAll('#taAudioLista .ta-audio-fila');
     var nuevas = [];
     filas.forEach(function(fila) {
@@ -20117,7 +20160,7 @@
     if (!nuevas.length) { alert('No hay ninguna tarea con título para cargar.'); return; }
     if (typeof db === 'undefined' || !db) { alert('No hay conexión con la base de datos.'); return; }
 
-    var ref = db.ref('empresas/' + empId + '/tareas');
+    var ref = db.ref('empresas/' + empId + '/proyectos/' + proyId + '/tareas');
     ref.once('value').then(function(snap) {
       var actuales = [];
       var v = snap.val();
@@ -20126,9 +20169,12 @@
     }).then(function() {
       cerrarModalTareasAudio();
       var emp = (typeof empresas !== 'undefined' ? empresas : []).find(function(e){ return e.id === empId; });
-      alert('✅ ' + nuevas.length + (nuevas.length === 1 ? ' tarea cargada' : ' tareas cargadas') + ' en "' + (emp ? emp.nombre : empId) + '".');
-      // Si la empresa elegida es la activa, refrescamos el Pizarrón que se ve en Home al toque
-      if (typeof empresaActual !== 'undefined' && empresaActual && empresaActual.id === empId && typeof mostrarTab === 'function') {
+      var proy = emp && (emp.proyectos || []).find(function(p){ return p.id === proyId; });
+      alert('✅ ' + nuevas.length + (nuevas.length === 1 ? ' tarea cargada' : ' tareas cargadas') + ' en "' + (emp ? emp.nombre : empId) + (proy ? ' / ' + proy.nombre : '') + '".');
+      // Si el proyecto elegido es el activo, refrescamos el Pizarrón que se ve en Home al toque
+      if (typeof empresaActual !== 'undefined' && empresaActual && empresaActual.id === empId
+          && typeof proyectoActual !== 'undefined' && proyectoActual && proyectoActual.id === proyId
+          && typeof mostrarTab === 'function') {
         mostrarTab('Home');
       }
     }).catch(function(err) {
@@ -20150,6 +20196,31 @@
         window._leerFactArchivoTipo = f._pdfMime || 'application/pdf';
       }
       if (typeof _mostrarPreviewFactura === 'function') _mostrarPreviewFactura(f);
+    }, 200);
+  };
+
+  // Abre el formulario real de "Nuevo Proveedor" y lo precarga con los datos detectados
+  // (constancia AFIP en PDF, o los que se fueron juntando charlando). El usuario revisa,
+  // completa lo que falte y confirma con el botón "Guardar" del propio formulario.
+  window.rkAbrirProveedorPrefill = function(f) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('Proveedores');
+    setTimeout(function() {
+      if (typeof agregarProveedor === 'function') agregarProveedor();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; };
+      setVal('provRazon', f.razonSocial);
+      setVal('provCuit', f.cuit);
+      setVal('provRubro', f.rubro || f.actividad);
+      setVal('provTel', f.telefono);
+      setVal('provDir', f.direccion || f.domicilio);
+      setVal('provEmail', f.email);
+      if (f.condicionIVA) {
+        var sel = document.getElementById('provIva');
+        if (sel && Array.prototype.some.call(sel.options, function(o){ return o.value === f.condicionIVA; })) {
+          sel.value = f.condicionIVA;
+        }
+      }
     }, 200);
   };
 
@@ -20285,7 +20356,15 @@
       + 'no puedas saber con certeza (resultados deportivos, noticias, cotizaciones, clima, precios, etc.) en vez de decir que no tenés acceso a internet. '
       + 'Respondés en español argentino, de forma clara, concisa y amigable, con la profundidad que la pregunta requiera. '
       + 'El usuario está actualmente en la sección: "' + ctx.desc + '" (tab: ' + ctx.tab + '). '
-      + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto.'
+      + 'Si preguntan sobre ARCA/AFIP, facturación electrónica, caja, presupuestos o proveedores, usás ese contexto. '
+      + 'Si el usuario te pide cargar, agregar o dar de alta un proveedor por chat, NO le pidas todos los datos juntos: '
+      + 'preguntale de a un dato por vez, en mensajes cortos, en este orden: 1) razón social (obligatorio), 2) CUIT, '
+      + '3) condición frente al IVA (Responsable Inscripto, Monotributista, Exento, No Responsable o Consumidor Final), '
+      + '4) rubro, 5) teléfono, 6) dirección, 7) email (los últimos 4 son opcionales, si el usuario dice que no tiene o quiere saltear, seguí sin insistir). '
+      + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos la razón social, agregá al FINAL '
+      + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
+      + '(null en lo que falte): ###PROVEEDOR_LISTO:{"razonSocial":"...","cuit":null,"condicionIVA":null,"rubro":null,"telefono":null,"direccion":null,"email":null}### '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo proveedor, hasta que el usuario cambie de tema.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -20323,13 +20402,17 @@
     var MODELOS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
     var mi = 0;
 
-    // Si es PDF, primero extraemos datos estructurados de factura en paralelo
+    // Si es PDF, primero extraemos datos estructurados de factura (o constancia AFIP) en paralelo
     var promesaFactura = null;
     if (esPdf) {
       var extractPayload = {
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
-          { text: 'Analizá este documento. Si es una factura o comprobante comercial, extraé los datos y respondé SOLO con un JSON válido con esta estructura exacta:\n{"esFactura":true,"proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\nUsá null en los campos que no encuentres. Si NO es una factura, respondé solo: {"esFactura":false}\nNo agregues texto fuera del JSON.' }
+          { text: 'Analizá este documento y clasificalo. Respondé SOLO con un JSON válido, sin texto fuera del JSON.\n'
+              + 'Si es una factura o comprobante comercial, usá esta estructura exacta:\n{"tipo":"factura","proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\n'
+              + 'Si es una constancia de inscripción / constancia de CUIT de AFIP (padrón de contribuyentes), usá esta estructura exacta:\n{"tipo":"constanciaAfip","razonSocial":"...","cuit":"...","condicionIVA":"Responsable Inscripto|Monotributista|Exento|No Responsable|Consumidor Final","domicilio":"...","actividad":"..."}\n'
+              + 'Si no es ninguna de las dos cosas, respondé: {"tipo":"otro"}\n'
+              + 'Usá null en los campos que no encuentres.' }
         ]}],
         generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
       };
@@ -20388,7 +20471,18 @@
         }
         _rkHistorial.push({ role: 'model', parts: [{ text: respuesta }] });
 
-        // Si había PDF, esperamos el resultado de extracción y mostramos botón si es factura
+        // Si el modelo juntó datos de un proveedor charlando, viene con un marcador al final
+        // que no se le muestra al usuario (ver instrucciones de sistemaPrompt).
+        var respuestaVisible = respuesta;
+        var provDatos = null;
+        var mProv = respuesta.match(/###PROVEEDOR_LISTO:(\{[\s\S]*?\})###/);
+        if (mProv) {
+          respuestaVisible = respuesta.replace(mProv[0], '').trim();
+          try { provDatos = JSON.parse(mProv[1]); } catch(e) {}
+        }
+
+        // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
+        // (factura → "Cargar en Facturas", constancia AFIP → "Cargar como proveedor")
         if (promesaFactura) {
           promesaFactura.then(function(extData) {
             var jsonStr = extData && extData.candidates && extData.candidates[0] && extData.candidates[0].content && extData.candidates[0].content.parts && extData.candidates[0].content.parts[0]
@@ -20398,12 +20492,12 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) factDatos = JSON.parse(m[0]);
             } catch(e) {}
-            if (factDatos && factDatos.esFactura) {
+            if (factDatos && factDatos.tipo === 'factura') {
               factDatos._pdfBase64 = pdfBase64;
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuesta, factDatos && factDatos.esFactura ? factDatos : null);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -20414,10 +20508,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuesta, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos);
           });
         } else {
-          rkMensajeBot(respuesta, null);
+          rkMensajeBot(respuestaVisible, null, null, provDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
