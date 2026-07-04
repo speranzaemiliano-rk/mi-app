@@ -21340,6 +21340,8 @@
   }
   #rk-agente-voz-btn.activa { color: #4CAF82; }
   #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-dictar-btn.escuchando { background: rgba(200,80,80,.35); animation: rkPulso 1.1s ease-in-out infinite; }
+  @keyframes rkPulso { 0%,100% { box-shadow: 0 0 0 0 rgba(200,80,80,.5); } 50% { box-shadow: 0 0 0 6px rgba(200,80,80,0); } }
 
   /* Mensajes */
   #rk-agente-mensajes {
@@ -21471,6 +21473,9 @@
     </label>
     <textarea id="rk-agente-input" placeholder="Preguntame algo sobre RK..." rows="1"
       onkeydown="rkAgenteKeydown(event)"></textarea>
+    <button id="rk-agente-dictar-btn" onclick="rkDictarToggle()" title="Hablarle al asistente" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:rgba(200,80,80,.12);flex-shrink:0;border:none;transition:background .2s;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cc6666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+    </button>
     <button id="rk-agente-enviar" onclick="rkAgenteEnviar()" title="Enviar">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
         <path d="M22 2L11 13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
@@ -21536,6 +21541,49 @@
     if (voz) utter.voice = voz;
     window.speechSynthesis.speak(utter);
   }
+
+  // Dictado por voz: micrófono en vivo (distinto de "adjuntar audio", que sube un archivo grabado antes).
+  var _rkReco = null;
+  var _rkEscuchando = false;
+
+  function _rkGetReco() {
+    if (_rkReco) return _rkReco;
+    var Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) return null;
+    _rkReco = new Ctor();
+    _rkReco.lang = 'es-AR';
+    _rkReco.interimResults = false;
+    _rkReco.maxAlternatives = 1;
+    _rkReco.onresult = function(e) {
+      var texto = e.results[0][0].transcript;
+      var input = document.getElementById('rk-agente-input');
+      input.value = texto;
+      rkAgenteEnviar();
+    };
+    _rkReco.onerror = function() { _rkEscuchando = false; _rkDictarBtnActualizar(); };
+    _rkReco.onend = function() { _rkEscuchando = false; _rkDictarBtnActualizar(); };
+    return _rkReco;
+  }
+
+  function _rkDictarBtnActualizar() {
+    var btn = document.getElementById('rk-agente-dictar-btn');
+    if (!btn) return;
+    btn.classList.toggle('escuchando', _rkEscuchando);
+    btn.title = _rkEscuchando ? 'Escuchando… (click para cancelar)' : 'Hablarle al asistente';
+  }
+
+  window.rkDictarToggle = function() {
+    var reco = _rkGetReco();
+    if (!reco) { alert('Tu navegador no soporta dictado por voz. Probá con Chrome.'); return; }
+    if (_rkEscuchando) {
+      reco.stop();
+      return;
+    }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    _rkEscuchando = true;
+    _rkDictarBtnActualizar();
+    try { reco.start(); } catch (e) { _rkEscuchando = false; _rkDictarBtnActualizar(); }
+  };
 
   var CONTEXTOS_TABS = {
     'Home': 'página de inicio con resumen de empresas y proyectos',
