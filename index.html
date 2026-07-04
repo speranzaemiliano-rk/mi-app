@@ -21328,6 +21328,18 @@
     line-height: 1;
   }
   #rk-agente-cerrar:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-voz-btn {
+    background: none;
+    border: none;
+    color: #8888aa;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+  #rk-agente-voz-btn.activa { color: #4CAF82; }
+  #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 
   /* Mensajes */
   #rk-agente-mensajes {
@@ -21443,6 +21455,7 @@
       <strong>Asistente RK</strong>
       <span id="rk-agente-estado">Listo para ayudar</span>
     </div>
+    <button id="rk-agente-voz-btn" onclick="rkVozToggle()" title="Leer las respuestas en voz alta">🔊</button>
     <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
   </div>
   <div id="rk-agente-contexto">Sección activa: <span id="rk-agente-tab-nombre">—</span></div>
@@ -21482,6 +21495,47 @@
   var _rkEsperando = false;
   var _rkPdfData = null; // { base64, nombre }
   var _rkAudioData = null; // { base64, nombre, mime }
+  var _rkVozActivada = localStorage.getItem('rk_voz_activada') !== '0'; // hablado por defecto
+
+  function _rkVozBtnActualizar() {
+    var btn = document.getElementById('rk-agente-voz-btn');
+    if (!btn) return;
+    btn.textContent = _rkVozActivada ? '🔊' : '🔇';
+    btn.classList.toggle('activa', _rkVozActivada);
+    btn.title = _rkVozActivada ? 'Se lee en voz alta (click para silenciar)' : 'Silenciado (click para leer en voz alta)';
+  }
+
+  window.rkVozToggle = function() {
+    _rkVozActivada = !_rkVozActivada;
+    localStorage.setItem('rk_voz_activada', _rkVozActivada ? '1' : '0');
+    if (!_rkVozActivada && window.speechSynthesis) window.speechSynthesis.cancel();
+    _rkVozBtnActualizar();
+  };
+
+  // Elige una voz en español (preferí es-AR, después cualquier es-*) entre las que ofrezca el navegador.
+  function _rkElegirVozEs() {
+    if (!window.speechSynthesis) return null;
+    var voces = window.speechSynthesis.getVoices() || [];
+    return voces.find(function(v) { return /^es-AR/i.test(v.lang); })
+      || voces.find(function(v) { return /^es-/i.test(v.lang); })
+      || null;
+  }
+
+  function rkHablar(texto) {
+    if (!_rkVozActivada || !window.speechSynthesis || !texto) return;
+    // Limpieza para que no lea símbolos de markdown ni emojis.
+    var limpio = String(texto)
+      .replace(/[*_`#>]/g, '')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}️]/gu, '')
+      .trim();
+    if (!limpio) return;
+    window.speechSynthesis.cancel();
+    var utter = new SpeechSynthesisUtterance(limpio);
+    utter.lang = 'es-AR';
+    var voz = _rkElegirVozEs();
+    if (voz) utter.voice = voz;
+    window.speechSynthesis.speak(utter);
+  }
 
   var CONTEXTOS_TABS = {
     'Home': 'página de inicio con resumen de empresas y proyectos',
@@ -21516,9 +21570,12 @@
     var panel = document.getElementById('rk-agente-panel');
     panel.classList.toggle('abierto', _rkAbierto);
     if (_rkAbierto) {
+      _rkVozBtnActualizar();
       rkActualizarContexto();
       if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, tus datos cargados, gestión contable, o cualquier otra pregunta que tengas. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
+    } else if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
   };
 
@@ -21625,6 +21682,7 @@
     }
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
+    rkHablar(texto);
     return div;
   }
 
@@ -21877,6 +21935,7 @@
 
   window.rkAgenteEnviar = function() {
     if (_rkEsperando) return;
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     var input = document.getElementById('rk-agente-input');
     var texto = input.value.trim();
     if (!texto && !_rkPdfData && !_rkAudioData) return;
