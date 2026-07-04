@@ -21695,7 +21695,7 @@
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
@@ -21720,6 +21720,13 @@
       btnP2.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
       btnP2.onclick = function() { rkAbrirProveedorPrefill(provDatos); btnP2.textContent = '✓ Abriendo formulario…'; btnP2.disabled = true; };
       div.appendChild(btnP2);
+    }
+    if (aporteDatos && aporteDatos.nombre) {
+      var btnAp = document.createElement('button');
+      btnAp.textContent = '🤝 Cargar aporte';
+      btnAp.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnAp.onclick = function() { rkAbrirAportantePrefill(aporteDatos); btnAp.textContent = '✓ Abriendo formulario…'; btnAp.disabled = true; };
+      div.appendChild(btnAp);
     }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
@@ -21885,6 +21892,42 @@
     }, 200);
   };
 
+  // Abre el formulario real de "Nuevo Aportante/Socio" y lo precarga con los datos juntados
+  // charlando (nombre, desarrollo, capital, etc.). El usuario revisa y confirma con "Guardar Aportante".
+  window.rkAbrirAportantePrefill = function(datos) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('Inversiones');
+    setTimeout(function() {
+      if (typeof abrirModalAportante === 'function') abrirModalAportante();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setVal('apNombre', datos.nombre);
+      setVal('apCapitalAportado', datos.capitalAportado);
+      setVal('apFechaVencimiento', datos.fechaVencimiento);
+      setVal('apObs', datos.obs);
+      if (datos.desarrollo && typeof desarrollos !== 'undefined') {
+        var nombreBuscado = String(datos.desarrollo).toLowerCase();
+        var d = desarrollos.find(function(x) { return (x.nombre || '').toLowerCase().indexOf(nombreBuscado) !== -1 || nombreBuscado.indexOf((x.nombre || '').toLowerCase()) !== -1; });
+        if (d) {
+          setVal('apDesarrolloId', d.id);
+          if (typeof onCambioDesarrolloAportante === 'function') onCambioDesarrolloAportante();
+        }
+      }
+      if (datos.moneda) setVal('apMoneda', datos.moneda);
+      if (datos.rentabilidadPct) {
+        setVal('apBaseRentabilidad', 'porcentaje');
+        setVal('apRentabilidadPct', datos.rentabilidadPct);
+        setVal('apBaseMontoPct', datos.baseMontoPct || 'ventaTotal');
+      } else if (datos.m2Asignados) {
+        setVal('apBaseRentabilidad', 'm2');
+        setVal('apM2Asignados', datos.m2Asignados);
+        if (datos.valorM2Asignado) setVal('apValorM2Asignado', datos.valorM2Asignado);
+      }
+      if (typeof toggleBaseRentabilidadFields === 'function') toggleBaseRentabilidadFields();
+      if (typeof actualizarPreviewRentabilidad === 'function') actualizarPreviewRentabilidad();
+    }, 200);
+  };
+
   function rkMensajeUser(texto) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
@@ -22026,7 +22069,18 @@
       + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos la razón social, agregá al FINAL '
       + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
       + '(null en lo que falte): ###PROVEEDOR_LISTO:{"razonSocial":"...","cuit":null,"condicionIVA":null,"rubro":null,"telefono":null,"direccion":null,"email":null}### '
-      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo proveedor, hasta que el usuario cambie de tema.'
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo proveedor, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide cargar, agregar o registrar un aporte/inversión de un aportante o socio, NO le pidas todos los datos juntos: '
+      + 'preguntale de a un dato por vez, en mensajes cortos, en este orden: 1) nombre del aportante/socio (obligatorio), '
+      + '2) a qué desarrollo inmobiliario está vinculado (obligatorio — tiene que ser uno de los que ya figuran en "DESARROLLOS INMOBILIARIOS" más abajo; '
+      + 'si el usuario nombra uno que no existe, avisale que no lo encontrás y pedile que aclare o lo cree primero en la sección Desarrollos), '
+      + '3) capital aportado (obligatorio) y moneda (ARS o USD, si no la dice asumí la del desarrollo), '
+      + '4) cómo se calcula la rentabilidad: como % (y sobre qué: valor de venta total, ganancia estimada, terreno o costo de obra) o como m² asignados a un valor fijo por m² '
+      + '(opcional, si no sabe/quiere saltear seguí sin insistir), 5) fecha de vencimiento del aporte (opcional), 6) observaciones (opcional). '
+      + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos el nombre y el desarrollo, agregá al FINAL '
+      + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
+      + '(null en lo que falte): ###APORTE_LISTO:{"nombre":"...","desarrollo":"...","capitalAportado":null,"moneda":null,"rentabilidadPct":null,"baseMontoPct":null,"m2Asignados":null,"valorM2Asignado":null,"fechaVencimiento":null,"obs":null}### '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -22137,10 +22191,16 @@
         // que no se le muestra al usuario (ver instrucciones de sistemaPrompt).
         var respuestaVisible = respuesta;
         var provDatos = null;
-        var mProv = respuesta.match(/###PROVEEDOR_LISTO:(\{[\s\S]*?\})###/);
+        var mProv = respuestaVisible.match(/###PROVEEDOR_LISTO:(\{[\s\S]*?\})###/);
         if (mProv) {
-          respuestaVisible = respuesta.replace(mProv[0], '').trim();
+          respuestaVisible = respuestaVisible.replace(mProv[0], '').trim();
           try { provDatos = JSON.parse(mProv[1]); } catch(e) {}
+        }
+        var aporteDatos = null;
+        var mAporte = respuestaVisible.match(/###APORTE_LISTO:(\{[\s\S]*?\})###/);
+        if (mAporte) {
+          respuestaVisible = respuestaVisible.replace(mAporte[0], '').trim();
+          try { aporteDatos = JSON.parse(mAporte[1]); } catch(e) {}
         }
 
         // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
@@ -22159,7 +22219,7 @@
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -22170,10 +22230,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos);
           });
         } else {
-          rkMensajeBot(respuestaVisible, null, null, provDatos);
+          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
