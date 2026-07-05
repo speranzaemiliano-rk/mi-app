@@ -6417,6 +6417,119 @@
         return out;
     }
 
+    // ── Leer avisos de transferencia de Santander desde Gmail ───────────
+    // Reutiliza la misma pantalla/lógica de "Importar extracto" (preview, anti-duplicados
+    // e "posible duplicado" contra pagosHistorial) para no repetir código: los candidatos
+    // armados acá se cargan en _impExtCandidatos igual que si vinieran de un Excel/PDF.
+    function impExtExtraerTextoPlano(payload){
+        var partePlano=null, parteHtml=null;
+        function buscar(p){
+            if(!p) return;
+            if(p.mimeType==='text/plain' && p.body && p.body.data && !partePlano) partePlano=p.body.data;
+            if(p.mimeType==='text/html' && p.body && p.body.data && !parteHtml) parteHtml=p.body.data;
+            if(p.parts) p.parts.forEach(buscar);
+        }
+        buscar(payload);
+        if(!partePlano && !parteHtml && payload && payload.body && payload.body.data){
+            if(payload.mimeType==='text/html') parteHtml=payload.body.data; else partePlano=payload.body.data;
+        }
+        function decode(b64url){
+            var b64=b64url.replace(/-/g,'+').replace(/_/g,'/');
+            while(b64.length%4) b64+='=';
+            try{ return decodeURIComponent(escape(atob(b64))); }catch(e){ try{ return atob(b64); }catch(e2){ return ''; } }
+        }
+        if(partePlano) return decode(partePlano);
+        if(parteHtml) return decode(parteHtml).replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+        return '';
+    }
+
+    function impExtLeerGmail(){
+        var cuentaId=document.getElementById('impExtCuenta').value;
+        var estado=document.getElementById('impExtGmailEstado');
+        if(!cuentaId){ alert('Primero elegí la cuenta destino.'); return; }
+        var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
+        if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
+        if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
+        estado.textContent='Esperando autorización de Google…';
+        try{
+            var tokenClient=google.accounts.oauth2.initTokenClient({
+                client_id:clientId,
+                scope:'https://www.googleapis.com/auth/gmail.readonly',
+                callback:function(resp){
+                    if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
+                    _gmailToken=resp.access_token;
+                    estado.textContent='Buscando avisos de transferencia…';
+                    _impExtBuscarTransferenciasGmail(cuentaId, estado).catch(function(e){
+                        estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
+                    });
+                }
+            });
+            tokenClient.requestAccessToken({prompt:'select_account'});
+        }catch(e){
+            estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
+        }
+    }
+
+    async function _impExtBuscarTransferenciasGmail(cuentaId, estado){
+        var q='subject:"Aviso de transferencia" from:santander newer_than:90d';
+        var url='https://gmail.googleapis.com/gmail/v1/users/me/messages?q='+encodeURIComponent(q)+'&maxResults=50';
+        var resp=await fetch(url,{headers:{Authorization:'Bearer '+_gmailToken}});
+        if(!resp.ok){
+            var err=await resp.json().catch(function(){return {};});
+            estado.textContent='❌ Error Gmail API: '+((err.error&&err.error.message)||resp.status);
+            return;
+        }
+        var data=await resp.json();
+        var messages=data.messages||[];
+        if(!messages.length){ estado.textContent='🔍 No encontré avisos de transferencia de Santander en los últimos 90 días.'; return; }
+        estado.textContent='Leyendo '+messages.length+' mail(s)…';
+
+        var manualClaves=_impPagosManualesClaves();
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+
+        var detalles=await Promise.all(messages.map(function(m){
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id+'?format=full',
+                {headers:{Authorization:'Bearer '+_gmailToken}})
+                .then(function(r){return r.json();})
+                .catch(function(){return null;});
+        }));
+
+        var candidatos=[];
+        detalles.forEach(function(msg){
+            if(!msg||!msg.payload) return;
+            var texto=impExtExtraerTextoPlano(msg.payload);
+            if(!texto) return;
+            var mImporte=texto.match(/Importe\s*[:\|]?\s*\$?\s*([\d.,]+)/i);
+            if(!mImporte) return;
+            var monto=impExtParseNum(mImporte[1]);
+            if(!monto) return;
+            // internalDate (epoch ms) es más confiable que parsear el header Date.
+            var fecha=msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'';
+            if(!fecha) return;
+            var mDest=texto.match(/Destinatario\s*[:\|]?\s*(\S+)/i);
+            var mComp=texto.match(/N[uú]mero de comprobante\s*[:\|]?\s*(\S+)/i);
+            var destinatario=mDest?mDest[1].trim():'';
+            var nroComprobante=mComp?mComp[1].trim():'';
+            var concepto='Transferencia'+(destinatario?' a '+destinatario:'')+(nroComprobante?' · Comp. '+nroComprobante:'');
+            var esEgreso=true; // confirmado con el usuario: este aviso es de transferencias salientes
+            var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
+            existentes[clave]=true;
+            candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:esEgreso,ref:nroComprobante,cuentaId:cuentaId,
+                dup:dup,dupManual:dupManual,usar:!dup&&!dupManual});
+        });
+
+        if(!candidatos.length){ estado.textContent='⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).'; return; }
+        _impExtCandidatos=candidatos;
+        impExtRenderPreview();
+        estado.textContent='✓ '+candidatos.length+' transferencia'+(candidatos.length===1?'':'s')+' encontrada'+(candidatos.length===1?'':'s')+' en Gmail.';
+    }
+
     function impExtClave(cuentaId, fecha, montoConSigno, desc){
         return [cuentaId, fecha, Math.round(montoConSigno*100), (desc||'').toLowerCase().replace(/\s+/g,' ').trim().substring(0,40)].join('|');
     }
@@ -20723,6 +20836,10 @@
       <div class="form-hint" style="margin-bottom:8px;">
         Subí el <strong>Resumen de Cuenta en PDF</strong> de Santander (se descarga desde Online Banking → Cuentas → Resumen de cuenta)
         o bien exportá a Excel/CSV. Se detectan automáticamente débitos, créditos y concepto. Los movimientos ya importados no se duplican.
+      </div>
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmail()">📧 Leer avisos de transferencia (Gmail)</button>
+        <span id="impExtGmailEstado" style="font-size:12px;color:var(--text-3);"></span>
       </div>
       <div id="impExtResumen" style="display:none;font-size:13px;color:var(--text-2);margin-bottom:8px;"></div>
       <div id="impExtPreviewWrap" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);">
