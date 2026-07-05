@@ -4637,6 +4637,7 @@
                         <option value="Caja de Ahorros ARS">Caja de Ahorros ARS</option>
                         <option value="Caja de Ahorros USD">Caja de Ahorros USD</option>
                         <option value="Virtual (CVU)">Virtual (CVU)</option>
+                        <option value="Tarjeta de Crédito">Tarjeta de Crédito</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -6293,6 +6294,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
         });
+        var manualClaves=_impPagosManualesClaves();
         function parseAmt(s){
             var neg=s.charAt(0)==='-';
             s=s.replace(/[^0-9.,]/g,'');
@@ -6342,9 +6344,11 @@
                 .replace(/-?\$\s*[\d.,]+/g,'')
                 .trim().replace(/\s+/g,' ');
             var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
             out.push({fecha:fecha,concepto:concepto||(esEgreso?'Débito':'Crédito'),
                       monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
-                      dup:!!existentes[clave],usar:!existentes[clave]});
+                      dup:dup,dupManual:dupManual,usar:!dup&&!dupManual});
             existentes[clave]=true;
             i++;
         }
@@ -6383,6 +6387,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')]=true;
         });
+        var manualClaves=_impPagosManualesClaves();
 
         // 3) Parsear cada fila de datos
         var out=[];
@@ -6404,40 +6409,286 @@
             var monto=esEgreso?salida:entrada;
             var ref=cols.comprob!==undefined?String(row[cols.comprob]||'').trim():'';
             var clave=impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
             out.push({fecha:fecha, concepto:concepto||(esEgreso?'Débito':'Crédito'), monto:monto, esEgreso:esEgreso,
-                ref:ref, cuentaId:cuentaId, dup:!!existentes[clave], usar:!existentes[clave]});
+                ref:ref, cuentaId:cuentaId, dup:dup, dupManual:dupManual, usar:!dup&&!dupManual});
             existentes[clave]=true; // evita duplicar dentro del mismo archivo
         }
         return out;
+    }
+
+    // ── Leer avisos de transferencia de Santander desde Gmail ───────────
+    // Reutiliza la misma pantalla/lógica de "Importar extracto" (preview, anti-duplicados
+    // e "posible duplicado" contra pagosHistorial) para no repetir código: los candidatos
+    // armados acá se cargan en _impExtCandidatos igual que si vinieran de un Excel/PDF.
+    function impExtExtraerTextoPlano(payload){
+        var partePlano=null, parteHtml=null;
+        function buscar(p){
+            if(!p) return;
+            if(p.mimeType==='text/plain' && p.body && p.body.data && !partePlano) partePlano=p.body.data;
+            if(p.mimeType==='text/html' && p.body && p.body.data && !parteHtml) parteHtml=p.body.data;
+            if(p.parts) p.parts.forEach(buscar);
+        }
+        buscar(payload);
+        if(!partePlano && !parteHtml && payload && payload.body && payload.body.data){
+            if(payload.mimeType==='text/html') parteHtml=payload.body.data; else partePlano=payload.body.data;
+        }
+        function decode(b64url){
+            var b64=b64url.replace(/-/g,'+').replace(/_/g,'/');
+            while(b64.length%4) b64+='=';
+            try{ return decodeURIComponent(escape(atob(b64))); }catch(e){ try{ return atob(b64); }catch(e2){ return ''; } }
+        }
+        if(partePlano) return decode(partePlano);
+        if(parteHtml) return decode(parteHtml).replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+        return '';
+    }
+
+    function impExtLeerGmail(){
+        var cuentaId=document.getElementById('impExtCuenta').value;
+        var estado=document.getElementById('impExtGmailEstado');
+        if(!cuentaId){ alert('Primero elegí la cuenta destino.'); return; }
+        var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
+        if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
+        if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
+        estado.textContent='Esperando autorización de Google…';
+        try{
+            var tokenClient=google.accounts.oauth2.initTokenClient({
+                client_id:clientId,
+                scope:'https://www.googleapis.com/auth/gmail.readonly',
+                callback:function(resp){
+                    if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
+                    _gmailToken=resp.access_token;
+                    estado.textContent='Buscando avisos de transferencia…';
+                    _impExtBuscarTransferenciasGmail(cuentaId, estado).catch(function(e){
+                        estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
+                    });
+                }
+            });
+            tokenClient.requestAccessToken({prompt:'select_account'});
+        }catch(e){
+            estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
+        }
+    }
+
+    async function _impExtBuscarTransferenciasGmail(cuentaId, estado){
+        var q='subject:"Aviso de transferencia" from:santander newer_than:90d';
+        var url='https://gmail.googleapis.com/gmail/v1/users/me/messages?q='+encodeURIComponent(q)+'&maxResults=50';
+        var resp=await fetch(url,{headers:{Authorization:'Bearer '+_gmailToken}});
+        if(!resp.ok){
+            var err=await resp.json().catch(function(){return {};});
+            estado.textContent='❌ Error Gmail API: '+((err.error&&err.error.message)||resp.status);
+            return;
+        }
+        var data=await resp.json();
+        var messages=data.messages||[];
+        if(!messages.length){ estado.textContent='🔍 No encontré avisos de transferencia de Santander en los últimos 90 días.'; return; }
+        estado.textContent='Leyendo '+messages.length+' mail(s)…';
+
+        var manualClaves=_impPagosManualesClaves();
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+
+        var detalles=await Promise.all(messages.map(function(m){
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id+'?format=full',
+                {headers:{Authorization:'Bearer '+_gmailToken}})
+                .then(function(r){return r.json();})
+                .catch(function(){return null;});
+        }));
+
+        var candidatos=[];
+        detalles.forEach(function(msg){
+            if(!msg||!msg.payload) return;
+            var texto=impExtExtraerTextoPlano(msg.payload);
+            if(!texto) return;
+            var mImporte=texto.match(/Importe\s*[:\|]?\s*\$?\s*([\d.,]+)/i);
+            if(!mImporte) return;
+            var monto=impExtParseNum(mImporte[1]);
+            if(!monto) return;
+            // internalDate (epoch ms) es más confiable que parsear el header Date.
+            var fecha=msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'';
+            if(!fecha) return;
+            var mDest=texto.match(/Destinatario\s*[:\|]?\s*(\S+)/i);
+            var mComp=texto.match(/N[uú]mero de comprobante\s*[:\|]?\s*(\S+)/i);
+            var destinatario=mDest?mDest[1].trim():'';
+            var nroComprobante=mComp?mComp[1].trim():'';
+            var concepto='Transferencia'+(destinatario?' a '+destinatario:'')+(nroComprobante?' · Comp. '+nroComprobante:'');
+            var esEgreso=true; // confirmado con el usuario: este aviso es de transferencias salientes
+            var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
+            existentes[clave]=true;
+            candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:esEgreso,ref:nroComprobante,cuentaId:cuentaId,
+                dup:dup,dupManual:dupManual,usar:!dup&&!dupManual});
+        });
+
+        if(!candidatos.length){ estado.textContent='⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).'; return; }
+        _impExtCandidatos=candidatos;
+        impExtRenderPreview();
+        estado.textContent='✓ '+candidatos.length+' transferencia'+(candidatos.length===1?'':'s')+' encontrada'+(candidatos.length===1?'':'s')+' en Gmail.';
+    }
+
+    // ── Leer consumos de tarjeta de crédito de Santander desde Gmail ─────
+    // Misma idea que las transferencias: se cargan como movimientos de la cuenta
+    // "Tarjeta de Crédito" elegida (tipo nuevo en Cuentas Bancarias). Cada consumo
+    // es un "egreso" que va restando el saldo de esa cuenta (representa lo adeudado).
+    function impExtLeerGmailTarjeta(){
+        var cuentaId=document.getElementById('impExtCuenta').value;
+        var estado=document.getElementById('impExtGmailEstado');
+        if(!cuentaId){ alert('Primero elegí la cuenta destino (la tarjeta de crédito).'); return; }
+        var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
+        if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
+        if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
+        estado.textContent='Esperando autorización de Google…';
+        try{
+            var tokenClient=google.accounts.oauth2.initTokenClient({
+                client_id:clientId,
+                scope:'https://www.googleapis.com/auth/gmail.readonly',
+                callback:function(resp){
+                    if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
+                    _gmailToken=resp.access_token;
+                    estado.textContent='Buscando consumos de tarjeta…';
+                    _impExtBuscarConsumosTarjetaGmail(cuentaId, estado).catch(function(e){
+                        estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
+                    });
+                }
+            });
+            tokenClient.requestAccessToken({prompt:'select_account'});
+        }catch(e){
+            estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
+        }
+    }
+
+    async function _impExtBuscarConsumosTarjetaGmail(cuentaId, estado){
+        var q='subject:"Información sobre tu pago" from:santander newer_than:90d';
+        var url='https://gmail.googleapis.com/gmail/v1/users/me/messages?q='+encodeURIComponent(q)+'&maxResults=50';
+        var resp=await fetch(url,{headers:{Authorization:'Bearer '+_gmailToken}});
+        if(!resp.ok){
+            var err=await resp.json().catch(function(){return {};});
+            estado.textContent='❌ Error Gmail API: '+((err.error&&err.error.message)||resp.status);
+            return;
+        }
+        var data=await resp.json();
+        var messages=data.messages||[];
+        if(!messages.length){ estado.textContent='🔍 No encontré consumos de tarjeta de Santander en los últimos 90 días.'; return; }
+        estado.textContent='Leyendo '+messages.length+' mail(s)…';
+
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+
+        var detalles=await Promise.all(messages.map(function(m){
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id+'?format=full',
+                {headers:{Authorization:'Bearer '+_gmailToken}})
+                .then(function(r){return r.json();})
+                .catch(function(){return null;});
+        }));
+
+        var candidatos=[];
+        detalles.forEach(function(msg){
+            if(!msg||!msg.payload) return;
+            var texto=impExtExtraerTextoPlano(msg.payload);
+            if(!texto) return;
+            var mMonto=texto.match(/Monto\s*[:\|]?\s*\$?\s*([\d.,]+)/i);
+            if(!mMonto) return;
+            var monto=impExtParseNum(mMonto[1]);
+            if(!monto) return;
+            var mComercio=texto.match(/Comercio\s*[:\|]?\s*([\s\S]*?)\s*Fecha\s*[:\|]?/i);
+            var mFecha=texto.match(/Fecha\s*[:\|]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+            var mCuotas=texto.match(/Cuotas\s*[:\|]?\s*(\d+)/i);
+            var mTarjeta=texto.match(/terminada en\s*(\d{3,4})/i);
+            var fecha=mFecha?impExtParseFecha(mFecha[1]):(msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'');
+            if(!fecha) return;
+            var comercio=mComercio?mComercio[1].trim():'Consumo';
+            var cuotas=mCuotas?parseInt(mCuotas[1],10):1;
+            var concepto=comercio+(cuotas>1?' (en '+cuotas+' cuotas)':'')+(mTarjeta?' · Tarjeta ...'+mTarjeta[1]:'');
+            var esEgreso=true; // todo consumo de tarjeta es un egreso (aumenta lo adeudado)
+            var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            existentes[clave]=true;
+            candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
+                dup:dup,dupManual:false,usar:!dup});
+        });
+
+        if(!candidatos.length){ estado.textContent='⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).'; return; }
+        _impExtCandidatos=candidatos;
+        impExtRenderPreview();
+        estado.textContent='✓ '+candidatos.length+' consumo'+(candidatos.length===1?'':'s')+' de tarjeta encontrado'+(candidatos.length===1?'':'s')+' en Gmail.';
     }
 
     function impExtClave(cuentaId, fecha, montoConSigno, desc){
         return [cuentaId, fecha, Math.round(montoConSigno*100), (desc||'').toLowerCase().replace(/\s+/g,' ').trim().substring(0,40)].join('|');
     }
 
+    // Pagos a proveedores ya registrados a mano (modalidad Bancarizado) desde presupuestos/facturas/documentos.
+    // Estos NUNCA pasan por ingGeneral, así que impExtClave no los detecta. Acá armamos un set aparte
+    // (cuenta + monto + fecha con ±2 días de tolerancia, ya que la fecha real de acreditación puede diferir
+    // de la que se cargó a mano) para avisar "posible duplicado" al importar el extracto real del banco.
+    function _impPagosManualesClaves(){
+        var claves={};
+        function marcar(cuentaId, fecha, monto){
+            if(!cuentaId||!fecha||!monto) return;
+            var base=new Date(fecha+'T00:00:00');
+            for(var d=-2; d<=2; d++){
+                var dt=new Date(base); dt.setDate(dt.getDate()+d);
+                var f=dt.toISOString().substring(0,10);
+                claves[cuentaId+'|'+f+'|'+Math.round(monto*100)]=true;
+            }
+        }
+        function recorrer(arr, montoFn){
+            (arr||[]).forEach(function(item){
+                (item.pagosHistorial||[]).forEach(function(p){
+                    if(p.modalidad!=='A'||!p.cuentaId||!p.fecha) return;
+                    marcar(p.cuentaId, p.fecha, montoFn(p));
+                });
+            });
+        }
+        recorrer(typeof datos!=='undefined'?datos:[], function(p){ return (p.capital||0)+(p.mayores||0)||p.montoPagado||0; });
+        recorrer(typeof facturas!=='undefined'?facturas:[], function(p){ return p.monto||0; });
+        recorrer(typeof documentos!=='undefined'?documentos:[], function(p){ return p.monto||0; });
+        return claves;
+    }
+
+    function _impEsPosibleDupManual(manualClaves, cuentaId, fecha, monto, esEgreso){
+        return !!(esEgreso && manualClaves[cuentaId+'|'+fecha+'|'+Math.round(monto*100)]);
+    }
+
     function impExtRenderPreview(){
         var fmt=function(n){return n?'$'+Math.round(n).toLocaleString('es-AR'):'';};
         var body=document.getElementById('impExtPreviewBody');
-        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup;}).length;
-        var dups=_impExtCandidatos.length-nuevos;
+        var dupsManual=_impExtCandidatos.filter(function(c){return !c.dup&&c.dupManual;}).length;
+        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup&&!c.dupManual;}).length;
+        var dups=_impExtCandidatos.length-nuevos-dupsManual;
         var resumen=document.getElementById('impExtResumen');
         resumen.style.display='';
         resumen.innerHTML='Se encontraron <strong>'+_impExtCandidatos.length+'</strong> movimientos · '+
             '<strong style="color:var(--success)">'+nuevos+'</strong> nuevos · '+
-            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten).';
+            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten)'+
+            (dupsManual?' · <strong style="color:var(--warn,#c78a1e)">'+dupsManual+'</strong> posibles duplicados de un pago ya cargado a mano (revisá antes de importarlos)':'')+'.';
         if(!_impExtCandidatos.length){
             document.getElementById('impExtPreviewWrap').style.display='none';
             document.getElementById('impExtBtnImportar').disabled=true;
             return;
         }
         body.innerHTML=_impExtCandidatos.map(function(c,i){
-            return '<tr style="'+(c.dup?'opacity:.5;':'')+'">'+
+            var estilo=c.dup?'opacity:.5;':(c.dupManual?'background:rgba(199,138,30,.12);':'');
+            var etiqueta=c.dup
+                ? '<span style="color:var(--text-3)">ya importado</span>'
+                : (c.dupManual
+                    ? '<span style="color:var(--warn,#c78a1e)" title="Cuenta, monto y fecha (±2 días) coinciden con un pago ya registrado en Facturas/Presupuestos/Documentos. Puede ser el mismo movimiento.">⚠️ posible duplicado (pago ya cargado a mano)</span>'
+                    : '<span style="color:var(--success)">nuevo</span>');
+            return '<tr style="'+estilo+'">'+
                 '<td><input type="checkbox" '+(c.usar?'checked':'')+' '+(c.dup?'disabled':'')+' onchange="_impExtCandidatos['+i+'].usar=this.checked;impExtRefreshBtn()"></td>'+
                 '<td>'+c.fecha+'</td>'+
                 '<td>'+(c.concepto||'').replace(/</g,'&lt;')+'</td>'+
                 '<td style="text-align:right;color:var(--success)">'+(!c.esEgreso?fmt(c.monto):'')+'</td>'+
                 '<td style="text-align:right;color:var(--danger)">'+(c.esEgreso?fmt(c.monto):'')+'</td>'+
-                '<td>'+(c.dup?'<span style="color:var(--text-3)">ya importado</span>':'<span style="color:var(--success)">nuevo</span>')+'</td>'+
+                '<td>'+etiqueta+'</td>'+
             '</tr>';
         }).join('');
         document.getElementById('impExtPreviewWrap').style.display='';
@@ -6452,7 +6703,8 @@
     }
 
     function impExtToggleAll(chk){
-        _impExtCandidatos.forEach(function(c){ if(!c.dup) c.usar=chk.checked; });
+        // Al tildar "todos" no se activan los posibles duplicados manuales: hay que revisarlos y tildarlos a mano.
+        _impExtCandidatos.forEach(function(c){ if(!c.dup && (!chk.checked || !c.dupManual)) c.usar=chk.checked; });
         impExtRenderPreview();
         document.getElementById('impExtCheckAll').checked=chk.checked;
     }
@@ -6562,7 +6814,8 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')] = true;
         });
-        var nuevos = 0;
+        var manualClaves = _impPagosManualesClaves();
+        var nuevos = 0, omitidosManual = 0;
         lista.forEach(function(t){
             var fecha = String(t.value_date || t.accounting_date || '').substring(0,10);
             if(!fecha) return;
@@ -6572,6 +6825,9 @@
             var concepto = (t.description || t.merchant && t.merchant.name || 'Movimiento').toString().trim();
             var clave = impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
             if(existentes[clave]) return;
+            // Belvo no tiene vista previa para revisar uno por uno: si coincide con un pago ya
+            // registrado a mano (cuenta + monto + fecha ±2 días), lo omitimos directo para no duplicar.
+            if(_impEsPosibleDupManual(manualClaves, cuentaId, fecha, monto, esEgreso)){ omitidosManual++; return; }
             existentes[clave] = true;
             ingGeneral.push({
                 tipo: esEgreso?'mov_banco_salida':'mov_banco_entrada',
@@ -6582,7 +6838,9 @@
             nuevos++;
         });
         if(nuevos){ persistirIngGeneral(); renderCuentasBancarias(); }
-        alert(nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.');
+        var msg = nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.';
+        if(omitidosManual) msg += '\n⚠️ Se omitieron '+omitidosManual+' que coinciden con un pago ya cargado a mano (cuenta, monto y fecha cercana) — revisá en Tesorería/Pagos si falta alguno.';
+        alert(msg);
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────
@@ -10546,6 +10804,10 @@
         datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
         facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});});
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
+        // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
+        ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
+        alquileres.filter(function(a){return (a.moneda||'ARS')!=='USD';}).forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
+        servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
         var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
         var saldoNeto=saldoIni+entradas-salidas;
         if(document.getElementById('cbIngresosBancarios'))document.getElementById('cbIngresosBancarios').textContent=fmt(entradas);
@@ -10559,6 +10821,9 @@
                 datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
                 facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=p.monto||0;});});
                 ingGeneral.forEach(function(ig){if(!ig.esBancario||ig.cuentaId!==(cb.id||cb.banco))return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')sal+=ig.monto||0;else ent+=ig.monto||0;});
+                ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
+                alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
+                servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
                 var saldoAct=(cb.saldo||0)+ent-sal;
                 var monSym=cb.moneda==='USD'?'USD ':'$';
                 var empN=empresas&&empresas.find?((empresas.find(function(e){return e.id===cb.empresaId;})||{}).nombre||'—'):'—';
@@ -10603,6 +10868,25 @@
             var esS = ig.esEgreso || ig.tipo === 'mov_banco_salida';
             movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx });
         });
+        // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (todavía sin selector de cuenta puntual: quedan "sin especificar")
+        ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
+            if (c.tipoAB !== 'A') return;
+            var cId = c.cuentaId||'';
+            var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+        }); });
+        alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){
+            if (c.tipoAB !== 'A') return;
+            var cId = c.cuentaId||'';
+            var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+        }); });
+        servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){
+            if (c.tipoAB !== 'A') return;
+            var cId = c.cuentaId||'';
+            var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+        }); });
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
 
@@ -10683,22 +10967,25 @@
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
             movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:esMov?igIdx:-1});
         });
-        // Cobros Ventas UF en ARS
+        // Cobros Ventas UF en ARS (los cobrados "A — Banco" no son efectivo: se ven en Cuentas Bancarias)
         ventas.forEach(v => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp === 'usd') return;
+                if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
             });
         });
-        // Cobros Alquileres ARS
+        // Cobros Alquileres ARS (ídem, excluye los cobrados por banco)
         alquileres.filter(a => (a.moneda||'ARS') === 'ARS').forEach(a => {
             (a.cobrosHistorial||[]).forEach(c => {
+                if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
             });
         });
-        // Cobros Servicios ARS
+        // Cobros Servicios ARS (ídem)
         servicios.forEach(s => {
             (s.cobrosHistorial||[]).forEach(c => {
+                if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', ingreso: c.monto||0, egreso: 0 });
             });
         });
@@ -10805,11 +11092,13 @@
         ventas.forEach(v => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp !== 'usd') return;
+                if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
             });
         });
         alquileres.filter(a => a.moneda === 'USD').forEach(a => {
             (a.cobrosHistorial||[]).forEach(c => {
+                if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
             });
         });
@@ -12609,8 +12898,24 @@
         persistirVentas();
     }
 
+    // Puebla el selector de cuenta bancaria del cobro y lo deja oculto (arranca en "B — Efectivo").
+    function _cvPoblarCuentas() {
+        var sel = document.getElementById('cobroVentaCuenta');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Sin especificar —</option>';
+        cuentasBancarias.forEach(function(cu) {
+            var o = document.createElement('option');
+            o.value = cu.id || cu.banco;
+            o.textContent = cu.banco + ' · ' + cu.tipo + ' (' + (cu.moneda||'ARS') + ')';
+            sel.appendChild(o);
+        });
+        var modSel = document.getElementById('cobroVentaModalidad'); if (modSel) modSel.value = 'B';
+        var grupo = document.getElementById('grupoCobroVentaCuenta'); if (grupo) grupo.style.display = 'none';
+    }
+
     function abrirCobroVenta(idx) {
         const v = ventas[idx];
+        _cvPoblarCuentas();
         // Si tiene un plan de cuotas simples activo, abrimos el selector de cuotas (sin ajuste CAC)
         if (v && v.cuotasSimple && v.cuotasSimple.activo) {
             _abrirCobroVentaCuotasSimple(idx);
@@ -13023,6 +13328,10 @@
         }
         var registro = { fecha: fecha, comp: comp, monto: monto, cac: cac, ref: ref, nroRecibo: nroRecibo, tipoAB: tipoAB };
         if (nroCuota) registro.nroCuota = nroCuota;
+        if (tipoAB === 'A') {
+            var cuentaCobro = (document.getElementById('cobroVentaCuenta')||{}).value || '';
+            if (cuentaCobro) registro.cuentaId = cuentaCobro;
+        }
         ventas[idx].cobrosHistorial.push(registro);
         // Actualizar acumulados
         const v = ventas[idx];
@@ -19515,7 +19824,7 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="form-group">
               <label>Comprobante *</label>
-              <select id="cobroVentaModalidad">
+              <select id="cobroVentaModalidad" onchange="document.getElementById('grupoCobroVentaCuenta').style.display=this.value==='A'?'':'none';">
                 <option value="B">B — Efectivo</option>
                 <option value="A">A — Banco</option>
               </select>
@@ -19524,6 +19833,11 @@
               <label>Referencia / Comprobante</label>
               <input type="text" id="cobroVentaRef" placeholder="Nº transferencia, cheque, etc.">
             </div>
+          </div>
+
+          <div class="form-group" id="grupoCobroVentaCuenta" style="display:none;">
+            <label>Cuenta bancaria</label>
+            <select id="cobroVentaCuenta" style="width:100%;"><option value="">— Sin especificar —</option></select>
           </div>
 
           <div class="modal-footer">
@@ -20670,6 +20984,11 @@
         Subí el <strong>Resumen de Cuenta en PDF</strong> de Santander (se descarga desde Online Banking → Cuentas → Resumen de cuenta)
         o bien exportá a Excel/CSV. Se detectan automáticamente débitos, créditos y concepto. Los movimientos ya importados no se duplican.
       </div>
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmail()">📧 Leer avisos de transferencia (Gmail)</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmailTarjeta()">💳 Leer consumos de tarjeta (Gmail)</button>
+        <span id="impExtGmailEstado" style="font-size:12px;color:var(--text-3);"></span>
+      </div>
       <div id="impExtResumen" style="display:none;font-size:13px;color:var(--text-2);margin-bottom:8px;"></div>
       <div id="impExtPreviewWrap" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);">
         <table style="font-size:12px;"><thead><tr>
@@ -21340,6 +21659,19 @@
   }
   #rk-agente-voz-btn.activa { color: #4CAF82; }
   #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-borrar-btn {
+    background: none;
+    border: none;
+    color: #8888aa;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+  #rk-agente-borrar-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-dictar-btn.escuchando { background: rgba(200,80,80,.35); animation: rkPulso 1.1s ease-in-out infinite; }
+  @keyframes rkPulso { 0%,100% { box-shadow: 0 0 0 0 rgba(200,80,80,.5); } 50% { box-shadow: 0 0 0 6px rgba(200,80,80,0); } }
 
   /* Mensajes */
   #rk-agente-mensajes {
@@ -21456,6 +21788,7 @@
       <span id="rk-agente-estado">Listo para ayudar</span>
     </div>
     <button id="rk-agente-voz-btn" onclick="rkVozToggle()" title="Leer las respuestas en voz alta">🔊</button>
+    <button id="rk-agente-borrar-btn" onclick="rkBorrarMemoria()" title="Borrar el historial de esta conversación">🗑️</button>
     <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
   </div>
   <div id="rk-agente-contexto">Sección activa: <span id="rk-agente-tab-nombre">—</span></div>
@@ -21471,6 +21804,9 @@
     </label>
     <textarea id="rk-agente-input" placeholder="Preguntame algo sobre RK..." rows="1"
       onkeydown="rkAgenteKeydown(event)"></textarea>
+    <button id="rk-agente-dictar-btn" onclick="rkDictarToggle()" title="Hablarle al asistente" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:rgba(200,80,80,.12);flex-shrink:0;border:none;transition:background .2s;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cc6666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+    </button>
     <button id="rk-agente-enviar" onclick="rkAgenteEnviar()" title="Enviar">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
         <path d="M22 2L11 13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
@@ -21491,11 +21827,47 @@
 <script>
 (function() {
   var _rkAbierto = false;
-  var _rkHistorial = []; // {role, parts}
+  var _rkHistorial = []; // {role, parts} — se manda a Gemini como contenido de la conversación
+  var _rkVisual = [];    // {rol:'user'|'bot', texto} — para redibujar los globos al reabrir el chat
   var _rkEsperando = false;
   var _rkPdfData = null; // { base64, nombre }
   var _rkAudioData = null; // { base64, nombre, mime }
   var _rkVozActivada = localStorage.getItem('rk_voz_activada') !== '0'; // hablado por defecto
+  var RK_CHAT_LS = 'rk_chat_memoria';
+  var RK_CHAT_MAX = 24; // últimos N mensajes (user+bot) que se guardan, para no inflar el contexto
+
+  // La conversación sobrevive a cerrar el panel/recargar la página (memoria entre sesiones).
+  function _rkGuardarMemoria() {
+    try {
+      localStorage.setItem(RK_CHAT_LS, JSON.stringify({
+        historial: _rkHistorial.slice(-RK_CHAT_MAX),
+        visual: _rkVisual.slice(-RK_CHAT_MAX)
+      }));
+    } catch (e) { /* localStorage lleno o deshabilitado: seguimos sin persistir */ }
+  }
+
+  function _rkCargarMemoria() {
+    try {
+      var raw = localStorage.getItem(RK_CHAT_LS);
+      if (!raw) return false;
+      var data = JSON.parse(raw);
+      if (data && Array.isArray(data.historial) && data.historial.length) {
+        _rkHistorial = data.historial;
+        _rkVisual = data.visual || [];
+        return true;
+      }
+    } catch (e) { /* memoria corrupta: se ignora */ }
+    return false;
+  }
+
+  window.rkBorrarMemoria = function() {
+    if (!confirm('¿Borrar el historial de esta conversación con el Asistente RK?')) return;
+    _rkHistorial = [];
+    _rkVisual = [];
+    localStorage.removeItem(RK_CHAT_LS);
+    document.getElementById('rk-agente-mensajes').innerHTML = '';
+    rkMensajeBot('Listo, empezamos de cero. ¿En qué te ayudo?');
+  };
 
   function _rkVozBtnActualizar() {
     var btn = document.getElementById('rk-agente-voz-btn');
@@ -21537,6 +21909,49 @@
     window.speechSynthesis.speak(utter);
   }
 
+  // Dictado por voz: micrófono en vivo (distinto de "adjuntar audio", que sube un archivo grabado antes).
+  var _rkReco = null;
+  var _rkEscuchando = false;
+
+  function _rkGetReco() {
+    if (_rkReco) return _rkReco;
+    var Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) return null;
+    _rkReco = new Ctor();
+    _rkReco.lang = 'es-AR';
+    _rkReco.interimResults = false;
+    _rkReco.maxAlternatives = 1;
+    _rkReco.onresult = function(e) {
+      var texto = e.results[0][0].transcript;
+      var input = document.getElementById('rk-agente-input');
+      input.value = texto;
+      rkAgenteEnviar();
+    };
+    _rkReco.onerror = function() { _rkEscuchando = false; _rkDictarBtnActualizar(); };
+    _rkReco.onend = function() { _rkEscuchando = false; _rkDictarBtnActualizar(); };
+    return _rkReco;
+  }
+
+  function _rkDictarBtnActualizar() {
+    var btn = document.getElementById('rk-agente-dictar-btn');
+    if (!btn) return;
+    btn.classList.toggle('escuchando', _rkEscuchando);
+    btn.title = _rkEscuchando ? 'Escuchando… (click para cancelar)' : 'Hablarle al asistente';
+  }
+
+  window.rkDictarToggle = function() {
+    var reco = _rkGetReco();
+    if (!reco) { alert('Tu navegador no soporta dictado por voz. Probá con Chrome.'); return; }
+    if (_rkEscuchando) {
+      reco.stop();
+      return;
+    }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    _rkEscuchando = true;
+    _rkDictarBtnActualizar();
+    try { reco.start(); } catch (e) { _rkEscuchando = false; _rkDictarBtnActualizar(); }
+  };
+
   var CONTEXTOS_TABS = {
     'Home': 'página de inicio con resumen de empresas y proyectos',
     'Dashboard': 'panel con gráficos y métricas del proyecto',
@@ -21565,6 +21980,8 @@
     'Caja': 'movimientos de caja'
   };
 
+  var _rkMemoriaCargada = false;
+
   window.rkAgenteToggle = function() {
     _rkAbierto = !_rkAbierto;
     var panel = document.getElementById('rk-agente-panel');
@@ -21572,6 +21989,21 @@
     if (_rkAbierto) {
       _rkVozBtnActualizar();
       rkActualizarContexto();
+      if (!_rkMemoriaCargada) {
+        _rkMemoriaCargada = true;
+        _rkCargarMemoria();
+        if (_rkVisual.length) {
+          var cont = document.getElementById('rk-agente-mensajes');
+          cont.innerHTML = '';
+          _rkVisual.forEach(function(m) {
+            var div = document.createElement('div');
+            div.className = 'rk-msg ' + (m.rol === 'user' ? 'rk-msg-user' : 'rk-msg-bot');
+            div.textContent = m.texto;
+            cont.appendChild(div);
+          });
+          cont.scrollTop = cont.scrollHeight;
+        }
+      }
       if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, tus datos cargados, gestión contable, o cualquier otra pregunta que tengas. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     } else if (window.speechSynthesis) {
@@ -21636,6 +22068,31 @@
       if (nombresProv.length) bloques.push('PROVEEDORES: ' + nombresProv.join(', '));
     }
 
+    if (typeof facturas !== 'undefined' && facturas.length) {
+      var factPend = facturas.filter(function(f){ return (f.estado||'pendiente') !== 'pagada'; });
+      if (factPend.length) {
+        var linsFact = factPend.map(function(f) {
+          var pend = (f.importe||0) - (f.pagado||0);
+          return '- ' + (f.proveedor||'—') + (f.numero?' (Nº '+f.numero+')':'') + ': pendiente ' + monFmt(pend, f.moneda) +
+            (f.vencimiento ? (', vence ' + f.vencimiento) : '');
+        });
+        bloques.push('FACTURAS PENDIENTES DE PAGO:\n' + linsFact.join('\n'));
+      }
+    }
+
+    if (typeof datos !== 'undefined' && datos.length && typeof calcPresupuesto === 'function') {
+      var presupPend = datos.map(function(d) {
+        var c = calcPresupuesto(d);
+        return { d: d, pend: (c.capitalPend||0) + (c.mayores||0) };
+      }).filter(function(x) { return x.pend > 1; });
+      if (presupPend.length) {
+        var linsPresup = presupPend.map(function(x) {
+          return '- ' + (x.d.proveedor||'—') + (x.d.concepto?' — '+x.d.concepto:'') + ': pendiente ' + monFmt(x.pend, 'ARS');
+        });
+        bloques.push('PRESUPUESTOS CON SALDO PENDIENTE:\n' + linsPresup.join('\n'));
+      }
+    }
+
     if (typeof ventas !== 'undefined' && ventas.length) {
       var linsVta = ventas.map(function(v) { return '- ' + (v.uf||'—') + ' (comprador: ' + (v.comprador||'—') + ')'; });
       bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
@@ -21647,7 +22104,7 @@
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
@@ -21673,6 +22130,13 @@
       btnP2.onclick = function() { rkAbrirProveedorPrefill(provDatos); btnP2.textContent = '✓ Abriendo formulario…'; btnP2.disabled = true; };
       div.appendChild(btnP2);
     }
+    if (aporteDatos && aporteDatos.nombre) {
+      var btnAp = document.createElement('button');
+      btnAp.textContent = '🤝 Cargar aporte';
+      btnAp.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnAp.onclick = function() { rkAbrirAportantePrefill(aporteDatos); btnAp.textContent = '✓ Abriendo formulario…'; btnAp.disabled = true; };
+      div.appendChild(btnAp);
+    }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
       btnT.textContent = '📋 Revisar ' + tareasDatos.tareas.length + (tareasDatos.tareas.length === 1 ? ' tarea detectada' : ' tareas detectadas');
@@ -21683,6 +22147,8 @@
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
     rkHablar(texto);
+    _rkVisual.push({ rol: 'bot', texto: texto });
+    _rkGuardarMemoria();
     return div;
   }
 
@@ -21837,6 +22303,42 @@
     }, 200);
   };
 
+  // Abre el formulario real de "Nuevo Aportante/Socio" y lo precarga con los datos juntados
+  // charlando (nombre, desarrollo, capital, etc.). El usuario revisa y confirma con "Guardar Aportante".
+  window.rkAbrirAportantePrefill = function(datos) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('Inversiones');
+    setTimeout(function() {
+      if (typeof abrirModalAportante === 'function') abrirModalAportante();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setVal('apNombre', datos.nombre);
+      setVal('apCapitalAportado', datos.capitalAportado);
+      setVal('apFechaVencimiento', datos.fechaVencimiento);
+      setVal('apObs', datos.obs);
+      if (datos.desarrollo && typeof desarrollos !== 'undefined') {
+        var nombreBuscado = String(datos.desarrollo).toLowerCase();
+        var d = desarrollos.find(function(x) { return (x.nombre || '').toLowerCase().indexOf(nombreBuscado) !== -1 || nombreBuscado.indexOf((x.nombre || '').toLowerCase()) !== -1; });
+        if (d) {
+          setVal('apDesarrolloId', d.id);
+          if (typeof onCambioDesarrolloAportante === 'function') onCambioDesarrolloAportante();
+        }
+      }
+      if (datos.moneda) setVal('apMoneda', datos.moneda);
+      if (datos.rentabilidadPct) {
+        setVal('apBaseRentabilidad', 'porcentaje');
+        setVal('apRentabilidadPct', datos.rentabilidadPct);
+        setVal('apBaseMontoPct', datos.baseMontoPct || 'ventaTotal');
+      } else if (datos.m2Asignados) {
+        setVal('apBaseRentabilidad', 'm2');
+        setVal('apM2Asignados', datos.m2Asignados);
+        if (datos.valorM2Asignado) setVal('apValorM2Asignado', datos.valorM2Asignado);
+      }
+      if (typeof toggleBaseRentabilidadFields === 'function') toggleBaseRentabilidadFields();
+      if (typeof actualizarPreviewRentabilidad === 'function') actualizarPreviewRentabilidad();
+    }, 200);
+  };
+
   function rkMensajeUser(texto) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
@@ -21844,6 +22346,8 @@
     div.textContent = texto;
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
+    _rkVisual.push({ rol: 'user', texto: texto });
+    _rkGuardarMemoria();
   }
 
   function rkTyping() {
@@ -21978,7 +22482,18 @@
       + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos la razón social, agregá al FINAL '
       + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
       + '(null en lo que falte): ###PROVEEDOR_LISTO:{"razonSocial":"...","cuit":null,"condicionIVA":null,"rubro":null,"telefono":null,"direccion":null,"email":null}### '
-      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo proveedor, hasta que el usuario cambie de tema.'
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo proveedor, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide cargar, agregar o registrar un aporte/inversión de un aportante o socio, NO le pidas todos los datos juntos: '
+      + 'preguntale de a un dato por vez, en mensajes cortos, en este orden: 1) nombre del aportante/socio (obligatorio), '
+      + '2) a qué desarrollo inmobiliario está vinculado (obligatorio — tiene que ser uno de los que ya figuran en "DESARROLLOS INMOBILIARIOS" más abajo; '
+      + 'si el usuario nombra uno que no existe, avisale que no lo encontrás y pedile que aclare o lo cree primero en la sección Desarrollos), '
+      + '3) capital aportado (obligatorio) y moneda (ARS o USD, si no la dice asumí la del desarrollo), '
+      + '4) cómo se calcula la rentabilidad: como % (y sobre qué: valor de venta total, ganancia estimada, terreno o costo de obra) o como m² asignados a un valor fijo por m² '
+      + '(opcional, si no sabe/quiere saltear seguí sin insistir), 5) fecha de vencimiento del aporte (opcional), 6) observaciones (opcional). '
+      + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos el nombre y el desarrollo, agregá al FINAL '
+      + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
+      + '(null en lo que falte): ###APORTE_LISTO:{"nombre":"...","desarrollo":"...","capitalAportado":null,"moneda":null,"rentabilidadPct":null,"baseMontoPct":null,"m2Asignados":null,"valorM2Asignado":null,"fechaVencimiento":null,"obs":null}### '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -22089,10 +22604,16 @@
         // que no se le muestra al usuario (ver instrucciones de sistemaPrompt).
         var respuestaVisible = respuesta;
         var provDatos = null;
-        var mProv = respuesta.match(/###PROVEEDOR_LISTO:(\{[\s\S]*?\})###/);
+        var mProv = respuestaVisible.match(/###PROVEEDOR_LISTO:(\{[\s\S]*?\})###/);
         if (mProv) {
-          respuestaVisible = respuesta.replace(mProv[0], '').trim();
+          respuestaVisible = respuestaVisible.replace(mProv[0], '').trim();
           try { provDatos = JSON.parse(mProv[1]); } catch(e) {}
+        }
+        var aporteDatos = null;
+        var mAporte = respuestaVisible.match(/###APORTE_LISTO:(\{[\s\S]*?\})###/);
+        if (mAporte) {
+          respuestaVisible = respuestaVisible.replace(mAporte[0], '').trim();
+          try { aporteDatos = JSON.parse(mAporte[1]); } catch(e) {}
         }
 
         // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
@@ -22111,7 +22632,7 @@
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -22122,10 +22643,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos);
           });
         } else {
-          rkMensajeBot(respuestaVisible, null, null, provDatos);
+          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
