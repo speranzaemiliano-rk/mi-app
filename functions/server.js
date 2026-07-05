@@ -860,13 +860,26 @@ app.get('/mail/diag', (req, res) => {
     });
 });
 
+// Extrae el motivo real de un error de imapflow/nodemailer (la librería suele tirar
+// mensajes genéricos como "Command failed" y guardar el detalle en otras propiedades).
+function detalleErrorMail(e) {
+    var partes = [];
+    if (e.authenticationFailed) partes.push('Falló la autenticación con Gmail (usuario/contraseña de aplicación incorrectos, o falta habilitar IMAP).');
+    if (e.responseText) partes.push('Respuesta del servidor: ' + e.responseText);
+    if (e.response && typeof e.response === 'string') partes.push('Respuesta: ' + e.response);
+    if (e.serverResponseCode) partes.push('Código: ' + e.serverResponseCode);
+    if (e.code) partes.push('Code: ' + e.code);
+    if (e.command) partes.push('Comando: ' + e.command);
+    return partes.join(' | ');
+}
+
 // Disparo manual (además del automático por intervalo).
 app.get('/mail/revisar', async (req, res) => {
     try {
         const r = await mailBotRevisar();
         res.json({ ok: true, ...r });
     } catch (e) {
-        res.status(e.faltanCreds ? 400 : 500).json({ error: e.message, faltanCreds: !!e.faltanCreds });
+        res.status(e.faltanCreds ? 400 : 500).json({ error: e.message, detalle: detalleErrorMail(e), faltanCreds: !!e.faltanCreds });
     }
 });
 
