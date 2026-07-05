@@ -13349,6 +13349,95 @@
         }
     }
 
+    // Recalcula TODOS los acumulados de cobro de una venta a partir de su cobrosHistorial.
+    // Se usa al editar o eliminar un cobro, para no arrastrar el error de sumar/restar a mano.
+    function _recalcCobrosVenta(v) {
+        var terreno=0, construccion=0, cobUSD=0, cobARS=0, cochera=0, cacUlt=0;
+        (v.cobrosHistorial||[]).forEach(function(c) {
+            var m = c.monto||0;
+            switch (c.comp) {
+                case 'usd': if (v.modalidad==='cuotas_cac') terreno+=m; else cobUSD+=m; break;
+                case 'ars_construccion': construccion+=m; if (c.cac>0) cacUlt=c.cac; break;
+                case 'cuota': construccion+=m; if (c.cac>0) cacUlt=c.cac; break;
+                case 'ars_general': cobARS+=m; break;
+                case 'cuota_ars_simple': cobARS+=m; break;
+                case 'cuota_usd_simple': cobUSD+=m; break;
+                case 'cochera_ars': cochera+=m; break;
+                case 'cochera_usd': cochera+=m; break;
+            }
+        });
+        if (v.modalidad==='cuotas_cac') v.terrenoCobrado = terreno;
+        v.construccionCobrado = construccion;
+        v.cobradoUSD = cobUSD;
+        v.cobradoARS = cobARS;
+        v.cocheraCobrado = cochera;
+        if (cacUlt>0) v.cacActual = cacUlt;
+    }
+
+    // Abre el modal de edición de un cobro puntual (permite corregir monto, CAC, fecha,
+    // forma de cobro y referencia sin tener que borrar todo el cobro).
+    var _editCobroVIdx = -1, _editCobroCIdx = -1;
+    window.abrirEditarCobroVenta = function(idx, cIdx) {
+        var v = ventas[idx]; if (!v) return;
+        var c = (v.cobrosHistorial||[])[cIdx]; if (!c) return;
+        _editCobroVIdx = idx; _editCobroCIdx = cIdx;
+        document.getElementById('ecvUF').textContent = (v.uf||'UF') + ' · cobro N°' + (cIdx+1);
+        document.getElementById('ecvFecha').value = c.fecha || '';
+        document.getElementById('ecvMonto').value = c.monto || '';
+        document.getElementById('ecvRef').value = c.ref || '';
+        document.getElementById('ecvModalidad').value = (c.tipoAB === 'A') ? 'A' : 'B';
+        // CAC solo aplica a cobros de construcción/cuota con ajuste
+        var esCac = (c.comp === 'cuota' || c.comp === 'ars_construccion');
+        document.getElementById('ecvGrupoCac').style.display = esCac ? '' : 'none';
+        document.getElementById('ecvCac').value = c.cac || '';
+        // Selector de cuenta bancaria (solo si es Banco)
+        var selC = document.getElementById('ecvCuenta');
+        selC.innerHTML = '<option value="">— Sin especificar —</option>';
+        cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; if((cu.id||cu.banco)===c.cuentaId) o.selected=true; selC.appendChild(o); });
+        document.getElementById('ecvGrupoCuenta').style.display = (c.tipoAB === 'A') ? '' : 'none';
+        document.getElementById('modalEditarCobroVenta').classList.add('active');
+    };
+    window.ecvOnModalidadChange = function() {
+        document.getElementById('ecvGrupoCuenta').style.display = (document.getElementById('ecvModalidad').value === 'A') ? '' : 'none';
+    };
+    window.cerrarEditarCobroVenta = function() { document.getElementById('modalEditarCobroVenta').classList.remove('active'); };
+    window.guardarEdicionCobroVenta = function() {
+        var v = ventas[_editCobroVIdx]; if (!v) return;
+        var c = (v.cobrosHistorial||[])[_editCobroCIdx]; if (!c) return;
+        var monto = parseFloat(document.getElementById('ecvMonto').value) || 0;
+        var fecha = document.getElementById('ecvFecha').value;
+        if (!monto || monto <= 0) { alert('Ingresá un monto válido.'); return; }
+        if (!fecha) { alert('Ingresá la fecha.'); return; }
+        c.monto = monto;
+        c.fecha = fecha;
+        c.ref = (document.getElementById('ecvRef').value||'').trim();
+        c.tipoAB = (document.getElementById('ecvModalidad').value === 'A') ? 'A' : 'B';
+        if (document.getElementById('ecvGrupoCac').style.display !== 'none') {
+            c.cac = parseFloat(document.getElementById('ecvCac').value) || 0;
+        }
+        if (c.tipoAB === 'A') {
+            var cu = document.getElementById('ecvCuenta').value || '';
+            if (cu) c.cuentaId = cu; else delete c.cuentaId;
+        } else {
+            delete c.cuentaId;
+        }
+        _recalcCobrosVenta(v);
+        cerrarEditarCobroVenta();
+        persistirVentas();
+        if (typeof renderVentas === 'function') renderVentas();
+        alert('✅ Cobro actualizado.');
+    };
+    window.eliminarCobroVenta = function(idx, cIdx) {
+        var v = ventas[idx]; if (!v) return;
+        var c = (v.cobrosHistorial||[])[cIdx]; if (!c) return;
+        if (!confirm('¿Eliminar este cobro de ' + (c.monto||0).toLocaleString('es-AR') + '? Se va a recalcular el saldo de la UF.')) return;
+        v.cobrosHistorial.splice(cIdx, 1);
+        _recalcCobrosVenta(v);
+        persistirVentas();
+        if (typeof renderVentas === 'function') renderVentas();
+        alert('✅ Cobro eliminado y saldo recalculado.');
+    };
+
     function imprimirReciboCobroVenta(v, monto, fecha, comp, cac, ref, nroRecibo, nroCuota) {
         const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS — Cuota', cuota_usd_simple:'USD — Cuota', cochera_ars:'🚗 Cochera (ARS)', cochera_usd:'🚗 Cochera (USD)'};
         const fmtM = n => ((comp==='usd'||comp==='cuota_usd_simple'||comp==='cochera_usd')?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
@@ -15563,10 +15652,15 @@
             var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple' || c.comp === 'cochera_usd') ? 'USD ' : '$ ';
             return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota', cochera_ars:'Cochera ARS', cochera_usd:'Cochera USD'}[c.comp]||c.comp) + (c.nroCuota?' Cuota '+c.nroCuota:'') + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
         }).join('\n');
-        var sel = prompt('Cobros de ' + (v.uf||'UF') + ':\n\n' + lista + '\n\nNúmero a reimprimir (1-' + hist.length + '):');
+        var sel = prompt('Cobros de ' + (v.uf||'UF') + ':\n\n' + lista + '\n\nElegí el número del cobro (1-' + hist.length + '):');
         if (!sel) return;
         var i = parseInt(sel) - 1;
         if (isNaN(i) || i < 0 || i >= hist.length) { alert('Número inválido.'); return; }
+        var accion = prompt('Cobro N°' + (i+1) + '. ¿Qué querés hacer?\n\n1) Reimprimir recibo\n2) Editar (monto, CAC, forma de cobro, fecha)\n3) Eliminar el cobro\n\nEscribí 1, 2 o 3:', '1');
+        if (accion === null) return;
+        accion = accion.trim();
+        if (accion === '2') { abrirEditarCobroVenta(idx, i); return; }
+        if (accion === '3') { eliminarCobroVenta(idx, i); return; }
         var c = hist[i];
         imprimirReciboCobroVenta(v, c.monto, c.fecha, c.comp, c.cac, c.ref, c.nroRecibo || generarNumeroRecibo(), c.nroCuota);
     }
@@ -19850,6 +19944,54 @@
     </div>
   </div>
 </div>
+<!-- ═══════════════ MODAL: EDITAR COBRO DE VENTA ═══════════════ -->
+<div class="modal" id="modalEditarCobroVenta">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-head">
+      <h2>✏️ Editar cobro — <span id="ecvUF" style="color:var(--gold);"></span></h2>
+      <button class="modal-close" onclick="cerrarEditarCobroVenta()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label>Fecha *</label>
+          <input type="date" id="ecvFecha">
+        </div>
+        <div class="form-group">
+          <label>Monto *</label>
+          <input type="number" id="ecvMonto" step="0.01" min="0" placeholder="0">
+        </div>
+      </div>
+      <div class="form-group" id="ecvGrupoCac">
+        <label>Índice CAC aplicado</label>
+        <input type="number" id="ecvCac" step="0.01" min="0" placeholder="Ej: 5891.20">
+        <div class="form-hint" style="color:var(--text-3);">Solo para cobros de cuota/construcción con ajuste CAC.</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label>Forma de cobro *</label>
+          <select id="ecvModalidad" onchange="ecvOnModalidadChange()">
+            <option value="B">B — Efectivo</option>
+            <option value="A">A — Banco</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Referencia</label>
+          <input type="text" id="ecvRef" placeholder="Nº transferencia, cheque, etc.">
+        </div>
+      </div>
+      <div class="form-group" id="ecvGrupoCuenta" style="display:none;">
+        <label>Cuenta bancaria</label>
+        <select id="ecvCuenta" style="width:100%;"><option value="">— Sin especificar —</option></select>
+      </div>
+      <div class="form-hint" style="color:var(--text-3);margin-bottom:8px;">Al guardar se recalcula el saldo cobrado de la UF automáticamente.</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cerrarEditarCobroVenta()">Cancelar</button>
+        <button type="button" class="btn btn-gold" onclick="guardarEdicionCobroVenta()">💾 Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+</div>
 <!-- ═══════════════ MODAL: COBRO DE COCHERA ═══════════════ -->
 <div class="modal" id="modalCobroCochera">
   <div class="modal-box" style="max-width:480px;">
@@ -21659,7 +21801,7 @@
   }
   #rk-agente-voz-btn.activa { color: #4CAF82; }
   #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-  #rk-agente-borrar-btn {
+  #rk-agente-borrar-btn, #rk-agente-vozsel-btn {
     background: none;
     border: none;
     color: #8888aa;
@@ -21669,7 +21811,7 @@
     border-radius: 6px;
     line-height: 1;
   }
-  #rk-agente-borrar-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-borrar-btn:hover, #rk-agente-vozsel-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
   #rk-agente-dictar-btn.escuchando { background: rgba(200,80,80,.35); animation: rkPulso 1.1s ease-in-out infinite; }
   @keyframes rkPulso { 0%,100% { box-shadow: 0 0 0 0 rgba(200,80,80,.5); } 50% { box-shadow: 0 0 0 6px rgba(200,80,80,0); } }
 
@@ -21788,6 +21930,7 @@
       <span id="rk-agente-estado">Listo para ayudar</span>
     </div>
     <button id="rk-agente-voz-btn" onclick="rkVozToggle()" title="Leer las respuestas en voz alta">🔊</button>
+    <button id="rk-agente-vozsel-btn" onclick="rkElegirVoz()" title="Elegir la voz del asistente">🎚️</button>
     <button id="rk-agente-borrar-btn" onclick="rkBorrarMemoria()" title="Borrar el historial de esta conversación">🗑️</button>
     <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
   </div>
@@ -21884,14 +22027,63 @@
     _rkVozBtnActualizar();
   };
 
-  // Elige una voz en español (preferí es-AR, después cualquier es-*) entre las que ofrezca el navegador.
+  var RK_VOZ_LS = 'rk_voz_nombre'; // voz elegida a mano por el usuario (si eligió una)
+
+  // Elige la mejor voz en español para que suene lo más argentino/rioplatense posible.
+  // Orden de preferencia: la que el usuario haya elegido a mano → es-AR → español latinoamericano
+  // (es-419/US/MX/UY/CL/etc.) → cualquier otro español → España (es-ES) como último recurso.
   function _rkElegirVozEs() {
     if (!window.speechSynthesis) return null;
     var voces = window.speechSynthesis.getVoices() || [];
-    return voces.find(function(v) { return /^es-AR/i.test(v.lang); })
-      || voces.find(function(v) { return /^es-/i.test(v.lang); })
-      || null;
+    if (!voces.length) return null;
+    // 1) Voz elegida a mano por el usuario
+    var elegida = localStorage.getItem(RK_VOZ_LS);
+    if (elegida) {
+      var m = voces.find(function(v) { return v.name === elegida; });
+      if (m) return m;
+    }
+    var esEspanol = function(v) { return /^es(-|_|$)/i.test(v.lang) || /espa[nñ]ol|spanish/i.test(v.name); };
+    var espanolas = voces.filter(esEspanol);
+    if (!espanolas.length) return null;
+    // 2) Argentina explícita
+    var ar = espanolas.find(function(v) { return /es[-_]AR/i.test(v.lang) || /argentin/i.test(v.name); });
+    if (ar) return ar;
+    // 3) Latinoamericano neutro / de países con acento cercano (evitando España)
+    var latamRe = /es[-_](419|US|MX|UY|CL|CO|PE|PY|BO|EC|VE|CR|GT)/i;
+    var latam = espanolas.find(function(v) { return latamRe.test(v.lang) || /latinoam|estados unidos|m[eé]xico|méxico/i.test(v.name); });
+    if (latam) return latam;
+    // 4) Cualquier español que NO sea de España
+    var noEspana = espanolas.find(function(v) { return !/es[-_]ES/i.test(v.lang) && !/espa[nñ]a|castilla/i.test(v.name); });
+    if (noEspana) return noEspana;
+    // 5) Lo que haya
+    return espanolas[0];
   }
+
+  // Devuelve la lista de voces en español disponibles (para el selector manual).
+  function _rkVocesEspanol() {
+    if (!window.speechSynthesis) return [];
+    return (window.speechSynthesis.getVoices() || []).filter(function(v) {
+      return /^es(-|_|$)/i.test(v.lang) || /espa[nñ]ol|spanish/i.test(v.name);
+    });
+  }
+
+  // Deja que el usuario elija a mano la voz entre las disponibles en su dispositivo.
+  window.rkElegirVoz = function() {
+    var voces = _rkVocesEspanol();
+    if (!voces.length) { alert('Tu navegador no tiene voces en español instaladas. En el celular podés agregarlas desde Ajustes → Idioma → Texto a voz.'); return; }
+    var actual = localStorage.getItem(RK_VOZ_LS) || '(automática)';
+    var lista = voces.map(function(v, i) { return (i+1) + ') ' + v.name + ' [' + v.lang + ']'; }).join('\n');
+    var r = prompt('Elegí la voz del asistente (escribí el número).\nActual: ' + actual + '\n\n0) Automática (mejor acento latino)\n' + lista, '0');
+    if (r === null) return;
+    var n = parseInt(r, 10);
+    if (n === 0) { localStorage.removeItem(RK_VOZ_LS); alert('Listo: voz automática.'); return; }
+    if (n >= 1 && n <= voces.length) {
+      localStorage.setItem(RK_VOZ_LS, voces[n-1].name);
+      // Prueba de la voz elegida
+      _rkVozActivada = true; localStorage.setItem('rk_voz_activada', '1'); _rkVozBtnActualizar();
+      rkHablar('Listo, esta es mi nueva voz. ¿Te gusta cómo sueno?');
+    }
+  };
 
   function rkHablar(texto) {
     if (!_rkVozActivada || !window.speechSynthesis || !texto) return;
@@ -21904,9 +22096,17 @@
     window.speechSynthesis.cancel();
     var utter = new SpeechSynthesisUtterance(limpio);
     utter.lang = 'es-AR';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
     var voz = _rkElegirVozEs();
-    if (voz) utter.voice = voz;
+    if (voz) { utter.voice = voz; utter.lang = voz.lang || 'es-AR'; }
     window.speechSynthesis.speak(utter);
+  }
+
+  // Las voces cargan de forma asíncrona en varios navegadores: forzamos su carga temprana.
+  if (window.speechSynthesis) {
+    try { window.speechSynthesis.getVoices(); } catch(e) {}
+    window.speechSynthesis.onvoiceschanged = function() { try { window.speechSynthesis.getVoices(); } catch(e) {} };
   }
 
   // Dictado por voz: micrófono en vivo (distinto de "adjuntar audio", que sube un archivo grabado antes).
@@ -22098,17 +22298,41 @@
       bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
     }
 
+    // Totales financieros (egresos pagados y cobros recibidos) para que pueda responder "¿cuánto pagué/cobré?"
+    try {
+      var pagadoProv = 0;
+      if (typeof datos !== 'undefined') datos.forEach(function(d){ pagadoProv += d.pagado||0; });
+      if (typeof facturas !== 'undefined') facturas.forEach(function(f){ pagadoProv += f.pagado||0; });
+      var cobradoARS = 0, cobradoUSD = 0;
+      var sumCobros = function(arr, filtroUSD){ (arr||[]).forEach(function(x){ (x.cobrosHistorial||[]).forEach(function(c){ if (filtroUSD && filtroUSD(c)) cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); }); };
+      if (typeof ventas !== 'undefined') sumCobros(ventas, function(c){ return c.comp==='usd'||c.comp==='cuota_usd_simple'; });
+      if (typeof alquileres !== 'undefined') (alquileres||[]).forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if ((a.moneda||'ARS')==='USD') cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); });
+      if (typeof servicios !== 'undefined') sumCobros(servicios, null);
+      var finLins = [];
+      if (pagadoProv) finLins.push('- Total pagado a proveedores (egresos): ' + monFmt(pagadoProv, 'ARS'));
+      if (cobradoARS) finLins.push('- Total cobrado en pesos (ventas/alquileres/servicios): ' + monFmt(cobradoARS, 'ARS'));
+      if (cobradoUSD) finLins.push('- Total cobrado en dólares: ' + monFmt(cobradoUSD, 'USD'));
+      if (finLins.length) bloques.push('SITUACIÓN FINANCIERA (aproximada):\n' + finLins.join('\n'));
+    } catch(e) {}
+
     var texto = bloques.join('\n\n');
     var LIMITE = 6000;
     if (texto.length > LIMITE) texto = texto.slice(0, LIMITE) + '\n[...datos truncados por espacio, hay más registros cargados...]';
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos, mailDatos, ingresoDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
     div.textContent = texto;
+    if (mailDatos && mailDatos.to) {
+      var btnM = document.createElement('button');
+      btnM.textContent = '📧 Enviar mail a ' + mailDatos.to;
+      btnM.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnM.onclick = function() { rkEnviarMailAsistente(mailDatos, btnM); };
+      div.appendChild(btnM);
+    }
     if (factDatos && factDatos.tipo === 'factura') {
       var btn = document.createElement('button');
       btn.textContent = '📥 Cargar en Facturas';
@@ -22136,6 +22360,14 @@
       btnAp.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
       btnAp.onclick = function() { rkAbrirAportantePrefill(aporteDatos); btnAp.textContent = '✓ Abriendo formulario…'; btnAp.disabled = true; };
       div.appendChild(btnAp);
+    }
+    if (ingresoDatos && (ingresoDatos.monto || ingresoDatos.origen)) {
+      var btnIg = document.createElement('button');
+      var monLbl = (ingresoDatos.moneda === 'USD' ? 'USD ' : '$') + (Number(ingresoDatos.monto||0).toLocaleString('es-AR'));
+      btnIg.textContent = '💼 Cargar ingreso (' + monLbl + ')';
+      btnIg.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#4CAF82,#2E9E68);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnIg.onclick = function() { rkAbrirIngresoPrefill(ingresoDatos); btnIg.textContent = '✓ Abriendo formulario…'; btnIg.disabled = true; };
+      div.appendChild(btnIg);
     }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
@@ -22339,6 +22571,71 @@
     }, 200);
   };
 
+  // Abre el formulario real de "Nuevo Ingreso General" precargado con lo que se juntó charlando.
+  // El usuario revisa (moneda, tipo, monto) y confirma con "Guardar Ingreso" del propio formulario.
+  window.rkAbrirIngresoPrefill = function(datos) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('IngGeneral');
+    setTimeout(function() {
+      if (typeof abrirModalIngGeneral === 'function') abrirModalIngGeneral();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setVal('igOrigen', datos.origen);
+      setVal('igMonto', datos.monto);
+      setVal('igReferencia', datos.referencia);
+      setVal('igObs', datos.obs);
+      // Moneda: respetamos lo que dijo el usuario; por defecto ARS (pesos).
+      var mon = (datos.moneda === 'USD') ? 'USD' : 'ARS';
+      setVal('igMoneda', mon);
+      // Tipo de ingreso: solo si coincide con una opción válida del select.
+      if (datos.tipo) {
+        var selT = document.getElementById('igTipoIngreso');
+        if (selT && Array.prototype.some.call(selT.options, function(o){ return o.value === datos.tipo; })) selT.value = datos.tipo;
+      }
+      // Efectivo (B) o Banco (A); por defecto efectivo.
+      var selM = document.getElementById('igModalidad');
+      if (selM) selM.value = (datos.modalidad === 'A') ? 'A' : 'B';
+      if (datos.fecha) setVal('igFecha', datos.fecha);
+    }, 200);
+  };
+
+  // Envía un mail que el asistente redactó charlando. Nunca manda solo: se dispara desde
+  // el botón "📧 Enviar mail". Reutiliza EmailJS (mismo servicio que las facturas). La
+  // plantilla tiene campos fijos (pensada para facturas): mapeamos asunto→numero,
+  // cuerpo→descripcion, destinatario→to_email/proveedor.
+  window.rkEnviarMailAsistente = function(datos, btn) {
+    if (!datos || !datos.to) return;
+    if (typeof getEmailJsConfig !== 'function') { alert('El envío de mails no está disponible.'); return; }
+    var cfg = getEmailJsConfig();
+    if (!cfg.serviceId || !cfg.templateId || !cfg.publicKey) {
+      alert('Configurá EmailJS en ⚙️ Ajustes antes de mandar mails.');
+      return;
+    }
+    if (typeof emailjs === 'undefined') { alert('La librería de mail (EmailJS) no cargó. Revisá tu conexión.'); return; }
+    var resumen = 'Vas a enviar este mail:\n\nPara: ' + datos.to + '\nAsunto: ' + (datos.asunto || '(sin asunto)') + '\n\n' + (datos.cuerpo || '') + '\n\n¿Confirmás el envío?';
+    if (!confirm(resumen)) return;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
+    var params = {
+      to_email:    datos.to,
+      proveedor:   datos.destinatario || datos.to,
+      numero:      datos.asunto || 'Mensaje de RK',
+      fecha:       (typeof formatearFecha === 'function') ? formatearFecha(new Date().toISOString().substring(0,10)) : '',
+      importe:     '—',
+      descripcion: datos.cuerpo || '',
+      estado:      datos.cuerpo || 'Enviado desde el Asistente RK.',
+      pdf_url:     ''
+    };
+    emailjs.send(cfg.serviceId, cfg.templateId, params, { publicKey: cfg.publicKey })
+      .then(function() {
+        if (btn) btn.textContent = '✓ Mail enviado a ' + datos.to;
+        rkMensajeBot('✅ Listo, mandé el mail a ' + datos.to + '.');
+      })
+      .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.textContent = '📧 Reintentar envío a ' + datos.to; }
+        rkMensajeBot('❌ No pude enviar el mail: ' + (e.text || e.message || String(e)));
+      });
+  };
+
   function rkMensajeUser(texto) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
@@ -22493,7 +22790,31 @@
       + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos el nombre y el desarrollo, agregá al FINAL '
       + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
       + '(null en lo que falte): ###APORTE_LISTO:{"nombre":"...","desarrollo":"...","capitalAportado":null,"moneda":null,"rentabilidadPct":null,"baseMontoPct":null,"m2Asignados":null,"valorM2Asignado":null,"fechaVencimiento":null,"obs":null}### '
-      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema.'
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide mandar/enviar un mail o correo a alguien, ayudalo a redactarlo: si no te dio el destinatario, el asunto o el cuerpo, '
+      + 'preguntáselos (podés proponer vos un borrador del cuerpo y del asunto si te dice de qué se trata, para que él lo apruebe o corrija). '
+      + 'El destinatario tiene que ser una dirección de mail válida; si te da solo un nombre, fijate si ese proveedor/persona figura en los datos con email, y si no, pedile la dirección. '
+      + 'En cuanto tengas al menos el destinatario (to) y algo de cuerpo, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
+      + 'exactamente este marcador con lo que tengas (null en lo que falte): ###MAIL_LISTO:{"to":"...","asunto":"...","cuerpo":"...","destinatario":null}### '
+      + 'El campo "cuerpo" es el texto completo del mail ya redactado. NUNCA digas que ya enviaste el mail: vos solo lo redactás, el usuario lo revisa y lo envía con un botón. '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo mail, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide cargar/registrar/agregar un INGRESO (ingreso general, entrada de plata, aporte, préstamo, subsidio, devolución, etc.), NO le pidas todos los datos juntos: '
+      + 'preguntale de a uno: 1) de qué se trata / origen (obligatorio, ej. "aporte de Juan", "préstamo del banco"), 2) monto (obligatorio), '
+      + '3) MONEDA. MUY IMPORTANTE: la moneda por defecto es PESOS (ARS). Estás en Argentina: si el usuario no aclara la moneda, asumí SIEMPRE pesos (ARS), NUNCA dólares. '
+      + 'Solo usá USD si el usuario dice explícitamente "dólares", "USD" o "verdes". 4) si entró en efectivo o al banco (por defecto efectivo), 5) fecha (por defecto hoy). '
+      + 'El "tipo" tiene que ser uno de estos valores exactos: aporte_socio, prestamo_empresa, prestamo_bancario, subsidio, devolucion, otro (si no encaja ninguno, usá "otro"). '
+      + 'No inventes datos. En cuanto tengas al menos el origen y el monto, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
+      + 'exactamente este marcador (null en lo que falte): ###INGRESO_LISTO:{"origen":"...","monto":null,"moneda":"ARS","tipo":"otro","modalidad":"B","referencia":null,"obs":null,"fecha":null}### '
+      + 'Ojo: en "moneda" poné "ARS" salvo que el usuario haya dicho dólares; en "modalidad" poné "B" (efectivo) o "A" (banco). '
+      + 'MUY IMPORTANTE sobre cargar cosas (ingresos, proveedores, aportes, mails): vos NO guardás nada directamente. Solo juntás los datos y aparece un botón para que el usuario confirme. '
+      + 'Entonces NUNCA digas "ya lo registré", "lo cargué" ni "listo, quedó guardado". Decí algo como "te dejo el botón para que lo cargues/confirmes". '
+      + 'Repetí el marcador actualizado en cada respuesta mientras sigan armando el mismo ingreso, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide que lo lleves, abras o vayas a una sección/pantalla del sistema (ej. "llevame a caja en pesos", "abrí proveedores", "mostrame el dashboard"), '
+      + 'hacelo: agregá al FINAL de tu respuesta (en una línea aparte, sin mencionarlo) el marcador ###IR_A:NombreTab### usando EXACTAMENTE uno de estos nombres de tab según lo que pida: '
+      + 'Home (inicio), Dashboard (panel/tablero), CajaGeneral (caja general), EfectivoPesos (caja/efectivo en pesos), EfectivoUSD (caja/efectivo en dólares), '
+      + 'CuentasBancarias (banco/cuentas bancarias), Ventas, Alquileres, Servicios, IngGeneral (ingresos generales), Inversiones (aportantes/socios), Desarrollos (desarrollos inmobiliarios), '
+      + 'ResumenIngresos (resumen de ingresos), Facturas, Proveedores, Presupuestos, Pagos, Egresos, Tesoreria (tesorería), Documentos, Reportes, PlanTrabajo (plan de trabajo/tareas), CompRecibidos (comprobantes recibidos), Config (configuración). '
+      + 'Por ejemplo, si te dicen "llevame a la caja en pesos" respondé algo corto como "Te llevo a Efectivo en Pesos 👍" y agregá al final: ###IR_A:EfectivoPesos### . Usá el marcador solo cuando pidan ir/abrir/mostrar una sección.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -22615,6 +22936,33 @@
           respuestaVisible = respuestaVisible.replace(mAporte[0], '').trim();
           try { aporteDatos = JSON.parse(mAporte[1]); } catch(e) {}
         }
+        var mailDatos = null;
+        var mMail = respuestaVisible.match(/###MAIL_LISTO:(\{[\s\S]*?\})###/);
+        if (mMail) {
+          respuestaVisible = respuestaVisible.replace(mMail[0], '').trim();
+          try { mailDatos = JSON.parse(mMail[1]); } catch(e) {}
+          if (mailDatos && !mailDatos.to) mailDatos = null; // sin destinatario todavía, no mostramos botón
+        }
+        var ingresoDatos = null;
+        var mIng = respuestaVisible.match(/###INGRESO_LISTO:(\{[\s\S]*?\})###/);
+        if (mIng) {
+          respuestaVisible = respuestaVisible.replace(mIng[0], '').trim();
+          try { ingresoDatos = JSON.parse(mIng[1]); } catch(e) {}
+          if (ingresoDatos && !ingresoDatos.monto) ingresoDatos = null; // sin monto todavía, no mostramos botón
+        }
+        // Navegación: si el asistente indicó ir a una sección, la abrimos directamente.
+        var mIrA = respuestaVisible.match(/###IR_A:\s*([A-Za-z]+)\s*###/);
+        if (mIrA) {
+          respuestaVisible = respuestaVisible.replace(mIrA[0], '').trim();
+          var destino = mIrA[1];
+          if (CONTEXTOS_TABS[destino] && typeof mostrarTab === 'function') {
+            setTimeout(function() {
+              _rkAbierto = false;
+              document.getElementById('rk-agente-panel').classList.remove('abierto');
+              mostrarTab(destino);
+            }, 400);
+          }
+        }
 
         // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
         // (factura → "Cargar en Facturas", constancia AFIP → "Cargar como proveedor")
@@ -22632,7 +22980,7 @@
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -22643,10 +22991,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
         } else {
-          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos);
+          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
