@@ -739,5 +739,148 @@ app.post('/whatsapp/send', async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  MAIL BOT — Asistente RK por email (recibir por IMAP, responder por SMTP)
+//  Le mandás un mail a la casilla del asistente y te responde solo con Gemini.
+//  Variables de entorno:
+//    MAIL_BOT_USER          → dirección Gmail dedicada del asistente (ej. asistente.rk@gmail.com)
+//    MAIL_BOT_APP_PASSWORD  → "contraseña de aplicación" de Google (NO la contraseña normal)
+//    MAIL_BOT_ALLOWED       → (opcional) mails autorizados a usarlo, separados por coma.
+//                             Si se deja vacío, responde a cualquiera (no recomendado).
+//    GEMINI_API_KEY         → API key de Gemini (la misma que WhatsApp)
+//  Nota: en Gmail hay que activar la verificación en 2 pasos y generar una
+//  "contraseña de aplicación" (https://myaccount.google.com/apppasswords). IMAP
+//  viene habilitado por defecto en Gmail.
+// ═══════════════════════════════════════════════════════════════════
+
+function mailBotConfigurado() {
+    return !!(process.env.MAIL_BOT_USER && process.env.MAIL_BOT_APP_PASSWORD);
+}
+
+// Genera la respuesta del asistente para un mail entrante.
+async function mailGenerarRespuesta(asunto, cuerpo) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return 'El asistente todavía no está configurado del lado del servidor (falta GEMINI_API_KEY en Railway).';
+    const systemPrompt = 'Sos el Asistente RK, el mismo asistente de la app "RK · Gestión Multiempresa", respondiendo por email. '
+        + 'Respondé en español argentino, claro y cordial, con el largo que amerite la consulta. Es un mail, podés usar párrafos pero evitá markdown pesado. '
+        + 'Si te preguntan por datos puntuales cargados en la app (facturas, proveedores, aportantes, saldos, etc.) aclarás que por mail todavía no tenés acceso a esos datos en tiempo real, y sugerís consultarlo desde el Asistente RK dentro de la app. '
+        + 'Para cualquier otra consulta (general, cálculos, redacción, consejos) respondé con solvencia. Cerrá el mail con una firma breve tipo "— Asistente RK".';
+    const entrada = 'Asunto: ' + (asunto || '(sin asunto)') + '\n\nMensaje:\n' + (cuerpo || '');
+    try {
+        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                system_instruction: { parts: [{ text: systemPrompt }] },
+                contents: [{ role: 'user', parts: [{ text: entrada }] }],
+                generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
+            })
+        });
+        const data = await resp.json().catch(() => ({}));
+        const texto = data.candidates && data.candidates[0] && data.candidates[0].content &&
+            data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+        return (texto && texto.trim()) || 'No pude generar una respuesta, probá de nuevo en un momento.\n\n— Asistente RK';
+    } catch (e) {
+        return 'Tuve un problema al procesar tu consulta (' + (e.message || e) + '). Probá de nuevo más tarde.\n\n— Asistente RK';
+    }
+}
+
+let _mailBotCorriendo = false;
+
+// Revisa la casilla por mails sin leer y responde cada uno. Devuelve cuántos procesó.
+async function mailBotRevisar() {
+    if (!mailBotConfigurado()) { const e = new Error('Faltan MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD en Railway.'); e.faltanCreds = true; throw e; }
+    if (_mailBotCorriendo) return { yaCorriendo: true, procesados: 0 };
+    _mailBotCorriendo = true;
+
+    const { ImapFlow }   = require('imapflow');
+    const { simpleParser } = require('mailparser');
+    const nodemailer     = require('nodemailer');
+
+    const user = process.env.MAIL_BOT_USER;
+    const pass = process.env.MAIL_BOT_APP_PASSWORD;
+    const permitidos = (process.env.MAIL_BOT_ALLOWED || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+    const client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user, pass }, logger: false });
+    const transporter = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user, pass } });
+
+    let procesados = 0, respondidos = 0;
+    try {
+        await client.connect();
+        const lock = await client.getMailboxLock('INBOX');
+        try {
+            // Solo los no leídos
+            for await (const msg of client.fetch({ seen: false }, { source: true })) {
+                procesados++;
+                let parsed;
+                try { parsed = await simpleParser(msg.source); } catch (_) { parsed = null; }
+                await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true }); // marcar leído para no reprocesar
+
+                if (!parsed) continue;
+                const from = (parsed.from && parsed.from.value && parsed.from.value[0] && parsed.from.value[0].address || '').toLowerCase();
+                if (!from || from === user.toLowerCase()) continue;               // evitar loops con uno mismo
+                if (permitidos.length && permitidos.indexOf(from) === -1) continue; // no autorizado: ignorar
+
+                const asunto = parsed.subject || '';
+                const cuerpo = parsed.text || (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '');
+                const respuesta = await mailGenerarRespuesta(asunto, cuerpo);
+
+                await transporter.sendMail({
+                    from: '"Asistente RK" <' + user + '>',
+                    to: from,
+                    subject: /^re:/i.test(asunto) ? asunto : ('Re: ' + (asunto || 'tu consulta')),
+                    text: respuesta,
+                    inReplyTo: parsed.messageId || undefined,
+                    references: parsed.messageId || undefined
+                });
+                respondidos++;
+            }
+        } finally {
+            lock.release();
+        }
+        await client.logout();
+    } catch (e) {
+        try { await client.logout(); } catch (_) {}
+        _mailBotCorriendo = false;
+        throw e;
+    }
+    _mailBotCorriendo = false;
+    return { procesados, respondidos };
+}
+
+// Diagnóstico
+app.get('/mail/diag', (req, res) => {
+    res.json({
+        ok: true,
+        userCargado: !!process.env.MAIL_BOT_USER,
+        appPasswordCargada: !!process.env.MAIL_BOT_APP_PASSWORD,
+        geminiKeyCargada: !!process.env.GEMINI_API_KEY,
+        permitidos: (process.env.MAIL_BOT_ALLOWED || '').split(',').map(s => s.trim()).filter(Boolean),
+        listoParaUsar: mailBotConfigurado() && !!process.env.GEMINI_API_KEY
+    });
+});
+
+// Disparo manual (además del automático por intervalo).
+app.get('/mail/revisar', async (req, res) => {
+    try {
+        const r = await mailBotRevisar();
+        res.json({ ok: true, ...r });
+    } catch (e) {
+        res.status(e.faltanCreds ? 400 : 500).json({ error: e.message, faltanCreds: !!e.faltanCreds });
+    }
+});
+
+// Revisión automática cada 2 minutos (solo si está configurado).
+if (mailBotConfigurado()) {
+    setInterval(function () {
+        mailBotRevisar().then(function (r) {
+            if (r && r.respondidos) console.log('[MailBot] respondió ' + r.respondidos + ' mail(s).');
+        }).catch(function (e) {
+            console.error('[MailBot] error:', e.message);
+        });
+    }, 120000);
+    console.log('[MailBot] activo: revisando la casilla cada 2 minutos.');
+}
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo + WhatsApp) corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo + WhatsApp + MailBot) corriendo en puerto ${PORT}`));

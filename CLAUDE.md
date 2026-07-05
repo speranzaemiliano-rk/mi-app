@@ -44,6 +44,7 @@ Roles en `roles/<uid>`: `superadmin`, `admin`, `editor`, `lector`. Flags JS: `es
 - **Belvo:** `GET /belvo/diag`, `POST /belvo/widget-token`, `GET /belvo/accounts`, `GET /belvo/transactions`. ⚠️ **Belvo NO cubre Argentina** (solo MX/BR/CO/CL).
 - **Prometeo (Plan B, soporta Argentina):** `GET /prometeo/diag`, `/providers`, `POST /prometeo/login`, `GET /prometeo/accounts`, `/movements`, `/logout`. Backend listo; **falta la UI de login en la app.**
 - **WhatsApp (Asistente RK por WhatsApp):** `GET /whatsapp/diag`, `GET|POST /whatsapp/webhook` (handshake + mensajes entrantes de Meta, responde con Gemini), `POST /whatsapp/send` (envío manual/disparado por la app, body `{to, mensaje}`). Backend listo; **falta crear la cuenta de WhatsApp Business (Meta for Developers) y cargar credenciales** — ver `PENDIENTES.md`.
+- **Mail bot (Asistente RK por email):** `GET /mail/diag`, `GET /mail/revisar` (dispara la revisión manual). Recibe por IMAP (Gmail) y responde con Gemini por SMTP; revisa cada 2 min si está configurado. Backend listo; **falta crear la casilla de Gmail dedicada + contraseña de aplicación y cargar credenciales** — ver `PENDIENTES.md`. Deps: `imapflow`, `mailparser`, `nodemailer`.
 - Helper clave: `leerPem()` acepta PEM con `\n` reales/literales o base64.
 
 ## Integraciones
@@ -52,7 +53,7 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 ## Variables de entorno (Railway)
 
-`AFIP_CUIT`, `AFIP_CERT` (base64), `AFIP_KEY` (base64), `AFIP_ENV` (production/testing), `AFIP_ACCESS_TOKEN`; `BELVO_SECRET_ID`, `BELVO_SECRET_PASSWORD`, `BELVO_ENV`; `PROMETEO_API_KEY`, `PROMETEO_ENV`; `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `GEMINI_API_KEY` (para que el asistente responda solo por WhatsApp); `PORT`.
+`AFIP_CUIT`, `AFIP_CERT` (base64), `AFIP_KEY` (base64), `AFIP_ENV` (production/testing), `AFIP_ACCESS_TOKEN`; `BELVO_SECRET_ID`, `BELVO_SECRET_PASSWORD`, `BELVO_ENV`; `PROMETEO_API_KEY`, `PROMETEO_ENV`; `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `GEMINI_API_KEY` (para que el asistente responda solo por WhatsApp/email); `MAIL_BOT_USER`, `MAIL_BOT_APP_PASSWORD`, `MAIL_BOT_ALLOWED` (bot de mail); `PORT`.
 
 ## PWA
 

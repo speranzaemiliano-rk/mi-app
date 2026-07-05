@@ -153,6 +153,48 @@ Backend: `whatsappEnviarMensaje()`, `whatsappGenerarRespuesta()` en
 
 ---
 
+## 🟡 EN CURSO: Asistente RK por email — falta crear la casilla y cargar credenciales
+
+El **backend ya está listo**: recibe mails en una casilla dedicada (IMAP),
+los responde solo con Gemini (SMTP) y revisa cada 2 minutos. Falta que el
+usuario cree la casilla de Gmail y cargue las credenciales en Railway.
+
+1. Crear (o usar) una **casilla de Gmail dedicada** para el asistente, ej.
+   `asistente.rk@gmail.com`.
+2. En esa cuenta de Google: activar **verificación en 2 pasos** y generar una
+   **contraseña de aplicación** en https://myaccount.google.com/apppasswords
+   (elegí "Correo" / "Otro"). Copiá esos 16 caracteres. (IMAP ya viene
+   habilitado en Gmail por defecto.)
+3. En Railway (mismo servicio) cargar:
+
+   | Variable | Valor |
+   |---|---|
+   | `MAIL_BOT_USER` | La dirección de la casilla (ej. `asistente.rk@gmail.com`) |
+   | `MAIL_BOT_APP_PASSWORD` | La contraseña de aplicación de 16 caracteres |
+   | `MAIL_BOT_ALLOWED` | (opcional pero recomendado) tu(s) mail(s) autorizados, separados por coma. Si se deja vacío responde a cualquiera. |
+   | `GEMINI_API_KEY` | La misma API key de Gemini que ya se usa |
+
+4. Railway reinicia solo. Verificá en
+   `https://<tu-servicio>.up.railway.app/mail/diag` que dé
+   `"listoParaUsar": true`.
+5. Mandá un mail a la casilla del asistente desde tu dirección autorizada.
+   En ~2 minutos (o forzando `GET /mail/revisar`) te responde solo.
+
+**Limitaciones de esta primera versión:**
+- El asistente por mail **no ve los datos reales de la app** (igual que el de
+  WhatsApp): responde como asistente general. Sumar eso requeriría que el
+  backend lea Firebase.
+- La revisión automática corre cada 2 minutos mientras el servicio de Railway
+  esté despierto.
+- **Seguridad:** conviene setear `MAIL_BOT_ALLOWED` con tu mail para que no le
+  responda (ni gaste cuota de Gemini) a cualquiera que le escriba.
+
+Backend: `mailBotRevisar()`, `mailGenerarRespuesta()` en `functions/server.js`,
+endpoints `GET /mail/diag`, `GET /mail/revisar`. Deps nuevas: `imapflow`,
+`mailparser`, `nodemailer`.
+
+---
+
 ## ✅ Leer movimientos del banco desde Gmail (transferencias y tarjeta) — hecho 2026-07-05
 
 Alternativa para tener los movimientos del Santander real **sin costo** (Belvo
