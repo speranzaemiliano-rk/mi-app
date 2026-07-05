@@ -21659,7 +21659,7 @@
   }
   #rk-agente-voz-btn.activa { color: #4CAF82; }
   #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-  #rk-agente-borrar-btn {
+  #rk-agente-borrar-btn, #rk-agente-vozsel-btn {
     background: none;
     border: none;
     color: #8888aa;
@@ -21669,7 +21669,7 @@
     border-radius: 6px;
     line-height: 1;
   }
-  #rk-agente-borrar-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-borrar-btn:hover, #rk-agente-vozsel-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
   #rk-agente-dictar-btn.escuchando { background: rgba(200,80,80,.35); animation: rkPulso 1.1s ease-in-out infinite; }
   @keyframes rkPulso { 0%,100% { box-shadow: 0 0 0 0 rgba(200,80,80,.5); } 50% { box-shadow: 0 0 0 6px rgba(200,80,80,0); } }
 
@@ -21788,6 +21788,7 @@
       <span id="rk-agente-estado">Listo para ayudar</span>
     </div>
     <button id="rk-agente-voz-btn" onclick="rkVozToggle()" title="Leer las respuestas en voz alta">🔊</button>
+    <button id="rk-agente-vozsel-btn" onclick="rkElegirVoz()" title="Elegir la voz del asistente">🎚️</button>
     <button id="rk-agente-borrar-btn" onclick="rkBorrarMemoria()" title="Borrar el historial de esta conversación">🗑️</button>
     <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
   </div>
@@ -21884,14 +21885,63 @@
     _rkVozBtnActualizar();
   };
 
-  // Elige una voz en español (preferí es-AR, después cualquier es-*) entre las que ofrezca el navegador.
+  var RK_VOZ_LS = 'rk_voz_nombre'; // voz elegida a mano por el usuario (si eligió una)
+
+  // Elige la mejor voz en español para que suene lo más argentino/rioplatense posible.
+  // Orden de preferencia: la que el usuario haya elegido a mano → es-AR → español latinoamericano
+  // (es-419/US/MX/UY/CL/etc.) → cualquier otro español → España (es-ES) como último recurso.
   function _rkElegirVozEs() {
     if (!window.speechSynthesis) return null;
     var voces = window.speechSynthesis.getVoices() || [];
-    return voces.find(function(v) { return /^es-AR/i.test(v.lang); })
-      || voces.find(function(v) { return /^es-/i.test(v.lang); })
-      || null;
+    if (!voces.length) return null;
+    // 1) Voz elegida a mano por el usuario
+    var elegida = localStorage.getItem(RK_VOZ_LS);
+    if (elegida) {
+      var m = voces.find(function(v) { return v.name === elegida; });
+      if (m) return m;
+    }
+    var esEspanol = function(v) { return /^es(-|_|$)/i.test(v.lang) || /espa[nñ]ol|spanish/i.test(v.name); };
+    var espanolas = voces.filter(esEspanol);
+    if (!espanolas.length) return null;
+    // 2) Argentina explícita
+    var ar = espanolas.find(function(v) { return /es[-_]AR/i.test(v.lang) || /argentin/i.test(v.name); });
+    if (ar) return ar;
+    // 3) Latinoamericano neutro / de países con acento cercano (evitando España)
+    var latamRe = /es[-_](419|US|MX|UY|CL|CO|PE|PY|BO|EC|VE|CR|GT)/i;
+    var latam = espanolas.find(function(v) { return latamRe.test(v.lang) || /latinoam|estados unidos|m[eé]xico|méxico/i.test(v.name); });
+    if (latam) return latam;
+    // 4) Cualquier español que NO sea de España
+    var noEspana = espanolas.find(function(v) { return !/es[-_]ES/i.test(v.lang) && !/espa[nñ]a|castilla/i.test(v.name); });
+    if (noEspana) return noEspana;
+    // 5) Lo que haya
+    return espanolas[0];
   }
+
+  // Devuelve la lista de voces en español disponibles (para el selector manual).
+  function _rkVocesEspanol() {
+    if (!window.speechSynthesis) return [];
+    return (window.speechSynthesis.getVoices() || []).filter(function(v) {
+      return /^es(-|_|$)/i.test(v.lang) || /espa[nñ]ol|spanish/i.test(v.name);
+    });
+  }
+
+  // Deja que el usuario elija a mano la voz entre las disponibles en su dispositivo.
+  window.rkElegirVoz = function() {
+    var voces = _rkVocesEspanol();
+    if (!voces.length) { alert('Tu navegador no tiene voces en español instaladas. En el celular podés agregarlas desde Ajustes → Idioma → Texto a voz.'); return; }
+    var actual = localStorage.getItem(RK_VOZ_LS) || '(automática)';
+    var lista = voces.map(function(v, i) { return (i+1) + ') ' + v.name + ' [' + v.lang + ']'; }).join('\n');
+    var r = prompt('Elegí la voz del asistente (escribí el número).\nActual: ' + actual + '\n\n0) Automática (mejor acento latino)\n' + lista, '0');
+    if (r === null) return;
+    var n = parseInt(r, 10);
+    if (n === 0) { localStorage.removeItem(RK_VOZ_LS); alert('Listo: voz automática.'); return; }
+    if (n >= 1 && n <= voces.length) {
+      localStorage.setItem(RK_VOZ_LS, voces[n-1].name);
+      // Prueba de la voz elegida
+      _rkVozActivada = true; localStorage.setItem('rk_voz_activada', '1'); _rkVozBtnActualizar();
+      rkHablar('Listo, esta es mi nueva voz. ¿Te gusta cómo sueno?');
+    }
+  };
 
   function rkHablar(texto) {
     if (!_rkVozActivada || !window.speechSynthesis || !texto) return;
@@ -21904,9 +21954,17 @@
     window.speechSynthesis.cancel();
     var utter = new SpeechSynthesisUtterance(limpio);
     utter.lang = 'es-AR';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
     var voz = _rkElegirVozEs();
-    if (voz) utter.voice = voz;
+    if (voz) { utter.voice = voz; utter.lang = voz.lang || 'es-AR'; }
     window.speechSynthesis.speak(utter);
+  }
+
+  // Las voces cargan de forma asíncrona en varios navegadores: forzamos su carga temprana.
+  if (window.speechSynthesis) {
+    try { window.speechSynthesis.getVoices(); } catch(e) {}
+    window.speechSynthesis.onvoiceschanged = function() { try { window.speechSynthesis.getVoices(); } catch(e) {} };
   }
 
   // Dictado por voz: micrófono en vivo (distinto de "adjuntar audio", que sube un archivo grabado antes).
@@ -22121,7 +22179,7 @@
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos, mailDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos, mailDatos, ingresoDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
@@ -22160,6 +22218,14 @@
       btnAp.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
       btnAp.onclick = function() { rkAbrirAportantePrefill(aporteDatos); btnAp.textContent = '✓ Abriendo formulario…'; btnAp.disabled = true; };
       div.appendChild(btnAp);
+    }
+    if (ingresoDatos && (ingresoDatos.monto || ingresoDatos.origen)) {
+      var btnIg = document.createElement('button');
+      var monLbl = (ingresoDatos.moneda === 'USD' ? 'USD ' : '$') + (Number(ingresoDatos.monto||0).toLocaleString('es-AR'));
+      btnIg.textContent = '💼 Cargar ingreso (' + monLbl + ')';
+      btnIg.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#4CAF82,#2E9E68);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnIg.onclick = function() { rkAbrirIngresoPrefill(ingresoDatos); btnIg.textContent = '✓ Abriendo formulario…'; btnIg.disabled = true; };
+      div.appendChild(btnIg);
     }
     if (tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length) {
       var btnT = document.createElement('button');
@@ -22363,6 +22429,34 @@
     }, 200);
   };
 
+  // Abre el formulario real de "Nuevo Ingreso General" precargado con lo que se juntó charlando.
+  // El usuario revisa (moneda, tipo, monto) y confirma con "Guardar Ingreso" del propio formulario.
+  window.rkAbrirIngresoPrefill = function(datos) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('IngGeneral');
+    setTimeout(function() {
+      if (typeof abrirModalIngGeneral === 'function') abrirModalIngGeneral();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setVal('igOrigen', datos.origen);
+      setVal('igMonto', datos.monto);
+      setVal('igReferencia', datos.referencia);
+      setVal('igObs', datos.obs);
+      // Moneda: respetamos lo que dijo el usuario; por defecto ARS (pesos).
+      var mon = (datos.moneda === 'USD') ? 'USD' : 'ARS';
+      setVal('igMoneda', mon);
+      // Tipo de ingreso: solo si coincide con una opción válida del select.
+      if (datos.tipo) {
+        var selT = document.getElementById('igTipoIngreso');
+        if (selT && Array.prototype.some.call(selT.options, function(o){ return o.value === datos.tipo; })) selT.value = datos.tipo;
+      }
+      // Efectivo (B) o Banco (A); por defecto efectivo.
+      var selM = document.getElementById('igModalidad');
+      if (selM) selM.value = (datos.modalidad === 'A') ? 'A' : 'B';
+      if (datos.fecha) setVal('igFecha', datos.fecha);
+    }, 200);
+  };
+
   // Envía un mail que el asistente redactó charlando. Nunca manda solo: se dispara desde
   // el botón "📧 Enviar mail". Reutiliza EmailJS (mismo servicio que las facturas). La
   // plantilla tiene campos fijos (pensada para facturas): mapeamos asunto→numero,
@@ -22561,7 +22655,16 @@
       + 'En cuanto tengas al menos el destinatario (to) y algo de cuerpo, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
       + 'exactamente este marcador con lo que tengas (null en lo que falte): ###MAIL_LISTO:{"to":"...","asunto":"...","cuerpo":"...","destinatario":null}### '
       + 'El campo "cuerpo" es el texto completo del mail ya redactado. NUNCA digas que ya enviaste el mail: vos solo lo redactás, el usuario lo revisa y lo envía con un botón. '
-      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo mail, hasta que el usuario cambie de tema.'
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo mail, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide cargar/registrar/agregar un INGRESO (ingreso general, entrada de plata, aporte, préstamo, subsidio, devolución, etc.), NO le pidas todos los datos juntos: '
+      + 'preguntale de a uno: 1) de qué se trata / origen (obligatorio, ej. "aporte de Juan", "préstamo del banco"), 2) monto (obligatorio), '
+      + '3) MONEDA. MUY IMPORTANTE: la moneda por defecto es PESOS (ARS). Estás en Argentina: si el usuario no aclara la moneda, asumí SIEMPRE pesos (ARS), NUNCA dólares. '
+      + 'Solo usá USD si el usuario dice explícitamente "dólares", "USD" o "verdes". 4) si entró en efectivo o al banco (por defecto efectivo), 5) fecha (por defecto hoy). '
+      + 'El "tipo" tiene que ser uno de estos valores exactos: aporte_socio, prestamo_empresa, prestamo_bancario, subsidio, devolucion, otro (si no encaja ninguno, usá "otro"). '
+      + 'No inventes datos. En cuanto tengas al menos el origen y el monto, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
+      + 'exactamente este marcador (null en lo que falte): ###INGRESO_LISTO:{"origen":"...","monto":null,"moneda":"ARS","tipo":"otro","modalidad":"B","referencia":null,"obs":null,"fecha":null}### '
+      + 'Ojo: en "moneda" poné "ARS" salvo que el usuario haya dicho dólares; en "modalidad" poné "B" (efectivo) o "A" (banco). '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo ingreso, hasta que el usuario cambie de tema.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -22690,6 +22793,13 @@
           try { mailDatos = JSON.parse(mMail[1]); } catch(e) {}
           if (mailDatos && !mailDatos.to) mailDatos = null; // sin destinatario todavía, no mostramos botón
         }
+        var ingresoDatos = null;
+        var mIng = respuestaVisible.match(/###INGRESO_LISTO:(\{[\s\S]*?\})###/);
+        if (mIng) {
+          respuestaVisible = respuestaVisible.replace(mIng[0], '').trim();
+          try { ingresoDatos = JSON.parse(mIng[1]); } catch(e) {}
+          if (ingresoDatos && !ingresoDatos.monto) ingresoDatos = null; // sin monto todavía, no mostramos botón
+        }
 
         // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
         // (factura → "Cargar en Facturas", constancia AFIP → "Cargar como proveedor")
@@ -22707,7 +22817,7 @@
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -22718,10 +22828,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos, mailDatos);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
         } else {
-          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos, mailDatos);
+          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
