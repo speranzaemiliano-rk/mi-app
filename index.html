@@ -6293,6 +6293,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
         });
+        var manualClaves=_impPagosManualesClaves();
         function parseAmt(s){
             var neg=s.charAt(0)==='-';
             s=s.replace(/[^0-9.,]/g,'');
@@ -6342,9 +6343,11 @@
                 .replace(/-?\$\s*[\d.,]+/g,'')
                 .trim().replace(/\s+/g,' ');
             var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
             out.push({fecha:fecha,concepto:concepto||(esEgreso?'Débito':'Crédito'),
                       monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
-                      dup:!!existentes[clave],usar:!existentes[clave]});
+                      dup:dup,dupManual:dupManual,usar:!dup&&!dupManual});
             existentes[clave]=true;
             i++;
         }
@@ -6383,6 +6386,7 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')]=true;
         });
+        var manualClaves=_impPagosManualesClaves();
 
         // 3) Parsear cada fila de datos
         var out=[];
@@ -6404,8 +6408,10 @@
             var monto=esEgreso?salida:entrada;
             var ref=cols.comprob!==undefined?String(row[cols.comprob]||'').trim():'';
             var clave=impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
+            var dup=!!existentes[clave];
+            var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
             out.push({fecha:fecha, concepto:concepto||(esEgreso?'Débito':'Crédito'), monto:monto, esEgreso:esEgreso,
-                ref:ref, cuentaId:cuentaId, dup:!!existentes[clave], usar:!existentes[clave]});
+                ref:ref, cuentaId:cuentaId, dup:dup, dupManual:dupManual, usar:!dup&&!dupManual});
             existentes[clave]=true; // evita duplicar dentro del mismo archivo
         }
         return out;
@@ -6415,29 +6421,70 @@
         return [cuentaId, fecha, Math.round(montoConSigno*100), (desc||'').toLowerCase().replace(/\s+/g,' ').trim().substring(0,40)].join('|');
     }
 
+    // Pagos a proveedores ya registrados a mano (modalidad Bancarizado) desde presupuestos/facturas/documentos.
+    // Estos NUNCA pasan por ingGeneral, así que impExtClave no los detecta. Acá armamos un set aparte
+    // (cuenta + monto + fecha con ±2 días de tolerancia, ya que la fecha real de acreditación puede diferir
+    // de la que se cargó a mano) para avisar "posible duplicado" al importar el extracto real del banco.
+    function _impPagosManualesClaves(){
+        var claves={};
+        function marcar(cuentaId, fecha, monto){
+            if(!cuentaId||!fecha||!monto) return;
+            var base=new Date(fecha+'T00:00:00');
+            for(var d=-2; d<=2; d++){
+                var dt=new Date(base); dt.setDate(dt.getDate()+d);
+                var f=dt.toISOString().substring(0,10);
+                claves[cuentaId+'|'+f+'|'+Math.round(monto*100)]=true;
+            }
+        }
+        function recorrer(arr, montoFn){
+            (arr||[]).forEach(function(item){
+                (item.pagosHistorial||[]).forEach(function(p){
+                    if(p.modalidad!=='A'||!p.cuentaId||!p.fecha) return;
+                    marcar(p.cuentaId, p.fecha, montoFn(p));
+                });
+            });
+        }
+        recorrer(typeof datos!=='undefined'?datos:[], function(p){ return (p.capital||0)+(p.mayores||0)||p.montoPagado||0; });
+        recorrer(typeof facturas!=='undefined'?facturas:[], function(p){ return p.monto||0; });
+        recorrer(typeof documentos!=='undefined'?documentos:[], function(p){ return p.monto||0; });
+        return claves;
+    }
+
+    function _impEsPosibleDupManual(manualClaves, cuentaId, fecha, monto, esEgreso){
+        return !!(esEgreso && manualClaves[cuentaId+'|'+fecha+'|'+Math.round(monto*100)]);
+    }
+
     function impExtRenderPreview(){
         var fmt=function(n){return n?'$'+Math.round(n).toLocaleString('es-AR'):'';};
         var body=document.getElementById('impExtPreviewBody');
-        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup;}).length;
-        var dups=_impExtCandidatos.length-nuevos;
+        var dupsManual=_impExtCandidatos.filter(function(c){return !c.dup&&c.dupManual;}).length;
+        var nuevos=_impExtCandidatos.filter(function(c){return !c.dup&&!c.dupManual;}).length;
+        var dups=_impExtCandidatos.length-nuevos-dupsManual;
         var resumen=document.getElementById('impExtResumen');
         resumen.style.display='';
         resumen.innerHTML='Se encontraron <strong>'+_impExtCandidatos.length+'</strong> movimientos · '+
             '<strong style="color:var(--success)">'+nuevos+'</strong> nuevos · '+
-            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten).';
+            '<strong style="color:var(--text-3)">'+dups+'</strong> ya importados (se omiten)'+
+            (dupsManual?' · <strong style="color:var(--warn,#c78a1e)">'+dupsManual+'</strong> posibles duplicados de un pago ya cargado a mano (revisá antes de importarlos)':'')+'.';
         if(!_impExtCandidatos.length){
             document.getElementById('impExtPreviewWrap').style.display='none';
             document.getElementById('impExtBtnImportar').disabled=true;
             return;
         }
         body.innerHTML=_impExtCandidatos.map(function(c,i){
-            return '<tr style="'+(c.dup?'opacity:.5;':'')+'">'+
+            var estilo=c.dup?'opacity:.5;':(c.dupManual?'background:rgba(199,138,30,.12);':'');
+            var etiqueta=c.dup
+                ? '<span style="color:var(--text-3)">ya importado</span>'
+                : (c.dupManual
+                    ? '<span style="color:var(--warn,#c78a1e)" title="Cuenta, monto y fecha (±2 días) coinciden con un pago ya registrado en Facturas/Presupuestos/Documentos. Puede ser el mismo movimiento.">⚠️ posible duplicado (pago ya cargado a mano)</span>'
+                    : '<span style="color:var(--success)">nuevo</span>');
+            return '<tr style="'+estilo+'">'+
                 '<td><input type="checkbox" '+(c.usar?'checked':'')+' '+(c.dup?'disabled':'')+' onchange="_impExtCandidatos['+i+'].usar=this.checked;impExtRefreshBtn()"></td>'+
                 '<td>'+c.fecha+'</td>'+
                 '<td>'+(c.concepto||'').replace(/</g,'&lt;')+'</td>'+
                 '<td style="text-align:right;color:var(--success)">'+(!c.esEgreso?fmt(c.monto):'')+'</td>'+
                 '<td style="text-align:right;color:var(--danger)">'+(c.esEgreso?fmt(c.monto):'')+'</td>'+
-                '<td>'+(c.dup?'<span style="color:var(--text-3)">ya importado</span>':'<span style="color:var(--success)">nuevo</span>')+'</td>'+
+                '<td>'+etiqueta+'</td>'+
             '</tr>';
         }).join('');
         document.getElementById('impExtPreviewWrap').style.display='';
@@ -6452,7 +6499,8 @@
     }
 
     function impExtToggleAll(chk){
-        _impExtCandidatos.forEach(function(c){ if(!c.dup) c.usar=chk.checked; });
+        // Al tildar "todos" no se activan los posibles duplicados manuales: hay que revisarlos y tildarlos a mano.
+        _impExtCandidatos.forEach(function(c){ if(!c.dup && (!chk.checked || !c.dupManual)) c.usar=chk.checked; });
         impExtRenderPreview();
         document.getElementById('impExtCheckAll').checked=chk.checked;
     }
@@ -6562,7 +6610,8 @@
             if(!g.esBancario) return;
             existentes[impExtClave(g.cuentaId, g.fecha, (g.esEgreso?-1:1)*(g.monto||0), g.origen||'')] = true;
         });
-        var nuevos = 0;
+        var manualClaves = _impPagosManualesClaves();
+        var nuevos = 0, omitidosManual = 0;
         lista.forEach(function(t){
             var fecha = String(t.value_date || t.accounting_date || '').substring(0,10);
             if(!fecha) return;
@@ -6572,6 +6621,9 @@
             var concepto = (t.description || t.merchant && t.merchant.name || 'Movimiento').toString().trim();
             var clave = impExtClave(cuentaId, fecha, (esEgreso?-1:1)*monto, concepto);
             if(existentes[clave]) return;
+            // Belvo no tiene vista previa para revisar uno por uno: si coincide con un pago ya
+            // registrado a mano (cuenta + monto + fecha ±2 días), lo omitimos directo para no duplicar.
+            if(_impEsPosibleDupManual(manualClaves, cuentaId, fecha, monto, esEgreso)){ omitidosManual++; return; }
             existentes[clave] = true;
             ingGeneral.push({
                 tipo: esEgreso?'mov_banco_salida':'mov_banco_entrada',
@@ -6582,7 +6634,9 @@
             nuevos++;
         });
         if(nuevos){ persistirIngGeneral(); renderCuentasBancarias(); }
-        alert(nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.');
+        var msg = nuevos ? ('✓ Se sincronizaron '+nuevos+' movimientos nuevos del banco.') : 'Todo al día: no había movimientos nuevos.';
+        if(omitidosManual) msg += '\n⚠️ Se omitieron '+omitidosManual+' que coinciden con un pago ya cargado a mano (cuenta, monto y fecha cercana) — revisá en Tesorería/Pagos si falta alguno.';
+        alert(msg);
     }
 
     // ── Pagos a Proveedores ────────────────────────────────────────
