@@ -612,5 +612,132 @@ app.get('/prometeo/logout', async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  WHATSAPP — Asistente RK por WhatsApp (WhatsApp Business Cloud API de Meta)
+//  Variables de entorno:
+//    WHATSAPP_TOKEN            → access token permanente de la app de Meta
+//    WHATSAPP_PHONE_NUMBER_ID  → ID del número de teléfono (Meta for Developers)
+//    WHATSAPP_VERIFY_TOKEN     → string que vos elegís, para el handshake del webhook
+//    GEMINI_API_KEY            → API key de Gemini, para que el asistente responda solo
+// ═══════════════════════════════════════════════════════════════════
+
+// Envía un mensaje de texto por WhatsApp. Se usa tanto para responder mensajes
+// entrantes como para avisos que dispare la app (ej. "avisame cuando venza una factura").
+async function whatsappEnviarMensaje(to, texto) {
+    const token   = process.env.WHATSAPP_TOKEN;
+    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    if (!token || !phoneId) {
+        const err = new Error('Faltan credenciales de WhatsApp. Configurá WHATSAPP_TOKEN y WHATSAPP_PHONE_NUMBER_ID en Railway.');
+        err.faltanCreds = true;
+        throw err;
+    }
+    const resp = await fetch('https://graph.facebook.com/v20.0/' + phoneId + '/messages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: String(to),
+            type: 'text',
+            text: { body: String(texto || '').slice(0, 4096) } // WhatsApp corta mensajes más largos
+        })
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+        const err = new Error('WhatsApp API respondió HTTP ' + resp.status);
+        err.data = json;
+        throw err;
+    }
+    return json;
+}
+
+// Genera la respuesta del asistente con Gemini. Sin acceso a los datos de la app
+// (facturas, proveedores, etc.) — eso queda para una vuelta siguiente si hace falta.
+async function whatsappGenerarRespuesta(textoUsuario) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return '⚠️ El asistente todavía no está configurado del lado del servidor (falta GEMINI_API_KEY en Railway).';
+    const systemPrompt = 'Sos el Asistente RK, el mismo asistente de la app "RK · Gestión Multiempresa", ahora respondiendo por WhatsApp. '
+        + 'Respondé en español argentino, de forma clara y breve (es un chat de WhatsApp: evitá formato markdown pesado, tablas o listas largas). '
+        + 'Si te preguntan algo puntual sobre los datos cargados en la app (facturas, proveedores, aportantes, saldos, etc.) explicá que '
+        + 'por WhatsApp todavía no tenés acceso a esos datos en tiempo real, y sugerí consultarlo desde el Asistente RK dentro de la app. '
+        + 'Para cualquier otra pregunta (general, cálculos, consejos, etc.) respondé con solvencia, como asistente de uso general.';
+    try {
+        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                system_instruction: { parts: [{ text: systemPrompt }] },
+                contents: [{ role: 'user', parts: [{ text: textoUsuario }] }],
+                generationConfig: { maxOutputTokens: 1024, temperature: 0.7 }
+            })
+        });
+        const data = await resp.json().catch(() => ({}));
+        const texto = data.candidates && data.candidates[0] && data.candidates[0].content &&
+            data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+        return (texto && texto.trim()) || 'No pude generar una respuesta, probá de nuevo en un momento.';
+    } catch (e) {
+        return '⚠️ Error al conectar con Gemini: ' + (e.message || e);
+    }
+}
+
+// Diagnóstico: confirma qué credenciales están cargadas.
+app.get('/whatsapp/diag', (req, res) => {
+    const tokenCargado       = !!process.env.WHATSAPP_TOKEN;
+    const phoneIdCargado     = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const verifyTokenCargado = !!process.env.WHATSAPP_VERIFY_TOKEN;
+    const geminiKeyCargada   = !!process.env.GEMINI_API_KEY;
+    res.json({
+        ok: true,
+        tokenCargado, phoneIdCargado, verifyTokenCargado, geminiKeyCargada,
+        listoParaUsar: tokenCargado && phoneIdCargado && verifyTokenCargado
+    });
+});
+
+// Handshake de verificación que pide Meta al registrar la URL del webhook.
+app.get('/whatsapp/webhook', (req, res) => {
+    const mode      = req.query['hub.mode'];
+    const token     = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+    if (mode === 'subscribe' && token && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+        return res.status(200).send(challenge);
+    }
+    return res.sendStatus(403);
+});
+
+// Recibe los mensajes entrantes de WhatsApp y responde con Gemini.
+// Se responde 200 enseguida (Meta reintenta si no recibe respuesta rápido) y se
+// procesa/envía la respuesta después, sin bloquear el webhook.
+app.post('/whatsapp/webhook', (req, res) => {
+    res.sendStatus(200);
+    (async () => {
+        try {
+            const entry  = req.body && req.body.entry && req.body.entry[0];
+            const change = entry && entry.changes && entry.changes[0];
+            const value  = change && change.value;
+            const msg    = value && value.messages && value.messages[0];
+            if (!msg || msg.type !== 'text') return; // ignora confirmaciones de entrega, no-texto, etc.
+            const texto = (msg.text && msg.text.body || '').trim();
+            if (!texto) return;
+            const respuesta = await whatsappGenerarRespuesta(texto);
+            await whatsappEnviarMensaje(msg.from, respuesta);
+        } catch (e) {
+            console.error('[WhatsApp webhook] error:', e.message);
+        }
+    })();
+});
+
+// Envío manual/disparado por la app (ej. futuros avisos de vencimientos).
+// POST /whatsapp/send  body: { "to": "5491122334455", "mensaje": "..." }
+app.post('/whatsapp/send', async (req, res) => {
+    try {
+        const b = req.body || {};
+        if (!b.to || !b.mensaje) return res.status(400).json({ error: 'Faltan to y/o mensaje.' });
+        const data = await whatsappEnviarMensaje(b.to, b.mensaje);
+        res.json({ ok: true, data });
+    } catch (e) {
+        if (e.faltanCreds) return res.status(500).json({ error: e.message });
+        res.status(500).json({ error: e.message, detalle: e.data });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo) corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo + WhatsApp) corriendo en puerto ${PORT}`));

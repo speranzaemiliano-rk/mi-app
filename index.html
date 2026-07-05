@@ -21603,6 +21603,17 @@
   }
   #rk-agente-voz-btn.activa { color: #4CAF82; }
   #rk-agente-voz-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  #rk-agente-borrar-btn {
+    background: none;
+    border: none;
+    color: #8888aa;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+  #rk-agente-borrar-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
   #rk-agente-dictar-btn.escuchando { background: rgba(200,80,80,.35); animation: rkPulso 1.1s ease-in-out infinite; }
   @keyframes rkPulso { 0%,100% { box-shadow: 0 0 0 0 rgba(200,80,80,.5); } 50% { box-shadow: 0 0 0 6px rgba(200,80,80,0); } }
 
@@ -21721,6 +21732,7 @@
       <span id="rk-agente-estado">Listo para ayudar</span>
     </div>
     <button id="rk-agente-voz-btn" onclick="rkVozToggle()" title="Leer las respuestas en voz alta">🔊</button>
+    <button id="rk-agente-borrar-btn" onclick="rkBorrarMemoria()" title="Borrar el historial de esta conversación">🗑️</button>
     <button id="rk-agente-cerrar" onclick="rkAgenteToggle()">✕</button>
   </div>
   <div id="rk-agente-contexto">Sección activa: <span id="rk-agente-tab-nombre">—</span></div>
@@ -21759,11 +21771,47 @@
 <script>
 (function() {
   var _rkAbierto = false;
-  var _rkHistorial = []; // {role, parts}
+  var _rkHistorial = []; // {role, parts} — se manda a Gemini como contenido de la conversación
+  var _rkVisual = [];    // {rol:'user'|'bot', texto} — para redibujar los globos al reabrir el chat
   var _rkEsperando = false;
   var _rkPdfData = null; // { base64, nombre }
   var _rkAudioData = null; // { base64, nombre, mime }
   var _rkVozActivada = localStorage.getItem('rk_voz_activada') !== '0'; // hablado por defecto
+  var RK_CHAT_LS = 'rk_chat_memoria';
+  var RK_CHAT_MAX = 24; // últimos N mensajes (user+bot) que se guardan, para no inflar el contexto
+
+  // La conversación sobrevive a cerrar el panel/recargar la página (memoria entre sesiones).
+  function _rkGuardarMemoria() {
+    try {
+      localStorage.setItem(RK_CHAT_LS, JSON.stringify({
+        historial: _rkHistorial.slice(-RK_CHAT_MAX),
+        visual: _rkVisual.slice(-RK_CHAT_MAX)
+      }));
+    } catch (e) { /* localStorage lleno o deshabilitado: seguimos sin persistir */ }
+  }
+
+  function _rkCargarMemoria() {
+    try {
+      var raw = localStorage.getItem(RK_CHAT_LS);
+      if (!raw) return false;
+      var data = JSON.parse(raw);
+      if (data && Array.isArray(data.historial) && data.historial.length) {
+        _rkHistorial = data.historial;
+        _rkVisual = data.visual || [];
+        return true;
+      }
+    } catch (e) { /* memoria corrupta: se ignora */ }
+    return false;
+  }
+
+  window.rkBorrarMemoria = function() {
+    if (!confirm('¿Borrar el historial de esta conversación con el Asistente RK?')) return;
+    _rkHistorial = [];
+    _rkVisual = [];
+    localStorage.removeItem(RK_CHAT_LS);
+    document.getElementById('rk-agente-mensajes').innerHTML = '';
+    rkMensajeBot('Listo, empezamos de cero. ¿En qué te ayudo?');
+  };
 
   function _rkVozBtnActualizar() {
     var btn = document.getElementById('rk-agente-voz-btn');
@@ -21876,6 +21924,8 @@
     'Caja': 'movimientos de caja'
   };
 
+  var _rkMemoriaCargada = false;
+
   window.rkAgenteToggle = function() {
     _rkAbierto = !_rkAbierto;
     var panel = document.getElementById('rk-agente-panel');
@@ -21883,6 +21933,21 @@
     if (_rkAbierto) {
       _rkVozBtnActualizar();
       rkActualizarContexto();
+      if (!_rkMemoriaCargada) {
+        _rkMemoriaCargada = true;
+        _rkCargarMemoria();
+        if (_rkVisual.length) {
+          var cont = document.getElementById('rk-agente-mensajes');
+          cont.innerHTML = '';
+          _rkVisual.forEach(function(m) {
+            var div = document.createElement('div');
+            div.className = 'rk-msg ' + (m.rol === 'user' ? 'rk-msg-user' : 'rk-msg-bot');
+            div.textContent = m.texto;
+            cont.appendChild(div);
+          });
+          cont.scrollTop = cont.scrollHeight;
+        }
+      }
       if (_rkHistorial.length === 0) rkMensajeBot('¡Hola! Soy el asistente de RK. Puedo ayudarte con el uso de la app, tus datos cargados, gestión contable, o cualquier otra pregunta que tengas. ¿En qué te ayudo?');
       setTimeout(function() { document.getElementById('rk-agente-input').focus(); }, 150);
     } else if (window.speechSynthesis) {
@@ -21947,6 +22012,31 @@
       if (nombresProv.length) bloques.push('PROVEEDORES: ' + nombresProv.join(', '));
     }
 
+    if (typeof facturas !== 'undefined' && facturas.length) {
+      var factPend = facturas.filter(function(f){ return (f.estado||'pendiente') !== 'pagada'; });
+      if (factPend.length) {
+        var linsFact = factPend.map(function(f) {
+          var pend = (f.importe||0) - (f.pagado||0);
+          return '- ' + (f.proveedor||'—') + (f.numero?' (Nº '+f.numero+')':'') + ': pendiente ' + monFmt(pend, f.moneda) +
+            (f.vencimiento ? (', vence ' + f.vencimiento) : '');
+        });
+        bloques.push('FACTURAS PENDIENTES DE PAGO:\n' + linsFact.join('\n'));
+      }
+    }
+
+    if (typeof datos !== 'undefined' && datos.length && typeof calcPresupuesto === 'function') {
+      var presupPend = datos.map(function(d) {
+        var c = calcPresupuesto(d);
+        return { d: d, pend: (c.capitalPend||0) + (c.mayores||0) };
+      }).filter(function(x) { return x.pend > 1; });
+      if (presupPend.length) {
+        var linsPresup = presupPend.map(function(x) {
+          return '- ' + (x.d.proveedor||'—') + (x.d.concepto?' — '+x.d.concepto:'') + ': pendiente ' + monFmt(x.pend, 'ARS');
+        });
+        bloques.push('PRESUPUESTOS CON SALDO PENDIENTE:\n' + linsPresup.join('\n'));
+      }
+    }
+
     if (typeof ventas !== 'undefined' && ventas.length) {
       var linsVta = ventas.map(function(v) { return '- ' + (v.uf||'—') + ' (comprador: ' + (v.comprador||'—') + ')'; });
       bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
@@ -22001,6 +22091,8 @@
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
     rkHablar(texto);
+    _rkVisual.push({ rol: 'bot', texto: texto });
+    _rkGuardarMemoria();
     return div;
   }
 
@@ -22198,6 +22290,8 @@
     div.textContent = texto;
     cont.appendChild(div);
     cont.scrollTop = cont.scrollHeight;
+    _rkVisual.push({ rol: 'user', texto: texto });
+    _rkGuardarMemoria();
   }
 
   function rkTyping() {

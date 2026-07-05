@@ -59,6 +59,20 @@ Backend: `misComprobantes(tipo, desde, hasta)` en `functions/server.js` (~línea
 > quien tenga acceso al proyecto de Railway podría verla. Si preocupa, crear un
 > usuario ARCA secundario con permisos acotados.
 
+> 🔎 **A investigar (reportado por el usuario 2026-07-05):** "⚡ Importar
+> automático" no está trayendo comprobantes emitidos/recibidos de **otros
+> puntos de venta**. El botón "📄 Importar" (WSFEv1 por certificado) ya
+> recorre todos los puntos de venta activos, pero tiene un límite de fondo:
+> solo ve los habilitados para web service (no lo hechos a mano en el portal).
+> El sospechoso real es "⚡ Importar automático" (`misComprobantes` en
+> `functions/server.js` ~línea 159): la automatización "mis-comprobantes" de
+> AFIP SDK admitiría un filtro `puntosVenta` (array) que hoy **no se está
+> mandando** — hay indicios de que sin ese filtro la automatización podría no
+> traer todos los puntos de venta. No se pudo confirmar contra la
+> documentación oficial (bloqueada para fetch automático). **Probar en vivo
+> cuando estén cargadas las credenciales** (`AFIP_SDK_TOKEN`/`ARCA_USER`/
+> `ARCA_PASS`) y, si se confirma, agregar el filtro correspondiente.
+
 ---
 
 ## 🟡 EN CURSO: Conexión automática con el banco (Belvo) — falta cargar keys
@@ -92,18 +106,81 @@ si se decide usar este camino.
 
 ---
 
-## 🔜 Leer movimientos del banco desde Gmail (gratis + automático)
+## 🟡 EN CURSO: Asistente RK por WhatsApp — falta crear la cuenta de Meta
+
+El **backend ya está listo** (`functions/server.js`): recibe mensajes de
+WhatsApp, responde con Gemini, y expone un endpoint para que la app mande
+avisos salientes. Falta que el usuario cree la cuenta y cargue credenciales:
+
+1. Crear una cuenta en **Meta for Developers** (https://developers.facebook.com)
+   → crear una App → agregar el producto **WhatsApp**.
+2. Ahí Meta da un **número de prueba gratuito** (para probar) y, en el panel,
+   el **Access Token** (temporal al principio; para producción hay que generar
+   uno permanente) y el **Phone Number ID**.
+3. En Railway, cargar:
+
+   | Variable | Valor |
+   |---|---|
+   | `WHATSAPP_TOKEN` | Access token de la app de Meta |
+   | `WHATSAPP_PHONE_NUMBER_ID` | Phone Number ID del panel de WhatsApp |
+   | `WHATSAPP_VERIFY_TOKEN` | Cualquier string que elijas vos (ej. una contraseña larga) |
+   | `GEMINI_API_KEY` | La misma API key de Gemini que se usa en Config → Gemini |
+
+4. En el panel de WhatsApp de Meta, configurar el **Webhook**:
+   URL `https://<tu-servicio>.up.railway.app/whatsapp/webhook`,
+   Verify Token = el mismo valor que pusiste en `WHATSAPP_VERIFY_TOKEN`,
+   y suscribirse al campo **messages**.
+5. Verificar en `https://<tu-servicio>.up.railway.app/whatsapp/diag` que
+   `listoParaUsar` dé `true`.
+6. Mandar un WhatsApp de prueba al número que te dio Meta — el Asistente RK
+   responde solo (usa Gemini, sin acceso todavía a los datos cargados en la
+   app — ver limitación abajo).
+
+**Limitaciones de esta primera versión:**
+- El asistente por WhatsApp **no ve los datos reales de la app** (facturas,
+  proveedores, saldos) — responde como asistente general nomás. Sumar eso
+  requeriría que el backend lea Firebase (hoy no tiene acceso).
+- El envío saliente (`POST /whatsapp/send`) está listo para usarse, pero
+  **no hay ninguna automatización armada todavía** que lo dispare (ej. avisar
+  cuando vence una factura) — habría que sumar un cron/trigger para eso.
+- Meta cobra por conversación pasado cierto volumen mensual gratis; para
+  producción real (no solo probar) hay que pasar la verificación de negocio
+  de Meta.
+
+Backend: `whatsappEnviarMensaje()`, `whatsappGenerarRespuesta()` en
+`functions/server.js`, endpoints `GET /whatsapp/diag`, `GET|POST
+/whatsapp/webhook`, `POST /whatsapp/send`.
+
+---
+
+## ✅ Leer movimientos del banco desde Gmail (transferencias y tarjeta) — hecho 2026-07-05
 
 Alternativa para tener los movimientos del Santander real **sin costo** (Belvo
-producción cuesta). La app YA lee Gmail (scope `gmail.readonly`, ver
-`abrirImportarGmail` / `buscarEmailsConPDF` ~línea 9288). Plan: botón
-"📧 Leer movimientos del banco" que busca los mails de aviso de Santander,
-parsea fecha/monto/ingreso-egreso/concepto y carga los movimientos con el mismo
-anti-duplicados del importador de extracto (`impExtClave`).
+producción cuesta, no cubre Argentina; Prometeo sí cubre pero es pago). En
+**Cuentas Bancarias → 📥 Importar extracto**:
 
-**FALTA para programarlo:** el usuario va a pasar **1-2 mails de ejemplo** del
-Santander (uno de ingreso y uno de egreso) — remitente, asunto y cuerpo — para
-escribir el parser a medida. Sin el ejemplo real no se puede hacer fiable.
+- **"📧 Leer avisos de transferencia (Gmail)"**: busca los mails "Aviso de
+  transferencia" de Santander (confirmado con el usuario: son transferencias
+  **salientes**), extrae destinatario/importe/número de comprobante, y arma
+  los mismos candidatos que el import por Excel/PDF (con el anti-duplicados
+  `impExtClave` + el aviso de "posible duplicado" contra `pagosHistorial`).
+- **"💳 Leer consumos de tarjeta (Gmail)"**: busca los mails "Información
+  sobre tu pago" (consumo con tarjeta de crédito), extrae comercio/monto/
+  fecha/cuotas. Se cargan en una cuenta nueva de tipo **"Tarjeta de Crédito"**
+  (opción agregada en el modal de Cuenta Bancaria) — cada consumo resta el
+  saldo de esa cuenta, representando lo adeudado.
+
+**Pendiente / a futuro:**
+- Solo cubre transferencias salientes y consumos de tarjeta — **transferencias
+  entrantes (ingresos)** quedan para cuando haya un mail de ejemplo real de ese
+  caso (el formato podría ser distinto al de las salientes).
+- No hay todavía forma de registrar el **pago del resumen de la tarjeta**
+  (que llevaría el saldo de la cuenta "Tarjeta de Crédito" de vuelta a 0) —
+  hoy el saldo de esa cuenta solo baja por los consumos.
+
+Código: `impExtLeerGmail()` / `_impExtBuscarTransferenciasGmail()` y
+`impExtLeerGmailTarjeta()` / `_impExtBuscarConsumosTarjetaGmail()` en
+`index.html` (sección de Importar Extracto).
 
 ---
 

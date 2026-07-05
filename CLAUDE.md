@@ -43,15 +43,16 @@ Roles en `roles/<uid>`: `superadmin`, `admin`, `editor`, `lector`. Flags JS: `es
 - **ARCA:** `GET /diag`, `GET /afip/importar?ptoVta=&tipoComp=`, `POST /afip` (emite, devuelve CAE).
 - **Belvo:** `GET /belvo/diag`, `POST /belvo/widget-token`, `GET /belvo/accounts`, `GET /belvo/transactions`. ⚠️ **Belvo NO cubre Argentina** (solo MX/BR/CO/CL).
 - **Prometeo (Plan B, soporta Argentina):** `GET /prometeo/diag`, `/providers`, `POST /prometeo/login`, `GET /prometeo/accounts`, `/movements`, `/logout`. Backend listo; **falta la UI de login en la app.**
+- **WhatsApp (Asistente RK por WhatsApp):** `GET /whatsapp/diag`, `GET|POST /whatsapp/webhook` (handshake + mensajes entrantes de Meta, responde con Gemini), `POST /whatsapp/send` (envío manual/disparado por la app, body `{to, mensaje}`). Backend listo; **falta crear la cuenta de WhatsApp Business (Meta for Developers) y cargar credenciales** — ver `PENDIENTES.md`.
 - Helper clave: `leerPem()` acepta PEM con `\n` reales/literales o base64.
 
 ## Integraciones
 
-ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PDF), EmailJS (mandar facturas), Gmail API (`gmail.readonly`).
+ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PDF, Asistente RK, responder por WhatsApp), EmailJS (mandar facturas), Gmail API (`gmail.readonly`), WhatsApp Business Cloud API (Meta).
 
 ## Variables de entorno (Railway)
 
-`AFIP_CUIT`, `AFIP_CERT` (base64), `AFIP_KEY` (base64), `AFIP_ENV` (production/testing), `AFIP_ACCESS_TOKEN`; `BELVO_SECRET_ID`, `BELVO_SECRET_PASSWORD`, `BELVO_ENV`; `PROMETEO_API_KEY`, `PROMETEO_ENV`; `PORT`.
+`AFIP_CUIT`, `AFIP_CERT` (base64), `AFIP_KEY` (base64), `AFIP_ENV` (production/testing), `AFIP_ACCESS_TOKEN`; `BELVO_SECRET_ID`, `BELVO_SECRET_PASSWORD`, `BELVO_ENV`; `PROMETEO_API_KEY`, `PROMETEO_ENV`; `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `GEMINI_API_KEY` (para que el asistente responda solo por WhatsApp); `PORT`.
 
 ## PWA
 
