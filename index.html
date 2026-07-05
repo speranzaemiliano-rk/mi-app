@@ -4637,6 +4637,7 @@
                         <option value="Caja de Ahorros ARS">Caja de Ahorros ARS</option>
                         <option value="Caja de Ahorros USD">Caja de Ahorros USD</option>
                         <option value="Virtual (CVU)">Virtual (CVU)</option>
+                        <option value="Tarjeta de Crédito">Tarjeta de Crédito</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -6528,6 +6529,96 @@
         _impExtCandidatos=candidatos;
         impExtRenderPreview();
         estado.textContent='✓ '+candidatos.length+' transferencia'+(candidatos.length===1?'':'s')+' encontrada'+(candidatos.length===1?'':'s')+' en Gmail.';
+    }
+
+    // ── Leer consumos de tarjeta de crédito de Santander desde Gmail ─────
+    // Misma idea que las transferencias: se cargan como movimientos de la cuenta
+    // "Tarjeta de Crédito" elegida (tipo nuevo en Cuentas Bancarias). Cada consumo
+    // es un "egreso" que va restando el saldo de esa cuenta (representa lo adeudado).
+    function impExtLeerGmailTarjeta(){
+        var cuentaId=document.getElementById('impExtCuenta').value;
+        var estado=document.getElementById('impExtGmailEstado');
+        if(!cuentaId){ alert('Primero elegí la cuenta destino (la tarjeta de crédito).'); return; }
+        var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
+        if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
+        if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
+        estado.textContent='Esperando autorización de Google…';
+        try{
+            var tokenClient=google.accounts.oauth2.initTokenClient({
+                client_id:clientId,
+                scope:'https://www.googleapis.com/auth/gmail.readonly',
+                callback:function(resp){
+                    if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
+                    _gmailToken=resp.access_token;
+                    estado.textContent='Buscando consumos de tarjeta…';
+                    _impExtBuscarConsumosTarjetaGmail(cuentaId, estado).catch(function(e){
+                        estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
+                    });
+                }
+            });
+            tokenClient.requestAccessToken({prompt:'select_account'});
+        }catch(e){
+            estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
+        }
+    }
+
+    async function _impExtBuscarConsumosTarjetaGmail(cuentaId, estado){
+        var q='subject:"Información sobre tu pago" from:santander newer_than:90d';
+        var url='https://gmail.googleapis.com/gmail/v1/users/me/messages?q='+encodeURIComponent(q)+'&maxResults=50';
+        var resp=await fetch(url,{headers:{Authorization:'Bearer '+_gmailToken}});
+        if(!resp.ok){
+            var err=await resp.json().catch(function(){return {};});
+            estado.textContent='❌ Error Gmail API: '+((err.error&&err.error.message)||resp.status);
+            return;
+        }
+        var data=await resp.json();
+        var messages=data.messages||[];
+        if(!messages.length){ estado.textContent='🔍 No encontré consumos de tarjeta de Santander en los últimos 90 días.'; return; }
+        estado.textContent='Leyendo '+messages.length+' mail(s)…';
+
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+
+        var detalles=await Promise.all(messages.map(function(m){
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id+'?format=full',
+                {headers:{Authorization:'Bearer '+_gmailToken}})
+                .then(function(r){return r.json();})
+                .catch(function(){return null;});
+        }));
+
+        var candidatos=[];
+        detalles.forEach(function(msg){
+            if(!msg||!msg.payload) return;
+            var texto=impExtExtraerTextoPlano(msg.payload);
+            if(!texto) return;
+            var mMonto=texto.match(/Monto\s*[:\|]?\s*\$?\s*([\d.,]+)/i);
+            if(!mMonto) return;
+            var monto=impExtParseNum(mMonto[1]);
+            if(!monto) return;
+            var mComercio=texto.match(/Comercio\s*[:\|]?\s*([\s\S]*?)\s*Fecha\s*[:\|]?/i);
+            var mFecha=texto.match(/Fecha\s*[:\|]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+            var mCuotas=texto.match(/Cuotas\s*[:\|]?\s*(\d+)/i);
+            var mTarjeta=texto.match(/terminada en\s*(\d{3,4})/i);
+            var fecha=mFecha?impExtParseFecha(mFecha[1]):(msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'');
+            if(!fecha) return;
+            var comercio=mComercio?mComercio[1].trim():'Consumo';
+            var cuotas=mCuotas?parseInt(mCuotas[1],10):1;
+            var concepto=comercio+(cuotas>1?' (en '+cuotas+' cuotas)':'')+(mTarjeta?' · Tarjeta ...'+mTarjeta[1]:'');
+            var esEgreso=true; // todo consumo de tarjeta es un egreso (aumenta lo adeudado)
+            var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
+            var dup=!!existentes[clave];
+            existentes[clave]=true;
+            candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:esEgreso,ref:'',cuentaId:cuentaId,
+                dup:dup,dupManual:false,usar:!dup});
+        });
+
+        if(!candidatos.length){ estado.textContent='⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).'; return; }
+        _impExtCandidatos=candidatos;
+        impExtRenderPreview();
+        estado.textContent='✓ '+candidatos.length+' consumo'+(candidatos.length===1?'':'s')+' de tarjeta encontrado'+(candidatos.length===1?'':'s')+' en Gmail.';
     }
 
     function impExtClave(cuentaId, fecha, montoConSigno, desc){
@@ -20839,6 +20930,7 @@
       </div>
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmail()">📧 Leer avisos de transferencia (Gmail)</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmailTarjeta()">💳 Leer consumos de tarjeta (Gmail)</button>
         <span id="impExtGmailEstado" style="font-size:12px;color:var(--text-3);"></span>
       </div>
       <div id="impExtResumen" style="display:none;font-size:13px;color:var(--text-2);margin-bottom:8px;"></div>
