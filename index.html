@@ -22098,17 +22098,41 @@
       bloques.push('VENTAS UF:\n' + linsVta.join('\n'));
     }
 
+    // Totales financieros (egresos pagados y cobros recibidos) para que pueda responder "¿cuánto pagué/cobré?"
+    try {
+      var pagadoProv = 0;
+      if (typeof datos !== 'undefined') datos.forEach(function(d){ pagadoProv += d.pagado||0; });
+      if (typeof facturas !== 'undefined') facturas.forEach(function(f){ pagadoProv += f.pagado||0; });
+      var cobradoARS = 0, cobradoUSD = 0;
+      var sumCobros = function(arr, filtroUSD){ (arr||[]).forEach(function(x){ (x.cobrosHistorial||[]).forEach(function(c){ if (filtroUSD && filtroUSD(c)) cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); }); };
+      if (typeof ventas !== 'undefined') sumCobros(ventas, function(c){ return c.comp==='usd'||c.comp==='cuota_usd_simple'; });
+      if (typeof alquileres !== 'undefined') (alquileres||[]).forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if ((a.moneda||'ARS')==='USD') cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); });
+      if (typeof servicios !== 'undefined') sumCobros(servicios, null);
+      var finLins = [];
+      if (pagadoProv) finLins.push('- Total pagado a proveedores (egresos): ' + monFmt(pagadoProv, 'ARS'));
+      if (cobradoARS) finLins.push('- Total cobrado en pesos (ventas/alquileres/servicios): ' + monFmt(cobradoARS, 'ARS'));
+      if (cobradoUSD) finLins.push('- Total cobrado en dólares: ' + monFmt(cobradoUSD, 'USD'));
+      if (finLins.length) bloques.push('SITUACIÓN FINANCIERA (aproximada):\n' + finLins.join('\n'));
+    } catch(e) {}
+
     var texto = bloques.join('\n\n');
     var LIMITE = 6000;
     if (texto.length > LIMITE) texto = texto.slice(0, LIMITE) + '\n[...datos truncados por espacio, hay más registros cargados...]';
     return texto;
   }
 
-  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos) {
+  function rkMensajeBot(texto, factDatos, tareasDatos, provDatos, aporteDatos, mailDatos) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
     div.className = 'rk-msg rk-msg-bot';
     div.textContent = texto;
+    if (mailDatos && mailDatos.to) {
+      var btnM = document.createElement('button');
+      btnM.textContent = '📧 Enviar mail a ' + mailDatos.to;
+      btnM.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnM.onclick = function() { rkEnviarMailAsistente(mailDatos, btnM); };
+      div.appendChild(btnM);
+    }
     if (factDatos && factDatos.tipo === 'factura') {
       var btn = document.createElement('button');
       btn.textContent = '📥 Cargar en Facturas';
@@ -22339,6 +22363,43 @@
     }, 200);
   };
 
+  // Envía un mail que el asistente redactó charlando. Nunca manda solo: se dispara desde
+  // el botón "📧 Enviar mail". Reutiliza EmailJS (mismo servicio que las facturas). La
+  // plantilla tiene campos fijos (pensada para facturas): mapeamos asunto→numero,
+  // cuerpo→descripcion, destinatario→to_email/proveedor.
+  window.rkEnviarMailAsistente = function(datos, btn) {
+    if (!datos || !datos.to) return;
+    if (typeof getEmailJsConfig !== 'function') { alert('El envío de mails no está disponible.'); return; }
+    var cfg = getEmailJsConfig();
+    if (!cfg.serviceId || !cfg.templateId || !cfg.publicKey) {
+      alert('Configurá EmailJS en ⚙️ Ajustes antes de mandar mails.');
+      return;
+    }
+    if (typeof emailjs === 'undefined') { alert('La librería de mail (EmailJS) no cargó. Revisá tu conexión.'); return; }
+    var resumen = 'Vas a enviar este mail:\n\nPara: ' + datos.to + '\nAsunto: ' + (datos.asunto || '(sin asunto)') + '\n\n' + (datos.cuerpo || '') + '\n\n¿Confirmás el envío?';
+    if (!confirm(resumen)) return;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
+    var params = {
+      to_email:    datos.to,
+      proveedor:   datos.destinatario || datos.to,
+      numero:      datos.asunto || 'Mensaje de RK',
+      fecha:       (typeof formatearFecha === 'function') ? formatearFecha(new Date().toISOString().substring(0,10)) : '',
+      importe:     '—',
+      descripcion: datos.cuerpo || '',
+      estado:      datos.cuerpo || 'Enviado desde el Asistente RK.',
+      pdf_url:     ''
+    };
+    emailjs.send(cfg.serviceId, cfg.templateId, params, { publicKey: cfg.publicKey })
+      .then(function() {
+        if (btn) btn.textContent = '✓ Mail enviado a ' + datos.to;
+        rkMensajeBot('✅ Listo, mandé el mail a ' + datos.to + '.');
+      })
+      .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.textContent = '📧 Reintentar envío a ' + datos.to; }
+        rkMensajeBot('❌ No pude enviar el mail: ' + (e.text || e.message || String(e)));
+      });
+  };
+
   function rkMensajeUser(texto) {
     var cont = document.getElementById('rk-agente-mensajes');
     var div = document.createElement('div');
@@ -22493,7 +22554,14 @@
       + 'No inventes ningún dato que el usuario no te haya dado. En cuanto tengas al menos el nombre y el desarrollo, agregá al FINAL '
       + 'de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) exactamente este marcador con lo que juntaste hasta ahora '
       + '(null en lo que falte): ###APORTE_LISTO:{"nombre":"...","desarrollo":"...","capitalAportado":null,"moneda":null,"rentabilidadPct":null,"baseMontoPct":null,"m2Asignados":null,"valorM2Asignado":null,"fechaVencimiento":null,"obs":null}### '
-      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema.'
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan hablando del mismo aporte, hasta que el usuario cambie de tema. '
+      + 'Si el usuario te pide mandar/enviar un mail o correo a alguien, ayudalo a redactarlo: si no te dio el destinatario, el asunto o el cuerpo, '
+      + 'preguntáselos (podés proponer vos un borrador del cuerpo y del asunto si te dice de qué se trata, para que él lo apruebe o corrija). '
+      + 'El destinatario tiene que ser una dirección de mail válida; si te da solo un nombre, fijate si ese proveedor/persona figura en los datos con email, y si no, pedile la dirección. '
+      + 'En cuanto tengas al menos el destinatario (to) y algo de cuerpo, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
+      + 'exactamente este marcador con lo que tengas (null en lo que falte): ###MAIL_LISTO:{"to":"...","asunto":"...","cuerpo":"...","destinatario":null}### '
+      + 'El campo "cuerpo" es el texto completo del mail ya redactado. NUNCA digas que ya enviaste el mail: vos solo lo redactás, el usuario lo revisa y lo envía con un botón. '
+      + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo mail, hasta que el usuario cambie de tema.'
       + empresasTxt
       + (datosApp
           ? ('\n\nEstos son los datos reales cargados en el proyecto activo. Usalos para responder preguntas concretas sobre montos, personas, desarrollos, etc. (por ejemplo "¿cuánto aportó Juan Pérez?"). Si preguntan por algo que no está en esta lista, decilo con claridad en vez de inventar:\n' + datosApp)
@@ -22615,6 +22683,13 @@
           respuestaVisible = respuestaVisible.replace(mAporte[0], '').trim();
           try { aporteDatos = JSON.parse(mAporte[1]); } catch(e) {}
         }
+        var mailDatos = null;
+        var mMail = respuestaVisible.match(/###MAIL_LISTO:(\{[\s\S]*?\})###/);
+        if (mMail) {
+          respuestaVisible = respuestaVisible.replace(mMail[0], '').trim();
+          try { mailDatos = JSON.parse(mMail[1]); } catch(e) {}
+          if (mailDatos && !mailDatos.to) mailDatos = null; // sin destinatario todavía, no mostramos botón
+        }
 
         // Si había PDF, esperamos el resultado de extracción y mostramos el botón correspondiente
         // (factura → "Cargar en Facturas", constancia AFIP → "Cargar como proveedor")
@@ -22632,7 +22707,7 @@
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
@@ -22643,10 +22718,10 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) tareasDatos = JSON.parse(m[0]);
             } catch(e) {}
-            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos);
+            rkMensajeBot(respuestaVisible, null, tareasDatos && tareasDatos.tareas && tareasDatos.tareas.length ? tareasDatos : null, provDatos, aporteDatos, mailDatos);
           });
         } else {
-          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos);
+          rkMensajeBot(respuestaVisible, null, null, provDatos, aporteDatos, mailDatos);
         }
 
         document.getElementById('rk-agente-estado').textContent = 'Listo para ayudar';
