@@ -9180,7 +9180,30 @@
     var GEMINI_API_KEY_LS = 'rk_gemini_api_key';
 
     function getGeminiKey() {
-        return localStorage.getItem(GEMINI_API_KEY_LS) || '';
+        // .trim() defensivo: una key pegada con un espacio o salto de línea al final
+        // hace que Google devuelva "invalid authentication credentials" aunque sea válida.
+        return (localStorage.getItem(GEMINI_API_KEY_LS) || '').trim();
+    }
+
+    // Detecta si el mensaje de error de la API de Gemini es por credenciales
+    // inválidas/revocadas (no tiene sentido reintentar: falla igual con cualquier modelo).
+    function geminiEsErrorAuth(msg) {
+        return /invalid authentication credentials|api key not valid|api_key_invalid|unauthenticated|permission denied|oauth 2 access token/i.test(msg || '');
+    }
+
+    // Devuelve un texto de ayuda según el tipo de error de Gemini (auth, cuota agotada, saturación).
+    function geminiHintError(msg) {
+        msg = msg || '';
+        if (geminiEsErrorAuth(msg)) {
+            return '⚠️ Tu API key de Gemini es inválida o fue revocada. Generá una nueva en https://aistudio.google.com/apikey y cargala en Config → Gemini (reemplazá la actual, no la agregues).';
+        }
+        if (/limit:\s*0/i.test(msg)) {
+            return '⚠️ Tu API key de Gemini no tiene cuota disponible (límite 0). Revisá tu plan en https://ai.dev/rate-limit o generá una API key nueva en Config → Gemini.';
+        }
+        if (/quota|capacity|overloaded|saturad|demand|429|503/i.test(msg)) {
+            return '⚠️ Gemini está saturado. Esperá unos segundos y reintentá.';
+        }
+        return '';
     }
 
     function cargarGeminiKeyUI() {
@@ -9724,6 +9747,8 @@
                 if (resp.ok) { lastErrMsg = null; break; }
                 var _ed = await resp.json().catch(function(){ return {}; });
                 lastErrMsg = (_ed.error && _ed.error.message) || ('Error ' + resp.status);
+                // Key inválida/revocada: falla igual con cualquier modelo, no reintentamos.
+                if (geminiEsErrorAuth(lastErrMsg)) break;
             }
             if (lastErrMsg) throw new Error(lastErrMsg);
 
@@ -9763,9 +9788,9 @@
 
         } catch(err) {
             var msgErr = err.message || 'Error al procesar el archivo.';
-            var esQuota = /quota|capacity|overloaded|saturad|demand|429|503/i.test(msgErr);
+            var hint = geminiHintError(msgErr);
             estadoEl.innerHTML = '❌ ' + msgErr +
-                (esQuota ? '<br><small>Gemini está saturado. Esperá unos segundos y reintentá.</small>' : '') +
+                (hint ? '<br><small>' + hint + '</small>' : '') +
                 '<br><button onclick="procesarFacturaPDFDesdeBase64()" style="margin-top:8px;padding:6px 14px;font-size:12px;border-radius:8px;border:1px solid var(--blue);background:#fff;color:var(--blue);cursor:pointer;">🔄 Reintentar</button>';
         }
     }
@@ -10575,6 +10600,8 @@
                 if (resp.ok) { lastErr = null; break; }
                 errData = await resp.json().catch(function(){ return {}; });
                 lastErr = new Error((errData.error && errData.error.message) || ('Error ' + resp.status));
+                // Key inválida/revocada: falla igual con cualquier modelo, no reintentamos.
+                if (geminiEsErrorAuth(lastErr.message)) break;
             }
             if (lastErr) throw lastErr;
             var result  = await resp.json();
@@ -10605,9 +10632,9 @@
             lfChequearProvNuevo();
         } catch(e) {
             var _msgE = e.message || String(e);
-            var _esQ  = /quota|capacity|overloaded|saturad|demand|429|503/i.test(_msgE);
+            var _hint = geminiHintError(_msgE);
             if (estadoEl) estadoEl.innerHTML = '❌ Error al procesar con Gemini: ' + _msgE +
-                (_esQ ? '<br><small>Gemini está saturado. Esperá unos segundos y reintentá.</small>' : '') +
+                (_hint ? '<br><small>' + _hint + '</small>' : '') +
                 '<br><button onclick="procesarFacturaPDFDesdeBase64()" style="margin-top:8px;padding:6px 14px;font-size:12px;border-radius:8px;border:1px solid var(--blue);background:#fff;color:var(--blue);cursor:pointer;">🔄 Reintentar</button>';
         }
     }
