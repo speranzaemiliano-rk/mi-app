@@ -11979,8 +11979,37 @@
     }
 
     function eliminarDoc(id) {
-        if (!confirm('¿Eliminar este comprobante?')) return;
+        var d = (documentos||[]).find(function(x){ return x && x.id===id; });
+        var tieneMov = d && ((d.pagado||0) > 0 || (d.pagosHistorial||[]).length > 0);
+        if (!confirm('¿Eliminar este comprobante?' + (tieneMov ? '\n\nTambién se quitará su movimiento de Caja General (el pago asociado).' : ''))) return;
         REF_DOCS.child(id).remove();
+    }
+
+    // Elimina el movimiento de caja que proviene del pago de un Documento.
+    // Quita el pago del documento y ofrece eliminar también el documento completo.
+    function eliminarMovPagoDoc(docId, pagoId) {
+        var d = (documentos||[]).find(function(x){ return x && x.id===docId; });
+        if (!d) { alert('Documento no encontrado.'); return; }
+        if (!confirm('¿Eliminar este pago del documento? Dejará de figurar en Caja General.')) return;
+        var hist = d.pagosHistorial || [];
+        if (pagoId) {
+            var p = hist.find(function(x){ return x && x.pagoId===pagoId; });
+            var monto = p ? (p.monto||0) : 0;
+            d.pagosHistorial = hist.filter(function(x){ return !(x && x.pagoId===pagoId); });
+            d.pagado = Math.max(0, (d.pagado||0) - monto);
+        } else {
+            // Pago inicial cargado como "monto ya pagado" (sin historial)
+            d.pagado = 0;
+        }
+        REF_DOCS.child(docId).update({ pagado: d.pagado, pagosHistorial: d.pagosHistorial || [] });
+        // Ofrecer eliminar también el documento completo
+        if (confirm('Pago eliminado. ¿Querés eliminar también el documento completo?')) {
+            REF_DOCS.child(docId).remove();
+        }
+        if (typeof renderDocumentos==='function') renderDocumentos();
+        if (typeof renderCajaGeneral==='function') renderCajaGeneral();
+        if (typeof renderEfectivoPesos==='function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD==='function') renderEfectivoUSD();
     }
     // ===================== ONBOARDING =====================
 
@@ -16189,7 +16218,8 @@
                         tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—'),
                         origen: d.proveedor||'—',
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
-                        monto: p.monto||0, esIngreso: false
+                        monto: p.monto||0, esIngreso: false,
+                        docId: d.id, pagoId: p.pagoId||''
                     });
                 });
             } else if ((d.pagado||0) > 0) {
@@ -16198,7 +16228,8 @@
                     tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—'),
                     origen: d.proveedor||'—',
                     medio: d.modalidad==='A' ? 'Banco' : 'Efectivo',
-                    monto: d.pagado, esIngreso: false
+                    monto: d.pagado, esIngreso: false,
+                    docId: d.id, pagoId: ''
                 });
             }
         });
@@ -16281,7 +16312,12 @@
                     sldARS = '<td style="text-align:right;font-weight:700;color:'+(sc>=0?'var(--success)':'var(--danger)')+';">'+fmtA(sc)+'</td>';
                 }
 
-                var bAcc=m.igIdx>=0?'<button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx):'';
+                var bAcc='';
+                if(m.igIdx>=0){
+                    bAcc='<button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx);
+                } else if(m.docId){
+                    bAcc='<button class="btn btn-danger-sm" onclick="eliminarMovPagoDoc(\''+m.docId+'\',\''+(m.pagoId||'')+'\')" title="Eliminar">✕</button>';
+                }
 
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
