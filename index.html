@@ -5148,16 +5148,17 @@
                     <div class="form-hint" id="factArchivoEstado">Subí el PDF o imagen de la factura. Máx. 4 MB.</div>
                 </div>
 
-                <!-- Panel de pago inmediato (solo si tipo=directo) -->
+                <!-- Panel de pago inmediato: se muestra siempre, tanto en Pago Directo como aplicada a Presupuesto -->
                 <div id="factPagoInmediatoPanel" style="display:none; border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; background:var(--surface);">
-                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-3); margin-bottom:12px;">💳 Pago de la factura</div>
+                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-3); margin-bottom:12px;">💳 ¿Esta factura ya es un egreso?</div>
                     <div class="form-group" style="margin-bottom:10px;">
-                        <label>¿Pagar ahora?</label>
+                        <label>¿Tomarla como egreso de caja/banco ahora?</label>
                         <div class="modalidad-toggle" style="margin-bottom:0;">
-                            <button type="button" class="modalidad-btn selected-A" id="factPagarSiBtn" onclick="selFactPagoInmediato(true)">✓ Sí, registrar pago</button>
-                            <button type="button" class="modalidad-btn" id="factPagarNoBtn" onclick="selFactPagoInmediato(false)">Dejar pendiente</button>
+                            <button type="button" class="modalidad-btn selected-A" id="factPagarSiBtn" onclick="selFactPagoInmediato(true)">✓ Sí, registrar egreso</button>
+                            <button type="button" class="modalidad-btn" id="factPagarNoBtn" onclick="selFactPagoInmediato(false)">No, dejar pendiente</button>
                         </div>
                         <input type="hidden" id="factPagarAhora" value="true">
+                        <div class="form-hint" id="factPagarAhoraHint"></div>
                     </div>
                     <div id="factPagoDetallePanel">
                         <div class="form-group" style="margin-bottom:10px;">
@@ -10121,25 +10122,29 @@
 
     // ===================== FACTURAS ENHANCED =====================
 
-    // Toggle tipo de factura: aplicar a presupuesto o pago directo
+    // Toggle tipo de factura: aplicar a presupuesto o pago directo.
+    // El panel "¿Es un egreso?" se muestra en ambos casos — la factura puede
+    // quedar vinculada a un presupuesto y a la vez registrar su propio egreso.
     function selFactTipo(tipo) {
         document.getElementById('factTipo').value = tipo;
         const presupBtn  = document.getElementById('factTipoPresupBtn');
         const directoBtn = document.getElementById('factTipoDirectoBtn');
         const presupGrupo= document.getElementById('factPresupGrupo');
         const pagoPanel  = document.getElementById('factPagoInmediatoPanel');
+        const hint       = document.getElementById('factPagarAhoraHint');
         if (tipo === 'presup') {
             presupBtn.className  = 'modalidad-btn selected-A';
             directoBtn.className = 'modalidad-btn';
             presupGrupo.style.display = '';
-            pagoPanel.style.display   = 'none';
+            if (hint) hint.textContent = 'Si decís que Sí, se registra un egreso propio de esta factura (además de quedar vinculada al presupuesto).';
         } else {
             presupBtn.className  = 'modalidad-btn';
             directoBtn.className = 'modalidad-btn selected-B';
             presupGrupo.style.display = 'none';
-            pagoPanel.style.display   = '';
-            recalcularRetencionesFactura();
+            if (hint) hint.textContent = '';
         }
+        pagoPanel.style.display = '';
+        recalcularRetencionesFactura();
     }
 
     function selFactPagoInmediato(si) {
@@ -10276,8 +10281,9 @@
             facturas.push(nuevo);
         }
 
-        // Si es pago directo y se quiere pagar ahora, registrar pago con modalidad
-        if (nuevo.tipo === 'directo' && document.getElementById('factPagarAhora').value === 'true') {
+        // Si se eligió tomarla como egreso ahora, registrar el pago con modalidad
+        // (aplica tanto a pago directo como a factura vinculada a un presupuesto)
+        if (document.getElementById('factPagarAhora').value === 'true') {
             const montoPago = parseFloat(document.getElementById('factMontoPago').value) || nuevo.importe;
             const mod = document.getElementById('factModalidadPago').value;
             const fechaPago = document.getElementById('factFechaPago').value || nuevo.fecha;
@@ -11971,6 +11977,19 @@
         document.getElementById('docModalidadA').className = 'modalidad-btn' + (m === 'A' ? ' selected-A' : '');
     }
 
+    // ¿Este comprobante se toma como egreso ya pagado, o queda pendiente?
+    function setDocEgreso(si) {
+        document.getElementById('docTomarEgreso').value = si ? 'true' : 'false';
+        document.getElementById('docEgresoSiBtn').className = 'modalidad-btn' + (si ? ' selected-A' : '');
+        document.getElementById('docEgresoNoBtn').className = 'modalidad-btn' + (!si ? ' selected-B' : '');
+        var wrap = document.getElementById('docPagadoWrap');
+        if (wrap) wrap.style.display = si ? '' : 'none';
+        var pagadoEl = document.getElementById('docPagado');
+        if (si && pagadoEl && !parseFloat(pagadoEl.value)) {
+            pagadoEl.value = parseFloat(document.getElementById('docImporte').value) || 0;
+        }
+    }
+
     function abrirModalDoc(id) {
         editandoDocId = id || null;
         document.getElementById('modalDocTitle').textContent = id ? '📄 Editar Comprobante' : '📄 Agregar Comprobante';
@@ -11995,6 +12014,20 @@
                 document.getElementById('docPagado').value = d.pagado || 0;
                 document.getElementById('docObservaciones').value = d.observaciones || '';
                 setDocModalidad(d.modalidad || 'B');
+                setDocEgreso((d.pagado||0) > 0);
+                const tieneHist = (d.pagosHistorial||[]).length > 0;
+                document.getElementById('docEgresoSiBtn').disabled = tieneHist;
+                document.getElementById('docEgresoNoBtn').disabled = tieneHist;
+                const pagadoInput = document.getElementById('docPagado');
+                if (pagadoInput) pagadoInput.disabled = tieneHist;
+                const egresoWrap = document.getElementById('docEgresoHint');
+                if (egresoWrap) egresoWrap.textContent = tieneHist
+                    ? 'Este comprobante ya tiene pagos registrados desde "💵 Pagar" — se conservan tal cual, no se pueden editar acá.'
+                    : '';
+            } else {
+                document.getElementById('docEgresoSiBtn').disabled = false;
+                document.getElementById('docEgresoNoBtn').disabled = false;
+                document.getElementById('docPagado').disabled = false;
             }
         } else {
             document.getElementById('docFecha').value = new Date().toISOString().split('T')[0];
@@ -12005,6 +12038,12 @@
             document.getElementById('docPagado').value = 0;
             document.getElementById('docObservaciones').value = '';
             setDocModalidad('B');
+            setDocEgreso(false);
+            document.getElementById('docEgresoSiBtn').disabled = false;
+            document.getElementById('docEgresoNoBtn').disabled = false;
+            document.getElementById('docPagado').disabled = false;
+            const egresoWrapNuevo = document.getElementById('docEgresoHint');
+            if (egresoWrapNuevo) egresoWrapNuevo.textContent = '';
         }
         document.getElementById('modalDoc').classList.add('active');
     }
@@ -12022,6 +12061,12 @@
             alert('Completá los campos obligatorios: proveedor, fecha, descripción e importe.');
             return;
         }
+        // Si ya tiene pagos registrados vía el botón "Pagar" (pagosHistorial), ese historial
+        // manda: el toggle de esta pantalla no puede pisarlo ni ponerlo en 0 por accidente.
+        const existente = editandoDocId ? documentos.find(x => x.id === editandoDocId) : null;
+        const tieneHistorial = !!(existente && (existente.pagosHistorial||[]).length);
+        const tomarEgreso = tieneHistorial ? true : (document.getElementById('docTomarEgreso').value === 'true');
+        const pagadoFinal = tieneHistorial ? (existente.pagado||0) : (tomarEgreso ? (parseFloat(document.getElementById('docPagado').value) || 0) : 0);
         const doc = {
             proveedor,
             fecha,
@@ -12030,10 +12075,11 @@
             descripcion,
             moneda:        document.getElementById('docMoneda').value,
             importe,
-            pagado:        parseFloat(document.getElementById('docPagado').value) || 0,
+            pagado:        pagadoFinal,
             modalidad:     docModalidadActual,
             observaciones: document.getElementById('docObservaciones').value.trim(),
         };
+        if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
         const docId = editandoDocId || 'doc_' + Date.now();
         REF_DOCS.child(docId).set({ ...doc, id: docId }).then(() => {
             cerrarModalDoc();
@@ -19900,7 +19946,17 @@
                 </div>
             </div>
             <div class="form-group">
-                <label>Monto ya pagado (si corresponde)</label>
+                <label>¿Tomar este comprobante como egreso de caja/banco?</label>
+                <div class="modalidad-toggle" style="margin-top:2px;">
+                    <button type="button" class="modalidad-btn" id="docEgresoSiBtn" onclick="setDocEgreso(true)">✓ Sí, ya está pagado</button>
+                    <button type="button" class="modalidad-btn selected-B" id="docEgresoNoBtn" onclick="setDocEgreso(false)">No, dejar pendiente</button>
+                </div>
+                <input type="hidden" id="docTomarEgreso" value="false">
+                <div class="form-hint">Si elegís "Sí", el pago aparece de inmediato en Caja General / Cuentas Bancarias según la modalidad.</div>
+                <div class="form-hint" id="docEgresoHint" style="color:var(--warn);"></div>
+            </div>
+            <div class="form-group" id="docPagadoWrap" style="display:none;">
+                <label>Monto pagado</label>
                 <input type="number" id="docPagado" placeholder="0.00" min="0" step="0.01" value="0">
             </div>
             <div class="form-group">
