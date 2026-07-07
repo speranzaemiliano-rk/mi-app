@@ -3938,7 +3938,7 @@
                 </div>
 
                 <!-- Stats -->
-                <div class="stats-grid" style="margin-bottom:20px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));">
+                <div class="stats-grid" style="margin-bottom:20px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr));">
                   <div class="stat-card" style="border-left:4px solid var(--gold);">
                     <div class="stat-label">Etapas totales</div>
                     <div class="stat-value" id="ptEtapasTotal">0</div>
@@ -3956,19 +3956,30 @@
                     <div class="stat-value" id="ptPendTotal" style="font-size:18px; color:var(--danger);">$0</div>
                   </div>
                   <div class="stat-card">
-                    <div class="stat-label">Avance global</div>
+                    <div class="stat-label">Avance real de obra</div>
                     <div class="stat-value" id="ptAvanceGlobal" style="font-size:20px; color:var(--blue);">0%</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-label">Desvío (obra − pago)</div>
+                    <div class="stat-value" id="ptDesvioGlobal" style="font-size:20px;">0%</div>
                   </div>
                 </div>
 
-                <!-- Barra de avance global -->
+                <!-- Barras de avance global: pago vs. obra -->
                 <div style="background:var(--surface-2); border-radius:8px; padding:16px; margin-bottom:20px;">
-                  <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-3); margin-bottom:8px;">
-                    <span>Avance global de la obra</span>
+                  <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-3); margin-bottom:6px;">
+                    <span>💰 Avance de pago</span>
                     <span id="ptAvanceGlobalLabel">0% pagado</span>
                   </div>
-                  <div style="height:12px; background:var(--surface); border-radius:6px; overflow:hidden;">
-                    <div id="ptBarraGlobal" style="height:100%; width:0%; background:var(--gold); border-radius:6px; transition:width .5s;"></div>
+                  <div style="height:10px; background:var(--surface); border-radius:5px; overflow:hidden; margin-bottom:14px;">
+                    <div id="ptBarraGlobal" style="height:100%; width:0%; background:var(--gold); border-radius:5px; transition:width .5s;"></div>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-3); margin-bottom:6px;">
+                    <span>🏗️ Avance real de obra</span>
+                    <span id="ptAvanceObraGlobalLabel">0%</span>
+                  </div>
+                  <div style="height:10px; background:var(--surface); border-radius:5px; overflow:hidden;">
+                    <div id="ptBarraGlobalObra" style="height:100%; width:0%; background:var(--blue); border-radius:5px; transition:width .5s;"></div>
                   </div>
                 </div>
 
@@ -16944,24 +16955,37 @@
         if (!cont) return;
         cont.innerHTML = '';
 
-        // Acumular totales
-        let totalPresup = 0, totalPagado = 0;
+        const hoy = new Date().toISOString().substring(0,10);
+
+        // Acumular totales globales
+        let totalPresup = 0, totalPagado = 0, sumAvanceObraPond = 0;
         planTrabajo.forEach(function(et) {
-            (et.items||[]).forEach(function(it) {
-                totalPresup += it.presupuesto || 0;
-                totalPagado += it.pagado      || 0;
-            });
+            var pE = 0, pgE = 0;
+            (et.items||[]).forEach(function(it) { pE += it.presupuesto||0; pgE += it.pagado||0; });
+            totalPresup += pE; totalPagado += pgE;
+            var avObra = (et.avanceObra !== undefined && et.avanceObra !== null) ? et.avanceObra : (et.avanceManual || 0);
+            sumAvanceObraPond += avObra * pE;
         });
-        const pctGlobal = totalPresup > 0 ? Math.min(100, Math.round((totalPagado/totalPresup)*100)) : 0;
+        const pctPagoGlobal = totalPresup > 0 ? Math.min(100, Math.round((totalPagado/totalPresup)*100)) : 0;
+        const pctObraGlobal = totalPresup > 0 ? Math.min(100, Math.round(sumAvanceObraPond/totalPresup)) : 0;
+        const desvioGlobal  = pctObraGlobal - pctPagoGlobal;
         const s = function(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; };
         s('ptEtapasTotal',     planTrabajo.length);
         s('ptPresupTotal',     '$' + Math.round(totalPresup).toLocaleString('es-AR'));
         s('ptPagadoTotal',     '$' + Math.round(totalPagado).toLocaleString('es-AR'));
         s('ptPendTotal',       '$' + Math.round(Math.max(0, totalPresup - totalPagado)).toLocaleString('es-AR'));
-        s('ptAvanceGlobal',    pctGlobal + '%');
-        s('ptAvanceGlobalLabel', pctGlobal + '% pagado');
+        s('ptAvanceGlobal',    pctObraGlobal + '%');
+        s('ptAvanceGlobalLabel', pctPagoGlobal + '% pagado');
+        s('ptAvanceObraGlobalLabel', pctObraGlobal + '%');
         const barra = document.getElementById('ptBarraGlobal');
-        if (barra) barra.style.width = pctGlobal + '%';
+        if (barra) barra.style.width = pctPagoGlobal + '%';
+        const barraObra = document.getElementById('ptBarraGlobalObra');
+        if (barraObra) barraObra.style.width = pctObraGlobal + '%';
+        const desvioEl = document.getElementById('ptDesvioGlobal');
+        if (desvioEl) {
+            desvioEl.textContent = (desvioGlobal>=0?'+':'') + desvioGlobal + '%';
+            desvioEl.style.color = desvioGlobal < -5 ? 'var(--danger)' : (desvioGlobal > 5 ? 'var(--success)' : 'var(--text-2)');
+        }
 
         if (!planTrabajo.length) {
             cont.innerHTML = '<div class="empty-msg" style="padding:32px; text-align:center;">No hay etapas creadas. Usá "+ Nueva Etapa" para empezar.</div>';
@@ -16972,10 +16996,27 @@
             const items = et.items || [];
             const presupEtapa = items.reduce(function(s,it){ return s+(it.presupuesto||0); }, 0);
             const pagadoEtapa = items.reduce(function(s,it){ return s+(it.pagado||0); }, 0);
-            // Avance: manual si está seteado, sino automático por pagos
-            const avanceAuto   = presupEtapa > 0 ? Math.min(100, Math.round((pagadoEtapa/presupEtapa)*100)) : 0;
-            const avanceFinal  = (et.avanceManual > 0) ? et.avanceManual : avanceAuto;
-            const avanceColor  = avanceFinal >= 100 ? 'var(--success)' : avanceFinal >= 50 ? 'var(--warn)' : 'var(--gold)';
+            const avancePago = presupEtapa > 0 ? Math.min(100, Math.round((pagadoEtapa/presupEtapa)*100)) : 0;
+            const avanceObra = Math.max(0, Math.min(100, (et.avanceObra !== undefined && et.avanceObra !== null) ? et.avanceObra : (et.avanceManual || 0)));
+            const desvio      = avanceObra - avancePago;
+            const desvioColor = desvio < -5 ? 'var(--danger)' : (desvio > 5 ? 'var(--success)' : 'var(--text-3)');
+            const desvioTxt   = (desvio>=0?'+':'') + desvio + '%';
+            const limite = et.presupuestoLimite || 0;
+            const sobrePresupuesto = limite > 0 && (presupEtapa > limite || pagadoEtapa > limite);
+
+            // Plazo transcurrido (línea de tiempo) — solo si hay ambas fechas y fin > inicio
+            var pctTiempo = null;
+            if (et.fechaInicio && et.fechaFin && et.fechaFin > et.fechaInicio) {
+                var dIni = new Date(et.fechaInicio+'T00:00:00').getTime();
+                var dFin = new Date(et.fechaFin+'T00:00:00').getTime();
+                var dHoy = new Date(hoy+'T00:00:00').getTime();
+                pctTiempo = Math.max(0, Math.min(100, Math.round((dHoy-dIni)/(dFin-dIni)*100)));
+            }
+            const atrasada = pctTiempo !== null && pctTiempo > (avanceObra + 10);
+
+            const badges =
+                (sobrePresupuesto ? '<span class="pill" style="font-size:10px;color:var(--danger);border-color:var(--danger);">⚠ Sobre presupuesto</span>' : '') +
+                (atrasada ? '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">⏱ Atrasada vs. plazo</span>' : '');
 
             const filasItems = items.length ? items.map(function(it, ii) {
                 const pct2 = it.presupuesto > 0 ? Math.min(100, Math.round((it.pagado||0)/it.presupuesto*100)) : 0;
@@ -17002,28 +17043,41 @@
             const card = document.createElement('div');
             card.className = 'table-card';
             card.style.marginBottom = '16px';
+            if (sobrePresupuesto) card.style.borderLeft = '3px solid var(--danger)';
             card.innerHTML = '<div style="padding:16px 20px; border-bottom:1px solid var(--border);">' +
                 '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">' +
                     '<div style="flex:1; min-width:0;">' +
-                        '<div style="display:flex; align-items:center; gap:10px;">' +
+                        '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">' +
                             '<h3 style="margin:0; font-size:15px;">' + (et.nombre||'Etapa') + '</h3>' +
                             (puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEtapa(' + ei + ')">✏</button>' +
                             '<button class="btn btn-danger-sm" onclick="eliminarEtapa(' + ei + ')">✕</button>' : '') +
+                            badges +
                         '</div>' +
                         (et.obs ? '<div style="font-size:12px; color:var(--text-3); margin-top:4px;">' + et.obs + '</div>' : '') +
-                        (et.fechaInicio ? '<div style="font-size:11px; color:var(--text-3); margin-top:4px;">' + formatearFecha(et.fechaInicio) + (et.fechaFin ? ' → ' + formatearFecha(et.fechaFin) : '') + '</div>' : '') +
-                        '<div style="margin-top:10px;">' +
-                            '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-3); margin-bottom:4px;">' +
-                                '<span>' + (et.avanceManual > 0 ? '✏ Avance manual' : '⚙ Avance por pagos') + '</span>' +
-                                '<span style="font-weight:700; color:' + avanceColor + ';">' + avanceFinal + '%</span>' +
+                        (et.fechaInicio ? '<div style="font-size:11px; color:var(--text-3); margin-top:4px;">📅 ' + formatearFecha(et.fechaInicio) + (et.fechaFin ? ' → ' + formatearFecha(et.fechaFin) : '') + (pctTiempo!==null ? ' · ' + pctTiempo + '% del plazo transcurrido' : '') + '</div>' : '') +
+                        (pctTiempo!==null ? '<div style="height:4px; background:var(--surface-2); border-radius:2px; overflow:hidden; margin-top:4px; max-width:280px;"><div style="height:100%; width:' + pctTiempo + '%; background:var(--text-3); border-radius:2px;"></div></div>' : '') +
+                        '<div style="margin-top:10px; max-width:320px;">' +
+                            '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-3); margin-bottom:3px;">' +
+                                '<span>💰 Avance de pago</span><span style="font-weight:700; color:var(--gold);">' + avancePago + '%</span>' +
                             '</div>' +
-                            '<div style="height:8px; background:var(--surface-2); border-radius:4px; overflow:hidden;">' +
-                                '<div style="height:100%; width:' + avanceFinal + '%; background:' + avanceColor + '; border-radius:4px; transition:width .4s;"></div>' +
+                            '<div style="height:7px; background:var(--surface-2); border-radius:4px; overflow:hidden; margin-bottom:8px;">' +
+                                '<div style="height:100%; width:' + avancePago + '%; background:var(--gold); border-radius:4px; transition:width .4s;"></div>' +
+                            '</div>' +
+                            '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-3); margin-bottom:3px;">' +
+                                '<span>🏗️ Avance real de obra</span><span style="font-weight:700; color:var(--blue);">' + avanceObra + '%</span>' +
+                            '</div>' +
+                            '<div style="height:7px; background:var(--surface-2); border-radius:4px; overflow:hidden;">' +
+                                '<div style="height:100%; width:' + avanceObra + '%; background:var(--blue); border-radius:4px; transition:width .4s;"></div>' +
+                            '</div>' +
+                            '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:8px; border-top:1px dashed var(--border);">' +
+                                '<span style="font-size:11px; color:var(--text-3);">Desvío (obra − pago)</span>' +
+                                '<strong style="font-size:13px; color:' + desvioColor + ';">' + desvioTxt + '</strong>' +
                             '</div>' +
                         '</div>' +
                     '</div>' +
                     '<div style="text-align:right; flex-shrink:0;">' +
                         '<div style="font-size:12px; color:var(--text-3);">Presupuesto: <strong style="color:var(--text-1);">$' + Math.round(presupEtapa).toLocaleString('es-AR') + '</strong></div>' +
+                        (limite>0 ? '<div style="font-size:12px; color:var(--text-3);">Límite: <strong style="color:' + (sobrePresupuesto?'var(--danger)':'var(--text-1)') + ';">$' + Math.round(limite).toLocaleString('es-AR') + '</strong></div>' : '') +
                         '<div style="font-size:12px; color:var(--text-3);">Pagado: <strong style="color:var(--success);">$' + Math.round(pagadoEtapa).toLocaleString('es-AR') + '</strong></div>' +
                         '<div style="font-size:12px; color:var(--text-3);">Pendiente: <strong style="color:var(--danger);">$' + Math.round(Math.max(0,presupEtapa-pagadoEtapa)).toLocaleString('es-AR') + '</strong></div>' +
                     '</div>' +
@@ -17055,7 +17109,10 @@
         document.getElementById('etapaFechaInicio').value= et ? (et.fechaInicio||'') : '';
         document.getElementById('etapaFechaFin').value  = et ? (et.fechaFin||'') : '';
         document.getElementById('etapaObs').value        = et ? (et.obs||'') : '';
-        document.getElementById('etapaAvanceManual').value= et ? (et.avanceManual||0) : 0;
+        // Compat: etapas viejas guardaron el % en avanceManual; las nuevas usan avanceObra
+        var avObraPrev = et ? ((et.avanceObra !== undefined && et.avanceObra !== null) ? et.avanceObra : (et.avanceManual||0)) : 0;
+        document.getElementById('etapaAvanceObra').value = avObraPrev;
+        document.getElementById('etapaPresupuestoLimite').value = et ? (et.presupuestoLimite || '') : '';
         document.getElementById('modalEtapa').classList.add('active');
     }
 
@@ -17069,9 +17126,10 @@
             nombre,
             fechaInicio:   document.getElementById('etapaFechaInicio').value || '',
             fechaFin:      document.getElementById('etapaFechaFin').value    || '',
-            obs:           document.getElementById('etapaObs').value.trim()  || '',
-            avanceManual:  parseInt(document.getElementById('etapaAvanceManual').value) || 0,
-            items:         (idx >= 0 && planTrabajo[idx]) ? (planTrabajo[idx].items||[]) : []
+            obs:              document.getElementById('etapaObs').value.trim()  || '',
+            avanceObra:       Math.max(0, Math.min(100, parseInt(document.getElementById('etapaAvanceObra').value) || 0)),
+            presupuestoLimite:parseFloat(document.getElementById('etapaPresupuestoLimite').value) || 0,
+            items:            (idx >= 0 && planTrabajo[idx]) ? (planTrabajo[idx].items||[]) : []
         };
         if (idx >= 0) planTrabajo[idx] = obj; else planTrabajo.push(obj);
         cerrarModalEtapa();
@@ -21540,10 +21598,15 @@
           <label>Observaciones</label>
           <input type="text" id="etapaObs" placeholder="Opcional">
         </div>
-        <div class="form-group" style="grid-column:1/-1;">
-          <label>% Avance manual (0-100) — si lo dejás en 0 se calcula por pagos</label>
-          <input type="number" id="etapaAvanceManual" min="0" max="100" step="1" placeholder="0">
-          <div class="form-hint">Si ingresás un valor, este sobreescribe el cálculo automático.</div>
+        <div class="form-group">
+          <label>% Avance real de obra (0-100)</label>
+          <input type="number" id="etapaAvanceObra" min="0" max="100" step="1" placeholder="0">
+          <div class="form-hint">Físicamente ejecutado en el terreno. Independiente de lo pagado.</div>
+        </div>
+        <div class="form-group">
+          <label>Límite de presupuesto (opcional)</label>
+          <input type="number" id="etapaPresupuestoLimite" min="0" step="1" placeholder="Sin límite">
+          <div class="form-hint">Si el gasto de la etapa lo supera, se marca como "sobre presupuesto".</div>
         </div>
       </div>
       <div class="modal-footer">
