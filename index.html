@@ -6096,25 +6096,64 @@
         if (m.indexOf('banc') >= 0 || m.indexOf('transfer') >= 0 || m.indexOf('cheque') >= 0 || m.indexOf('cuenta') >= 0 || m === 'a') return 'A';
         return 'B'; // efectivo, caja, u otros
     }
+    // Normaliza el pool de números libres (Firebase puede guardarlo como array u objeto).
+    function _normLibres(arr) {
+        if (!arr) return [];
+        var lista = Array.isArray(arr) ? arr : Object.keys(arr).map(function(k){ return arr[k]; });
+        return lista.filter(function(x){ return typeof x === 'number' && x > 0; });
+    }
+
     // Devuelve el próximo número correlativo para el tipo A/B (Promise<string>).
+    // Primero reutiliza un número liberado (el más chico); si no hay, avanza el contador.
     function obtenerProximoComprobante(tipoAB) {
         var tipo = (tipoAB === 'A') ? 'A' : 'B';
         var prefijo = codigoEmpresaActual() + '-' + codigoProyectoActual() + '-' + tipo + '-';
+        var fmt = function(n){ return prefijo + String(n).padStart(5,'0'); };
         return new Promise(function(resolve) {
-            if (!db || !getBasePath) { resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); return; }
-            try {
-                var ref = db.ref(getBasePath() + '/contadoresComprobante/' + tipo);
+            if (!db || !getBasePath) { resolve(fmt(Math.floor(Math.random()*9000+1000))); return; }
+            var base = getBasePath();
+            var _incrementar = function() {
+                var ref = db.ref(base + '/contadoresComprobante/' + tipo);
                 ref.transaction(function(n){ return (n||0)+1; })
-                .then(function(r){ var n = (r.snapshot && r.snapshot.val()) || 1; resolve(prefijo + String(n).padStart(5,'0')); })
-                .catch(function(){ resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); });
-            } catch(e) { resolve(prefijo + String(Math.floor(Math.random()*9000+1000))); }
+                .then(function(r){ var n = (r.snapshot && r.snapshot.val()) || 1; resolve(fmt(n)); })
+                .catch(function(){ resolve(fmt(Math.floor(Math.random()*9000+1000))); });
+            };
+            try {
+                // 1) Intentar reutilizar el número liberado más chico (llenar huecos)
+                var libresRef = db.ref(base + '/comprobantesLibres/' + tipo);
+                var reusar = null;
+                libresRef.transaction(function(arr){
+                    reusar = null;
+                    var nums = _normLibres(arr);
+                    if (!nums.length) return arr; // nada libre → no tocar
+                    nums.sort(function(a,b){ return a - b; });
+                    reusar = nums.shift(); // el más chico
+                    return nums.length ? nums : null;
+                }).then(function(){
+                    if (reusar != null) resolve(fmt(reusar));
+                    else _incrementar();
+                }).catch(function(){ _incrementar(); });
+            } catch(e) { _incrementar(); }
         });
     }
 
-    // Libera el número correlativo de un comprobante que se elimina:
-    // si era el ÚLTIMO emitido de su tipo (A/B), retrocede el contador
-    // para que el próximo comprobante reutilice ese mismo número.
-    // (Si se borra uno del medio no se toca, para no generar duplicados.)
+    // Agrega un número al pool de "libres" (huecos reutilizables) sin duplicar.
+    function _agregarComprobanteLibre(tipo, num) {
+        if (!db || !getBasePath) return;
+        try {
+            var ref = db.ref(getBasePath() + '/comprobantesLibres/' + tipo);
+            ref.transaction(function(arr){
+                var nums = _normLibres(arr);
+                if (nums.indexOf(num) === -1) nums.push(num);
+                nums.sort(function(a,b){ return a - b; });
+                return nums;
+            });
+        } catch(e) {}
+    }
+
+    // Libera el número correlativo de un comprobante que se elimina, para que se reutilice:
+    //  - Si era el ÚLTIMO emitido de su tipo → retrocede el contador.
+    //  - Si era uno del medio → lo guarda en el pool de "libres" (se reutiliza al generar).
     function _liberarNroComprobante(nro, tipoAB) {
         if (!nro || !db || !getBasePath) return;
         var tipo = (tipoAB === 'A') ? 'A' : 'B';
@@ -6127,7 +6166,10 @@
             ref.transaction(function(n){
                 if ((n || 0) === num) return num - 1; // era el último → retrocede
                 return; // no era el último → aborta sin escribir
-            });
+            }).then(function(res){
+                var bajo = res && res.committed && res.snapshot && res.snapshot.val() === (num - 1);
+                if (!bajo) _agregarComprobanteLibre(tipo, num); // era del medio → al pool
+            }).catch(function(){ _agregarComprobanteLibre(tipo, num); });
         } catch(e) { /* silencioso: no bloquea el borrado */ }
     }
 
