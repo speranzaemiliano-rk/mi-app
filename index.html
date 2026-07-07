@@ -8923,6 +8923,41 @@
             ${acciones}
         </div>`;
     }
+    // ── Click en fila de movimiento → preguntar si abrir el origen ────
+    // srcTipo/srcRef se agregan a cada objeto "mov" en Caja General, Extracto
+    // Bancario y Resumen de Ingresos. Al hacer clic en la fila (fuera de los
+    // botones de acción) se pregunta si abrir el documento/operación origen.
+    // Engancha el clic de apertura en una <tr> ya creada (ignora clics en botones internos).
+    function _filaMovClickeable(tr, tipo, ref) {
+        if (!tr || !tipo || ref===''||ref===null||ref===undefined) return;
+        tr.style.cursor = 'pointer';
+        tr.title = 'Clic para abrir la operación';
+        tr.addEventListener('click', function(ev){
+            if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return;
+            abrirOrigenMovimiento(tipo, ref);
+        });
+    }
+    function abrirOrigenMovimiento(tipo, ref) {
+        var labels = {
+            presupuesto: 'este presupuesto', factura: 'esta factura', documento: 'este documento',
+            emitido: 'este comprobante emitido', venta: 'esta venta UF', alquiler: 'este alquiler',
+            servicio: 'este servicio', movcaja: 'este movimiento de caja', movbanco: 'este movimiento bancario'
+        };
+        if (!confirm('¿Abrir ' + (labels[tipo] || 'esta operación') + '?')) return;
+        switch (tipo) {
+            case 'presupuesto': editarFila(ref); break;
+            case 'factura':     editarFactura(ref); break;
+            case 'documento':   abrirModalDoc(ref); break;
+            case 'emitido':     abrirModalEmitir(ref); break;
+            case 'venta':       abrirModalVenta(ref); break;
+            case 'alquiler':    abrirModalAlquiler(ref); break;
+            case 'servicio':    abrirModalServicio(ref); break;
+            case 'movcaja':     editarMovCaja(ref); break;
+            case 'movbanco':    editarMovBanco(ref); break;
+            default: alert('No se pudo determinar el origen de este movimiento.');
+        }
+    }
+
     // ── Botón eliminar dinámico según rol ─────────────────────────
     function btnElim(tipo, idx) {
         if (esSuperAdmin) {
@@ -10978,43 +11013,45 @@
 
         // ── Recolectar TODOS los movimientos (sin filtros) ─────
         var movs = [];
-        datos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){
+        datos.forEach(function(d, dIdx){ (d.pagosHistorial||[]).forEach(function(p){
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||'—', entrada: 0, salida: (p.capital||0)+(p.mayores||0)||p.montoPagado||0 });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||'—', entrada: 0, salida: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
         }); });
-        facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){
+        facturas.forEach(function(f, fIdx){ (f.pagosHistorial||[]).forEach(function(p){
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0 });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'factura', srcRef:fIdx });
         }); });
         ingGeneral.forEach(function(ig, igIdx){
             if (!ig.esBancario) return;
             var cId = ig.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             var esS = ig.esEgreso || ig.tipo === 'mov_banco_salida';
-            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx });
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movbanco';
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx, srcTipo:srcTipo, srcRef:srcRef });
         });
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (todavía sin selector de cuenta puntual: quedan "sin especificar")
-        ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
+        ventas.forEach(function(v, vIdx){ (v.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'venta', srcRef:vIdx });
         }); });
-        alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){
+        alquileres.forEach(function(a, aIdx){ (a.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'alquiler', srcRef:aIdx });
         }); });
-        servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){
+        servicios.forEach(function(s, sIdx){ (s.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0 });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'servicio', srcRef:sIdx });
         }); });
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
@@ -11058,6 +11095,7 @@
             var acciones = m.igIdx!==undefined
                 ? '<button class="btn-icon" title="Editar" onclick="editarMovBanco('+m.igIdx+')">✏️</button> <button class="btn-icon" title="Borrar" onclick="borrarMovBanco('+m.igIdx+')" style="color:var(--danger);">🗑️</button>'
                 : '';
+            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
             tr.innerHTML = '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
                 '<td>'+tipoBadge+' <span style="font-size:11px;color:var(--text-2);">'+m.tipo+'</span></td>'+
                 '<td>'+m.desc+'</td>'+
@@ -16206,48 +16244,55 @@
             var esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             var esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
             var tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco entrada',mov_banco_salida:'Banco salida'};
-            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',medio:(ig.tipo==='mov_banco_salida'?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1});
+            // Origen para el click: prioriza el comprobante emitido si lo hay; si no, el propio
+            // registro de ingGeneral (editarMovCaja abre cualquier tipo no bancario por índice)
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : (ig.esBancario ? 'movbanco' : 'movcaja');
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',medio:(ig.tipo==='mov_banco_salida'?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1,srcTipo:srcTipo,srcRef:srcRef});
         });
 
         // 2. Cobros de Ventas UF
-        ventas.forEach(function(v) {
+        ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
                 var mon = c.comp === 'usd' ? 'USD' : 'ARS';
                 movs.push({
                     fecha: c.fecha, moneda: mon,
                     tipo: 'Cobro Venta UF', desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''),
                     origen: v.comprador || '—',
-                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true
+                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true,
+                    srcTipo: 'venta', srcRef: vIdx
                 });
             });
         });
 
         // 3. Cobros de Alquileres
-        alquileres.forEach(function(a) {
+        alquileres.forEach(function(a, aIdx) {
             (a.cobrosHistorial||[]).forEach(function(c) {
                 movs.push({
                     fecha: c.fecha, moneda: a.moneda||'ARS',
                     tipo: 'Cobro Alquiler', desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''),
                     origen: a.inquilino||'—',
-                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true
+                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true,
+                    srcTipo: 'alquiler', srcRef: aIdx
                 });
             });
         });
 
         // 4. Cobros de Servicios del Estudio
-        servicios.forEach(function(s) {
+        servicios.forEach(function(s, sIdx) {
             (s.cobrosHistorial||[]).forEach(function(c) {
                 movs.push({
                     fecha: c.fecha, moneda: 'ARS',
                     tipo: 'Cobro Servicio', desc: s.descripcion||'—',
                     origen: s.cliente||'—',
-                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true
+                    medio: 'Efectivo', monto: c.monto||0, esIngreso: true,
+                    srcTipo: 'servicio', srcRef: sIdx
                 });
             });
         });
 
         // 5. Pagos de Presupuestos (A=Banco, B=Efectivo)
-        datos.forEach(function(d) {
+        datos.forEach(function(d, dIdx) {
             var hist = d.pagosHistorial || [];
             if (hist.length > 0) {
                 hist.forEach(function(p) {
@@ -16257,7 +16302,8 @@
                         tipo: 'Pago Presupuesto', desc: d.concepto||'—',
                         origen: d.proveedor||'—',
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
-                        monto: monto, esIngreso: false
+                        monto: monto, esIngreso: false,
+                        srcTipo: 'presupuesto', srcRef: dIdx
                     });
                 });
             } else if ((d.pagado||0) > 0) {
@@ -16266,20 +16312,22 @@
                     tipo: 'Pago Presupuesto', desc: d.concepto||'—',
                     origen: d.proveedor||'—',
                     medio: d.modalidad==='A' ? 'Banco' : 'Efectivo',
-                    monto: d.pagado, esIngreso: false
+                    monto: d.pagado, esIngreso: false,
+                    srcTipo: 'presupuesto', srcRef: dIdx
                 });
             }
         });
 
         // 6. Pagos de Facturas (A=Banco, B=Efectivo)
-        facturas.forEach(function(f) {
+        facturas.forEach(function(f, fIdx) {
             (f.pagosHistorial||[]).forEach(function(p) {
                 movs.push({
                     fecha: p.fecha, moneda: f.moneda||'ARS',
                     tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero+' — ':'') + (f.descripcion||'—'),
                     origen: f.proveedor||'—',
                     medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
-                    monto: p.monto||0, esIngreso: false
+                    monto: p.monto||0, esIngreso: false,
+                    srcTipo: 'factura', srcRef: fIdx
                 });
             });
         });
@@ -16294,6 +16342,7 @@
                         tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—'),
                         origen: d.proveedor||'—',
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
+                        srcTipo: 'documento', srcRef: d.id,
                         monto: p.monto||0, esIngreso: false,
                         docId: d.id, pagoId: p.pagoId||''
                     });
@@ -16304,6 +16353,7 @@
                     tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—'),
                     origen: d.proveedor||'—',
                     medio: d.modalidad==='A' ? 'Banco' : 'Efectivo',
+                    srcTipo: 'documento', srcRef: d.id,
                     monto: d.pagado, esIngreso: false,
                     docId: d.id, pagoId: ''
                 });
@@ -16394,6 +16444,7 @@
                 } else if(m.docId){
                     bAcc='<button class="btn btn-danger-sm" onclick="eliminarMovPagoDoc(\''+m.docId+'\',\''+(m.pagoId||'')+'\')" title="Eliminar">✕</button>';
                 }
+                _filaMovClickeable(tr, m.srcTipo, m.srcRef);
 
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
@@ -16428,35 +16479,41 @@
         var movs = [];
 
         // Ventas UF
-        ventas.forEach(function(v) {
+        ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
                 var mon = c.comp === 'usd' ? 'USD' : 'ARS';
                 movs.push({ fecha: c.fecha, moneda: mon, tipo: 'Venta UF',
-                    desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''), cliente: v.comprador || '—', monto: c.monto || 0 });
+                    desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''), cliente: v.comprador || '—', monto: c.monto || 0,
+                    srcTipo: 'venta', srcRef: vIdx });
             });
         });
 
         // Alquileres
-        alquileres.forEach(function(a) {
+        alquileres.forEach(function(a, aIdx) {
             (a.cobrosHistorial||[]).forEach(function(c) {
                 movs.push({ fecha: c.fecha, moneda: a.moneda||'ARS', tipo: 'Alquiler',
-                    desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''), cliente: a.inquilino || '—', monto: c.monto || 0 });
+                    desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''), cliente: a.inquilino || '—', monto: c.monto || 0,
+                    srcTipo: 'alquiler', srcRef: aIdx });
             });
         });
 
         // Servicios del Estudio
-        servicios.forEach(function(s) {
+        servicios.forEach(function(s, sIdx) {
             (s.cobrosHistorial||[]).forEach(function(c) {
                 movs.push({ fecha: c.fecha, moneda: 'ARS', tipo: 'Honorarios',
-                    desc: s.descripcion || '—', cliente: s.cliente || '—', monto: c.monto || 0 });
+                    desc: s.descripcion || '—', cliente: s.cliente || '—', monto: c.monto || 0,
+                    srcTipo: 'servicio', srcRef: sIdx });
             });
         });
 
         // Ingresos Generales
-        ingGeneral.forEach(function(ig) {
+        ingGeneral.forEach(function(ig, igIdx) {
             var tLab = {aporte_socio:'Aporte socio', prestamo_empresa:'Préstamo empresa', prestamo_bancario:'Préstamo bancario', subsidio:'Subsidio', devolucion:'Devolución', otro:'Otro'};
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : (ig.esBancario ? 'movbanco' : 'movcaja');
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
             movs.push({ fecha: ig.fecha, moneda: ig.moneda||'ARS', tipo: 'Ingreso General',
-                desc: tLab[ig.tipo] || ig.tipo || '—', cliente: ig.origen || '—', monto: ig.monto || 0 });
+                desc: tLab[ig.tipo] || ig.tipo || '—', cliente: ig.origen || '—', monto: ig.monto || 0,
+                srcTipo: srcTipo, srcRef: srcRef });
         });
 
         // ── Totales globales (sin filtros) ─────────────────────
@@ -16512,6 +16569,7 @@
                 var tr = document.createElement('tr');
                 var monColor = m.moneda==='USD' ? 'var(--blue)' : 'var(--success)';
                 var fmtM = m.moneda==='USD' ? fmtU : fmtA;
+                _filaMovClickeable(tr, m.srcTipo, m.srcRef);
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
                     '<td><span class="pill badge-ok" style="font-size:10px;">'+m.tipo+'</span></td>'+
