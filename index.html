@@ -4248,7 +4248,8 @@
                                     <th class="sortable" onclick="sortTable('egresosBody',0,this)">Proveedor<i class="si">⇅</i></th>
                                     <th class="sortable" onclick="sortTable('egresosBody',1,this)" style="text-align:right;">Pagado Presupuestos<i class="si">⇅</i></th>
                                     <th class="sortable" onclick="sortTable('egresosBody',2,this)" style="text-align:right;">Pagado Facturas<i class="si">⇅</i></th>
-                                    <th class="sortable" onclick="sortTable('egresosBody',3,this)" style="text-align:right;">Total Egresado<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('egresosBody',3,this)" style="text-align:right;">Documentos / Caja / Banco<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('egresosBody',4,this)" style="text-align:right;">Total Egresado<i class="si">⇅</i></th>
                                 </tr>
                             </thead>
                             <tbody id="egresosBody"></tbody>
@@ -10819,7 +10820,13 @@
     function renderEgresos() {
         const totalPagadoPres = datos.reduce((s, i) => s + (i.pagado || 0), 0);
         const totalPagadoFact = facturas.reduce((s, f) => s + (f.pagado || 0), 0);
-        const totalEgresos = totalPagadoPres + totalPagadoFact;
+        const totalPagadoDocs = (documentos||[]).reduce((s, d) => s + (d.pagado || 0), 0);
+        // Egresos de Caja/Banco: manuales + los que genera "Emitir Comprobante" con Afecta caja = Sí / Egreso
+        const totalEgresosCaja = ingGeneral.reduce((s, ig) => {
+            const esEgr = ig.esEgreso || ig.tipo === 'mov_egreso_caja' || ig.tipo === 'mov_banco_salida';
+            return s + (esEgr ? (ig.monto || 0) : 0);
+        }, 0);
+        const totalEgresos = totalPagadoPres + totalPagadoFact + totalPagadoDocs + totalEgresosCaja;
 
         const el1 = document.getElementById('egresosTotalARS');
         const el2 = document.getElementById('egresosTotalUSD');
@@ -10836,28 +10843,41 @@
         const provMap = {};
         datos.forEach(d => {
             if ((d.pagado||0) <= 0) return;
-            if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0 };
+            if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0, otros: 0 };
             provMap[d.proveedor].presup += d.pagado || 0;
         });
         facturas.forEach(f => {
             if ((f.pagado||0) <= 0) return;
-            if (!provMap[f.proveedor]) provMap[f.proveedor] = { presup: 0, fact: 0 };
+            if (!provMap[f.proveedor]) provMap[f.proveedor] = { presup: 0, fact: 0, otros: 0 };
             provMap[f.proveedor].fact += f.pagado || 0;
         });
+        (documentos||[]).forEach(d => {
+            if ((d.pagado||0) <= 0) return;
+            if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0, otros: 0 };
+            provMap[d.proveedor].otros += d.pagado || 0;
+        });
+        // Los egresos de Caja/Banco no siempre tienen un "proveedor" prolijo (pueden ser
+        // movimientos manuales o comprobantes emitidos a un cliente) — se agrupan aparte.
+        if (totalEgresosCaja > 0) {
+            const key = 'Movimientos de Caja / Banco';
+            if (!provMap[key]) provMap[key] = { presup: 0, fact: 0, otros: 0 };
+            provMap[key].otros += totalEgresosCaja;
+        }
         tbody.innerHTML = '';
         const provs = Object.keys(provMap).sort();
         if (provs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No hay egresos registrados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No hay egresos registrados.</td></tr>';
             return;
         }
         provs.forEach(nombre => {
             const v = provMap[nombre];
-            const total = v.presup + v.fact;
+            const total = v.presup + v.fact + v.otros;
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${nombre}</strong></td>
                 <td style="text-align:right;">$${Math.round(v.presup).toLocaleString('es-AR')}</td>
                 <td style="text-align:right;">$${Math.round(v.fact).toLocaleString('es-AR')}</td>
+                <td style="text-align:right;">$${Math.round(v.otros).toLocaleString('es-AR')}</td>
                 <td style="text-align:right;"><strong>$${Math.round(total).toLocaleString('es-AR')}</strong></td>`;
             tbody.appendChild(tr);
         });
@@ -16701,6 +16721,51 @@
             });
         });
 
+        // De documentos de proveedor
+        (documentos||[]).forEach(function(d, di) {
+            var hist = d.pagosHistorial || [];
+            hist.forEach(function(p, pi) {
+                filas.push({
+                    src: 'documento', datoIdx: di, pagoIdx: pi,
+                    fecha: p.fecha, proveedor: d.proveedor||'—',
+                    concepto: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'),
+                    modalidad: p.modalidad||'B',
+                    capital: p.monto||0, mayores: 0,
+                    total: p.monto||0,
+                    totalRet: 0, rets: []
+                });
+            });
+            if (!hist.length && (d.pagado||0) > 0) {
+                filas.push({
+                    src: 'documento_legacy', datoIdx: di, pagoIdx: -1,
+                    fecha: d.fecha, proveedor: d.proveedor||'—',
+                    concepto: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'),
+                    modalidad: d.modalidad||'B',
+                    capital: d.pagado||0, mayores: 0,
+                    total: d.pagado||0,
+                    totalRet: 0, rets: []
+                });
+            }
+        });
+
+        // De movimientos de Caja/Banco (manuales, o generados por "Emitir Comprobante"
+        // con Afecta caja = Sí / Egreso)
+        var tLegE = {aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco entrada',mov_banco_salida:'Banco salida'};
+        ingGeneral.forEach(function(ig, igIdx) {
+            var esEgr = ig.esEgreso || ig.tipo === 'mov_egreso_caja' || ig.tipo === 'mov_banco_salida';
+            if (!esEgr) return;
+            filas.push({
+                src: 'movcaja_legacy', datoIdx: igIdx, pagoIdx: -1,
+                fecha: ig.fecha,
+                proveedor: tLegE[ig.tipo] || (ig.esBancario ? 'Movimiento bancario' : 'Movimiento de caja'),
+                concepto: _cajaDescMask(ig, ig.origen || ig.referencia || '—'),
+                modalidad: ig.tipoAB === 'A' ? 'A' : 'B',
+                capital: ig.monto||0, mayores: 0,
+                total: ig.monto||0,
+                totalRet: 0, rets: []
+            });
+        });
+
         // Filtrar
         var filtradas = filas.filter(function(f) {
             if (filtMod && f.modalidad !== filtMod) return false;
@@ -16727,7 +16792,9 @@
                 ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>'
                 : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
             var neto = f.total - f.totalRet;
-            var editBtn = (puedeEditar && f.src !== 'presup_legacy')
+            // abrirEditarPago solo sabe editar pagos de 'presup' y 'factura' (con su propio
+            // pagosHistorial). Documentos y movimientos de caja/banco se editan desde su pestaña.
+            var editBtn = (puedeEditar && (f.src === 'presup' || f.src === 'factura'))
                 ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+f.src+'\','+f.datoIdx+','+f.pagoIdx+')" title="Editar este pago">✏</button>'
                 : '';
             tr.innerHTML =
