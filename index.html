@@ -6111,6 +6111,26 @@
         });
     }
 
+    // Libera el número correlativo de un comprobante que se elimina:
+    // si era el ÚLTIMO emitido de su tipo (A/B), retrocede el contador
+    // para que el próximo comprobante reutilice ese mismo número.
+    // (Si se borra uno del medio no se toca, para no generar duplicados.)
+    function _liberarNroComprobante(nro, tipoAB) {
+        if (!nro || !db || !getBasePath) return;
+        var tipo = (tipoAB === 'A') ? 'A' : 'B';
+        var m = String(nro).match(/(\d+)\s*$/);
+        if (!m) return;
+        var num = parseInt(m[1], 10);
+        if (!num) return;
+        try {
+            var ref = db.ref(getBasePath() + '/contadoresComprobante/' + tipo);
+            ref.transaction(function(n){
+                if ((n || 0) === num) return num - 1; // era el último → retrocede
+                return; // no era el último → aborta sin escribir
+            });
+        } catch(e) { /* silencioso: no bloquea el borrado */ }
+    }
+
     // ── Sort de columnas ──────────────────────────────────────────
     const _sortState = {};
     function sortTable(tbodyId, colIdx, thEl) {
@@ -11728,6 +11748,8 @@
         if (i >= 0) {
             comprobantesEmitidos.splice(i, 1);
             persistirEmitidos();
+            // Liberar el número correlativo si era el último emitido de su tipo
+            if (e && e.nro) _liberarNroComprobante(e.nro, e.tipoAB);
             // Si tenía un movimiento de caja/banco asociado, preguntar si eliminarlo también
             var tieneMov = ingGeneral.some(function(ig){ return ig && ig.origenEmitidoId === id; });
             if (tieneMov && confirm('Este comprobante tenía un movimiento de caja/banco asociado. ¿Eliminarlo también?')) {
@@ -11995,6 +12017,8 @@
         if (pagoId) {
             var p = hist.find(function(x){ return x && x.pagoId===pagoId; });
             var monto = p ? (p.monto||0) : 0;
+            // Liberar el número correlativo del pago si era el último de su tipo
+            if (p && p.nroCorrelativo) _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
             d.pagosHistorial = hist.filter(function(x){ return !(x && x.pagoId===pagoId); });
             d.pagado = Math.max(0, (d.pagado||0) - monto);
         } else {
@@ -15009,12 +15033,14 @@
         if(!confirm('¿Eliminar este movimiento?'))return;
         var emitId = ig.origenEmitidoId;
         ingGeneral.splice(idx,1);persistirIngGeneral();
+        // Liberar el número correlativo propio del movimiento si era el último de su tipo
+        if(ig.nroCorrelativo) _liberarNroComprobante(ig.nroCorrelativo, ig.tipoAB);
         // Si el movimiento provino de un comprobante emitido, ofrecer eliminar también el comprobante
         if(emitId && typeof comprobantesEmitidos !== 'undefined'){
             var comp = comprobantesEmitidos.find(function(x){ return x && x.id===emitId; });
             if(comp && confirm('Este movimiento estaba asociado al comprobante '+(comp.nro||'')+'. ¿Eliminar también el comprobante?')){
                 var ci = comprobantesEmitidos.findIndex(function(x){ return x && x.id===emitId; });
-                if(ci>=0){ comprobantesEmitidos.splice(ci,1); persistirEmitidos(); if(typeof renderEmitidos==='function')renderEmitidos(); }
+                if(ci>=0){ comprobantesEmitidos.splice(ci,1); persistirEmitidos(); if(comp.nro) _liberarNroComprobante(comp.nro, comp.tipoAB); if(typeof renderEmitidos==='function')renderEmitidos(); }
             }
         }
         if(typeof renderCajaGeneral==='function')renderCajaGeneral();
