@@ -1,6 +1,34 @@
 const express = require('express');
 const cors    = require('cors');
+const crypto  = require('crypto');
 const Afip    = require('@afipsdk/afip.js');
+const admin   = require('firebase-admin');
+
+// Firebase Admin — se inicializa con service account (base64 del JSON) o con las
+// variables individuales FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.
+(function initFirebaseAdmin() {
+    try {
+        if (admin.apps.length) return;
+        var sa64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+        if (sa64) {
+            var sa = JSON.parse(Buffer.from(sa64, 'base64').toString('utf8'));
+            admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com' });
+        } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+            admin.initializeApp({
+                credential: admin.credential.cert({
+                    projectId: process.env.FIREBASE_PROJECT_ID,
+                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    privateKey: leerPem(process.env.FIREBASE_PRIVATE_KEY)
+                }),
+                databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com'
+            });
+        } else {
+            console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar. Cargá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.');
+        }
+    } catch (e) {
+        console.error('[Firebase Admin] Error al inicializar:', e.message);
+    }
+})();
 
 const app  = express();
 
@@ -25,11 +53,19 @@ app.use(function(req, res, next) {
         return next();
     }
     const recibido = req.get('X-App-Token') || req.query.token;
-    if (recibido !== esperado) {
+    if (!recibido || !_tokenIgual(recibido, esperado)) {
         return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
     }
     next();
 });
+
+function _tokenIgual(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    var ba = Buffer.from(a);
+    var bb = Buffer.from(b);
+    if (ba.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ba, bb);
+}
 
 // Variables de entorno:
 //   AFIP_CUIT       → tu CUIT sin guiones
@@ -921,6 +957,116 @@ if (mailBotConfigurado()) {
     }, 120000);
     console.log('[MailBot] activo: revisando la casilla cada 2 minutos.');
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  USUARIOS — Gestión de usuarios de Firebase Auth desde la app
+//  Requiere Firebase Admin SDK (FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway).
+// ═══════════════════════════════════════════════════════════════════
+function requireAdmin(res) {
+    if (!admin.apps.length) {
+        res.status(500).json({ error: 'Firebase Admin no está inicializado. Configurá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.' });
+        return false;
+    }
+    return true;
+}
+
+app.get('/usuarios/listar', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var result = await admin.auth().listUsers(1000);
+        var dbRoles = await admin.database().ref('roles').once('value');
+        var rolesMap = dbRoles.val() || {};
+        var users = result.users.map(function(u) {
+            return {
+                uid: u.uid,
+                email: u.email || '',
+                displayName: u.displayName || '',
+                disabled: u.disabled,
+                createdAt: u.metadata.creationTime,
+                lastLogin: u.metadata.lastSignInTime,
+                rol: rolesMap[u.uid] || 'sin rol'
+            };
+        });
+        res.json(users);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/usuarios/crear', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.email || !b.password) return res.status(400).json({ error: 'Faltan email y/o password.' });
+        if (b.password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+        var user = await admin.auth().createUser({
+            email: b.email,
+            password: b.password,
+            displayName: b.displayName || '',
+            disabled: false
+        });
+        if (b.rol) {
+            await admin.database().ref('roles/' + user.uid).set(b.rol);
+        }
+        res.json({ ok: true, uid: user.uid, email: user.email });
+    } catch (e) {
+        res.status(e.code === 'auth/email-already-exists' ? 409 : 500).json({ error: e.message });
+    }
+});
+
+app.post('/usuarios/eliminar', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.uid) return res.status(400).json({ error: 'Falta uid.' });
+        await admin.auth().deleteUser(b.uid);
+        await admin.database().ref('roles/' + b.uid).remove();
+        await admin.database().ref('usuarios/' + b.uid).remove();
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/usuarios/deshabilitar', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.uid) return res.status(400).json({ error: 'Falta uid.' });
+        var disabled = b.disabled !== false;
+        await admin.auth().updateUser(b.uid, { disabled: disabled });
+        res.json({ ok: true, disabled: disabled });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/usuarios/rol', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.uid || !b.rol) return res.status(400).json({ error: 'Faltan uid y/o rol.' });
+        var validos = ['superadmin', 'admin', 'editor', 'lector'];
+        if (validos.indexOf(b.rol) === -1) return res.status(400).json({ error: 'Rol inválido. Opciones: ' + validos.join(', ') });
+        await admin.database().ref('roles/' + b.uid).set(b.rol);
+        res.json({ ok: true, uid: b.uid, rol: b.rol });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/usuarios/reset-password', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.uid || !b.password) return res.status(400).json({ error: 'Faltan uid y/o password.' });
+        if (b.password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+        await admin.auth().updateUser(b.uid, { password: b.password });
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo + WhatsApp + MailBot) corriendo en puerto ${PORT}`));
