@@ -3,15 +3,42 @@ const cors    = require('cors');
 const Afip    = require('@afipsdk/afip.js');
 
 const app  = express();
-app.use(cors({ origin: true }));
+
+// CORS: por defecto abierto (compat con lo de antes). Si se define ALLOWED_ORIGINS
+// (lista separada por comas) en el entorno, se restringe a esos orígenes.
+const _allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+app.use(cors({ origin: _allowedOrigins.length ? _allowedOrigins : true }));
 app.use(express.json());
 
+// Autenticación por token compartido (X-App-Token / ?token=).
+// Modo compatibilidad: mientras no se defina APP_API_TOKEN en el entorno, el
+// backend sigue aceptando pedidos sin autenticar (como hasta ahora), pero avisa
+// en el log en cada request para que no pase desapercibido antes de producción.
+// El webhook de WhatsApp queda afuera porque lo llama Meta directamente (no
+// puede mandar nuestro header) y ya se valida con WHATSAPP_VERIFY_TOKEN aparte.
+const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook'];
+app.use(function(req, res, next) {
+    if (_RUTAS_SIN_TOKEN.indexOf(req.path) !== -1) return next();
+    const esperado = process.env.APP_API_TOKEN;
+    if (!esperado) {
+        console.warn('[seguridad] APP_API_TOKEN no configurado — ' + req.method + ' ' + req.path + ' se aceptó SIN autenticar. Configurá APP_API_TOKEN antes de usar esto con datos reales.');
+        return next();
+    }
+    const recibido = req.get('X-App-Token') || req.query.token;
+    if (recibido !== esperado) {
+        return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
+    }
+    next();
+});
+
 // Variables de entorno:
-//   AFIP_CUIT   → tu CUIT sin guiones
-//   AFIP_CERT   → contenido del archivo .crt (con \n reales)
-//   AFIP_KEY    → contenido del archivo .key (con \n reales)
-//   AFIP_ENV    → "production" o "testing" (default: testing)
-//   PORT        → puerto (Railway/Render lo inyectan automático)
+//   AFIP_CUIT       → tu CUIT sin guiones
+//   AFIP_CERT       → contenido del archivo .crt (con \n reales)
+//   AFIP_KEY        → contenido del archivo .key (con \n reales)
+//   AFIP_ENV        → "production" o "testing" (default: testing)
+//   APP_API_TOKEN   → token secreto que debe mandar el frontend (X-App-Token) en cada request
+//   ALLOWED_ORIGINS → orígenes permitidos para CORS, separados por comas (opcional)
+//   PORT            → puerto (Railway/Render lo inyectan automático)
 
 // Lee un PEM de una env var. Acepta 3 formatos:
 //  1) PEM con saltos de línea reales
