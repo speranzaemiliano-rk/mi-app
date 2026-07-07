@@ -3852,6 +3852,23 @@
                   </div>
 
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔒 Token del backend (ARCA/Belvo/Prometeo)</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Solo hace falta si en Railway configuraste la variable <code>APP_API_TOKEN</code> para cerrar el backend.
+                      Pegá acá el mismo valor — se manda en cada pedido para que el backend lo acepte. Si <code>APP_API_TOKEN</code> no está configurado en Railway, este campo no hace falta.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;">
+                      <div class="form-group" style="flex:1;margin:0;">
+                        <label>Token</label>
+                        <input type="password" id="cfgAppToken" placeholder="Mismo valor que APP_API_TOKEN en Railway" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarAppToken()" style="margin-bottom:1px;">💾 Guardar</button>
+                    </div>
+                    <div id="cfgAppTokenStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    <button class="btn btn-outline btn-sm" onclick="borrarAppToken()" style="margin-top:8px;">🗑️ Borrar token</button>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🗑️ Borrar API Key Anthropic</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:10px;">Elimina la clave de Anthropic guardada de este dispositivo.</p>
                     <button class="btn btn-outline btn-sm" onclick="borrarApiKey()">Borrar Anthropic Key</button>
@@ -6894,7 +6911,7 @@
         var token;
         try {
             _belvoMsg('⏳ Pidiendo token al backend…', 'var(--gold)');
-            var r = await fetch(url + '/belvo/widget-token', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+            var r = await fetch(_conToken(url + '/belvo/widget-token'), { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
             var j = await r.json();
             if(!r.ok || !j.access){ _belvoMsg('❌ El backend no devolvió token. ' + (j.error||'') + ' ' + (j.detalle?JSON.stringify(j.detalle):''), 'var(--danger)'); return; }
             token = j.access;
@@ -6933,7 +6950,7 @@
         var desde = d.toISOString().substring(0,10);
         var data;
         try {
-            var r = await fetch(url + '/belvo/transactions?link=' + encodeURIComponent(cb.belvoLink) + '&date_from=' + desde + '&date_to=' + hasta);
+            var r = await fetch(_conToken(url + '/belvo/transactions?link=' + encodeURIComponent(cb.belvoLink) + '&date_from=' + desde + '&date_to=' + hasta));
             data = await r.json();
             if(!r.ok){ alert('Belvo devolvió un error al traer movimientos.\n' + (data.error||'') ); return; }
         } catch(e){ alert('No se pudo conectar con el backend.\n' + (e.message||e)); return; }
@@ -9220,6 +9237,7 @@
                 cargarGeminiKeyDesdeFirebase();
                 cargarGoogleClientIdDesdeFirebase();
                 cargarEmailJsConfigDesdeFirebase();
+                cargarAppTokenDesdeFirebase();
 
                 const email = user.email || '';
                 const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
@@ -9380,6 +9398,71 @@
         cargarGeminiKeyUI();
         cargarEmailJsConfigUI();
         cargarGoogleClientIdUI();
+        cargarAppTokenUI();
+    }
+
+    // ── Token compartido del backend (X-App-Token) ──────────────────────
+    var APP_TOKEN_LS = 'rk_app_token';
+    function getAppToken() { return localStorage.getItem(APP_TOKEN_LS) || ''; }
+
+    function cargarAppTokenUI() {
+        var val = getAppToken();
+        var el  = document.getElementById('cfgAppToken');
+        if (el) el.value = val || '';
+        var st  = document.getElementById('cfgAppTokenStatus');
+        if (!st) return;
+        if (val) {
+            st.textContent = '✅ Token configurado (guardado en nube y dispositivo).';
+        } else {
+            st.textContent = '🔄 Buscando token en la nube…';
+            db.ref('global/config/appToken').once('value').then(function(snap) {
+                var v = snap.val();
+                if (v) {
+                    localStorage.setItem(APP_TOKEN_LS, v);
+                    if (el) el.value = v;
+                    st.textContent = '✅ Token cargado desde la nube.';
+                } else {
+                    st.textContent = 'ℹ️ Sin token configurado — solo hace falta si activaste APP_API_TOKEN en Railway.';
+                }
+            }).catch(function() {
+                st.textContent = 'ℹ️ Sin token configurado — solo hace falta si activaste APP_API_TOKEN en Railway.';
+            });
+        }
+    }
+
+    function guardarAppToken() {
+        var val = (document.getElementById('cfgAppToken').value || '').trim();
+        if (!val) { alert('Pegá el token.'); return; }
+        localStorage.setItem(APP_TOKEN_LS, val);
+        db.ref('global/config/appToken').set(val).then(function() {
+            document.getElementById('cfgAppTokenStatus').textContent = '✅ Token guardado en este dispositivo y en la nube.';
+        }).catch(function() {
+            document.getElementById('cfgAppTokenStatus').textContent = '✅ Token guardado en este dispositivo (sin acceso a nube).';
+        });
+    }
+
+    function borrarAppToken() {
+        if (!confirm('¿Borrar el token del backend de todos los dispositivos?')) return;
+        localStorage.removeItem(APP_TOKEN_LS);
+        db.ref('global/config/appToken').remove();
+        document.getElementById('cfgAppToken').value = '';
+        document.getElementById('cfgAppTokenStatus').textContent = '⚠️ Token eliminado.';
+    }
+
+    function cargarAppTokenDesdeFirebase() {
+        if (localStorage.getItem(APP_TOKEN_LS)) return;
+        db.ref('global/config/appToken').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val) localStorage.setItem(APP_TOKEN_LS, val);
+        }).catch(function(){});
+    }
+
+    // Agrega el token (si hay uno configurado) a una URL del backend como ?token=/&token=.
+    // Sirve para GET simples sin tener que armar un objeto de headers en cada llamada.
+    function _conToken(url) {
+        var t = getAppToken();
+        if (!t) return url;
+        return url + (url.indexOf('?') !== -1 ? '&' : '?') + 'token=' + encodeURIComponent(t);
     }
 
     function guardarApiKey() {
@@ -17485,7 +17568,7 @@
         st.textContent = 'Consultando todos los puntos de venta en ARCA… puede tardar unos segundos.';
         try {
             // El backend detecta automáticamente todos los puntos de venta activos y tipos
-            var resp = await fetch(baseUrl + '/afip/importar');
+            var resp = await fetch(_conToken(baseUrl + '/afip/importar'));
             if (!resp.ok) throw new Error('Error HTTP ' + resp.status);
             var lista = await resp.json();
             if (!Array.isArray(lista)) throw new Error(lista.error || 'Respuesta inesperada');
@@ -17559,7 +17642,7 @@
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
-            var resp = await fetch(baseUrl + '/afip/emitidos' + (qs.length ? ('?' + qs.join('&')) : ''));
+            var resp = await fetch(_conToken(baseUrl + '/afip/emitidos' + (qs.length ? ('?' + qs.join('&')) : '')));
             var json = await resp.json();
             if (!resp.ok) {
                 if (json && json.faltanCreds) throw new Error('Falta configurar las credenciales en el servidor (Railway): AFIP_SDK_TOKEN, ARCA_USER y ARCA_PASS. ' + (json.detalle||''));
@@ -17941,7 +18024,7 @@
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
-            var resp = await fetch(baseUrl + '/afip/recibidos' + (qs.length ? ('?' + qs.join('&')) : ''));
+            var resp = await fetch(_conToken(baseUrl + '/afip/recibidos' + (qs.length ? ('?' + qs.join('&')) : '')));
             var json = await resp.json();
             if (!resp.ok) {
                 if (json && json.faltanCreds) {
@@ -18278,7 +18361,7 @@
         btn.disabled = true; btn.textContent = 'Emitiendo…';
 
         try {
-            var resp = await fetch(url, {
+            var resp = await fetch(_conToken(url), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
