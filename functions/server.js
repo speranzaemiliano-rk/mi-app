@@ -36,7 +36,7 @@ const app  = express();
 // (lista separada por comas) en el entorno, se restringe a esos orígenes.
 const _allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 app.use(cors({ origin: _allowedOrigins.length ? _allowedOrigins : true }));
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
 
 // Autenticación por token compartido (X-App-Token / ?token=).
 // Modo compatibilidad: mientras no se defina APP_API_TOKEN en el entorno, el
@@ -969,6 +969,31 @@ function requireAdmin(res) {
     }
     return true;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  GEMINI PROXY — para que la API key no se exponga en el frontend
+//  El frontend manda el body completo de Gemini y el modelo; el backend
+//  agrega la key y reenvía. Así la key vive solo en el servidor.
+// ═══════════════════════════════════════════════════════════════════
+app.post('/gemini', async (req, res) => {
+    var apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY no está configurada en el servidor.' });
+    var model = req.body.model || 'gemini-2.5-flash';
+    var geminiBody = req.body.body;
+    if (!geminiBody) return res.status(400).json({ error: 'Falta body con el request de Gemini.' });
+    try {
+        var resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + apiKey, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(geminiBody)
+        });
+        var data = await resp.json().catch(function() { return {}; });
+        if (!resp.ok) return res.status(resp.status).json(data);
+        return res.json(data);
+    } catch (e) {
+        return res.status(502).json({ error: 'Error al conectar con Gemini: ' + e.message });
+    }
+});
 
 app.get('/usuarios/listar', async (req, res) => {
     if (!requireAdmin(res)) return;
