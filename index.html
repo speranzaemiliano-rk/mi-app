@@ -3941,6 +3941,39 @@
                   </div>
 
                 </div>
+
+                  <!-- ── Gestión de Usuarios (solo superadmin) ── -->
+                  <div id="secGestionUsuarios" style="display:none; border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:12px;">👥 Gestión de Usuarios</h4>
+
+                    <div style="background:var(--bg-2);border-radius:10px;padding:16px;margin-bottom:16px;">
+                      <h5 style="font-size:13px;font-weight:600;margin-bottom:12px;">Crear nuevo usuario</h5>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div class="form-group" style="margin:0;"><label>Email</label><input type="email" id="nuevoUserEmail" placeholder="usuario@ejemplo.com" style="font-size:13px;"></div>
+                        <div class="form-group" style="margin:0;"><label>Nombre</label><input type="text" id="nuevoUserNombre" placeholder="Nombre completo" style="font-size:13px;"></div>
+                        <div class="form-group" style="margin:0;"><label>Contraseña</label><input type="password" id="nuevoUserPass" placeholder="Mínimo 6 caracteres" style="font-size:13px;"></div>
+                        <div class="form-group" style="margin:0;"><label>Rol</label>
+                          <select id="nuevoUserRol" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">
+                            <option value="lector">Lector</option>
+                            <option value="editor">Editor</option>
+                            <option value="admin">Admin</option>
+                            <option value="superadmin">Superadmin</option>
+                          </select>
+                        </div>
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="crearUsuarioDesdePanel()" style="margin-top:12px;">➕ Crear usuario</button>
+                      <div id="crearUsuarioMsg" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    </div>
+
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                      <h5 style="font-size:13px;font-weight:600;">Usuarios registrados</h5>
+                      <button class="btn btn-outline btn-sm" onclick="cargarUsuariosBackend()">🔄 Actualizar</button>
+                    </div>
+                    <div id="tablaUsuariosContainer" style="overflow-x:auto;">
+                      <p style="font-size:12px;color:var(--text-3);">Cargando…</p>
+                    </div>
+                  </div>
+
               </div>
             </div><!-- /panelConfig -->
 
@@ -8813,6 +8846,12 @@
         // Remuneraciones: sección sensible, solo Super Administrador
         var remBtn = document.getElementById('tabBtnRemuneraciones');
         if (remBtn) remBtn.style.display = esSuperAdmin ? '' : 'none';
+        // Gestión de usuarios desde el backend (solo superadmin)
+        var secGU = document.getElementById('secGestionUsuarios');
+        if (secGU) {
+            secGU.style.display = esSuperAdmin ? '' : 'none';
+            if (esSuperAdmin) cargarUsuariosBackend();
+        }
         renderizar(); renderProveedores(); renderFacturas();
     }
 
@@ -9463,6 +9502,118 @@
         var t = getAppToken();
         if (!t) return url;
         return url + (url.indexOf('?') !== -1 ? '&' : '?') + 'token=' + encodeURIComponent(t);
+    }
+
+    // ── Gestión de Usuarios (superadmin) ─────────────────────────────
+    function _backendUrl() {
+        return (localStorage.getItem('rk_afip_function_url') || '').replace(/\/afip\/?$/, '').replace(/\/+$/, '');
+    }
+    function _fetchBackend(path, opts) {
+        opts = opts || {};
+        var url = _backendUrl();
+        if (!url) { alert('Configurá primero la URL del backend (ARCA).'); return Promise.reject('sin url'); }
+        var headers = opts.headers || {};
+        var t = getAppToken();
+        if (t) headers['X-App-Token'] = t;
+        if (opts.body && typeof opts.body === 'object') {
+            headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(opts.body);
+        }
+        opts.headers = headers;
+        return fetch(url + path, opts).then(function(r) {
+            return r.json().then(function(j) { j._status = r.status; return j; });
+        });
+    }
+
+    function cargarUsuariosBackend() {
+        var cont = document.getElementById('tablaUsuariosContainer');
+        if (!cont) return;
+        cont.innerHTML = '<p style="font-size:12px;color:var(--text-3);">Cargando…</p>';
+        _fetchBackend('/usuarios/listar').then(function(data) {
+            if (data.error) { cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">' + escHtml(data.error) + '</p>'; return; }
+            if (!Array.isArray(data) || !data.length) { cont.innerHTML = '<p style="font-size:12px;">No hay usuarios.</p>'; return; }
+            var h = '<table class="data-table" style="font-size:12px;width:100%;"><thead><tr>'
+                + '<th>Email</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Último login</th><th>Acciones</th></tr></thead><tbody>';
+            data.forEach(function(u) {
+                var estado = u.disabled ? '<span style="color:var(--danger);">Deshabilitado</span>' : '<span style="color:var(--success);">Activo</span>';
+                var lastLogin = u.lastLogin ? new Date(u.lastLogin).toLocaleDateString('es-AR') : '—';
+                h += '<tr>'
+                    + '<td>' + escHtml(u.email) + '</td>'
+                    + '<td>' + escHtml(u.displayName || '—') + '</td>'
+                    + '<td><select onchange="cambiarRolUsuario(\'' + u.uid + '\', this.value)" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">'
+                    + ['superadmin','admin','editor','lector'].map(function(r) {
+                        return '<option value="' + r + '"' + (u.rol === r ? ' selected' : '') + '>' + r + '</option>';
+                      }).join('')
+                    + '</select></td>'
+                    + '<td>' + estado + '</td>'
+                    + '<td>' + lastLogin + '</td>'
+                    + '<td style="white-space:nowrap;">'
+                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="toggleUsuario(\'' + u.uid + '\',' + !u.disabled + ')">' + (u.disabled ? '✅ Habilitar' : '⛔ Deshabilitar') + '</button> '
+                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="resetPassUsuario(\'' + u.uid + '\')">🔑 Reset pass</button> '
+                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;color:var(--danger);" onclick="eliminarUsuarioPanel(\'' + u.uid + '\',\'' + escHtml(u.email).replace(/'/g,'\\\'') + '\')">🗑️</button>'
+                    + '</td></tr>';
+            });
+            h += '</tbody></table>';
+            cont.innerHTML = h;
+        }).catch(function(e) {
+            cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">Error de conexión: ' + escHtml(String(e)) + '</p>';
+        });
+    }
+
+    function crearUsuarioDesdePanel() {
+        var email = (document.getElementById('nuevoUserEmail').value || '').trim();
+        var nombre = (document.getElementById('nuevoUserNombre').value || '').trim();
+        var pass = (document.getElementById('nuevoUserPass').value || '').trim();
+        var rol = document.getElementById('nuevoUserRol').value;
+        var msg = document.getElementById('crearUsuarioMsg');
+        if (!email || !pass) { msg.textContent = '⚠️ Completá email y contraseña.'; return; }
+        if (pass.length < 6) { msg.textContent = '⚠️ La contraseña debe tener al menos 6 caracteres.'; return; }
+        msg.textContent = 'Creando…';
+        _fetchBackend('/usuarios/crear', { method: 'POST', body: { email: email, password: pass, displayName: nombre, rol: rol } })
+        .then(function(data) {
+            if (data.error) { msg.innerHTML = '<span style="color:var(--danger);">' + escHtml(data.error) + '</span>'; return; }
+            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(data.email) + '</span>';
+            document.getElementById('nuevoUserEmail').value = '';
+            document.getElementById('nuevoUserNombre').value = '';
+            document.getElementById('nuevoUserPass').value = '';
+            cargarListaUsuarios();
+        }).catch(function(e) { msg.textContent = 'Error: ' + e; });
+    }
+
+    function eliminarUsuarioPanel(uid, email) {
+        if (!confirm('¿Eliminar definitivamente al usuario ' + email + '?\nSe borra de Auth, roles y datos de usuario. Esta acción no se puede deshacer.')) return;
+        _fetchBackend('/usuarios/eliminar', { method: 'POST', body: { uid: uid } })
+        .then(function(data) {
+            if (data.error) { alert('Error: ' + data.error); return; }
+            alert('Usuario eliminado.');
+            cargarListaUsuarios();
+        }).catch(function(e) { alert('Error: ' + e); });
+    }
+
+    function toggleUsuario(uid, deshabilitar) {
+        _fetchBackend('/usuarios/deshabilitar', { method: 'POST', body: { uid: uid, disabled: deshabilitar } })
+        .then(function(data) {
+            if (data.error) { alert('Error: ' + data.error); return; }
+            cargarListaUsuarios();
+        }).catch(function(e) { alert('Error: ' + e); });
+    }
+
+    function cambiarRolUsuario(uid, rol) {
+        _fetchBackend('/usuarios/rol', { method: 'POST', body: { uid: uid, rol: rol } })
+        .then(function(data) {
+            if (data.error) { alert('Error: ' + data.error); return; }
+        }).catch(function(e) { alert('Error: ' + e); });
+    }
+
+    function resetPassUsuario(uid) {
+        var pass = prompt('Nueva contraseña para el usuario (mínimo 6 caracteres):');
+        if (!pass) return;
+        if (pass.length < 6) { alert('La contraseña debe tener al menos 6 caracteres.'); return; }
+        _fetchBackend('/usuarios/reset-password', { method: 'POST', body: { uid: uid, password: pass } })
+        .then(function(data) {
+            if (data.error) { alert('Error: ' + data.error); return; }
+            alert('Contraseña actualizada.');
+        }).catch(function(e) { alert('Error: ' + e); });
     }
 
     function guardarApiKey() {
