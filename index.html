@@ -7191,7 +7191,8 @@
         if(gc)gc.style.display=m==='A'?'':'none';if(pr)pr.style.display=m==='A'?'':'none';
         pagoFDRecalcRet();
     }
-    function pagoFDRecalcRet() {
+    var _pagoFDRetsCalculadas = [];
+    function pagoFDRecalcRet(soloTotales) {
         var mod=document.getElementById('pagoFDMod').value;
         if(mod!=='A') return;
         var monto=parseFloat(document.getElementById('pagoFDMonto').value)||0;
@@ -7203,11 +7204,31 @@
         var desgEl=document.getElementById('pagoFDRetDesglose'),totalEl=document.getElementById('pagoFDRetTotal'),netoEl=document.getElementById('pagoFDRetNeto');
         if(!desgEl||!totalEl||!netoEl) return;
         var rets=(prov&&base>0)?calcularRetenciones(base,prov,provNombre,mesAno):[];
-        if(!rets.length){desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'+(prov?'Este proveedor no tiene retenciones configuradas.':'Seleccioná un ítem para ver retenciones.')+'</div>';totalEl.textContent='$0';netoEl.textContent='$'+Math.round(monto).toLocaleString('es-AR');return;}
+        if(!rets.length){_pagoFDRetsCalculadas=[];desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'+(prov?'Este proveedor no tiene retenciones configuradas.':'Seleccioná un ítem para ver retenciones.')+'</div>';totalEl.textContent='$0';netoEl.textContent='$'+Math.round(monto).toLocaleString('es-AR');return;}
+        if(!soloTotales){
+            _pagoFDRetsCalculadas=rets.map(function(r){return Object.assign({},r,{activa:true});});
+            desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
+                return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
+                    +'<input type="checkbox" checked onchange="pagoFDToggleRet('+i+')" style="margin-top:3px;cursor:pointer;">'
+                    +'<span style="flex:1;"><strong>Reg.'+r.codigo+'</strong> — '+r.desc+'</span>'
+                    +'<strong style="color:var(--danger);white-space:nowrap;">$'+Math.round(r.monto).toLocaleString('es-AR')+'</strong>'
+                    +'</label>'
+                    +(r.nota?'<div style="font-size:11px;color:var(--text-3);padding-left:28px;margin-top:-4px;margin-bottom:4px;">'+r.nota+'</div>':'');
+            }).join('');
+        } else {
+            _pagoFDRetsCalculadas.forEach(function(r,i){
+                var nuevoCalc=rets.find(function(x){return x.codigo===r.codigo;});
+                if(nuevoCalc) r.monto=nuevoCalc.monto;
+            });
+        }
         var totalRet=0;
-        desgEl.innerHTML=rets.map(function(r){totalRet+=r.monto;return '<div class="ret-row"><span><strong>Reg.'+r.codigo+'</strong> — '+r.desc+'</span><strong style="color:var(--danger);">$'+Math.round(r.monto).toLocaleString('es-AR')+'</strong></div>'+(r.nota?'<div style="font-size:11px;color:var(--text-3);padding-left:4px;">'+r.nota+'</div>':'');}).join('');
+        _pagoFDRetsCalculadas.forEach(function(r){if(r.activa)totalRet+=r.monto;});
         totalEl.textContent='$'+Math.round(totalRet).toLocaleString('es-AR');
         netoEl.textContent='$'+Math.round(monto-totalRet).toLocaleString('es-AR');
+    }
+    function pagoFDToggleRet(idx) {
+        if(_pagoFDRetsCalculadas[idx]) _pagoFDRetsCalculadas[idx].activa=!_pagoFDRetsCalculadas[idx].activa;
+        pagoFDRecalcRet(true);
     }
     async function guardarPagoFD() {
         var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
@@ -7222,11 +7243,8 @@
         var rets=[],totalRet=0,baseEste=0;
         if(mod==='A'){
             baseEste=parseFloat(document.getElementById('pagoFDBase').value)||monto;
-            var mesAno=fecha.substring(0,7),provNombre='';
-            if(_pagoFDTab==='fact'){var ff=facturas[parseInt(val)];if(ff)provNombre=ff.proveedor||'';}
-            else{var dd=documentos.find(function(x){return x.id===val;});if(dd)provNombre=dd.proveedor||'';}
-            var prov=proveedores.find(function(p){return p.razonSocial===provNombre;});
-            if(prov){rets=calcularRetenciones(baseEste,prov,provNombre,mesAno);totalRet=rets.reduce(function(s,r){return s+r.monto;},0);}
+            rets=_pagoFDRetsCalculadas.filter(function(r){return r.activa;});
+            totalRet=rets.reduce(function(s,r){return s+r.monto;},0);
         }
         var entry={pagoId:'FD-'+Date.now(),fecha:fecha,modalidad:mod,monto:monto,baseImponible:baseEste,
             retenciones:rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet:totalRet};
@@ -7580,7 +7598,8 @@
         return rets;
     }
 
-    function recalcularRetenciones() {
+    var _presupRetsCalculadas = [];
+    function recalcularRetenciones(soloTotales) {
         const mod = document.getElementById('modalidadPago').value;
         if (mod !== 'A') return;
 
@@ -7592,9 +7611,8 @@
         if (baseInp && !baseInp._editado) baseInp.value = Math.round(bruto);
         const baseEste = parseFloat(document.getElementById('retBaseImponible').value) || bruto;
 
-        // Fecha del pago para calcular mes
         const fechaPago = document.getElementById('pagoFecha').value || new Date().toISOString().substring(0,10);
-        const mesAno    = fechaPago.substring(0, 7); // 'YYYY-MM'
+        const mesAno    = fechaPago.substring(0, 7);
 
         const prov = regimenesDePago();
         const i    = parseInt(document.getElementById('pagoPresupuesto').value);
@@ -7608,37 +7626,50 @@
         if (!desglose || !totalEl || !netoEl) return;
 
         if (!prov || rets.length === 0) {
+            _presupRetsCalculadas = [];
             desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? 'Este proveedor no tiene regímenes de retención configurados.' : 'Seleccioná un presupuesto para ver las retenciones.'}</div>`;
             totalEl.textContent = '$0';
             netoEl.textContent  = '$' + Math.round(bruto).toLocaleString('es-AR');
             return;
         }
 
-        let totalRet = 0;
-        desglose.innerHTML = rets.map(r => {
-            totalRet += r.monto;
-            // Mostrar desglose acumulado si hay datos
-            let detalle = '';
-            if (r.baseTotalMes !== undefined && r.retAcum !== undefined) {
-                detalle = `<div style="font-size:11px; color:var(--text-3); margin-top:3px; line-height:1.5;">
-                    Base acum. mes: <strong>$${Math.round(r.baseTotalMes).toLocaleString('es-AR')}</strong> ·
-                    Ret. s/total: <strong>$${Math.round(r.retSobreTotal).toLocaleString('es-AR')}</strong> ·
-                    Ya retenido: <strong>$${Math.round(r.retAcum).toLocaleString('es-AR')}</strong> ·
-                    <span style="color:var(--danger);">Este pago: <strong>$${Math.round(r.monto).toLocaleString('es-AR')}</strong></span>
-                </div>`;
-            }
-            return `<div class="ret-row" style="flex-direction:column; align-items:flex-start; gap:2px;">
-                <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
-                    <span><strong style="color:var(--text-2);">Reg. ${r.codigo}</strong> — ${r.desc}</span>
-                    <strong style="color:var(--danger); white-space:nowrap; margin-left:8px;">$${Math.round(r.monto).toLocaleString('es-AR')}</strong>
-                </div>
-                ${r.nota ? `<div style="font-size:11px; color:var(--text-3);">${r.nota}</div>` : ''}
-                ${detalle}
-            </div>`;
-        }).join('');
+        if (!soloTotales) {
+            _presupRetsCalculadas = rets.map(r => Object.assign({}, r, { activa: true }));
+            desglose.innerHTML = _presupRetsCalculadas.map((r, i) => {
+                let detalle = '';
+                if (r.baseTotalMes !== undefined && r.retAcum !== undefined) {
+                    detalle = `<div style="font-size:11px; color:var(--text-3); margin-top:3px; line-height:1.5; padding-left:28px;">
+                        Base acum. mes: <strong>$${Math.round(r.baseTotalMes).toLocaleString('es-AR')}</strong> ·
+                        Ret. s/total: <strong>$${Math.round(r.retSobreTotal).toLocaleString('es-AR')}</strong> ·
+                        Ya retenido: <strong>$${Math.round(r.retAcum).toLocaleString('es-AR')}</strong> ·
+                        <span style="color:var(--danger);">Este pago: <strong>$${Math.round(r.monto).toLocaleString('es-AR')}</strong></span>
+                    </div>`;
+                }
+                return `<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;flex-direction:column;">
+                    <div style="display:flex;align-items:flex-start;gap:8px;width:100%;">
+                        <input type="checkbox" checked onchange="presupToggleRet(${i})" style="margin-top:3px;cursor:pointer;">
+                        <span style="flex:1;"><strong style="color:var(--text-2);">Reg. ${r.codigo}</strong> — ${r.desc}</span>
+                        <strong style="color:var(--danger); white-space:nowrap; margin-left:8px;">$${Math.round(r.monto).toLocaleString('es-AR')}</strong>
+                    </div>
+                    ${r.nota ? `<div style="font-size:11px; color:var(--text-3); padding-left:28px;">${r.nota}</div>` : ''}
+                    ${detalle}
+                </label>`;
+            }).join('');
+        } else {
+            _presupRetsCalculadas.forEach(r => {
+                var nuevoCalc = rets.find(x => x.codigo === r.codigo);
+                if (nuevoCalc) r.monto = nuevoCalc.monto;
+            });
+        }
 
+        let totalRet = 0;
+        _presupRetsCalculadas.forEach(r => { if (r.activa) totalRet += r.monto; });
         totalEl.textContent = '$' + Math.round(totalRet).toLocaleString('es-AR');
         netoEl.textContent  = '$' + Math.round(bruto - totalRet).toLocaleString('es-AR');
+    }
+    function presupToggleRet(idx) {
+        if (_presupRetsCalculadas[idx]) _presupRetsCalculadas[idx].activa = !_presupRetsCalculadas[idx].activa;
+        recalcularRetenciones(true);
     }
 
     function indicePagoActual(item) {
@@ -7739,16 +7770,12 @@
         datos[i].pagado            = datos[i].pagadoPresupuesto + datos[i].pagadoMayores;
         if (!datos[i].recibo) datos[i].recibo = generarNumeroRecibo();
 
-        // Calcular retenciones con método acumulado mensual
         let retenciones = [];
         let totalRet = 0;
         let baseEste = 0;
         if (modalidadPago === 'A') {
             baseEste = parseFloat(document.getElementById('retBaseImponible').value) || (capital + mayores);
-            const mesAno    = (fechaPago || '').substring(0, 7);
-            const nombreProv = datos[i].proveedor;
-            const prov = regimenesDePago();
-            retenciones = calcularRetenciones(baseEste, prov, nombreProv, mesAno);
+            retenciones = _presupRetsCalculadas.filter(r => r.activa);
             totalRet = retenciones.reduce((s, r) => s + r.monto, 0);
         }
 
@@ -9950,7 +9977,8 @@
         lfRecalcRet();
     }
 
-    function lfRecalcRet() {
+    var _lfRetsCalculadas = [];
+    function lfRecalcRet(soloTotales) {
         if (document.getElementById('lfModalidad').value !== 'A') return;
         var importe = parseFloat(document.getElementById('leerFactImporte').value) || 0;
         var base    = parseFloat(document.getElementById('lfRetBase').value) || importe;
@@ -9959,15 +9987,38 @@
         var fecha  = document.getElementById('lfFechaPago').value || new Date().toISOString().substring(0,10);
         var mesAno = fecha.substring(0,7);
         var rets = calcularRetenciones(base, prov, provNombre, mesAno);
-        var total = 0;
         var desgEl = document.getElementById('lfRetDesglose');
-        if (desgEl) {
-            desgEl.innerHTML = rets.length === 0
-                ? '<div class="ret-row" style="color:var(--text-3);font-size:12px;">Sin regímenes configurados para este proveedor.</div>'
-                : rets.map(function(r){ total += r.monto; return '<div class="ret-row"><span>Reg. ' + r.codigo + ' — ' + r.desc + '</span><strong style="color:var(--danger);">$' + Math.round(r.monto).toLocaleString('es-AR') + '</strong></div>'; }).join('');
+        if (!desgEl) return;
+        if (rets.length === 0) {
+            _lfRetsCalculadas = [];
+            desgEl.innerHTML = '<div class="ret-row" style="color:var(--text-3);font-size:12px;">Sin regímenes configurados para este proveedor.</div>';
+            var te = document.getElementById('lfRetTotal'); if (te) te.textContent = '$0';
+            var ne = document.getElementById('lfRetNeto');  if (ne) ne.textContent = '$' + Math.round(base).toLocaleString('es-AR');
+            return;
         }
+        if (!soloTotales) {
+            _lfRetsCalculadas = rets.map(function(r){ return Object.assign({}, r, { activa: true }); });
+            desgEl.innerHTML = _lfRetsCalculadas.map(function(r, i){
+                return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
+                    + '<input type="checkbox" checked onchange="lfToggleRet(' + i + ')" style="margin-top:3px;cursor:pointer;">'
+                    + '<span style="flex:1;"><strong>Reg.' + r.codigo + '</strong> — ' + r.desc + '</span>'
+                    + '<strong style="color:var(--danger);white-space:nowrap;">$' + Math.round(r.monto).toLocaleString('es-AR') + '</strong>'
+                    + '</label>';
+            }).join('');
+        } else {
+            _lfRetsCalculadas.forEach(function(r){
+                var nuevoCalc = rets.find(function(x){ return x.codigo === r.codigo; });
+                if (nuevoCalc) r.monto = nuevoCalc.monto;
+            });
+        }
+        var total = 0;
+        _lfRetsCalculadas.forEach(function(r){ if (r.activa) total += r.monto; });
         var te = document.getElementById('lfRetTotal'); if (te) te.textContent = '$' + Math.round(total).toLocaleString('es-AR');
         var ne = document.getElementById('lfRetNeto');  if (ne) ne.textContent = '$' + Math.round(base - total).toLocaleString('es-AR');
+    }
+    function lfToggleRet(idx) {
+        if (_lfRetsCalculadas[idx]) _lfRetsCalculadas[idx].activa = !_lfRetsCalculadas[idx].activa;
+        lfRecalcRet(true);
     }
 
     // Chequear si el proveedor escrito en el input existe o no
@@ -10279,7 +10330,7 @@
                 var provObj    = proveedores.find(function(p){ return p.razonSocial === prov; }) || null;
                 var retenciones = []; var totalRet = 0;
                 if (mod === 'A') {
-                    retenciones = calcularRetenciones(baseRet, provObj, prov, mesAno);
+                    retenciones = _lfRetsCalculadas.filter(function(r){ return r.activa; });
                     totalRet = retenciones.reduce(function(s,r){ return s + r.monto; }, 0);
                 }
                 nueva.pagado = montoPago;
@@ -10463,7 +10514,8 @@
     }
 
     // Retenciones para pago directo de factura
-    function recalcularRetencionesFactura() {
+    var _factRetsCalculadas = [];
+    function recalcularRetencionesFactura(soloTotales) {
         const modEl = document.getElementById('factModalidadPago');
         if (!modEl || modEl.value !== 'A') return;
         const importe = parseFloat(document.getElementById('factImporte').value) || 0;
@@ -10479,12 +10531,36 @@
         const totalEl  = document.getElementById('factRetTotal');
         const netoEl   = document.getElementById('factRetNeto');
         if (!desglose) return;
+        if (rets.length === 0) {
+            _factRetsCalculadas = [];
+            desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? 'Sin regímenes configurados.' : 'Seleccioná un proveedor.'}</div>`;
+            if (totalEl) totalEl.textContent = '$0';
+            if (netoEl) netoEl.textContent = '$' + Math.round(base).toLocaleString('es-AR');
+            return;
+        }
+        if (!soloTotales) {
+            _factRetsCalculadas = rets.map(r => Object.assign({}, r, { activa: true }));
+            desglose.innerHTML = _factRetsCalculadas.map((r, i) =>
+                `<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">` +
+                `<input type="checkbox" checked onchange="factToggleRet(${i})" style="margin-top:3px;cursor:pointer;">` +
+                `<span style="flex:1;">Reg. ${r.codigo} — ${r.desc}</span>` +
+                `<strong style="color:var(--danger);white-space:nowrap;">$${Math.round(r.monto).toLocaleString('es-AR')}</strong>` +
+                `</label>`
+            ).join('');
+        } else {
+            _factRetsCalculadas.forEach(r => {
+                var nuevoCalc = rets.find(x => x.codigo === r.codigo);
+                if (nuevoCalc) r.monto = nuevoCalc.monto;
+            });
+        }
         let totalRet = 0;
-        desglose.innerHTML = rets.length === 0
-            ? `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? 'Sin regímenes configurados.' : 'Seleccioná un proveedor.'}</div>`
-            : rets.map(r => { totalRet += r.monto; return `<div class="ret-row"><span>Reg. ${r.codigo} — ${r.desc}</span><strong style="color:var(--danger);">$${Math.round(r.monto).toLocaleString('es-AR')}</strong></div>`; }).join('');
+        _factRetsCalculadas.forEach(r => { if (r.activa) totalRet += r.monto; });
         if (totalEl) totalEl.textContent = '$' + Math.round(totalRet).toLocaleString('es-AR');
         if (netoEl)  netoEl.textContent  = '$' + Math.round(base - totalRet).toLocaleString('es-AR');
+    }
+    function factToggleRet(idx) {
+        if (_factRetsCalculadas[idx]) _factRetsCalculadas[idx].activa = !_factRetsCalculadas[idx].activa;
+        recalcularRetencionesFactura(true);
     }
 
     document.getElementById('formFact').addEventListener('submit', async function(e) {
@@ -10555,7 +10631,7 @@
             const prov    = proveedores.find(p => p.razonSocial === nuevo.proveedor) || null;
             let retenciones = []; let totalRet = 0;
             if (mod === 'A') {
-                retenciones = calcularRetenciones(baseRet, prov, nuevo.proveedor, mesAno);
+                retenciones = _factRetsCalculadas.filter(r => r.activa);
                 totalRet = retenciones.reduce((s,r) => s + r.monto, 0);
             }
             nuevo.pagosHistorial = nuevo.pagosHistorial || [];
