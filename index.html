@@ -4953,7 +4953,7 @@
                         <div class="form-group" style="margin-bottom:12px;">
                             <label style="font-size:11px;">Base imponible neta para retenciones (s/IVA)</label>
                             <input type="number" id="retBaseImponible" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="recalcularRetenciones()" style="width:100%;">
-                            <div class="form-hint">Normalmente es el total bruto del pago. Si la factura es con IVA, ingresá el neto (sin IVA).</div>
+                            <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
                         </div>
 
                         <div id="retDesglose">
@@ -5235,7 +5235,7 @@
                                 <div class="form-group" style="margin-bottom:12px;">
                                     <label style="font-size:11px;">Base imponible neta (s/IVA)</label>
                                     <input type="number" id="factRetBase" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="recalcularRetencionesFactura()" style="width:100%;">
-                                    <div class="form-hint">Ingresá el neto gravado (sin IVA). Las retenciones se calculan sobre este monto y se descuentan del total a pagar.</div>
+                                    <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
                                 </div>
                                 <div id="factRetDesglose"></div>
                                 <div class="ret-total-row">
@@ -7181,7 +7181,7 @@
         document.getElementById('pagoFDPendiente').textContent=fmt(pend);
         info.style.display='';
         var mi=document.getElementById('pagoFDMonto');if(mi&&(!mi.value||parseFloat(mi.value)===0))mi.value=Math.round(pend);
-        var bi=document.getElementById('pagoFDBase');if(bi&&(!bi.value||parseFloat(bi.value)===0))bi.value=Math.round(pend);
+        var bi=document.getElementById('pagoFDBase');if(bi&&(!bi.value||parseFloat(bi.value)===0))bi.value=Math.round(pend/1.21);
         pagoFDRecalcRet();
     }
     function pagoFDSelMod(m) {
@@ -7608,8 +7608,9 @@
         const bruto   = capital + mayores;
 
         const baseInp = document.getElementById('retBaseImponible');
-        if (baseInp && !baseInp._editado) baseInp.value = Math.round(bruto);
-        const baseEste = parseFloat(document.getElementById('retBaseImponible').value) || bruto;
+        var netoDefault = bruto > 0 ? Math.round(bruto / 1.21) : 0;
+        if (baseInp && !baseInp._editado) baseInp.value = netoDefault;
+        const baseEste = parseFloat(document.getElementById('retBaseImponible').value) || netoDefault;
 
         const fechaPago = document.getElementById('pagoFecha').value || new Date().toISOString().substring(0,10);
         const mesAno    = fechaPago.substring(0, 7);
@@ -9388,6 +9389,8 @@
         this._editado = true;
         recalcularRetenciones();
     });
+    var _lfRetBaseEl = document.getElementById('lfRetBase');
+    if (_lfRetBaseEl) _lfRetBaseEl.addEventListener('input', function() { this._editado = true; });
 
 
 
@@ -9982,7 +9985,8 @@
         if (document.getElementById('lfModalidad').value !== 'A') return;
         var importe = parseFloat(document.getElementById('leerFactImporte').value) || 0;
         var montoPago = parseFloat(document.getElementById('lfMontoPago').value) || importe;
-        var base    = parseFloat(document.getElementById('lfRetBase').value) || importe;
+        var baseEl = document.getElementById('lfRetBase');
+        var base = parseFloat(baseEl.value) || (importe > 0 ? Math.round(importe / 1.21) : 0);
         var provNombre = document.getElementById('leerFactProv').value.trim();
         var prov = proveedores.find(function(p){ return p.razonSocial === provNombre; }) || null;
         var fecha  = document.getElementById('lfFechaPago').value || new Date().toISOString().substring(0,10);
@@ -10081,7 +10085,11 @@
         lfSelMod('A');
         var hoy = new Date().toISOString().substring(0,10);
         document.getElementById('lfFechaPago').value = hoy;
-        document.getElementById('lfRetBase').value = '';
+        // Auto-completar base imponible con neto gravado de Gemini o importe/1.21
+        var _lfImp = parseFloat(document.getElementById('leerFactImporte').value) || 0;
+        var _lfNeto = window._lfNetoGravado || (_lfImp > 0 ? Math.round(_lfImp / 1.21 * 100) / 100 : 0);
+        document.getElementById('lfRetBase').value = _lfNeto > 0 ? Math.round(_lfNeto) : '';
+        document.getElementById('lfRetBase')._editado = false;
         document.getElementById('lfRetDesglose').innerHTML = '';
         // Chequear si el proveedor ya existe o no
         lfChequearProvNuevo();
@@ -10126,6 +10134,8 @@
                 '  "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD, o null si no hay",\n' +
                 '  "cae": "número de CAE (Código de Autorización Electrónica), o null",\n' +
                 '  "vencimientoCae": "fecha de vencimiento del CAE en formato YYYY-MM-DD, o null",\n' +
+                '  "netoGravado": importe neto gravado numérico (sin IVA, sin percepciones), o null si no figura,\n' +
+                '  "importeIVA": importe del IVA numérico, o null si no figura,\n' +
                 '  "importe": importe total numérico sin símbolo de moneda (ej: 15000.50),\n' +
                 '  "moneda": "ARS o USD",\n' +
                 '  "descripcion": "descripción breve del concepto o servicio facturado"\n' +
@@ -10232,6 +10242,8 @@
         if (datos.descripcion) document.getElementById('leerFactDesc').value    = datos.descripcion;
         if (datos.importe)     document.getElementById('leerFactImporte').value = datos.importe;
         if (datos.moneda)      document.getElementById('leerFactMoneda').value  = datos.moneda || 'ARS';
+        // Guardar neto gravado para base imponible de retenciones
+        window._lfNetoGravado = datos.netoGravado || null;
         // Campos extra
         if (datos.cuit)          document.getElementById('leerFactCuit').value    = datos.cuit;
         if (datos.condicionIva)  document.getElementById('leerFactCondIva').value = datos.condicionIva;
@@ -10522,8 +10534,9 @@
         const importe = parseFloat(document.getElementById('factImporte').value) || 0;
         const montoPago = parseFloat(document.getElementById('factMontoPago').value) || importe;
         const baseInp = document.getElementById('factRetBase');
-        if (baseInp && !baseInp._editado) baseInp.value = Math.round(importe) || '';
-        const base = parseFloat(document.getElementById('factRetBase')?.value) || importe;
+        var netoDefault = importe > 0 ? Math.round(importe / 1.21) : 0;
+        if (baseInp && !baseInp._editado) baseInp.value = netoDefault || '';
+        const base = parseFloat(document.getElementById('factRetBase')?.value) || netoDefault;
         const nombreProv = document.getElementById('factProveedor').value;
         const prov = proveedores.find(p => p.razonSocial === nombreProv) || null;
         const fechaPago = document.getElementById('factFechaPago')?.value || new Date().toISOString().substring(0,10);
@@ -11057,6 +11070,7 @@
             setVal('leerFactImporte', datos_.importe);
             if (datos_.moneda) { var ms = document.getElementById('leerFactMoneda'); if (ms) ms.value = datos_.moneda; }
             setVal('leerFactDesc',    datos_.descripcion);
+            window._lfNetoGravado = datos_.netoGravado || null;
             lfChequearProvNuevo();
         } catch(e) {
             var _msgE = e.message || String(e);
@@ -22306,7 +22320,7 @@
           <div class="form-group" style="margin-bottom:12px;">
             <label style="font-size:11px;">Base imponible neta (s/IVA)</label>
             <input type="number" id="pagoFDBase" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="pagoFDRecalcRet()" style="width:100%;">
-            <div class="form-hint">Normalmente el total del pago. Si la factura tiene IVA, ingresá el neto s/IVA.</div>
+            <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
           </div>
           <div id="pagoFDRetDesglose"></div>
           <div class="ret-total-row"><span>Retención total</span><strong id="pagoFDRetTotal" style="color:var(--danger);">$0</strong></div>
@@ -22549,7 +22563,7 @@
                 <div class="form-group" style="margin-bottom:12px;">
                   <label style="font-size:11px;">Base imponible neta (s/IVA)</label>
                   <input type="number" id="lfRetBase" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="lfRecalcRet()" style="width:100%;">
-                  <div class="form-hint">Normalmente es el importe total. Si incluye IVA, ingresá el neto.</div>
+                  <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
                 </div>
                 <div id="lfRetDesglose"></div>
                 <div class="ret-total-row"><span>Retención total</span><strong id="lfRetTotal" style="color:var(--danger);">$0</strong></div>
@@ -24097,7 +24111,7 @@
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
           { text: 'Analizá este documento y clasificalo. Respondé SOLO con un JSON válido, sin texto fuera del JSON.\n'
-              + 'Si es una factura o comprobante comercial, usá esta estructura exacta:\n{"tipo":"factura","proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","importe":0.00,"moneda":"ARS"}\n'
+              + 'Si es una factura o comprobante comercial, usá esta estructura exacta:\n{"tipo":"factura","proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","netoGravado":0.00,"importeIVA":0.00,"importe":0.00,"moneda":"ARS"}\n'
               + 'Si es una constancia de inscripción / constancia de CUIT de AFIP (padrón de contribuyentes), usá esta estructura exacta:\n{"tipo":"constanciaAfip","razonSocial":"...","cuit":"...","condicionIVA":"Responsable Inscripto|Monotributista|Exento|No Responsable|Consumidor Final","domicilio":"...","actividad":"..."}\n'
               + 'Si no es ninguna de las dos cosas, respondé: {"tipo":"otro"}\n'
               + 'Usá null en los campos que no encuentres.' }
