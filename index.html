@@ -7094,15 +7094,79 @@
         rows.forEach(function(r){
             var modB=r.mod==='A'?'<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>':'<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
             var tipB=r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
-            var btnI=r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirPagoFact('+r.di+','+r.pi+')" title="Imprimir">🖨️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirPagoPresup('+r.di+','+r.pi+')" title="Imprimir">🖨️</button>';
+            var btnI=r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirPagoFact('+r.di+','+r.pi+')" title="Imprimir recibo">🖨️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirPagoPresup('+r.di+','+r.pi+')" title="Imprimir recibo">🖨️</button>';
+            var btnR=r.ret>0?(r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirRetFact('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirRetPresup('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>'):'';
             var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+(r.esFact?'factura':'presup')+'\','+r.di+','+r.pi+')" title="Editar">✏</button>':'';
             var tr=document.createElement('tr');
-            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnE+'</div></td>';
+            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
     }
     function imprimirPagoPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;var desglose={capital:p.capital||p.montoPagado||0,mayores:p.mayores||0};imprimirReciboDato(d,(p.capital||p.montoPagado||0)+(p.mayores||0),p.fecha,desglose,p.modalidad,p.retenciones||[],p.totalRet||0);}
     function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0);}
+
+    function imprimirRetPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p||!p.retenciones||!p.retenciones.length)return;imprimirComprobanteRetencion(d.proveedor,p);}
+    function imprimirRetFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p||!p.retenciones||!p.retenciones.length)return;imprimirComprobanteRetencion(f.proveedor,p,f.numero);}
+
+    function imprimirComprobanteRetencion(provNombre, pago, nroFact) {
+        var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR'); };
+        var emp = getEmpresaParaRecibo();
+        var emision = new Date().toLocaleDateString('es-AR');
+        var fechaPago = pago.fecha ? formatearFecha(pago.fecha) : emision;
+        var rets = pago.retenciones || [];
+        var totalRet = pago.totalRet || rets.reduce(function(s,r){return s+r.monto;},0);
+        var montoBruto = pago.monto || pago.capital || ((pago.capital||0)+(pago.mayores||0));
+        var nroComp = pago.nroCorrelativo || pago.pagoId || '';
+
+        var prov = proveedores.find(function(p){return p.razonSocial===provNombre;});
+        var provCuit = (prov && prov.cuit) || '';
+        var provCondIva = (prov && prov.condicionIVA) || '';
+        var provDir = (prov && prov.direccion) || '';
+
+        var _rh = buildReciboHeader('Comprobante de Retención', nroComp, emision, {
+            nombre: provNombre || '—',
+            label: 'Sujeto retenido',
+            detalle: [provCuit ? 'CUIT: ' + provCuit : '', provCondIva, provDir].filter(Boolean).join(' · ')
+        });
+
+        var retsHTML = rets.map(function(r){
+            return '<tr>'
+                + '<td><strong>Reg. ' + r.codigo + '</strong></td>'
+                + '<td>' + (r.desc || r.codigo) + '</td>'
+                + '<td class="tr">' + fmt(r.monto) + '</td>'
+                + '</tr>';
+        }).join('');
+
+        var html = '<html><head><meta charset="UTF-8"><title>Retención ' + nroComp + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
+        '<div style="margin-bottom:20px;padding:12px 16px;background:#faf6ea;border-radius:6px;font-size:12px;color:var(--muted);">' +
+        '<strong style="color:var(--ink);">Datos del pago</strong><br>' +
+        'Fecha de pago: <strong>' + fechaPago + '</strong>' +
+        (nroFact ? ' · Factura: <strong>' + nroFact + '</strong>' : '') +
+        ' · Monto bruto: <strong>' + fmt(montoBruto) + '</strong>' +
+        ' · Modalidad: <strong>' + (pago.modalidad === 'A' ? 'Bancarizado' : 'Efectivo') + '</strong>' +
+        '</div>' +
+        '<table class="tbl">' +
+        '<thead><tr><th>Régimen</th><th>Descripción</th><th class="tr">Importe retenido</th></tr></thead>' +
+        '<tbody>' + retsHTML + '</tbody>' +
+        '<tfoot><tr><td colspan="2"><strong>Total retenido</strong></td><td class="tr">' + fmt(totalRet) + '</td></tr></tfoot>' +
+        '</table>' +
+        '<div class="bottom">' +
+        '<div class="instrucciones"><div class="instr-titulo">Agente de retención</div><div class="instr-body">' +
+        emp.nombre + (emp.cuit ? '<br>CUIT: ' + emp.cuit : '') + (emp.condIva ? '<br>' + emp.condIva : '') + (emp.direccion ? '<br>' + emp.direccion : '') +
+        '</div></div>' +
+        '<div class="totales">' +
+        '<div class="tot-row"><span>Monto bruto del pago</span><span>' + fmt(montoBruto) + '</span></div>' +
+        '<div class="tot-row ret"><span>Total retenciones</span><span>- ' + fmt(totalRet) + '</span></div>' +
+        '<div class="tot-final"><span>Neto pagado</span><span>' + fmt(montoBruto - totalRet) + '</span></div>' +
+        '</div></div>' +
+        '<div class="firmas"><div class="fi">Sujeto retenido — ' + (provNombre||'Proveedor') + '</div><div class="fi">Agente de retención — ' + emp.nombre + '</div></div>' +
+        '<div class="pie">Comprobante de retención ' + nroComp + ' · Generado el ' + emision + '</div>' +
+        '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+
+        var win = window.open('', '_blank', 'width=780,height=950');
+        if (!win) { alert('Bloqueaste las ventanas emergentes. Permitilas para imprimir.'); return; }
+        win.document.open(); win.document.write(html); win.document.close();
+    }
 
     // ── Presupuesto: verificar si tiene factura o documento aplicado ──
     function tieneFactODoc(idx) {
@@ -17323,6 +17387,7 @@
                 var modBadge = p.modalidad==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
+                var retBtn = (p.retenciones&&p.retenciones.length) ? '<button class="btn btn-outline btn-sm" onclick="imprimirRetPresup('+di+','+pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>' : '';
                 var editBtn = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\'presup\','+di+','+pi+')" title="Editar pago">✏</button>' : '';
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
@@ -17334,7 +17399,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(monto)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA(monto-(p.totalRet||0))+'</td>'+
-                    '<td><div class="action-btns">'+editBtn+'</div></td>'+
+                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
@@ -17362,6 +17427,7 @@
                 var modBadge = p.modalidad==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
+                var retBtn = (p.retenciones&&p.retenciones.length) ? '<button class="btn btn-outline btn-sm" onclick="imprimirRetFact('+fi+','+pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>' : '';
                 var editBtn = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\'factura\','+fi+','+pi+')" title="Editar pago">✏</button>' : '';
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
@@ -17373,7 +17439,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
-                    '<td><div class="action-btns">'+editBtn+'</div></td>'+
+                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
                 '</tr>');
             });
         });
