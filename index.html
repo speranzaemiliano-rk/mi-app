@@ -338,6 +338,15 @@
         .sub-block:hover > .nav-item .nav-drag-handle,
         .nav-sub:hover .nav-drag-handle { color: rgba(255,255,255,.55); }
         .nav-drag-handle:active { cursor: grabbing; }
+        /* Se mantuvo un concepto principal arrastrado encima de otro (que ya
+           tiene submenú) por más de ~1s: al soltar se anida como ítem de ese
+           concepto. */
+        .nav-block.nav-nest-target > .nav-item {
+            background: rgba(41,151,255,.28) !important;
+            outline: 2px dashed rgba(41,151,255,.65);
+            outline-offset: -2px;
+            border-radius: 8px;
+        }
         .nav-block.sortable-ghost, .sub-block.sortable-ghost, .nav-sub.sortable-ghost { opacity: .3; }
         .nav-block.sortable-chosen, .sub-block.sortable-chosen, .nav-sub.sortable-chosen { box-shadow: 0 6px 18px rgba(0,0,0,.45); }
 
@@ -8786,9 +8795,70 @@
         });
     }
 
+    // Mueve navBlockEl (un concepto principal) adentro del submenú de
+    // targetBlockEl, como un ítem más de ese concepto. Solo funciona si
+    // targetBlockEl ya tiene su propio submenú (Caja y Bancos, Ingresos,
+    // Egresos, Herramientas); si es un botón simple, no hay dónde anidar.
+    function anidarConcepto(navBlockEl, targetBlockEl, sinGuardar) {
+        if (!navBlockEl || !targetBlockEl || navBlockEl === targetBlockEl) return;
+        var targetSub = targetBlockEl.querySelector(':scope > .nav-submenu');
+        if (!targetSub) return;
+        var navkey = navBlockEl.dataset.navkey;
+        var targetKey = targetBlockEl.dataset.navkey;
+        if (!navkey || !targetKey) return;
+
+        var hijos = Array.prototype.slice.call(navBlockEl.children);
+        if (!hijos.length) return;
+        var esGrupo = hijos.length > 1; // tenía botón + su propio submenú
+        var nodo;
+        if (esGrupo) {
+            nodo = document.createElement('div');
+            nodo.className = 'sub-block';
+            nodo.dataset.navkey = navkey;
+            hijos.forEach(function(h){ nodo.appendChild(h); });
+        } else {
+            nodo = hijos[0];
+        }
+        var cabecera = esGrupo ? nodo.querySelector('.nav-item') : nodo;
+        if (cabecera) cabecera.classList.add('nav-sub');
+        nodo.dataset.navkey = navkey; // el botón simple no traía data-navkey propio (estaba en el .nav-block)
+        targetSub.appendChild(nodo);
+        navBlockEl.remove();
+
+        if (!sinGuardar) guardarNestSidebar(navkey, targetKey);
+    }
+
+    // Guarda en Firebase qué concepto quedó anidado dentro de cuál.
+    function guardarNestSidebar(navkey, targetKey) {
+        if (!esSuperAdmin || !db) return;
+        db.ref('global/config/sidebarNest/' + navkey).set(targetKey).catch(function(){});
+        guardarOrdenSidebar();
+        guardarOrdenSubmenus();
+    }
+
+    // Re-aplica los anidados guardados — corre para TODOS los usuarios,
+    // ANTES de restaurar el orden (para que los contenedores ya existan).
+    function aplicarNestSidebar() {
+        if (!db) return Promise.resolve();
+        return db.ref('global/config/sidebarNest').once('value').then(function(snap) {
+            var tree = snap.val();
+            if (!tree) return;
+            var nav = document.querySelector('.sidebar-nav');
+            if (!nav) return;
+            Object.keys(tree).forEach(function(navkey) {
+                var targetKey = tree[navkey];
+                var navBlock = nav.querySelector(':scope > .nav-block[data-navkey="' + navkey + '"]');
+                var targetBlock = nav.querySelector(':scope > .nav-block[data-navkey="' + targetKey + '"]');
+                if (!navBlock || !targetBlock) return;
+                anidarConcepto(navBlock, targetBlock, true);
+            });
+        }).catch(function(){});
+    }
+
     // Aplica el orden guardado en Firebase — corre para TODOS los usuarios.
     function aplicarOrdenSidebarGlobal() {
         if (!db) return;
+        aplicarNestSidebar().then(function() {
         db.ref('global/config/sidebarOrder').once('value').then(function(snap) {
             var orden = snap.val();
             if (!orden || !orden.length) return;
@@ -8815,6 +8885,7 @@
                 orden.forEach(function(k){ if (porKey[k]) cont.appendChild(porKey[k]); });
             });
         }).catch(function(){});
+        });
     }
     document.addEventListener('DOMContentLoaded', aplicarOrdenSidebarGlobal);
 
@@ -8834,6 +8905,21 @@
             payload[id] = _submenuBloques(id).map(function(b){ return b.dataset.navkey; });
         });
         db.ref('global/config/sidebarSubOrder').set(payload).catch(function(){});
+    }
+
+    // Anidar un concepto principal en otro sosteniéndolo encima: se arma un
+    // temporizador mientras el mouse queda sobre el MISMO destino válido
+    // (que ya tenga submenú propio); si se suelta ahí después de ~900ms,
+    // se anida. Si se mueve a otro lado antes, se cancela.
+    var _navHoverTarget = null, _navHoverTimer = null, _navPendienteAnidar = null;
+    function _limpiarHoverAnidado() {
+        clearTimeout(_navHoverTimer);
+        _navHoverTimer = null;
+        _navHoverTarget = null;
+        if (_navPendienteAnidar) {
+            _navPendienteAnidar.classList.remove('nav-nest-target');
+            _navPendienteAnidar = null;
+        }
     }
 
     // Habilita el arrastre (handles visibles + Sortable) SOLO si sos Super
@@ -8860,7 +8946,29 @@
                 delayOnTouchOnly: true,
                 ghostClass: 'sortable-ghost',
                 chosenClass: 'sortable-chosen',
-                onEnd: guardarOrdenSidebar
+                onMove: function(evt) {
+                    var related = evt.related;
+                    var esDestinoValido = related && related.classList && related.classList.contains('nav-block') &&
+                        related !== evt.dragged && related.querySelector(':scope > .nav-submenu');
+                    if (!esDestinoValido) { _limpiarHoverAnidado(); return true; }
+                    if (related === _navHoverTarget) return true;
+                    _limpiarHoverAnidado();
+                    _navHoverTarget = related;
+                    _navHoverTimer = setTimeout(function() {
+                        related.classList.add('nav-nest-target');
+                        _navPendienteAnidar = related;
+                    }, 900);
+                    return true;
+                },
+                onEnd: function(evt) {
+                    var target = _navPendienteAnidar;
+                    _limpiarHoverAnidado();
+                    if (target && target !== evt.item) {
+                        anidarConcepto(evt.item, target);
+                    } else {
+                        guardarOrdenSidebar();
+                    }
+                }
             });
         }
         SUBMENU_IDS.forEach(function(id) {
@@ -8886,7 +8994,8 @@
         if (!confirm('¿Volver el menú al orden original para TODOS los usuarios?')) return;
         Promise.all([
             db.ref('global/config/sidebarOrder').remove(),
-            db.ref('global/config/sidebarSubOrder').remove()
+            db.ref('global/config/sidebarSubOrder').remove(),
+            db.ref('global/config/sidebarNest').remove()
         ]).then(function(){ location.reload(); }).catch(function(){ location.reload(); });
     }
 
