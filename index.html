@@ -5901,6 +5901,7 @@
             const botonesEdicion = btnEditarFila + btnElim('presupuesto', index);
 
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'presupuesto', index);
             tr.innerHTML = `
                 <td>${formatearFecha(item.fecha)}</td>
                 <td><strong>${item.proveedor}</strong> ${badgeCompartido(item)}</td>
@@ -7120,6 +7121,7 @@
             var btnR=r.ret>0?(r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirRetFact('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirRetPresup('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>'):'';
             var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+(r.esFact?'factura':'presup')+'\','+r.di+','+r.pi+')" title="Editar">✏</button>':'';
             var tr=document.createElement('tr');
+            _filaMovClickeable(tr, r.esFact?'factura':'presupuesto', r.di);
             tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
@@ -8828,7 +8830,9 @@
                     ? `<button class="btn btn-outline btn-sm" onclick="toggleProvPagos('${nombre.replace(/'/g,"\\'")}') " title="Ver pagos a este proveedor">💳 Pagos <span id="provPagosIcon_${idSafe}">▼</span></button>`
                     : '';
                 const tr = document.createElement('tr');
-                tr.style.cursor = 'default';
+                tr.style.cursor = 'pointer';
+                tr.title = 'Clic para ver ficha completa';
+                (function(n){ tr.addEventListener('click', function(ev){ if(ev.target&&ev.target.closest&&ev.target.closest('button,a,input,select,textarea'))return; verFichaProveedor(n); }); })(nombre);
                 tr.innerHTML = `
                     <td>${p.grupo ? '<span class="pill pill-gold">'+p.grupo+'</span>' : '—'}</td>
                     <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a></td>
@@ -10892,6 +10896,7 @@
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
                     ` + btnElim('factura', idx) : '—';
                 const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
                     <td><strong>${f.proveedor||'—'}</strong> ${badgeCompartido(f)}</td>
@@ -11648,45 +11653,49 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx});
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movcaja';
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx,srcTipo:srcTipo,srcRef:srcRef});
         });
         // Cobros Ventas UF en ARS (los cobrados "A — Banco" no son efectivo: se ven en Cuentas Bancarias)
-        ventas.forEach(v => {
+        ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp === 'usd') return;
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
         });
         // Cobros Alquileres ARS (ídem, excluye los cobrados por banco)
         alquileres.filter(a => (a.moneda||'ARS') === 'ARS').forEach(a => {
+            var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         // Cobros Servicios ARS (ídem)
-        servicios.forEach(s => {
+        servicios.forEach((s,sIdx) => {
             (s.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'servicio', srcRef:sIdx });
             });
         });
 
         // ── EGRESOS ARS en efectivo (pagos B) ─────────────────
-        datos.forEach(d => {
+        datos.forEach((d,dIdx) => {
             (d.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: (p.capital||0)+(p.mayores||0)||p.montoPagado||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
             });
             if (!(d.pagosHistorial) && (d.pagado||0) > 0 && (d.modalidad||'B') === 'B') {
-                movs.push({ fecha: d.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: d.pagado });
+                movs.push({ fecha: d.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: d.pagado, srcTipo:'presupuesto', srcRef:dIdx });
             }
         });
         facturas.filter(f => (f.moneda||'ARS') === 'ARS').forEach(f => {
+            var fIdx = facturas.indexOf(f);
             (f.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
             });
         });
 
@@ -11736,6 +11745,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
             const bEFP=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML = `
                 <td>${m.fecha ? formatearFecha(m.fecha) : '—'}</td>
@@ -11770,25 +11780,29 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx});
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movcaja';
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx,srcTipo:srcTipo,srcRef:srcRef});
         });
-        ventas.forEach(v => {
+        ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp !== 'usd') return;
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
         });
         alquileres.filter(a => a.moneda === 'USD').forEach(a => {
+            var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         facturas.filter(f => f.moneda === 'USD').forEach(f => {
+            var fIdx = facturas.indexOf(f);
             (f.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
             });
         });
 
@@ -11839,6 +11853,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
             const bEFU=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML =
                 '<td>'+(m.fecha ? formatearFecha(m.fecha) : '—')+'</td>'+
@@ -12391,6 +12406,7 @@
         var esSA = (typeof esSuperAdmin !== 'undefined' && esSuperAdmin);
         list.forEach(function(e){
             var tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'emitido', e.id);
             if (e.confidencial && !esSA) {
                 tr.innerHTML =
                     '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
@@ -12625,6 +12641,7 @@
             const tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comp. X', otro:'Otro' };
             const mon = d.moneda === 'USD' ? 'USD ' : '$';
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'documento', d.id);
             tr.innerHTML = `
                 <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
                 <td><strong>${d.proveedor||'—'}</strong></td>
@@ -14476,6 +14493,7 @@
                       btnElim('venta', idx)
                     : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' + docsBtns;
                 const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'venta', idx);
                 tr.innerHTML =
                     '<td><strong>' + (v.uf||'—') + '</strong>' + desVinc + '</td>' +
                     '<td>' + (tipos[v.tipo]||v.tipo||'—') + '</td>' +
@@ -15312,6 +15330,7 @@
                       btnElim('alquiler', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'alquiler', idx);
                 tr.innerHTML =
                     '<td><strong>' + (a.unidad||'—') + '</strong>' + (a.direccion ? '<br><span style="font-size:11px;color:var(--text-3);">' + a.direccion + '</span>' : '') + '</td>' +
                     '<td>' + (tipos[a.tipo]||a.tipo||'—') + '</td>' +
@@ -15547,6 +15566,7 @@
                       btnElim('servicio', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'servicio', idx);
                 tr.innerHTML =
                     '<td>'+(s.fecha?formatearFecha(s.fecha):'—')+'</td>'+
                     '<td><strong>'+(s.cliente||'—')+'</strong></td>'+
@@ -15764,6 +15784,7 @@
                       btnElim('inggeneral', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'movcaja', idx);
                 tr.innerHTML =
                     '<td>'+(ig.fecha?formatearFecha(ig.fecha):'—')+'</td>'+
                     '<td><span class="pill pill-A" style="font-size:11px;">'+(tLab2[ig.tipo]||ig.tipo||'—')+'</span></td>'+
@@ -17268,6 +17289,8 @@
 
         filtradas.forEach(function(f) {
             var tr = document.createElement('tr');
+            var _srcMap = {presup:'presupuesto',presup_legacy:'presupuesto',factura:'factura',documento:'documento',movcaja_legacy:'movcaja',documento_legacy:'documento'};
+            _filaMovClickeable(tr, _srcMap[f.src]||f.src, f.datoIdx);
             var modBadge = f.modalidad==='A'
                 ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>'
                 : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
