@@ -127,8 +127,12 @@
 
         
         /* ── TOOLTIPS ── */
-        [title] { position: relative; }
-        [title]:not(input):not(select):not(textarea)::after {
+        /* OJO: tr/td/th quedan EXCLUIDOS del tooltip custom. Un ::before/::after
+           sobre una fila de tabla genera una celda anónima en Chrome y corre
+           todas las columnas respecto de los títulos. Las tablas usan el
+           tooltip nativo del navegador. */
+        [title]:not(tr):not(td):not(th) { position: relative; }
+        [title]:not(input):not(select):not(textarea):not(tr):not(td):not(th)::after {
             content: attr(title);
             position: absolute;
             bottom: calc(100% + 7px);
@@ -153,7 +157,7 @@
             letter-spacing: 0;
             line-height: 1.4;
         }
-        [title]:not(input):not(select):not(textarea)::before {
+        [title]:not(input):not(select):not(textarea):not(tr):not(td):not(th)::before {
             content: '';
             position: absolute;
             bottom: calc(100% + 2px);
@@ -166,8 +170,8 @@
             transition: opacity .15s;
             z-index: 9999;
         }
-        [title]:not(input):not(select):not(textarea):hover::after,
-        [title]:not(input):not(select):not(textarea):hover::before {
+        [title]:not(input):not(select):not(textarea):not(tr):not(td):not(th):hover::after,
+        [title]:not(input):not(select):not(textarea):not(tr):not(td):not(th):hover::before {
             opacity: 1;
         }
         /* Ajuste para items de la sidebar: tooltip a la derecha */
@@ -9911,9 +9915,24 @@
         var email = document.getElementById('eutEmail').value;
         if (!email) return;
         var msg = document.getElementById('eutMsg');
-        msg.textContent = 'Enviando…';
-        auth.sendPasswordResetEmail(email).then(function() {
-            msg.innerHTML = '<span style="color:var(--success);">✅ Mail para definir contraseña enviado a ' + escHtml(email) + '.</span>';
+        msg.textContent = 'Verificando cuenta…';
+        // Firebase "resuelve OK" el envío de mail de recuperación aunque el email no
+        // tenga una cuenta de Auth real (protección anti-enumeración) — por eso no
+        // alcanza con mirar si la promesa se cumplió. Chequeamos antes si existe la
+        // cuenta para poder avisar la causa más probable si nunca llega el mail.
+        // (fetchSignInMethodsForEmail puede devolver vacío igual en proyectos con
+        // "protección de enumeración de email" activada, así que igual mandamos el
+        // mail aunque dé vacío — solo cambia el tono del aviso.)
+        auth.fetchSignInMethodsForEmail(email).catch(function(){ return null; }).then(function(metodos) {
+            var existeConfirmado = !!(metodos && metodos.length);
+            msg.textContent = 'Enviando…';
+            return auth.sendPasswordResetEmail(email).then(function() {
+                if (existeConfirmado) {
+                    msg.innerHTML = '<span style="color:var(--success);">✅ Mail para definir contraseña enviado a ' + escHtml(email) + '. Si no aparece en unos minutos, revisá la carpeta de spam/promociones.</span>';
+                } else {
+                    msg.innerHTML = '<span style="color:var(--warn);">⚠️ Se pidió el envío, pero no pude confirmar que ' + escHtml(email) + ' tenga una cuenta de acceso real creada. Si no llega nada en unos minutos (revisando spam), es probable que este usuario haya quedado cargado solo en la base de datos por un alta vieja — quitalo y volvé a crearlo con "➕ Crear usuario".</span>';
+                }
+            });
         }).catch(function(e) {
             msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(e.message) + '</span>';
         });
