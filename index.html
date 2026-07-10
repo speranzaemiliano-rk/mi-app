@@ -5901,6 +5901,7 @@
             const botonesEdicion = btnEditarFila + btnElim('presupuesto', index);
 
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'presupuesto', index);
             tr.innerHTML = `
                 <td>${formatearFecha(item.fecha)}</td>
                 <td><strong>${item.proveedor}</strong> ${badgeCompartido(item)}</td>
@@ -6024,9 +6025,12 @@
         document.getElementById('entrega').value     = item.entrega;
         document.getElementById('cacBase').value     = item.indiceCACBase || '';
         document.getElementById('docArchivo').value  = '';
-        document.getElementById('docEstado').textContent = docExistente
-            ? `📎 Documento actual: ${docExistente.docNombre}. Elegí otro solo si querés reemplazarlo.`
-            : '';
+        var _de = document.getElementById('docEstado');
+        if (docExistente && docExistente.docId) {
+            _de.innerHTML = '📎 Documento actual: <a href="javascript:void(0)" onclick="descargarDoc(\'' + docExistente.docId + '\',\'' + (docExistente.docNombre||'documento').replace(/'/g,'') + '\')" style="color:var(--blue);font-weight:600;text-decoration:underline;cursor:pointer;">' + escHtml(docExistente.docNombre||'ver') + '</a> — Elegí otro solo si querés reemplazarlo.';
+        } else {
+            _de.textContent = '';
+        }
         selModalidadPres(item.modalidad || 'A');
         // En edicion no se re-comparte
         const panelPres = document.getElementById('panelCompartirPres');
@@ -7120,6 +7124,7 @@
             var btnR=r.ret>0?(r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirRetFact('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirRetPresup('+r.di+','+r.pi+')" title="Comprobante de retención" style="color:var(--danger);">🏛️</button>'):'';
             var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+(r.esFact?'factura':'presup')+'\','+r.di+','+r.pi+')" title="Editar">✏</button>':'';
             var tr=document.createElement('tr');
+            _filaMovClickeable(tr, r.esFact?'factura':'presupuesto', r.di);
             tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
@@ -8828,10 +8833,12 @@
                     ? `<button class="btn btn-outline btn-sm" onclick="toggleProvPagos('${nombre.replace(/'/g,"\\'")}') " title="Ver pagos a este proveedor">💳 Pagos <span id="provPagosIcon_${idSafe}">▼</span></button>`
                     : '';
                 const tr = document.createElement('tr');
-                tr.style.cursor = 'default';
+                tr.style.cursor = 'pointer';
+                tr.title = 'Clic para ver ficha completa';
+                (function(n){ tr.addEventListener('click', function(ev){ if(ev.target&&ev.target.closest&&ev.target.closest('button,a,input,select,textarea'))return; verFichaProveedor(n); }); })(nombre);
                 tr.innerHTML = `
                     <td>${p.grupo ? '<span class="pill pill-gold">'+p.grupo+'</span>' : '—'}</td>
-                    <td><strong>${nombre}</strong></td>
+                    <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a></td>
                     <td>${p.cuit||'—'}</td>
                     <td><span class="badge-rol badge-blue">${p.condicionIVA||'—'}</span></td>
                     <td>${p.rubro||'—'}</td>
@@ -9682,35 +9689,55 @@
         var cont = document.getElementById('tablaUsuariosContainer');
         if (!cont) return;
         cont.innerHTML = '<p style="font-size:12px;color:var(--text-3);">Cargando…</p>';
-        _fetchBackend('/usuarios/listar').then(function(data) {
-            if (data.error) { cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">' + escHtml(data.error) + '</p>'; return; }
-            if (!Array.isArray(data) || !data.length) { cont.innerHTML = '<p style="font-size:12px;">No hay usuarios.</p>'; return; }
+        Promise.all([REF_USUARIOS.once('value'), REF_ROLES.once('value')]).then(function(snaps) {
+            var usuarios = snaps[0].val() || {};
+            var roles = snaps[1].val() || {};
+            var uids = Object.keys(usuarios);
+            if (!uids.length) { cont.innerHTML = '<p style="font-size:12px;">No hay usuarios registrados.</p>'; return; }
+            var orden = ['superadmin','admin','editor','lector'];
+            uids.sort(function(a,b){ return orden.indexOf(roles[a]||'lector') - orden.indexOf(roles[b]||'lector'); });
             var h = '<table class="data-table" style="font-size:12px;width:100%;"><thead><tr>'
-                + '<th>Email</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Último login</th><th>Acciones</th></tr></thead><tbody>';
-            data.forEach(function(u) {
-                var estado = u.disabled ? '<span style="color:var(--danger);">Deshabilitado</span>' : '<span style="color:var(--success);">Activo</span>';
-                var lastLogin = u.lastLogin ? new Date(u.lastLogin).toLocaleDateString('es-AR') : '—';
+                + '<th>Email</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr></thead><tbody>';
+            var miUid = auth.currentUser ? auth.currentUser.uid : null;
+            uids.forEach(function(uid) {
+                var u = usuarios[uid] || {};
+                var rol = roles[uid] || 'lector';
+                var esMio = uid === miUid;
                 h += '<tr>'
-                    + '<td>' + escHtml(u.email) + '</td>'
-                    + '<td>' + escHtml(u.displayName || '—') + '</td>'
-                    + '<td><select onchange="cambiarRolUsuario(\'' + u.uid + '\', this.value)" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">'
-                    + ['superadmin','admin','editor','lector'].map(function(r) {
-                        return '<option value="' + r + '"' + (u.rol === r ? ' selected' : '') + '>' + r + '</option>';
+                    + '<td>' + escHtml(u.email || uid) + '</td>'
+                    + '<td>' + escHtml(u.nombre || '—') + '</td>'
+                    + '<td><select onchange="cambiarRolLocal(\'' + uid + '\', this.value)"' + (esMio ? ' disabled title="No podés cambiar tu propio rol"' : '') + ' style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">'
+                    + orden.map(function(r) {
+                        return '<option value="' + r + '"' + (rol === r ? ' selected' : '') + '>' + r + '</option>';
                       }).join('')
                     + '</select></td>'
-                    + '<td>' + estado + '</td>'
-                    + '<td>' + lastLogin + '</td>'
                     + '<td style="white-space:nowrap;">'
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="toggleUsuario(\'' + u.uid + '\',' + !u.disabled + ')">' + (u.disabled ? '✅ Habilitar' : '⛔ Deshabilitar') + '</button> '
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="resetPassUsuario(\'' + u.uid + '\')">🔑 Reset pass</button> '
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;color:var(--danger);" onclick="eliminarUsuarioPanel(\'' + u.uid + '\',\'' + escHtml(u.email).replace(/'/g,'\\\'') + '\')">🗑️</button>'
+                    + (esMio ? '<span style="font-size:10px;color:var(--text-3);">Tu cuenta</span>' :
+                        '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;color:var(--danger);" onclick="eliminarUsuarioLocal(\'' + uid + '\',\'' + escHtml(u.email||'').replace(/'/g,'\\\'') + '\')">🗑️ Quitar</button>')
                     + '</td></tr>';
             });
             h += '</tbody></table>';
             cont.innerHTML = h;
         }).catch(function(e) {
-            cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">Error de conexión: ' + escHtml(String(e)) + '</p>';
+            cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">Error: ' + escHtml(String(e)) + '</p>';
         });
+    }
+
+    function cambiarRolLocal(uid, rol) {
+        firebase.database().ref('roles/' + uid).set(rol).then(function() {
+            cargarUsuariosBackend();
+        }).catch(function(e) { alert('Error: ' + e.message); });
+    }
+
+    function eliminarUsuarioLocal(uid, email) {
+        if (!confirm('¿Quitar al usuario ' + email + ' del sistema?\nSe eliminan sus datos y rol de la base de datos.')) return;
+        Promise.all([
+            firebase.database().ref('roles/' + uid).remove(),
+            firebase.database().ref('usuarios/' + uid).remove()
+        ]).then(function() {
+            alert('Usuario quitado.');
+            cargarUsuariosBackend();
+        }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function crearUsuarioDesdePanel() {
@@ -9722,15 +9749,38 @@
         if (!email || !pass) { msg.textContent = '⚠️ Completá email y contraseña.'; return; }
         if (pass.length < 6) { msg.textContent = '⚠️ La contraseña debe tener al menos 6 caracteres.'; return; }
         msg.textContent = 'Creando…';
-        _fetchBackend('/usuarios/crear', { method: 'POST', body: { email: email, password: pass, displayName: nombre, rol: rol } })
-        .then(function(data) {
-            if (data.error) { msg.innerHTML = '<span style="color:var(--danger);">' + escHtml(data.error) + '</span>'; return; }
-            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(data.email) + '</span>';
+        var secondaryApp;
+        try {
+            secondaryApp = firebase.initializeApp(firebase.app().options, 'secondary_' + Date.now());
+        } catch(e) { msg.textContent = 'Error inicializando: ' + e.message; return; }
+        secondaryApp.auth().createUserWithEmailAndPassword(email, pass)
+        .then(function(cred) {
+            var uid = cred.user.uid;
+            return cred.user.updateProfile({ displayName: nombre }).then(function() {
+                return Promise.all([
+                    firebase.database().ref('roles/' + uid).set(rol),
+                    firebase.database().ref('usuarios/' + uid).set({ email: email, nombre: nombre })
+                ]);
+            });
+        })
+        .then(function() {
+            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '</span>';
             document.getElementById('nuevoUserEmail').value = '';
             document.getElementById('nuevoUserNombre').value = '';
             document.getElementById('nuevoUserPass').value = '';
+            secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); });
             cargarListaUsuarios();
-        }).catch(function(e) { msg.textContent = 'Error: ' + e; });
+            cargarUsuariosBackend();
+        })
+        .catch(function(e) {
+            var errores = {
+                'auth/email-already-in-use': 'Ese email ya está registrado.',
+                'auth/invalid-email': 'El email no es válido.',
+                'auth/weak-password': 'La contraseña es muy débil (mínimo 6 caracteres).'
+            };
+            msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(errores[e.code] || e.message) + '</span>';
+            if (secondaryApp) secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); }).catch(function(){});
+        });
     }
 
     function eliminarUsuarioPanel(uid, email) {
@@ -10495,9 +10545,12 @@
         document.getElementById('factImporte').value      = f.importe || 0;
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
-        document.getElementById('factArchivoEstado').textContent = f.docNombre
-            ? `📎 Archivo actual: ${f.docNombre}. Elegí otro para reemplazarlo.`
-            : 'Subí el PDF o imagen de la factura. Máx. 4 MB.';
+        var _fae = document.getElementById('factArchivoEstado');
+        if (f.docId && f.docNombre) {
+            _fae.innerHTML = '📎 Archivo actual: <a href="javascript:void(0)" onclick="descargarDoc(\'' + f.docId + '\',\'' + (f.docNombre||'factura').replace(/'/g,'') + '\')" style="color:var(--blue);font-weight:600;text-decoration:underline;cursor:pointer;">' + escHtml(f.docNombre) + '</a> — Elegí otro para reemplazarlo.';
+        } else {
+            _fae.textContent = 'Subí el PDF o imagen de la factura. Máx. 4 MB.';
+        }
         // Inicializar UI de tipo
         selFactTipo(f.tipo || 'presup');
         selFactPagoInmediato(false); // en edición no re-pagamos
@@ -10849,6 +10902,7 @@
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
                     ` + btnElim('factura', idx) : '—';
                 const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
                     <td><strong>${f.proveedor||'—'}</strong> ${badgeCompartido(f)}</td>
@@ -11605,45 +11659,49 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx});
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movcaja';
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx,srcTipo:srcTipo,srcRef:srcRef});
         });
         // Cobros Ventas UF en ARS (los cobrados "A — Banco" no son efectivo: se ven en Cuentas Bancarias)
-        ventas.forEach(v => {
+        ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp === 'usd') return;
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
         });
         // Cobros Alquileres ARS (ídem, excluye los cobrados por banco)
         alquileres.filter(a => (a.moneda||'ARS') === 'ARS').forEach(a => {
+            var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         // Cobros Servicios ARS (ídem)
-        servicios.forEach(s => {
+        servicios.forEach((s,sIdx) => {
             (s.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'servicio', srcRef:sIdx });
             });
         });
 
         // ── EGRESOS ARS en efectivo (pagos B) ─────────────────
-        datos.forEach(d => {
+        datos.forEach((d,dIdx) => {
             (d.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: (p.capital||0)+(p.mayores||0)||p.montoPagado||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
             });
             if (!(d.pagosHistorial) && (d.pagado||0) > 0 && (d.modalidad||'B') === 'B') {
-                movs.push({ fecha: d.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: d.pagado });
+                movs.push({ fecha: d.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor, ingreso: 0, egreso: d.pagado, srcTipo:'presupuesto', srcRef:dIdx });
             }
         });
         facturas.filter(f => (f.moneda||'ARS') === 'ARS').forEach(f => {
+            var fIdx = facturas.indexOf(f);
             (f.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
             });
         });
 
@@ -11693,6 +11751,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
             const bEFP=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML = `
                 <td>${m.fecha ? formatearFecha(m.fecha) : '—'}</td>
@@ -11727,25 +11786,29 @@
             const tL={aporte_socio:'Aporte',prestamo_empresa:'Préstamo',prestamo_bancario:'Préstamo banco',subsidio:'Subsidio',devolucion:'Devolución',otro:'Otro',mov_ingreso_caja:'Ingreso caja',mov_egreso_caja:'Egreso caja',mov_banco_entrada:'Banco Entrada',mov_banco_salida:'Banco Salida'};
             const esEgr=ig.esEgreso||ig.tipo==='mov_egreso_caja'||ig.tipo==='mov_banco_salida';
             const esMov=ig.tipo==='mov_ingreso_caja'||ig.tipo==='mov_egreso_caja';
-            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx});
+            var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movcaja';
+            var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
+            movs.push({fecha:ig.fecha,tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',ingreso:esEgr?0:(ig.monto||0),egreso:esEgr?(ig.monto||0):0,igIdx:igIdx,srcTipo:srcTipo,srcRef:srcRef});
         });
-        ventas.forEach(v => {
+        ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.comp !== 'usd') return;
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
         });
         alquileres.filter(a => a.moneda === 'USD').forEach(a => {
+            var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0 });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         facturas.filter(f => f.moneda === 'USD').forEach(f => {
+            var fIdx = facturas.indexOf(f);
             (f.pagosHistorial||[]).forEach(p => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0 });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
             });
         });
 
@@ -11796,6 +11859,7 @@
         filtrados.forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
             const bEFU=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
             tr.innerHTML =
                 '<td>'+(m.fecha ? formatearFecha(m.fecha) : '—')+'</td>'+
@@ -12348,6 +12412,7 @@
         var esSA = (typeof esSuperAdmin !== 'undefined' && esSuperAdmin);
         list.forEach(function(e){
             var tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'emitido', e.id);
             if (e.confidencial && !esSA) {
                 tr.innerHTML =
                     '<td>' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
@@ -12582,6 +12647,7 @@
             const tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comp. X', otro:'Otro' };
             const mon = d.moneda === 'USD' ? 'USD ' : '$';
             const tr = document.createElement('tr');
+            _filaMovClickeable(tr, 'documento', d.id);
             tr.innerHTML = `
                 <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
                 <td><strong>${d.proveedor||'—'}</strong></td>
@@ -14433,6 +14499,7 @@
                       btnElim('venta', idx)
                     : '<button class="btn btn-outline btn-sm" onclick="abrirEstadoCuentaVenta(' + idx + ')">📋 Estado</button> ' + docsBtns;
                 const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'venta', idx);
                 tr.innerHTML =
                     '<td><strong>' + (v.uf||'—') + '</strong>' + desVinc + '</td>' +
                     '<td>' + (tipos[v.tipo]||v.tipo||'—') + '</td>' +
@@ -15269,6 +15336,7 @@
                       btnElim('alquiler', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'alquiler', idx);
                 tr.innerHTML =
                     '<td><strong>' + (a.unidad||'—') + '</strong>' + (a.direccion ? '<br><span style="font-size:11px;color:var(--text-3);">' + a.direccion + '</span>' : '') + '</td>' +
                     '<td>' + (tipos[a.tipo]||a.tipo||'—') + '</td>' +
@@ -15504,6 +15572,7 @@
                       btnElim('servicio', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'servicio', idx);
                 tr.innerHTML =
                     '<td>'+(s.fecha?formatearFecha(s.fecha):'—')+'</td>'+
                     '<td><strong>'+(s.cliente||'—')+'</strong></td>'+
@@ -15721,6 +15790,7 @@
                       btnElim('inggeneral', idx)
                     : '—';
                 var tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'movcaja', idx);
                 tr.innerHTML =
                     '<td>'+(ig.fecha?formatearFecha(ig.fecha):'—')+'</td>'+
                     '<td><span class="pill pill-A" style="font-size:11px;">'+(tLab2[ig.tipo]||ig.tipo||'—')+'</span></td>'+
@@ -17225,6 +17295,8 @@
 
         filtradas.forEach(function(f) {
             var tr = document.createElement('tr');
+            var _srcMap = {presup:'presupuesto',presup_legacy:'presupuesto',factura:'factura',documento:'documento',movcaja_legacy:'movcaja',documento_legacy:'documento'};
+            _filaMovClickeable(tr, _srcMap[f.src]||f.src, f.datoIdx);
             var modBadge = f.modalidad==='A'
                 ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>'
                 : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
@@ -17527,6 +17599,227 @@
             '</tr></thead>'+
             '<tbody>'+filas.join('')+'</tbody>'+
             '</table></div>';
+    }
+
+    function verFichaProveedor(nombre) {
+        var prov = proveedores.find(function(p){ return p.razonSocial === nombre; });
+        document.getElementById('fichaProv_titulo').textContent = '🏢 ' + nombre;
+        var fmtA = function(n){ return '$' + Math.round(n||0).toLocaleString('es-AR'); };
+
+        var h = '';
+
+        // --- Datos del proveedor ---
+        if (prov) {
+            var regs = [
+                prov.ret78 ? 'Reg.78' : '', prov.ret94 ? 'Reg.94' : '',
+                prov.ret119 ? 'Reg.119' : '', prov.ret30 ? 'Reg.30' : '',
+                prov.retSUSSIng ? 'SUSS-Ing 1,2%' : '', prov.retSUSSConst ? 'SUSS-Const 2,5%' : '',
+                prov.retSUSSLimp ? 'SUSS-Limp 6%' : ''
+            ].filter(Boolean).join(', ') || '—';
+            h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:20px;">'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">CUIT</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.cuit||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Condición IVA</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.condicionIVA||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Rubro</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.rubro||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Grupo</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.grupo||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Teléfono</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.telefono||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Dirección</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.direccion||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Email</div>'
+                + '<div style="font-size:14px;font-weight:600;">' + (prov.email||'—') + '</div></div>'
+                + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;">'
+                + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Retenciones</div>'
+                + '<div style="font-size:13px;font-weight:600;">' + regs + '</div></div>'
+                + '</div>';
+        }
+
+        // --- Resumen numérico ---
+        var presusDelProv = datos.filter(function(d){ return d.proveedor === nombre; });
+        var factsDelProv = facturas.filter(function(f){ return f.proveedor === nombre; });
+        var totalPresupuestado = 0, totalAjustado = 0, totalPagadoPresup = 0;
+        presusDelProv.forEach(function(d) {
+            var c = calcPresupuesto(d);
+            totalPresupuestado += c.base;
+            totalAjustado += c.totalAjustado;
+            totalPagadoPresup += (d.pagado||0);
+        });
+        var totalFacturado = 0, totalPagadoFact = 0, totalPendienteFact = 0;
+        factsDelProv.forEach(function(f) {
+            totalFacturado += (f.importe||0);
+            totalPagadoFact += (f.pagado||0);
+            if (f.estado !== 'pagada') totalPendienteFact += ((f.importe||0) - (f.pagado||0));
+        });
+        var factsPagadas = factsDelProv.filter(function(f){ return f.estado === 'pagada'; });
+        var factsPendientes = factsDelProv.filter(function(f){ return f.estado !== 'pagada'; });
+
+        h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:24px;">'
+            + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:12px;text-align:center;">'
+            + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Presupuestos</div>'
+            + '<div style="font-size:20px;font-weight:700;color:var(--blue);">' + presusDelProv.length + '</div></div>'
+            + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:8px;padding:12px;text-align:center;">'
+            + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Facturas</div>'
+            + '<div style="font-size:20px;font-weight:700;color:var(--gold);">' + factsDelProv.length + '</div></div>'
+            + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--success);border-radius:8px;padding:12px;text-align:center;">'
+            + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Total pagado</div>'
+            + '<div style="font-size:15px;font-weight:700;color:var(--success);">' + fmtA(totalPagadoPresup + totalPagadoFact) + '</div></div>'
+            + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:8px;padding:12px;text-align:center;">'
+            + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Pendiente fact.</div>'
+            + '<div style="font-size:15px;font-weight:700;color:var(--danger);">' + fmtA(totalPendienteFact) + '</div></div>'
+            + '</div>';
+
+        // --- Presupuestos ---
+        h += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;">'
+            + '<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">'
+            + '<span style="font-size:16px;">📋</span>'
+            + '<span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;">Presupuestos (' + presusDelProv.length + ')</span></div>';
+        if (presusDelProv.length) {
+            h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+                + '<thead><tr style="background:var(--surface-2);">'
+                + '<th style="padding:8px 12px;text-align:left;">Fecha</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Concepto</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Rubro</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Modalidad</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Base</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Ajustado</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Pagado</th>'
+                + '<th style="padding:8px 12px;text-align:center;">Avance</th>'
+                + '</tr></thead><tbody>';
+            presusDelProv.forEach(function(d) {
+                var c = calcPresupuesto(d);
+                var pag = d.pagado||0;
+                var pct = c.totalAjustado > 0 ? Math.min(100, Math.round((pag / c.totalAjustado) * 100)) : (pag > 0 ? 100 : 0);
+                var mod = d.modalidad === 'A' ? 'Banco' : d.modalidad === 'AB' ? 'Mixto' : 'Efectivo';
+                h += '<tr style="border-bottom:1px solid var(--border);">'
+                    + '<td style="padding:8px 12px;">' + (d.fecha ? formatearFecha(d.fecha) : '—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (d.concepto||'—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (d.rubro||'—') + (d.subrubro ? ' / '+d.subrubro : '') + '</td>'
+                    + '<td style="padding:8px 12px;">' + mod + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(c.base) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;color:var(--blue);">' + fmtA(c.totalAjustado) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + fmtA(pag) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:center;"><div style="display:flex;align-items:center;gap:6px;justify-content:center;">'
+                    + '<div style="flex:1;max-width:60px;height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;">'
+                    + '<div style="height:100%;width:' + pct + '%;background:' + (pct>=100?'var(--success)':pct>=50?'var(--warn)':'var(--danger)') + ';border-radius:3px;"></div></div>'
+                    + '<span style="font-size:11px;font-weight:600;color:' + (pct>=100?'var(--success)':pct>=50?'var(--warn)':'var(--danger)') + ';">' + pct + '%</span></div></td>'
+                    + '</tr>';
+            });
+            h += '</tbody></table></div>';
+        } else {
+            h += '<div style="padding:20px;text-align:center;color:var(--text-3);font-size:12px;">Sin presupuestos cargados.</div>';
+        }
+        h += '</div>';
+
+        // --- Facturas pendientes ---
+        h += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;">'
+            + '<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">'
+            + '<span style="font-size:16px;">⏳</span>'
+            + '<span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--warn);">Facturas pendientes (' + factsPendientes.length + ')</span></div>';
+        if (factsPendientes.length) {
+            h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+                + '<thead><tr style="background:var(--surface-2);">'
+                + '<th style="padding:8px 12px;text-align:left;">Fecha</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Número</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Descripción</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Moneda</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Vencimiento</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Importe</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Pagado</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Saldo</th>'
+                + '<th style="padding:8px 12px;text-align:center;">Estado</th>'
+                + '</tr></thead><tbody>';
+            factsPendientes.forEach(function(f) {
+                var saldo = (f.importe||0) - (f.pagado||0);
+                var hoy = new Date(); hoy.setHours(0,0,0,0);
+                var venc = f.vencimiento ? new Date(f.vencimiento+'T00:00:00') : null;
+                var vencida = venc && venc < hoy;
+                var estadoBadge = f.estado === 'parcial'
+                    ? '<span style="color:var(--warn);font-weight:600;">Parcial</span>'
+                    : (vencida ? '<span style="color:var(--danger);font-weight:600;">Vencida</span>'
+                    : '<span style="color:var(--text-3);">Pendiente</span>');
+                h += '<tr style="border-bottom:1px solid var(--border);' + (vencida ? 'background:rgba(255,0,0,.03);' : '') + '">'
+                    + '<td style="padding:8px 12px;">' + (f.fecha ? formatearFecha(f.fecha) : '—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.numero||'—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.descripcion||'—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.moneda||'ARS') + '</td>'
+                    + '<td style="padding:8px 12px;' + (vencida ? 'color:var(--danger);font-weight:600;' : '') + '">' + (f.vencimiento ? formatearFecha(f.vencimiento) : '—') + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(f.importe) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + fmtA(f.pagado) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--danger);">' + fmtA(saldo) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:center;">' + estadoBadge + '</td>'
+                    + '</tr>';
+            });
+            h += '</tbody></table></div>';
+        } else {
+            h += '<div style="padding:20px;text-align:center;color:var(--text-3);font-size:12px;">Sin facturas pendientes.</div>';
+        }
+        h += '</div>';
+
+        // --- Facturas pagadas ---
+        h += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;">'
+            + '<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">'
+            + '<span style="font-size:16px;">✅</span>'
+            + '<span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--success);">Facturas pagadas (' + factsPagadas.length + ')</span></div>';
+        if (factsPagadas.length) {
+            h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+                + '<thead><tr style="background:var(--surface-2);">'
+                + '<th style="padding:8px 12px;text-align:left;">Fecha</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Número</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Descripción</th>'
+                + '<th style="padding:8px 12px;text-align:left;">Moneda</th>'
+                + '<th style="padding:8px 12px;text-align:right;">Importe</th>'
+                + '</tr></thead><tbody>';
+            factsPagadas.forEach(function(f) {
+                h += '<tr style="border-bottom:1px solid var(--border);">'
+                    + '<td style="padding:8px 12px;">' + (f.fecha ? formatearFecha(f.fecha) : '—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.numero||'—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.descripcion||'—') + '</td>'
+                    + '<td style="padding:8px 12px;">' + (f.moneda||'ARS') + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(f.importe) + '</td>'
+                    + '</tr>';
+            });
+            h += '</tbody></table></div>';
+        } else {
+            h += '<div style="padding:20px;text-align:center;color:var(--text-3);font-size:12px;">Sin facturas pagadas.</div>';
+        }
+        h += '</div>';
+
+        // --- Historial de pagos ---
+        h += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;">'
+            + '<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">'
+            + '<span style="font-size:16px;">💳</span>'
+            + '<span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;">Historial de pagos</span></div>';
+        h += buildProvPagosHTML(nombre);
+        h += '</div>';
+
+        document.getElementById('fichaProv_contenido').innerHTML = h;
+        document.getElementById('modalFichaProv').classList.add('active');
+    }
+
+    function imprimirFichaProv() {
+        var cont = document.getElementById('fichaProv_contenido');
+        if (!cont) return;
+        var titulo = document.getElementById('fichaProv_titulo').textContent || 'Ficha Proveedor';
+        var w = window.open('', '_blank', 'width=900,height=700');
+        w.document.write('<html><head><title>' + titulo + '</title>'
+            + '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px;color:#333;font-size:12px;}'
+            + 'table{width:100%;border-collapse:collapse;margin-bottom:12px;}th,td{padding:6px 10px;border:1px solid #ddd;text-align:left;}'
+            + 'th{background:#f5f5f5;font-weight:600;}h1{font-size:18px;margin-bottom:16px;}'
+            + '@media print{body{padding:10px;}}</style></head><body>'
+            + '<h1>' + titulo + '</h1>' + cont.innerHTML
+            + '</body></html>');
+        w.document.close();
+        setTimeout(function(){ w.print(); }, 300);
     }
 
     // ══════════════════════════════════════════════════════════
@@ -21625,6 +21918,27 @@
           </table>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL: FICHA PROVEEDOR ═══════════════ -->
+<div class="modal" id="modalFichaProv">
+  <div class="modal-box" style="max-width:960px;max-height:94vh;">
+    <div class="modal-head" style="background:var(--ink);color:#fff;margin:0;padding:18px 24px;border-radius:var(--radius-sm);">
+      <div style="display:flex;align-items:center;gap:14px;width:100%;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:10px;letter-spacing:.22em;text-transform:uppercase;font-family:monospace;color:rgba(255,255,255,.45);margin-bottom:3px;">Ficha de Proveedor</div>
+          <h2 id="fichaProv_titulo" style="color:#fff;font-size:17px;font-weight:300;letter-spacing:.02em;"></h2>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-gold btn-sm" onclick="imprimirFichaProv()" style="white-space:nowrap;">🖨️ Imprimir</button>
+          <button class="modal-close" onclick="document.getElementById('modalFichaProv').classList.remove('active')" style="color:rgba(255,255,255,.6);">✕</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;overflow-y:auto;max-height:calc(94vh - 80px);">
+      <div id="fichaProv_contenido"></div>
     </div>
   </div>
 </div>
