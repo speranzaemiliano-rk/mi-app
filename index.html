@@ -321,17 +321,19 @@
         .nav-sub:hover { color: rgba(255,255,255,.88); }
         .nav-sub.active { color: var(--gold-light); background: rgba(41,151,255,.15); }
 
-        /* ── Orden personalizable del sidebar: se arrastra directo desde el
-           handle (⠿), siempre disponible, sin activar ningún modo. Aplica a
-           los conceptos principales (.nav-block) Y a los ítems dentro de
-           cada submenú (.nav-sub / .sub-block). ── */
+        /* ── Orden del sidebar: SOLO el Super Administrador puede arrastrar
+           (handle ⠿), directo, sin activar ningún modo. El orden que define
+           se guarda en Firebase y lo ven TODOS los usuarios; el resto no ve
+           los handles ni puede arrastrar. Aplica a los conceptos principales
+           (.nav-block) Y a los ítems dentro de cada submenú (.nav-sub / .sub-block). ── */
         .nav-block, .sub-block { display: flex; flex-direction: column; gap: 2px; border-radius: 10px; }
         .nav-drag-handle {
-            display: inline-flex; align-items: center; justify-content: center;
+            display: none; align-items: center; justify-content: center;
             flex-shrink: 0; width: 14px; text-align: center;
             color: rgba(255,255,255,.22); cursor: grab; touch-action: none;
             transition: color .15s;
         }
+        .sidebar-nav.superadmin-drag .nav-drag-handle { display: inline-flex; }
         .nav-block:hover .nav-drag-handle,
         .sub-block:hover > .nav-item .nav-drag-handle,
         .nav-sub:hover .nav-drag-handle { color: rgba(255,255,255,.55); }
@@ -2713,7 +2715,7 @@
             </div>
             </div>
             <div style="text-align:center;padding:10px 4px 2px;">
-                <span onclick="restaurarOrdenSidebar()" title="Volver el menú al orden original" style="font-size:10px;color:rgba(255,255,255,.25);cursor:pointer;">↺ restaurar orden del menú</span>
+                <span id="navReorderReset" onclick="restaurarOrdenSidebar()" title="Volver el menú al orden original (para todos los usuarios)" style="display:none;font-size:10px;color:rgba(255,255,255,.25);cursor:pointer;">↺ restaurar orden del menú</span>
             </div>
         </div>
 
@@ -8757,12 +8759,17 @@
     }
 
     // ══════════════════════════════════════════════════════════
-    // ORDEN PERSONALIZADO DEL SIDEBAR — el usuario arrastra los
-    // conceptos principales (Inicio, Ingresos, Egresos, etc.) para
-    // darles el orden que quiera. Se guarda en este dispositivo/navegador.
+    // ORDEN DEL SIDEBAR — compartido y global (Firebase, no por dispositivo).
+    // Solo el Super Administrador puede arrastrar (handle ⠿) los conceptos
+    // principales y los ítems dentro de cada submenú; los 5 submenús comparten
+    // grupo de arrastre, así que un ítem (o sub-menú anidado) se puede soltar
+    // en una categoría distinta a la original. El orden y la ubicación que
+    // define se guardan en global/config y lo ve TODO el mundo. El resto de
+    // los usuarios solo lo ve aplicado, sin poder tocarlo.
     // ══════════════════════════════════════════════════════════
-    var SIDEBAR_ORDER_LS_KEY = 'rk_sidebar_order_v1';
     var _sidebarSortable = null;
+    var SUBMENU_IDS = ['principalSubmenu','ingresosSubmenu','egresosSubmenu','provSubmenu','herramientasSubmenu'];
+    var _submenuSortables = {};
 
     function _sidebarBloques() {
         var nav = document.querySelector('.sidebar-nav');
@@ -8771,30 +8778,6 @@
             return c.classList && c.classList.contains('nav-block');
         });
     }
-
-    function aplicarOrdenSidebar() {
-        var orden;
-        try { orden = JSON.parse(localStorage.getItem(SIDEBAR_ORDER_LS_KEY) || 'null'); } catch(e) { orden = null; }
-        if (!orden || !orden.length) return;
-        var nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        var porKey = {};
-        _sidebarBloques().forEach(function(b){ porKey[b.dataset.navkey] = b; });
-        // Primero los guardados (en el orden guardado); los que sean nuevos
-        // (agregados en una actualización posterior) quedan al final, tal como estaban.
-        orden.forEach(function(key){ if (porKey[key]) nav.appendChild(porKey[key]); });
-    }
-
-    function guardarOrdenSidebar() {
-        var orden = _sidebarBloques().map(function(b){ return b.dataset.navkey; });
-        try { localStorage.setItem(SIDEBAR_ORDER_LS_KEY, JSON.stringify(orden)); } catch(e) {}
-    }
-
-    // ── Orden dentro de cada submenú (Caja y Bancos, Ingresos, Egresos,
-    // Proveedores, Herramientas) — mismo mecanismo, un storage-key por submenú. ──
-    var SUBMENU_IDS = ['principalSubmenu','ingresosSubmenu','egresosSubmenu','provSubmenu','herramientasSubmenu'];
-    var _submenuSortables = {};
-
     function _submenuBloques(containerId) {
         var cont = document.getElementById(containerId);
         if (!cont) return [];
@@ -8803,29 +8786,72 @@
         });
     }
 
-    function aplicarOrdenSubmenu(containerId) {
-        var cont = document.getElementById(containerId);
-        if (!cont) return;
-        var orden;
-        try { orden = JSON.parse(localStorage.getItem('rk_sidebar_sub_' + containerId + '_v1') || 'null'); } catch(e) { orden = null; }
-        if (!orden || !orden.length) return;
-        var porKey = {};
-        _submenuBloques(containerId).forEach(function(b){ porKey[b.dataset.navkey] = b; });
-        orden.forEach(function(k){ if (porKey[k]) cont.appendChild(porKey[k]); });
+    // Aplica el orden guardado en Firebase — corre para TODOS los usuarios.
+    function aplicarOrdenSidebarGlobal() {
+        if (!db) return;
+        db.ref('global/config/sidebarOrder').once('value').then(function(snap) {
+            var orden = snap.val();
+            if (!orden || !orden.length) return;
+            var nav = document.querySelector('.sidebar-nav');
+            if (!nav) return;
+            var porKey = {};
+            _sidebarBloques().forEach(function(b){ porKey[b.dataset.navkey] = b; });
+            orden.forEach(function(key){ if (porKey[key]) nav.appendChild(porKey[key]); });
+        }).catch(function(){});
+        db.ref('global/config/sidebarSubOrder').once('value').then(function(snap) {
+            var todos = snap.val();
+            if (!todos) return;
+            // Mapa único navkey → elemento buscando en TODOS los submenús, porque
+            // un ítem puede haberse guardado en un contenedor distinto al original
+            // (el superadmin lo movió de categoría).
+            var porKey = {};
+            SUBMENU_IDS.forEach(function(id) {
+                _submenuBloques(id).forEach(function(b){ porKey[b.dataset.navkey] = b; });
+            });
+            SUBMENU_IDS.forEach(function(id) {
+                var orden = todos[id];
+                var cont = document.getElementById(id);
+                if (!orden || !cont) return;
+                orden.forEach(function(k){ if (porKey[k]) cont.appendChild(porKey[k]); });
+            });
+        }).catch(function(){});
+    }
+    document.addEventListener('DOMContentLoaded', aplicarOrdenSidebarGlobal);
+
+    // Guarda el orden en Firebase (para todos) — solo si sos superadmin.
+    function guardarOrdenSidebar() {
+        if (!esSuperAdmin || !db) return;
+        var orden = _sidebarBloques().map(function(b){ return b.dataset.navkey; });
+        db.ref('global/config/sidebarOrder').set(orden).catch(function(){});
+    }
+    // Los submenús comparten grupo de arrastre (un ítem puede pasar de una
+    // categoría a otra), así que guardamos TODOS los contenedores juntos:
+    // el ítem movido desaparece de uno y aparece en el otro.
+    function guardarOrdenSubmenus() {
+        if (!esSuperAdmin || !db) return;
+        var payload = {};
+        SUBMENU_IDS.forEach(function(id) {
+            payload[id] = _submenuBloques(id).map(function(b){ return b.dataset.navkey; });
+        });
+        db.ref('global/config/sidebarSubOrder').set(payload).catch(function(){});
     }
 
-    function guardarOrdenSubmenu(containerId) {
-        var orden = _submenuBloques(containerId).map(function(b){ return b.dataset.navkey; });
-        try { localStorage.setItem('rk_sidebar_sub_' + containerId + '_v1', JSON.stringify(orden)); } catch(e) {}
-    }
-
-    // Arrastre siempre activo (sin modo/botón): se agarra del handle (⠿) y se
-    // suelta donde se quiera. Se inicializa una sola vez, al cargar la página.
-    // Aplica tanto a los conceptos principales del sidebar como a los ítems
-    // dentro de cada submenú.
-    function initSidebarDragDirecto() {
+    // Habilita el arrastre (handles visibles + Sortable) SOLO si sos Super
+    // Administrador. Se llama desde aplicarPermisos(), una vez que ya se
+    // sabe el rol real del usuario logueado.
+    var _sidebarDragTries = 0;
+    function actualizarDragSidebarSegunRol() {
         var nav = document.querySelector('.sidebar-nav');
-        if (nav && !_sidebarSortable && window.Sortable) {
+        if (nav) nav.classList.toggle('superadmin-drag', !!esSuperAdmin);
+        var reset = document.getElementById('navReorderReset');
+        if (reset) reset.style.display = esSuperAdmin ? '' : 'none';
+        if (!esSuperAdmin) return;
+        if (!window.Sortable) {
+            // El script de SortableJS (CDN) puede tardar en llegar; reintentamos un rato.
+            if (_sidebarDragTries++ < 20) setTimeout(actualizarDragSidebarSegunRol, 300);
+            return;
+        }
+        if (nav && !_sidebarSortable) {
             _sidebarSortable = new Sortable(nav, {
                 animation: 180,
                 handle: '.nav-drag-handle',
@@ -8837,52 +8863,32 @@
                 onEnd: guardarOrdenSidebar
             });
         }
-        if (window.Sortable) {
-            SUBMENU_IDS.forEach(function(id) {
-                if (_submenuSortables[id]) return;
-                var cont = document.getElementById(id);
-                if (!cont) return;
-                _submenuSortables[id] = new Sortable(cont, {
-                    animation: 180,
-                    handle: '.nav-drag-handle',
-                    draggable: '.nav-item, .sub-block',
-                    delay: 60,
-                    delayOnTouchOnly: true,
-                    ghostClass: 'sortable-ghost',
-                    chosenClass: 'sortable-chosen',
-                    onEnd: function(){ guardarOrdenSubmenu(id); }
-                });
+        SUBMENU_IDS.forEach(function(id) {
+            if (_submenuSortables[id]) return;
+            var cont = document.getElementById(id);
+            if (!cont) return;
+            _submenuSortables[id] = new Sortable(cont, {
+                animation: 180,
+                handle: '.nav-drag-handle',
+                draggable: '.nav-item, .sub-block',
+                group: 'rk-sidebar-sub', // mismo grupo en los 5 submenús: un ítem puede pasar de categoría
+                delay: 60,
+                delayOnTouchOnly: true,
+                ghostClass: 'sortable-ghost',
+                chosenClass: 'sortable-chosen',
+                onEnd: guardarOrdenSubmenus
             });
-        }
+        });
     }
-    function aplicarOrdenSubmenusGuardados() {
-        SUBMENU_IDS.forEach(aplicarOrdenSubmenu);
-    }
-    document.addEventListener('DOMContentLoaded', initSidebarDragDirecto);
-    document.addEventListener('DOMContentLoaded', aplicarOrdenSubmenusGuardados);
-    // Por si el DOM ya estaba listo cuando este script corrió (Sortable puede
-    // tardar en llegar del CDN) reintentamos un par de veces.
-    var _sidebarDragTries = 0;
-    (function _retrySidebarDrag() {
-        var faltan = !_sidebarSortable || SUBMENU_IDS.some(function(id){ return !_submenuSortables[id] && document.getElementById(id); });
-        if (!faltan || _sidebarDragTries > 20) return;
-        _sidebarDragTries++;
-        initSidebarDragDirecto();
-        aplicarOrdenSubmenusGuardados();
-        var faltanAun = !_sidebarSortable || SUBMENU_IDS.some(function(id){ return !_submenuSortables[id] && document.getElementById(id); });
-        if (faltanAun) setTimeout(_retrySidebarDrag, 300);
-    })();
 
     function restaurarOrdenSidebar() {
-        if (!confirm('¿Volver el menú al orden original?')) return;
-        try {
-            localStorage.removeItem(SIDEBAR_ORDER_LS_KEY);
-            SUBMENU_IDS.forEach(function(id){ localStorage.removeItem('rk_sidebar_sub_' + id + '_v1'); });
-        } catch(e) {}
-        location.reload();
+        if (!esSuperAdmin) return;
+        if (!confirm('¿Volver el menú al orden original para TODOS los usuarios?')) return;
+        Promise.all([
+            db.ref('global/config/sidebarOrder').remove(),
+            db.ref('global/config/sidebarSubOrder').remove()
+        ]).then(function(){ location.reload(); }).catch(function(){ location.reload(); });
     }
-
-    document.addEventListener('DOMContentLoaded', aplicarOrdenSidebar);
 
     function toggleHerramientasMenu() {
         const sub  = document.getElementById('herramientasSubmenu');
@@ -9276,6 +9282,8 @@
             secGU.style.display = esSuperAdmin ? '' : 'none';
             if (esSuperAdmin) cargarUsuariosBackend();
         }
+        // Reordenar el menú lateral (drag): solo Super Administrador
+        if (typeof actualizarDragSidebarSegunRol === 'function') actualizarDragSidebarSegunRol();
         renderizar(); renderProveedores(); renderFacturas();
     }
 
