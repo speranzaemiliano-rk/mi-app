@@ -9682,35 +9682,55 @@
         var cont = document.getElementById('tablaUsuariosContainer');
         if (!cont) return;
         cont.innerHTML = '<p style="font-size:12px;color:var(--text-3);">Cargando…</p>';
-        _fetchBackend('/usuarios/listar').then(function(data) {
-            if (data.error) { cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">' + escHtml(data.error) + '</p>'; return; }
-            if (!Array.isArray(data) || !data.length) { cont.innerHTML = '<p style="font-size:12px;">No hay usuarios.</p>'; return; }
+        Promise.all([REF_USUARIOS.once('value'), REF_ROLES.once('value')]).then(function(snaps) {
+            var usuarios = snaps[0].val() || {};
+            var roles = snaps[1].val() || {};
+            var uids = Object.keys(usuarios);
+            if (!uids.length) { cont.innerHTML = '<p style="font-size:12px;">No hay usuarios registrados.</p>'; return; }
+            var orden = ['superadmin','admin','editor','lector'];
+            uids.sort(function(a,b){ return orden.indexOf(roles[a]||'lector') - orden.indexOf(roles[b]||'lector'); });
             var h = '<table class="data-table" style="font-size:12px;width:100%;"><thead><tr>'
-                + '<th>Email</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Último login</th><th>Acciones</th></tr></thead><tbody>';
-            data.forEach(function(u) {
-                var estado = u.disabled ? '<span style="color:var(--danger);">Deshabilitado</span>' : '<span style="color:var(--success);">Activo</span>';
-                var lastLogin = u.lastLogin ? new Date(u.lastLogin).toLocaleDateString('es-AR') : '—';
+                + '<th>Email</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr></thead><tbody>';
+            var miUid = auth.currentUser ? auth.currentUser.uid : null;
+            uids.forEach(function(uid) {
+                var u = usuarios[uid] || {};
+                var rol = roles[uid] || 'lector';
+                var esMio = uid === miUid;
                 h += '<tr>'
-                    + '<td>' + escHtml(u.email) + '</td>'
-                    + '<td>' + escHtml(u.displayName || '—') + '</td>'
-                    + '<td><select onchange="cambiarRolUsuario(\'' + u.uid + '\', this.value)" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">'
-                    + ['superadmin','admin','editor','lector'].map(function(r) {
-                        return '<option value="' + r + '"' + (u.rol === r ? ' selected' : '') + '>' + r + '</option>';
+                    + '<td>' + escHtml(u.email || uid) + '</td>'
+                    + '<td>' + escHtml(u.nombre || '—') + '</td>'
+                    + '<td><select onchange="cambiarRolLocal(\'' + uid + '\', this.value)"' + (esMio ? ' disabled title="No podés cambiar tu propio rol"' : '') + ' style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">'
+                    + orden.map(function(r) {
+                        return '<option value="' + r + '"' + (rol === r ? ' selected' : '') + '>' + r + '</option>';
                       }).join('')
                     + '</select></td>'
-                    + '<td>' + estado + '</td>'
-                    + '<td>' + lastLogin + '</td>'
                     + '<td style="white-space:nowrap;">'
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="toggleUsuario(\'' + u.uid + '\',' + !u.disabled + ')">' + (u.disabled ? '✅ Habilitar' : '⛔ Deshabilitar') + '</button> '
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;" onclick="resetPassUsuario(\'' + u.uid + '\')">🔑 Reset pass</button> '
-                    + '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;color:var(--danger);" onclick="eliminarUsuarioPanel(\'' + u.uid + '\',\'' + escHtml(u.email).replace(/'/g,'\\\'') + '\')">🗑️</button>'
+                    + (esMio ? '<span style="font-size:10px;color:var(--text-3);">Tu cuenta</span>' :
+                        '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 6px;color:var(--danger);" onclick="eliminarUsuarioLocal(\'' + uid + '\',\'' + escHtml(u.email||'').replace(/'/g,'\\\'') + '\')">🗑️ Quitar</button>')
                     + '</td></tr>';
             });
             h += '</tbody></table>';
             cont.innerHTML = h;
         }).catch(function(e) {
-            cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">Error de conexión: ' + escHtml(String(e)) + '</p>';
+            cont.innerHTML = '<p style="color:var(--danger);font-size:12px;">Error: ' + escHtml(String(e)) + '</p>';
         });
+    }
+
+    function cambiarRolLocal(uid, rol) {
+        firebase.database().ref('roles/' + uid).set(rol).then(function() {
+            cargarUsuariosBackend();
+        }).catch(function(e) { alert('Error: ' + e.message); });
+    }
+
+    function eliminarUsuarioLocal(uid, email) {
+        if (!confirm('¿Quitar al usuario ' + email + ' del sistema?\nSe eliminan sus datos y rol de la base de datos.')) return;
+        Promise.all([
+            firebase.database().ref('roles/' + uid).remove(),
+            firebase.database().ref('usuarios/' + uid).remove()
+        ]).then(function() {
+            alert('Usuario quitado.');
+            cargarUsuariosBackend();
+        }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function crearUsuarioDesdePanel() {
@@ -9722,15 +9742,38 @@
         if (!email || !pass) { msg.textContent = '⚠️ Completá email y contraseña.'; return; }
         if (pass.length < 6) { msg.textContent = '⚠️ La contraseña debe tener al menos 6 caracteres.'; return; }
         msg.textContent = 'Creando…';
-        _fetchBackend('/usuarios/crear', { method: 'POST', body: { email: email, password: pass, displayName: nombre, rol: rol } })
-        .then(function(data) {
-            if (data.error) { msg.innerHTML = '<span style="color:var(--danger);">' + escHtml(data.error) + '</span>'; return; }
-            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(data.email) + '</span>';
+        var secondaryApp;
+        try {
+            secondaryApp = firebase.initializeApp(firebase.app().options, 'secondary_' + Date.now());
+        } catch(e) { msg.textContent = 'Error inicializando: ' + e.message; return; }
+        secondaryApp.auth().createUserWithEmailAndPassword(email, pass)
+        .then(function(cred) {
+            var uid = cred.user.uid;
+            return cred.user.updateProfile({ displayName: nombre }).then(function() {
+                return Promise.all([
+                    firebase.database().ref('roles/' + uid).set(rol),
+                    firebase.database().ref('usuarios/' + uid).set({ email: email, nombre: nombre })
+                ]);
+            });
+        })
+        .then(function() {
+            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '</span>';
             document.getElementById('nuevoUserEmail').value = '';
             document.getElementById('nuevoUserNombre').value = '';
             document.getElementById('nuevoUserPass').value = '';
+            secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); });
             cargarListaUsuarios();
-        }).catch(function(e) { msg.textContent = 'Error: ' + e; });
+            cargarUsuariosBackend();
+        })
+        .catch(function(e) {
+            var errores = {
+                'auth/email-already-in-use': 'Ese email ya está registrado.',
+                'auth/invalid-email': 'El email no es válido.',
+                'auth/weak-password': 'La contraseña es muy débil (mínimo 6 caracteres).'
+            };
+            msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(errores[e.code] || e.message) + '</span>';
+            if (secondaryApp) secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); }).catch(function(){});
+        });
     }
 
     function eliminarUsuarioPanel(uid, email) {
