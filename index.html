@@ -4134,6 +4134,22 @@
                     </div>
                   </div>
 
+                  <!-- ── Visibilidad del menú lateral (solo superadmin) ── -->
+                  <div id="secVisibilidadMenu" style="display:none; border-top:1px solid var(--border);padding-top:20px;margin-top:20px;">
+                    <h4 style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:8px;">🧭 Visibilidad del Menú Lateral</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;">
+                      Elegí qué secciones del menú se muestran. Podés ocultarlas para todos los usuarios, o solo para un usuario puntual
+                      (el ajuste por usuario tiene prioridad sobre el general).
+                    </p>
+                    <div class="form-group" style="max-width:340px;margin-bottom:12px;">
+                      <label>Aplicar a</label>
+                      <select id="visMenuUsuarioSel" onchange="cambiarVisibilidadMenuUsuario(this.value)" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">
+                        <option value="__global__">🌐 Todos los usuarios (global)</option>
+                      </select>
+                    </div>
+                    <div id="visMenuLista" style="background:var(--bg-2);border-radius:10px;padding:4px 16px;"></div>
+                  </div>
+
               </div>
             </div><!-- /panelConfig -->
 
@@ -8999,6 +9015,108 @@
         ]).then(function(){ location.reload(); }).catch(function(){ location.reload(); });
     }
 
+    // ══════════════════════════════════════════════════════════
+    // VISIBILIDAD DEL MENÚ LATERAL (admin)
+    // Permite al superadmin ocultar/mostrar secciones del menú,
+    // ya sea para todos los usuarios (global) o para un usuario puntual
+    // (el ajuste por usuario tiene prioridad sobre el global).
+    // Se guarda en Firebase: global/config/menuVisibilidad
+    // ══════════════════════════════════════════════════════════
+    var MENU_ITEMS_VISIBILIDAD = [
+        {key:'home',           label:'🏠 Inicio'},
+        {key:'desarrollos',    label:'🏢 Desarrollos Inmobiliarios'},
+        {key:'caja',           label:'🏦 Caja y Bancos'},
+        {key:'ingresos',       label:'📈 Ingresos'},
+        {key:'egresos',        label:'📉 Egresos'},
+        {key:'tesoreria',      label:'🔁 Tesorería Interempresa'},
+        {key:'reportes',       label:'📊 Reportes'},
+        {key:'remuneraciones', label:'🪪 Remuneraciones'},
+        {key:'plantrabajo',    label:'🏗️ Plan de Trabajo'},
+        {key:'config',         label:'⚙️ Configuración'},
+        {key:'herramientas',   label:'🛠️ Herramientas'}
+    ];
+    var menuVisibilidadCfg = { global:{}, usuarios:{} };
+    var _visMenuUsuarioActual = '__global__';
+
+    function cargarVisibilidadMenu() {
+        db.ref('global/config/menuVisibilidad').on('value', function(snap) {
+            var val = snap.val() || {};
+            menuVisibilidadCfg = { global: val.global || {}, usuarios: val.usuarios || {} };
+            aplicarVisibilidadMenu();
+            if (esSuperAdmin) renderVisibilidadMenuPanel();
+        });
+    }
+
+    function aplicarVisibilidadMenu() {
+        var uid = auth.currentUser ? auth.currentUser.uid : null;
+        var overridesUsuario = (uid && menuVisibilidadCfg.usuarios[uid]) || {};
+        MENU_ITEMS_VISIBILIDAD.forEach(function(item) {
+            // Puede ser un .nav-block de primer nivel, o (si el superadmin lo anidó
+            // dentro de otra categoría) un .sub-block con el mismo data-navkey.
+            var bloque = document.querySelector('.nav-block[data-navkey="' + item.key + '"], .sub-block[data-navkey="' + item.key + '"]');
+            if (!bloque) return;
+            var val = overridesUsuario[item.key];
+            if (val === undefined) val = menuVisibilidadCfg.global[item.key];
+            bloque.style.display = (val === false) ? 'none' : '';
+        });
+    }
+
+    function poblarSelectVisMenuUsuarios() {
+        var sel = document.getElementById('visMenuUsuarioSel');
+        if (!sel) return;
+        REF_USUARIOS.once('value').then(function(snap) {
+            var usuarios = snap.val() || {};
+            var opts = '<option value="__global__">🌐 Todos los usuarios (global)</option>';
+            Object.keys(usuarios).forEach(function(uid) {
+                var email = usuarios[uid].email || uid;
+                opts += '<option value="' + uid + '">' + email + '</option>';
+            });
+            sel.innerHTML = opts;
+            sel.value = _visMenuUsuarioActual;
+        });
+    }
+
+    function cambiarVisibilidadMenuUsuario(val) {
+        _visMenuUsuarioActual = val;
+        renderVisibilidadMenuPanel();
+    }
+
+    function renderVisibilidadMenuPanel() {
+        var cont = document.getElementById('visMenuLista');
+        if (!cont) return;
+        var scope = _visMenuUsuarioActual;
+        var esGlobal = scope === '__global__';
+        var overrides = esGlobal ? menuVisibilidadCfg.global : (menuVisibilidadCfg.usuarios[scope] || {});
+        cont.innerHTML = MENU_ITEMS_VISIBILIDAD.map(function(item) {
+            var val = overrides[item.key];
+            var opciones;
+            if (esGlobal) {
+                var visible = val !== false;
+                opciones = '<option value="visible"' + (visible ? ' selected' : '') + '>Visible</option>' +
+                           '<option value="oculto"' + (!visible ? ' selected' : '') + '>Oculto</option>';
+            } else {
+                opciones = '<option value="heredar"' + (val === undefined ? ' selected' : '') + '>Heredar de global</option>' +
+                           '<option value="visible"' + (val === true ? ' selected' : '') + '>Visible</option>' +
+                           '<option value="oculto"' + (val === false ? ' selected' : '') + '>Oculto</option>';
+            }
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-soft);">' +
+                '<span style="font-size:13px;">' + item.label + '</span>' +
+                '<select onchange="cambiarVisibilidadMenuItem(\'' + item.key + '\', this.value)" style="width:auto;padding:5px 8px;font-size:12px;">' + opciones + '</select>' +
+                '</div>';
+        }).join('');
+    }
+
+    function cambiarVisibilidadMenuItem(key, val) {
+        var scope = _visMenuUsuarioActual;
+        if (scope === '__global__') {
+            db.ref('global/config/menuVisibilidad/global/' + key).set(val !== 'oculto');
+        } else if (val === 'heredar') {
+            db.ref('global/config/menuVisibilidad/usuarios/' + scope + '/' + key).remove();
+        } else {
+            db.ref('global/config/menuVisibilidad/usuarios/' + scope + '/' + key).set(val === 'visible');
+        }
+    }
+
     function toggleHerramientasMenu() {
         const sub  = document.getElementById('herramientasSubmenu');
         const chev = document.getElementById('herramientasChevron');
@@ -9393,6 +9511,12 @@
         }
         // Reordenar el menú lateral (drag): solo Super Administrador
         if (typeof actualizarDragSidebarSegunRol === 'function') actualizarDragSidebarSegunRol();
+        // Visibilidad del menú lateral: panel de gestión, solo superadmin
+        var secVM = document.getElementById('secVisibilidadMenu');
+        if (secVM) {
+            secVM.style.display = esSuperAdmin ? '' : 'none';
+            if (esSuperAdmin) { poblarSelectVisMenuUsuarios(); renderVisibilidadMenuPanel(); }
+        }
         renderizar(); renderProveedores(); renderFacturas();
     }
 
@@ -9818,6 +9942,7 @@
                 cargarGoogleClientIdDesdeFirebase();
                 cargarEmailJsConfigDesdeFirebase();
                 cargarAppTokenDesdeFirebase();
+                cargarVisibilidadMenu();
 
                 const email = user.email || '';
                 const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
