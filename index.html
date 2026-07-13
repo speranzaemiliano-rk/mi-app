@@ -25026,6 +25026,34 @@
   // el botón "📧 Enviar mail". Reutiliza EmailJS (mismo servicio que las facturas). La
   // plantilla tiene campos fijos (pensada para facturas): mapeamos asunto→numero,
   // cuerpo→descripcion, destinatario→to_email/proveedor.
+  // Envía un mail SIN pedir confirmación, para cuando el usuario dio la orden explícita
+  // de mandarlo ya en el mismo pedido (ver "enviar":true en las instrucciones de MAIL_LISTO).
+  window.rkEnviarMailDirecto = function(datos) {
+    if (!datos || !datos.to) return;
+    if (typeof getEmailJsConfig !== 'function' || typeof emailjs === 'undefined') {
+      rkMensajeBot('❌ No pude mandar el mail: el envío de mails no está disponible.');
+      return;
+    }
+    var cfg = getEmailJsConfig();
+    if (!cfg.serviceId || !cfg.templateId || !cfg.publicKey) {
+      rkMensajeBot('No pude mandar el mail a ' + datos.to + ': configurá EmailJS en ⚙️ Ajustes antes de mandar mails.');
+      return;
+    }
+    var params = {
+      to_email:    datos.to,
+      proveedor:   datos.destinatario || datos.to,
+      numero:      datos.asunto || 'Mensaje de RK',
+      fecha:       (typeof formatearFecha === 'function') ? formatearFecha(new Date().toISOString().substring(0,10)) : '',
+      importe:     '—',
+      descripcion: datos.cuerpo || '',
+      estado:      datos.cuerpo || 'Enviado desde el Asistente RK.',
+      pdf_url:     ''
+    };
+    emailjs.send(cfg.serviceId, cfg.templateId, params, { publicKey: cfg.publicKey })
+      .then(function() { rkMensajeBot('✅ Mail enviado a ' + datos.to + ' (asunto: "' + (datos.asunto || 'sin asunto') + '").'); })
+      .catch(function(e) { rkMensajeBot('❌ No pude enviar el mail a ' + datos.to + ': ' + (e.text || e.message || String(e))); });
+  };
+
   window.rkEnviarMailAsistente = function(datos, btn) {
     if (!datos || !datos.to) return;
     if (typeof getEmailJsConfig !== 'function') { alert('El envío de mails no está disponible.'); return; }
@@ -25212,8 +25240,14 @@
       + 'preguntáselos (podés proponer vos un borrador del cuerpo y del asunto si te dice de qué se trata, para que él lo apruebe o corrija). '
       + 'El destinatario tiene que ser una dirección de mail válida; si te da solo un nombre, fijate si ese proveedor/persona figura en los datos con email, y si no, pedile la dirección. '
       + 'En cuanto tengas al menos el destinatario (to) y algo de cuerpo, agregá al FINAL de tu respuesta (en una línea aparte, sin explicarla ni mencionarla) '
-      + 'exactamente este marcador con lo que tengas (null en lo que falte): ###MAIL_LISTO:{"to":"...","asunto":"...","cuerpo":"...","destinatario":null}### '
-      + 'El campo "cuerpo" es el texto completo del mail ya redactado. NUNCA digas que ya enviaste el mail: vos solo lo redactás, el usuario lo revisa y lo envía con un botón. '
+      + 'exactamente este marcador con lo que tengas (null en lo que falte): ###MAIL_LISTO:{"to":"...","asunto":"...","cuerpo":"...","destinatario":null,"enviar":false}### '
+      + 'El campo "cuerpo" es el texto completo del mail ya redactado. El campo "enviar" es MUY IMPORTANTE: ponelo en true SOLO cuando el usuario haya dado, '
+      + 'en el mismo pedido, la orden explícita y completa de mandar el mail YA (te dio destinatario + de qué trata en una sola instrucción, tipo '
+      + '"mandale/enviale un mail a tal dirección diciéndole/contándole/sobre tal cosa") y ya tenés destinatario, asunto y cuerpo completos: en ese caso '
+      + 'el mail se envía automáticamente apenas contestás, así que SÍ podés decir que se lo estás mandando o que ya se lo mandaste. '
+      + 'Poné "enviar":false en cualquier otro caso (por ejemplo si el usuario solo te pide ayuda para redactarlo, revisarlo o corregirlo, o si él mismo pide '
+      + 'revisarlo antes de mandarlo, o si todavía falta el asunto o el cuerpo): ahí NUNCA digas que ya enviaste el mail, porque el usuario lo tiene que '
+      + 'confirmar con un botón. Ante la duda, dejalo en false. '
       + 'Repetí ese marcador actualizado en cada respuesta mientras sigan armando el mismo mail, hasta que el usuario cambie de tema. '
       + 'Si te piden mandar por mail las tareas, los pendientes o el estado de las tareas, armá el cuerpo con la lista real de "TAREAS PENDIENTES" que tenés más abajo en el contexto '
       + '(título, responsable y vencimiento de cada una); no inventes tareas que no estén en esa lista. Si no hay ninguna tarea pendiente cargada, decíselo en vez de inventar. '
@@ -25356,6 +25390,12 @@
           respuestaVisible = respuestaVisible.replace(mMail[0], '').trim();
           try { mailDatos = JSON.parse(mMail[1]); } catch(e) {}
           if (mailDatos && !mailDatos.to) mailDatos = null; // sin destinatario todavía, no mostramos botón
+        }
+        // Si el usuario dio la orden explícita de mandarlo ya (enviar:true) y ya está
+        // todo el mail armado, lo despachamos directo, sin mostrar el botón de confirmación.
+        if (mailDatos && mailDatos.enviar === true && mailDatos.to && mailDatos.asunto && mailDatos.cuerpo) {
+          rkEnviarMailDirecto(mailDatos);
+          mailDatos = null;
         }
         var ingresoDatos = null;
         var mIng = respuestaVisible.match(/###INGRESO_LISTO:(\{[\s\S]*?\})###/);
