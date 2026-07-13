@@ -6349,6 +6349,15 @@
         }).catch(() => alert('No se pudo abrir el documento.'));
     }
 
+    // Muestra en un .form-hint el estado del adjunto actual (con link para verlo) o que no hay ninguno.
+    function _renderEstadoAdjunto(elId, nombre, docId) {
+        var el = document.getElementById(elId);
+        if (!el) return;
+        el.innerHTML = (nombre && docId)
+            ? ('📎 Adjunto actual: ' + escHtml(nombre) + ' — <a href="#" onclick="descargarDoc(\'' + docId + '\',\'' + escHtml(nombre).replace(/'/g,"\\'") + '\');return false;">ver</a> (subí otro archivo para reemplazarlo)')
+            : '';
+    }
+
     function generarNumeroRecibo() {
         const f = new Date();
         const ymd = f.getFullYear() + String(f.getMonth()+1).padStart(2,'0') + String(f.getDate()).padStart(2,'0');
@@ -12905,6 +12914,8 @@
                 document.getElementById('emitMovTipo').value = e.movTipo || 'egreso';
                 if (e.cuentaId) document.getElementById('emitCuentaBancaria').value = e.cuentaId;
             }
+            document.getElementById('emitArchivo').value = '';
+            _renderEstadoAdjunto('emitArchivoEstado', e.adjuntoNombre, e.adjuntoId);
         } else {
             document.getElementById('emitConfidencial').checked = false;
             document.getElementById('emitTipo').value      = 'recibo';
@@ -12916,6 +12927,8 @@
             emitToggleProveedor();
             document.getElementById('emitAfectaCaja').value = 'no';
             emitToggleAfectaCaja();
+            document.getElementById('emitArchivo').value = '';
+            _renderEstadoAdjunto('emitArchivoEstado', null, null);
         }
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
@@ -12964,8 +12977,21 @@
             confidencial:  document.getElementById('emitConfidencial').checked,
             afectaCaja:    afectaCaja,
             movTipo:       afectaCaja ? (document.getElementById('emitMovTipo').value || 'egreso') : '',
-            cuentaId:      cuentaId
+            cuentaId:      cuentaId,
+            adjuntoId:     prev ? (prev.adjuntoId || '')     : '',
+            adjuntoNombre: prev ? (prev.adjuntoNombre || '') : '',
+            adjuntoTipo:   prev ? (prev.adjuntoTipo || '')   : ''
         };
+        var archivoEmit = document.getElementById('emitArchivo').files[0];
+        if (archivoEmit) {
+            if (archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            try {
+                var base64Emit = await leerArchivoBase64(archivoEmit);
+                var adjIdEmit = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                await REF_DOCS.child(adjIdEmit).set({ nombre: archivoEmit.name, tipo: archivoEmit.type, contenido: base64Emit });
+                reg.adjuntoId = adjIdEmit; reg.adjuntoNombre = archivoEmit.name; reg.adjuntoTipo = archivoEmit.type;
+            } catch (err) { alert('No se pudo subir el adjunto: ' + (err.message || err)); return; }
+        }
         // Asignar número correlativo solo si es nuevo (al editar se conserva el existente)
         if (!reg.nro) { reg.nro = await obtenerProximoComprobante(tipoAB); }
         var idx = comprobantesEmitidos.findIndex(function(x){ return x.id === reg.id; });
@@ -12990,6 +13016,7 @@
             persistirEmitidos();
             // Liberar el número correlativo si era el último emitido de su tipo
             if (e && e.nro) _liberarNroComprobante(e.nro, e.tipoAB);
+            if (e && e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove();
             // Si tenía un movimiento de caja/banco asociado, preguntar si eliminarlo también
             var tieneMov = ingGeneral.some(function(ig){ return ig && ig.origenEmitidoId === id; });
             if (tieneMov && confirm('Este comprobante tenía un movimiento de caja/banco asociado. ¿Eliminarlo también?')) {
@@ -13056,6 +13083,7 @@
                 '<td style="text-align:right;">' + mon + Math.round(e.total||0).toLocaleString('es-AR') + '</td>' +
                 '<td><div class="action-btns">' +
                     '<button class="btn btn-outline btn-sm" title="Imprimir" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')">🖨️</button> ' +
+                    (e.adjuntoId ? '<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc(\'' + e.adjuntoId + '\',\'' + escHtml(e.adjuntoNombre||'').replace(/'/g,"\\'") + '\')">📎</button> ' : '') +
                     (editable ? '<button class="btn btn-outline btn-sm" title="Editar" onclick="abrirModalEmitir(\'' + e.id + '\')">✏</button> ' +
                                 '<button class="btn btn-outline btn-sm" title="Eliminar" onclick="eliminarEmitido(\'' + e.id + '\')">🗑</button>' : '') +
                 '</div></td>';
@@ -13160,6 +13188,9 @@
                 if (egresoWrap) egresoWrap.textContent = tieneHist
                     ? 'Este comprobante ya tiene pagos registrados desde "💵 Pagar" — se conservan tal cual, no se pueden editar acá.'
                     : '';
+                document.getElementById('docNroInterno').textContent = d.nro ? ('N° ' + d.nro) : '(se asigna al guardar)';
+                document.getElementById('docCompArchivo').value = '';
+                _renderEstadoAdjunto('docCompArchivoEstado', d.adjuntoNombre, d.adjuntoId);
             } else {
                 document.getElementById('docEgresoSiBtn').disabled = false;
                 document.getElementById('docEgresoNoBtn').disabled = false;
@@ -13180,6 +13211,9 @@
             document.getElementById('docPagado').disabled = false;
             const egresoWrapNuevo = document.getElementById('docEgresoHint');
             if (egresoWrapNuevo) egresoWrapNuevo.textContent = '';
+            document.getElementById('docNroInterno').textContent = '(se asigna al guardar)';
+            document.getElementById('docCompArchivo').value = '';
+            _renderEstadoAdjunto('docCompArchivoEstado', null, null);
         }
         document.getElementById('modalDoc').classList.add('active');
     }
@@ -13188,7 +13222,7 @@
         document.getElementById('modalDoc').classList.remove('active');
     }
 
-    function guardarDoc() {
+    async function guardarDoc() {
         const proveedor = document.getElementById('docProveedor').value;
         const fecha = document.getElementById('docFecha').value;
         const descripcion = document.getElementById('docDescripcion').value.trim();
@@ -13207,6 +13241,7 @@
             proveedor,
             fecha,
             numero:        document.getElementById('docNumero').value.trim(),
+            nro:           existente ? (existente.nro || null) : null,
             tipo:          document.getElementById('docTipo').value,
             descripcion,
             moneda:        document.getElementById('docMoneda').value,
@@ -13214,8 +13249,23 @@
             pagado:        pagadoFinal,
             modalidad:     docModalidadActual,
             observaciones: document.getElementById('docObservaciones').value.trim(),
+            adjuntoId:     existente ? (existente.adjuntoId || '')     : '',
+            adjuntoNombre: existente ? (existente.adjuntoNombre || '') : '',
+            adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : ''
         };
         if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
+        const archivoDoc = document.getElementById('docCompArchivo').files[0];
+        if (archivoDoc) {
+            if (archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            try {
+                const base64Doc = await leerArchivoBase64(archivoDoc);
+                const adjIdDoc = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                await REF_DOCS.child(adjIdDoc).set({ nombre: archivoDoc.name, tipo: archivoDoc.type, contenido: base64Doc });
+                doc.adjuntoId = adjIdDoc; doc.adjuntoNombre = archivoDoc.name; doc.adjuntoTipo = archivoDoc.type;
+            } catch (err) { alert('No se pudo subir el adjunto: ' + (err.message || err)); return; }
+        }
+        // Asignar número correlativo interno solo si es nuevo (al editar se conserva el existente)
+        if (!doc.nro) doc.nro = await obtenerProximoComprobante(docModalidadActual);
         const docId = editandoDocId || 'doc_' + Date.now();
         REF_DOCS.child(docId).set({ ...doc, id: docId }).then(() => {
             cerrarModalDoc();
@@ -13266,7 +13316,7 @@
             tr.innerHTML = `
                 <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
                 <td><strong>${d.proveedor||'—'}</strong></td>
-                <td>${d.numero||'—'}</td>
+                <td>${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : (d.nro ? '' : '—')}</td>
                 <td>${d.descripcion||'—'}</td>
                 <td><span class="pill pill-${d.modalidad||'B'}">${d.modalidad||'B'}</span></td>
                 <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
@@ -13275,6 +13325,7 @@
                 <td><div class="action-btns">
                     ${(d.pagado||0)<(d.importe||0)?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
                     ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Reimprimir">🖨️</button>`:''}
+                    ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
                     <button class="btn btn-danger-sm" onclick="eliminarDoc('${d.id}')">✕</button>
                 </div></td>`;
@@ -13286,6 +13337,8 @@
         var d = (documentos||[]).find(function(x){ return x && x.id===id; });
         var tieneMov = d && ((d.pagado||0) > 0 || (d.pagosHistorial||[]).length > 0);
         if (!confirm('¿Eliminar este comprobante?' + (tieneMov ? '\n\nTambién se quitará su movimiento de Caja General (el pago asociado).' : ''))) return;
+        if (d && d.nro) _liberarNroComprobante(d.nro, d.modalidad);
+        if (d && d.adjuntoId) REF_DOCS.child(d.adjuntoId).remove();
         REF_DOCS.child(id).remove();
     }
 
@@ -21432,6 +21485,11 @@
                     <label>Observaciones / detalle</label>
                     <textarea id="emitObs" rows="2" style="width:100%;resize:vertical;" placeholder="Texto libre que aparece en el comprobante"></textarea>
                 </div>
+                <div class="form-group">
+                    <label>Comprobante adjunto (foto o PDF) <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                    <input type="file" id="emitArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+                    <div class="form-hint" id="emitArchivoEstado"></div>
+                </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" onclick="cerrarModalEmitir()">Cancelar</button>
                     <button type="button" class="btn btn-gold" onclick="guardarComprobanteEmitido()">💾 Guardar e imprimir</button>
@@ -21460,8 +21518,9 @@
                     <input type="date" id="docFecha">
                 </div>
                 <div class="form-group">
-                    <label>Nro. Comprobante</label>
+                    <label>Nro. Comprobante <span style="color:var(--text-3);font-weight:400;">(referencia externa, opcional)</span></label>
                     <input type="text" id="docNumero" placeholder="Ej: REC-001, OP-2024-05">
+                    <div class="form-hint">N° interno asignado por el sistema: <strong id="docNroInterno">(se asigna al guardar)</strong></div>
                 </div>
                 <div class="form-group">
                     <label>Tipo de comprobante</label>
@@ -21515,6 +21574,11 @@
             <div class="form-group">
                 <label>Observaciones</label>
                 <input type="text" id="docObservaciones" placeholder="Notas adicionales">
+            </div>
+            <div class="form-group">
+                <label>Comprobante adjunto (foto o PDF) <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                <input type="file" id="docCompArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+                <div class="form-hint" id="docCompArchivoEstado"></div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="cerrarModalDoc()">Cancelar</button>
