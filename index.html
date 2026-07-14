@@ -13791,6 +13791,22 @@
         }
         // Asignar número correlativo interno solo si es nuevo (al editar se conserva el existente)
         if (!doc.nro) doc.nro = await obtenerProximoComprobante(docModalidadActual);
+        // Si se marca como pagado acá (no vía el botón "Pagar" dedicado), generamos igual una
+        // entrada de historial de pago — para que el botón 🖨️ Reimprimir quede disponible después,
+        // sin importar el tipo de comprobante.
+        if (tomarEgreso && !tieneHistorial && pagadoFinal > 0) {
+            doc.pagosHistorial = [{
+                pagoId: 'FD-' + Date.now(),
+                fecha,
+                modalidad: doc.modalidad,
+                monto: pagadoFinal,
+                baseImponible: pagadoFinal,
+                retenciones: [],
+                totalRet: 0,
+                tipoAB: doc.modalidad,
+                nroCorrelativo: doc.nro
+            }];
+        }
         const docId = editandoDocId || 'doc_' + Date.now();
         REF_DOCS.child(docId).set({ ...doc, id: docId }).then(() => {
             cerrarModalDoc();
@@ -25953,9 +25969,19 @@
     }
     if (factDatos && factDatos.tipo === 'constanciaAfip') {
       var btnP = document.createElement('button');
-      btnP.textContent = '🏢 Cargar como proveedor';
+      btnP.textContent = factDatos._provYaExistia ? 'ℹ️ Ya estaba cargado — Ver/Editar'
+        : (factDatos._provAgregado ? '✓ Agregado como proveedor — Ver/Editar' : '🏢 Cargar como proveedor');
       btnP.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
-      btnP.onclick = function() { rkAbrirProveedorPrefill(factDatos); btnP.textContent = '✓ Abriendo formulario…'; btnP.disabled = true; };
+      btnP.onclick = function() {
+        if (factDatos._provIdx != null) {
+          _rkAbierto = false;
+          document.getElementById('rk-agente-panel').classList.remove('abierto');
+          if (typeof mostrarTab === 'function') mostrarTab('Proveedores');
+          setTimeout(function() { if (typeof editarProveedor === 'function') editarProveedor(factDatos._provIdx); }, 200);
+        } else {
+          rkAbrirProveedorPrefill(factDatos);
+        }
+      };
       div.appendChild(btnP);
     }
     if (provDatos && provDatos.razonSocial) {
@@ -26171,6 +26197,28 @@
         }
       }
     }, 200);
+  };
+
+  // Da de alta directamente (sin abrir ningún formulario) al proveedor detectado en una
+  // constancia de inscripción de AFIP. Si ya existe (por razón social o CUIT), no duplica.
+  window.rkAgregarProveedorDesdeConstancia = function(f) {
+    if (!f || !f.razonSocial || typeof proveedores === 'undefined') return null;
+    var existente = (typeof buscarProveedorPorNombre === 'function') ? buscarProveedorPorNombre(f.razonSocial) : null;
+    if (!existente && f.cuit) {
+      var cuitNorm = String(f.cuit).replace(/\D/g, '');
+      existente = proveedores.find(function(p){ return p.cuit && p.cuit.replace(/\D/g, '') === cuitNorm; });
+    }
+    if (existente) return { prov: existente, idx: proveedores.indexOf(existente), nuevo: false };
+    var nuevo = {
+      id: 'P-' + Date.now(), razonSocial: f.razonSocial, cuit: f.cuit || '',
+      condicionIVA: f.condicionIVA || 'Responsable Inscripto',
+      grupo: '', rubro: f.actividad || '', telefono: '', direccion: f.domicilio || '',
+      ret78: false, ret94: false, ret119: false, ret30: false,
+      retSUSSIng: false, retSUSSConst: false, retSUSSLimp: false
+    };
+    proveedores.push(nuevo);
+    if (typeof persistirProveedores === 'function') persistirProveedores();
+    return { prov: nuevo, idx: proveedores.length - 1, nuevo: true };
   };
 
   // Abre el formulario real de "Nuevo Aportante/Socio" y lo precarga con los datos juntados
@@ -26657,6 +26705,10 @@
               factDatos._pdfBase64 = pdfBase64;
               factDatos._pdfMime = pdfMime;
               factDatos._pdfNombre = pdfNombre;
+            }
+            if (factDatos && factDatos.tipo === 'constanciaAfip') {
+              var _provAuto = rkAgregarProveedorDesdeConstancia(factDatos);
+              if (_provAuto) { factDatos._provAgregado = _provAuto.nuevo; factDatos._provYaExistia = !_provAuto.nuevo; factDatos._provIdx = _provAuto.idx; }
             }
             rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip' || factDatos.tipo === 'presupuesto')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
