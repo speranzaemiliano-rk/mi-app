@@ -959,6 +959,103 @@ if (mailBotConfigurado()) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  AGENDA DE VENCIMIENTOS — alerta por mail de servicios próximos a vencer
+//  Lee empresas/*/proyectos/*/vencimientosServicios desde Firebase Admin,
+//  y manda un mail (por el mismo SMTP del mail bot) cuando faltan los días
+//  indicados en `diasAviso` de cada vencimiento y todavía no se avisó.
+// ═══════════════════════════════════════════════════════════════════
+let _vencimientosCorriendo = false;
+
+async function revisarVencimientos() {
+    if (!admin.apps.length) { const e = new Error('Firebase Admin no está inicializado. Configurá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.'); e.faltanCreds = true; throw e; }
+    if (!mailBotConfigurado()) { const e = new Error('Faltan MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD en Railway.'); e.faltanCreds = true; throw e; }
+    if (_vencimientosCorriendo) return { yaCorriendo: true, avisados: 0 };
+    _vencimientosCorriendo = true;
+
+    const nodemailer = require('nodemailer');
+    const user = process.env.MAIL_BOT_USER;
+    const pass = process.env.MAIL_BOT_APP_PASSWORD;
+    const emailDefault = process.env.ALERTAS_EMAIL_DEFAULT || user;
+    const transporter = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user, pass } });
+
+    let revisados = 0, avisados = 0;
+    try {
+        const snap = await admin.database().ref('empresas').once('value');
+        const empresasVal = snap.val() || {};
+        const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+
+        for (const empId of Object.keys(empresasVal)) {
+            const emp = empresasVal[empId] || {};
+            const emailEmpresa = (emp.datos && emp.datos.email) || '';
+            const proyectos = emp.proyectos || {};
+            for (const proyId of Object.keys(proyectos)) {
+                const vencimientos = (proyectos[proyId] || {}).vencimientosServicios || {};
+                for (const vencId of Object.keys(vencimientos)) {
+                    const v = vencimientos[vencId];
+                    if (!v || v.pagado || !v.fechaVencimiento) continue;
+                    revisados++;
+                    const fechaVenc = new Date(v.fechaVencimiento + 'T00:00:00');
+                    if (isNaN(fechaVenc.getTime())) continue;
+                    const diasRestantes = Math.round((fechaVenc - hoy) / 86400000);
+                    if (diasRestantes < 0) continue;
+                    const diasAviso = Array.isArray(v.diasAviso) && v.diasAviso.length ? v.diasAviso : [10, 5];
+                    const recordatorios = v.recordatorios || {};
+
+                    for (const dia of diasAviso) {
+                        if (diasRestantes > dia || recordatorios[String(dia)]) continue;
+                        const destino = v.emailAlerta || emailEmpresa || emailDefault;
+                        if (!destino) continue;
+
+                        const asunto = '⏰ Vence "' + (v.alias || v.empresaProveedora || 'un servicio') + '" en ' + diasRestantes + ' día(s)';
+                        const cuerpo = 'Hola,\n\n' +
+                            'El servicio "' + (v.alias || '(sin alias)') + '"' + (v.empresaProveedora ? ' de ' + v.empresaProveedora : '') + '\n' +
+                            'vence el ' + v.fechaVencimiento + ' (en ' + diasRestantes + ' día(s)).\n' +
+                            (v.monto ? 'Monto: ' + (v.moneda || 'ARS') + ' ' + v.monto + '\n' : '') +
+                            '\nEmpresa: ' + (emp.nombre || empId) +
+                            '\n\n— Agenda de Vencimientos, RK Gestión Multiempresa';
+
+                        await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to: destino, subject: asunto, text: cuerpo });
+                        await admin.database()
+                            .ref('empresas/' + empId + '/proyectos/' + proyId + '/vencimientosServicios/' + vencId + '/recordatorios/' + dia)
+                            .set(true);
+                        avisados++;
+                    }
+                }
+            }
+        }
+    } finally {
+        _vencimientosCorriendo = false;
+    }
+    return { revisados, avisados };
+}
+
+// Disparo manual (además del automático diario).
+app.get('/vencimientos/revisar', async (req, res) => {
+    try {
+        const r = await revisarVencimientos();
+        res.json({ ok: true, ...r });
+    } catch (e) {
+        res.status(e.faltanCreds ? 400 : 500).json({ error: e.message, detalle: detalleErrorMail(e) });
+    }
+});
+
+// Revisión automática una vez por día (además de poder dispararla a mano).
+if (mailBotConfigurado()) {
+    setInterval(function () {
+        revisarVencimientos().then(function (r) {
+            if (r && r.avisados) console.log('[Vencimientos] avisó ' + r.avisados + ' vencimiento(s) de servicios.');
+        }).catch(function (e) {
+            console.error('[Vencimientos] error:', e.message);
+        });
+    }, 24 * 60 * 60 * 1000);
+    // Primera revisión a los 2 minutos de levantar el server (para no competir con el mail bot en el boot).
+    setTimeout(function () {
+        revisarVencimientos().catch(function (e) { console.error('[Vencimientos] error:', e.message); });
+    }, 120000);
+    console.log('[Vencimientos] activo: revisando la agenda de vencimientos una vez por día.');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  USUARIOS — Gestión de usuarios de Firebase Auth desde la app
 //  Requiere Firebase Admin SDK (FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway).
 // ═══════════════════════════════════════════════════════════════════
