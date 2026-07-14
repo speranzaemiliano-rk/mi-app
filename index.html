@@ -5003,7 +5003,7 @@
                 </div>
                 <div class="form-group">
                     <label>Presupuesto base (ARS)</label>
-                    <input type="number" id="presupuesto" required>
+                    <input type="number" id="presupuesto" step="0.01" min="0" required>
                 </div>
                 <div class="form-group">
                     <label>Modalidad de pago</label>
@@ -5022,7 +5022,7 @@
                 </div>
                 <div class="form-group" id="grupoPagado">
                     <label>Monto Pagado (capital)</label>
-                    <input type="number" id="pagado" required>
+                    <input type="number" id="pagado" step="0.01" min="0" required>
                 </div>
                 <div class="form-group">
                     <label>Fecha de Entrega</label>
@@ -5274,6 +5274,18 @@
                     <input type="email" id="provEmail" placeholder="contacto@empresa.com">
                 </div>
                 <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="provExento" onchange="provToggleExento()" style="width:auto;margin-right:6px;vertical-align:middle;">
+                        🚫 Exento de todas las retenciones
+                    </label>
+                    <div class="form-hint">Si lo marcás, no se le aplica ningún régimen de retención al registrar pagos, aunque tenga regímenes tildados más abajo.</div>
+                </div>
+                <div class="form-group" id="provCertExentoWrap" style="display:none;">
+                    <label>Certificado de no retención (opcional)</label>
+                    <input type="file" id="provCertExento" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+                    <div class="form-hint" id="provCertExentoEstado"></div>
+                </div>
+                <div class="form-group" id="provRegimenesWrap">
                     <label>Regímenes de retención aplicables</label>
                     <div class="form-hint" style="margin-bottom:8px;">Marcá los regímenes que corresponden a este proveedor. Se usarán al registrar pagos A (bancarizados).</div>
                     <div class="regime-check">
@@ -6492,7 +6504,7 @@
             compartirEnProyectos(datoCopia, 'datos', selPres);
         }
         // Ofrecer agregar al Plan de Trabajo (solo en nuevo presupuesto)
-        if (editandoIndex < 0 && planTrabajo.length > 0) {
+        if (editandoIndex < 0) {
             const newIdx = datos.length - 1;
             const d = datos[newIdx];
             setTimeout(function() {
@@ -7994,6 +8006,7 @@
     // nombreProv, mesAno: para consultar acumulado previo en el mismo mes
     function calcularRetenciones(baseEste, prov, nombreProv, mesAno) {
         if (!prov) return [];
+        if (prov.exentoRetenciones) return [];
         const rets = [];
 
         // Helper: aplica escala Reg.119 sobre un importe
@@ -9427,6 +9440,18 @@
     // ===================== PROVEEDORES =====================
     function persistirProveedores() { REF_PROV.set(proveedores); }
 
+    // Muestra/oculta el certificado de no retención y habilita/deshabilita los regímenes
+    // individuales según si el proveedor está marcado como exento de todas las retenciones.
+    function provToggleExento() {
+        var exento = document.getElementById('provExento').checked;
+        document.getElementById('provCertExentoWrap').style.display = exento ? '' : 'none';
+        var wrap = document.getElementById('provRegimenesWrap');
+        if (wrap) {
+            wrap.style.opacity = exento ? '.45' : '1';
+            Array.prototype.forEach.call(wrap.querySelectorAll('input[type=checkbox]'), function(cb){ cb.disabled = exento; });
+        }
+    }
+
     function agregarProveedor() {
         editandoProvIndex = -1;
         document.getElementById('modalProvTitle').textContent = '🏢 Agregar Proveedor';
@@ -9438,6 +9463,10 @@
         document.getElementById('provRetSUSSIng').checked   = false;
         document.getElementById('provRetSUSSConst').checked = false;
         document.getElementById('provRetSUSSLimp').checked  = false;
+        document.getElementById('provExento').checked = false;
+        document.getElementById('provCertExento').value = '';
+        document.getElementById('provCertExentoEstado').textContent = '';
+        provToggleExento();
         poblarSelectGrupos('');
         document.getElementById('modalProv').classList.add('active');
     }
@@ -9462,6 +9491,10 @@
         document.getElementById('provRetSUSSIng').checked    = !!p.retSUSSIng;
         document.getElementById('provRetSUSSConst').checked  = !!p.retSUSSConst;
         document.getElementById('provRetSUSSLimp').checked   = !!p.retSUSSLimp;
+        document.getElementById('provExento').checked = !!p.exentoRetenciones;
+        document.getElementById('provCertExento').value = '';
+        _renderEstadoAdjunto('provCertExentoEstado', p.certExentoNombre, p.certExentoId);
+        provToggleExento();
         document.getElementById('modalProv').classList.add('active');
     }
 
@@ -9477,8 +9510,9 @@
         document.getElementById('modalProv').style.zIndex = '';
     }
 
-    document.getElementById('formProv').addEventListener('submit', function(e) {
+    document.getElementById('formProv').addEventListener('submit', async function(e) {
         e.preventDefault();
+        const anteriorProv = editandoProvIndex >= 0 ? proveedores[editandoProvIndex] : null;
         const nuevo = {
             grupo: document.getElementById('provGrupo').value,
             razonSocial: document.getElementById('provRazon').value.trim(),
@@ -9494,9 +9528,24 @@
             ret30:        document.getElementById('provRet30').checked,
             retSUSSIng:   document.getElementById('provRetSUSSIng').checked,
             retSUSSConst: document.getElementById('provRetSUSSConst').checked,
-            retSUSSLimp:  document.getElementById('provRetSUSSLimp').checked
+            retSUSSLimp:  document.getElementById('provRetSUSSLimp').checked,
+            exentoRetenciones: document.getElementById('provExento').checked,
+            certExentoId:     anteriorProv ? (anteriorProv.certExentoId || '')     : '',
+            certExentoNombre: anteriorProv ? (anteriorProv.certExentoNombre || '') : '',
+            certExentoTipo:   anteriorProv ? (anteriorProv.certExentoTipo || '')   : ''
         };
         if (!nuevo.razonSocial) { alert('La razón social es obligatoria.'); return; }
+        const archivoCert = document.getElementById('provCertExento').files[0];
+        if (archivoCert) {
+            if (archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('El certificado supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            try {
+                document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado…';
+                const base64Cert = await leerArchivoBase64(archivoCert);
+                const certId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                await REF_DOCS.child(certId).set({ nombre: archivoCert.name, tipo: archivoCert.type, contenido: base64Cert });
+                nuevo.certExentoId = certId; nuevo.certExentoNombre = archivoCert.name; nuevo.certExentoTipo = archivoCert.type;
+            } catch (err) { alert('No se pudo subir el certificado: ' + (err.message || err)); return; }
+        }
         if (editandoProvIndex >= 0) { nuevo.id = proveedores[editandoProvIndex].id || ('P-' + Date.now()); proveedores[editandoProvIndex] = nuevo; }
         else { nuevo.id = 'P-' + Date.now(); proveedores.push(nuevo); }
         cerrarProveedor(); persistirProveedores();
@@ -9527,10 +9576,13 @@
             tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">Ningún proveedor coincide con la búsqueda.</td></tr>';
         } else {
             visibles.forEach(({p, i: index}) => {
-                const acciones = esSuperAdmin
+                const acciones = (esSuperAdmin
                     ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button><button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>`
-                    : puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>` : '—';
-                const regs = [
+                    : puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>` : '—')
+                    + (p.certExentoId ? ` <button class="btn btn-outline btn-sm" title="Ver certificado de no retención" onclick="descargarDoc('${p.certExentoId}','${escHtml(p.certExentoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : '');
+                const regs = p.exentoRetenciones
+                    ? '<span class="pill" style="font-size:10px; background:#EEF2FF; color:#3730A3; border:1px solid #C7D2FE;">🚫 Exento</span>'
+                    : [
                     p.ret78         ? '<span class="pill" style="font-size:10px; background:#FEF2F2; color:#C0392B; border:1px solid #FCA5A5;">Reg.78</span>' : '',
                     p.ret94         ? '<span class="pill" style="font-size:10px; background:#FEF2F2; color:#C0392B; border:1px solid #FCA5A5;">Reg.94</span>' : '',
                     p.ret119        ? '<span class="pill" style="font-size:10px; background:#FEF2F2; color:#C0392B; border:1px solid #FCA5A5;">Reg.119</span>' : '',
@@ -11369,8 +11421,10 @@
         } else {
             _fae.textContent = 'Subí el PDF o imagen de la factura. Máx. 4 MB.';
         }
-        // Inicializar UI de tipo
-        selFactTipo(f.tipo || 'presup');
+        // Inicializar UI de tipo. Si todavía no está vinculada a ningún presupuesto,
+        // mostramos el selector igual (aunque se haya cargado como "Pago Directo") para
+        // que se pueda asignar uno sin tener que ir a buscar el botón "Aplicar a Presupuesto".
+        selFactTipo(f.presupuestoIdx === undefined ? 'presup' : (f.tipo || 'presup'));
         selFactPagoInmediato(false); // en edición no re-pagamos
         selFactModalidad('A');
         poblarPresupuestosFactura();
@@ -19035,20 +19089,38 @@
     let _asignarPlanCallback = null;
 
     function ofrecerAsignarAlPlan(src, idx, desc, callback) {
-        if (!planTrabajo.length) { if (callback) callback(false); return; }
         document.getElementById('asignarPlanDesc').textContent = desc;
         document.getElementById('asignarPlanSrc').value = src;
         document.getElementById('asignarPlanIdx').value = idx;
         _asignarPlanCallback = callback;
-        // Poblar select de etapas
+        _repoblarSelectAsignarPlan();
+        document.getElementById('modalAsignarPlan').classList.add('active');
+    }
+
+    // Repuebla el select de etapas del modal "Agregar al Plan de Trabajo", con una opción
+    // para crear una etapa nueva al vuelo. seleccionarIdx (opcional) deja esa etapa elegida.
+    function _repoblarSelectAsignarPlan(seleccionarIdx) {
         const sel = document.getElementById('asignarPlanEtapa');
-        sel.innerHTML = '<option value="">— Seleccioná una etapa —</option>';
+        sel.innerHTML = '<option value="">— Seleccioná una etapa —</option><option value="__nueva__">➕ Crear nueva etapa…</option>';
         planTrabajo.forEach(function(et, i) {
             const opt = document.createElement('option');
             opt.value = i; opt.textContent = et.nombre;
             sel.appendChild(opt);
         });
-        document.getElementById('modalAsignarPlan').classList.add('active');
+        if (seleccionarIdx !== undefined && seleccionarIdx !== null) sel.value = seleccionarIdx;
+    }
+
+    // Si el usuario eligió "Crear nueva etapa…" en el select, le pide el nombre, la crea
+    // en el Plan de Trabajo y la deja seleccionada.
+    function asignarPlanEtapaChange() {
+        const sel = document.getElementById('asignarPlanEtapa');
+        if (sel.value !== '__nueva__') return;
+        const nombre = (prompt('Nombre de la nueva etapa:') || '').trim();
+        if (!nombre) { sel.value = ''; return; }
+        planTrabajo.push({ nombre, fechaInicio: '', fechaFin: '', obs: '', avanceObra: 0, presupuestoLimite: 0, items: [], tareas: [] });
+        persistirPlan();
+        if (typeof renderPlanTrabajo === 'function') renderPlanTrabajo();
+        _repoblarSelectAsignarPlan(planTrabajo.length - 1);
     }
 
     function cerrarAsignarPlan() {
@@ -23648,12 +23720,10 @@
       <input type="hidden" id="asignarPlanIdx">
       <div class="form-group">
         <label>¿A qué etapa querés asignarlo?</label>
-        <select id="asignarPlanEtapa" style="width:100%;">
+        <select id="asignarPlanEtapa" style="width:100%;" onchange="asignarPlanEtapaChange()">
           <option value="">— Seleccioná una etapa —</option>
+          <option value="__nueva__">➕ Crear nueva etapa…</option>
         </select>
-      </div>
-      <div style="background:var(--surface-2); border-radius:6px; padding:12px; font-size:12px; color:var(--text-3); margin-top:4px;">
-        Si no hay etapas creadas, podés crearlas desde el <strong>Plan de Trabajo</strong> en el sidebar.
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarAsignarPlan()">No, omitir</button>
