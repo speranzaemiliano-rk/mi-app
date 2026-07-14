@@ -5244,6 +5244,10 @@
                     <input type="text" id="provRazon" required>
                 </div>
                 <div class="form-group">
+                    <label>Nombre de fantasía <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                    <input type="text" id="provFantasia" placeholder="Nombre comercial, si es distinto de la razón social">
+                </div>
+                <div class="form-group">
                     <label>CUIT</label>
                     <input type="text" id="provCuit" placeholder="20-12345678-9">
                 </div>
@@ -5281,8 +5285,10 @@
                     <div class="form-hint">Si lo marcás, no se le aplica ningún régimen de retención al registrar pagos, aunque tenga regímenes tildados más abajo.</div>
                 </div>
                 <div class="form-group" id="provCertExentoWrap" style="display:none;">
-                    <label>Certificado de no retención (opcional)</label>
-                    <input type="file" id="provCertExento" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+                    <label>Certificados de no retención (opcional)</label>
+                    <div id="provCertExentoLista"></div>
+                    <input type="file" id="provCertExento" accept=".pdf,.jpg,.jpeg,.png" multiple style="font-size:12px;padding:6px;">
+                    <div class="form-hint">Podés elegir varios archivos a la vez (uno por régimen, por ejemplo).</div>
                     <div class="form-hint" id="provCertExentoEstado"></div>
                 </div>
                 <div class="form-group" id="provRegimenesWrap">
@@ -6209,7 +6215,7 @@
         var btn = document.getElementById('presupBtnAltaProv');
         if (!sel || !aviso || !btn) return;
         var val = sel.value.trim();
-        var existe = !val || proveedores.some(function(p){ return p.razonSocial === val; });
+        var existe = !val || !!buscarProveedorPorNombre(val);
         aviso.style.display = existe ? 'none' : '';
         btn.style.display = existe ? 'none' : '';
     }
@@ -6219,7 +6225,7 @@
     function presupDarDeAltaProv() {
         var nombre = (document.getElementById('proveedor').value || '').trim();
         if (!nombre) { alert('Elegí o escribí el nombre del proveedor primero.'); return; }
-        var yaExiste = proveedores.some(function(p){ return p.razonSocial.toLowerCase() === nombre.toLowerCase(); });
+        var yaExiste = !!buscarProveedorPorNombre(nombre);
         if (yaExiste) { presupChequearProvNuevo(); return; }
         var nuevoProv = {
             id: 'P-' + Date.now(), razonSocial: nombre, cuit: '', condicionIVA: 'Responsable Inscripto',
@@ -6333,11 +6339,8 @@
             _leerPresupArchivoTipo = mimeType;
             document.getElementById('docEstado').textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
             if (extracted.proveedor) {
-                var nombres = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
-                var provNorm = extracted.proveedor.toLowerCase().trim();
-                var match = nombres.find(function(n){ return n.toLowerCase() === provNorm; }) ||
-                    nombres.find(function(n){ return n.toLowerCase().includes(provNorm) || provNorm.includes(n.toLowerCase()); });
-                poblarSelectProveedores(match || extracted.proveedor);
+                var provMatch = buscarProveedorAprox(extracted.proveedor);
+                poblarSelectProveedores(provMatch ? provMatch.razonSocial : extracted.proveedor);
             }
             presupChequearProvNuevo();
             var alertas = [];
@@ -7538,7 +7541,7 @@
         var montoBruto = pago.monto || pago.capital || ((pago.capital||0)+(pago.mayores||0));
         var nroComp = pago.nroCorrelativo || pago.pagoId || '';
 
-        var prov = proveedores.find(function(p){return p.razonSocial===provNombre;});
+        var prov = buscarProveedorPorNombre(provNombre);
         var provCuit = (prov && prov.cuit) || '';
         var provCondIva = (prov && prov.condicionIVA) || '';
         var provDir = (prov && prov.direccion) || '';
@@ -7687,7 +7690,7 @@
         var base=parseFloat(document.getElementById('pagoFDBase').value)||monto;
         var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'',provNombre='';
         if(val){if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(f)provNombre=f.proveedor||'';}else{var d=documentos.find(function(x){return x.id===val;});if(d)provNombre=d.proveedor||'';}}
-        var prov=proveedores.find(function(p){return p.razonSocial===provNombre;});
+        var prov=buscarProveedorPorNombre(provNombre);
         var fecha=document.getElementById('pagoFDFecha').value||'',mesAno=fecha.substring(0,7);
         var desgEl=document.getElementById('pagoFDRetDesglose'),totalEl=document.getElementById('pagoFDRetTotal'),netoEl=document.getElementById('pagoFDRetNeto');
         if(!desgEl||!totalEl||!netoEl) return;
@@ -7971,7 +7974,7 @@
         const i = parseInt(document.getElementById('pagoPresupuesto').value);
         if (isNaN(i) || !datos[i]) return null;
         const nombreProv = datos[i].proveedor;
-        return proveedores.find(p => p.razonSocial === nombreProv) || null;
+        return buscarProveedorPorNombre(nombreProv);
     }
 
     // ── Acumulado mensual de Ganancias para un proveedor/régimen ──
@@ -9440,6 +9443,30 @@
     // ===================== PROVEEDORES =====================
     function persistirProveedores() { REF_PROV.set(proveedores); }
 
+    // Busca un proveedor por coincidencia EXACTA de razón social o nombre de fantasía
+    // (para saber si "ya existe" antes de dar de alta uno nuevo).
+    function buscarProveedorPorNombre(nombre) {
+        if (!nombre) return null;
+        var n = String(nombre).toLowerCase().trim();
+        return proveedores.find(function(p){
+            return (p.razonSocial||'').toLowerCase() === n || (p.nombreFantasia||'').toLowerCase() === n;
+        }) || null;
+    }
+
+    // Igual, pero también intenta una coincidencia parcial (para prellenar con el nombre
+    // que extrajo la IA de un PDF/foto, que puede venir con nombre de fantasía y no calzar
+    // exacto con la razón social cargada, o viceversa).
+    function buscarProveedorAprox(nombre) {
+        var exacto = buscarProveedorPorNombre(nombre);
+        if (exacto) return exacto;
+        if (!nombre) return null;
+        var n = String(nombre).toLowerCase().trim();
+        return proveedores.find(function(p){
+            var rs = (p.razonSocial||'').toLowerCase(), nf = (p.nombreFantasia||'').toLowerCase();
+            return (rs && (rs.includes(n) || n.includes(rs))) || (nf && (nf.includes(n) || n.includes(nf)));
+        }) || null;
+    }
+
     // Muestra/oculta el certificado de no retención y habilita/deshabilita los regímenes
     // individuales según si el proveedor está marcado como exento de todas las retenciones.
     function provToggleExento() {
@@ -9450,6 +9477,32 @@
             wrap.style.opacity = exento ? '.45' : '1';
             Array.prototype.forEach.call(wrap.querySelectorAll('input[type=checkbox]'), function(cb){ cb.disabled = exento; });
         }
+    }
+
+    // Certificados de no retención ya subidos (mientras el modal de Proveedor está abierto).
+    // Cada uno: { id, nombre, tipo }. Se guardan definitivamente al enviar el formulario.
+    var _provCertExentoWorking = [];
+
+    function provRenderCertLista() {
+        var cont = document.getElementById('provCertExentoLista');
+        if (!cont) return;
+        if (!_provCertExentoWorking.length) { cont.innerHTML = ''; return; }
+        cont.innerHTML = _provCertExentoWorking.map(function(c, i) {
+            return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;">' +
+                '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎 ' + escHtml(c.nombre) + '</span>' +
+                '<a href="#" onclick="descargarDoc(\'' + c.id + '\',\'' + escHtml(c.nombre).replace(/'/g,"\\'") + '\');return false;">ver</a>' +
+                '<a href="#" style="color:var(--danger);" onclick="provQuitarCert(' + i + ');return false;">quitar</a>' +
+                '</div>';
+        }).join('');
+    }
+
+    function provQuitarCert(idx) {
+        var c = _provCertExentoWorking[idx];
+        if (!c) return;
+        if (!confirm('¿Quitar "' + c.nombre + '"?')) return;
+        _provCertExentoWorking.splice(idx, 1);
+        if (c.id) REF_DOCS.child(c.id).remove();
+        provRenderCertLista();
     }
 
     function agregarProveedor() {
@@ -9466,6 +9519,8 @@
         document.getElementById('provExento').checked = false;
         document.getElementById('provCertExento').value = '';
         document.getElementById('provCertExentoEstado').textContent = '';
+        _provCertExentoWorking = [];
+        provRenderCertLista();
         provToggleExento();
         poblarSelectGrupos('');
         document.getElementById('modalProv').classList.add('active');
@@ -9478,6 +9533,7 @@
         poblarSelectGrupos(p.grupo || '');
         document.getElementById('provGrupo').value   = p.grupo || '';
         document.getElementById('provRazon').value   = p.razonSocial || '';
+        document.getElementById('provFantasia').value = p.nombreFantasia || '';
         document.getElementById('provCuit').value    = p.cuit || '';
         document.getElementById('provIva').value     = p.condicionIVA || 'Responsable Inscripto';
         document.getElementById('provRubro').value   = p.rubro || '';
@@ -9493,7 +9549,12 @@
         document.getElementById('provRetSUSSLimp').checked   = !!p.retSUSSLimp;
         document.getElementById('provExento').checked = !!p.exentoRetenciones;
         document.getElementById('provCertExento').value = '';
-        _renderEstadoAdjunto('provCertExentoEstado', p.certExentoNombre, p.certExentoId);
+        document.getElementById('provCertExentoEstado').textContent = '';
+        // Migración: proveedores viejos guardaron un solo certificado (certExentoId).
+        _provCertExentoWorking = p.certificadosExento && p.certificadosExento.length
+            ? p.certificadosExento.slice()
+            : (p.certExentoId ? [{ id: p.certExentoId, nombre: p.certExentoNombre || 'certificado', tipo: p.certExentoTipo }] : []);
+        provRenderCertLista();
         provToggleExento();
         document.getElementById('modalProv').classList.add('active');
     }
@@ -9516,6 +9577,7 @@
         const nuevo = {
             grupo: document.getElementById('provGrupo').value,
             razonSocial: document.getElementById('provRazon').value.trim(),
+            nombreFantasia: document.getElementById('provFantasia').value.trim(),
             cuit: document.getElementById('provCuit').value.trim(),
             condicionIVA: document.getElementById('provIva').value,
             rubro: document.getElementById('provRubro').value.trim(),
@@ -9530,21 +9592,22 @@
             retSUSSConst: document.getElementById('provRetSUSSConst').checked,
             retSUSSLimp:  document.getElementById('provRetSUSSLimp').checked,
             exentoRetenciones: document.getElementById('provExento').checked,
-            certExentoId:     anteriorProv ? (anteriorProv.certExentoId || '')     : '',
-            certExentoNombre: anteriorProv ? (anteriorProv.certExentoNombre || '') : '',
-            certExentoTipo:   anteriorProv ? (anteriorProv.certExentoTipo || '')   : ''
+            certificadosExento: _provCertExentoWorking.slice()
         };
         if (!nuevo.razonSocial) { alert('La razón social es obligatoria.'); return; }
-        const archivoCert = document.getElementById('provCertExento').files[0];
-        if (archivoCert) {
-            if (archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('El certificado supera los ' + MAX_DOC_MB + ' MB.'); return; }
-            try {
-                document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado…';
-                const base64Cert = await leerArchivoBase64(archivoCert);
-                const certId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-                await REF_DOCS.child(certId).set({ nombre: archivoCert.name, tipo: archivoCert.type, contenido: base64Cert });
-                nuevo.certExentoId = certId; nuevo.certExentoNombre = archivoCert.name; nuevo.certExentoTipo = archivoCert.type;
-            } catch (err) { alert('No se pudo subir el certificado: ' + (err.message || err)); return; }
+        const archivosCert = document.getElementById('provCertExento').files;
+        if (archivosCert && archivosCert.length) {
+            for (let i = 0; i < archivosCert.length; i++) {
+                const archivoCert = archivosCert[i];
+                if (archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
+                try {
+                    document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado ' + (i+1) + ' de ' + archivosCert.length + '…';
+                    const base64Cert = await leerArchivoBase64(archivoCert);
+                    const certId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + i;
+                    await REF_DOCS.child(certId).set({ nombre: archivoCert.name, tipo: archivoCert.type, contenido: base64Cert });
+                    nuevo.certificadosExento.push({ id: certId, nombre: archivoCert.name, tipo: archivoCert.type });
+                } catch (err) { alert('No se pudo subir "' + archivoCert.name + '": ' + (err.message || err)); return; }
+            }
         }
         if (editandoProvIndex >= 0) { nuevo.id = proveedores[editandoProvIndex].id || ('P-' + Date.now()); proveedores[editandoProvIndex] = nuevo; }
         else { nuevo.id = 'P-' + Date.now(); proveedores.push(nuevo); }
@@ -9576,10 +9639,13 @@
             tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">Ningún proveedor coincide con la búsqueda.</td></tr>';
         } else {
             visibles.forEach(({p, i: index}) => {
+                const certificados = (p.certificadosExento && p.certificadosExento.length)
+                    ? p.certificadosExento
+                    : (p.certExentoId ? [{ id: p.certExentoId, nombre: p.certExentoNombre }] : []);
                 const acciones = (esSuperAdmin
                     ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button><button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>`
                     : puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>` : '—')
-                    + (p.certExentoId ? ` <button class="btn btn-outline btn-sm" title="Ver certificado de no retención" onclick="descargarDoc('${p.certExentoId}','${escHtml(p.certExentoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : '');
+                    + certificados.map(c => ` <button class="btn btn-outline btn-sm" title="Ver ${escHtml(c.nombre||'certificado')}" onclick="descargarDoc('${c.id}','${escHtml(c.nombre||'').replace(/'/g,"\\'")}')">📎</button>`).join('');
                 const regs = p.exentoRetenciones
                     ? '<span class="pill" style="font-size:10px; background:#EEF2FF; color:#3730A3; border:1px solid #C7D2FE;">🚫 Exento</span>'
                     : [
@@ -9605,7 +9671,7 @@
                 (function(n){ tr.addEventListener('click', function(ev){ if(ev.target&&ev.target.closest&&ev.target.closest('button,a,input,select,textarea'))return; verFichaProveedor(n); }); })(nombre);
                 tr.innerHTML = `
                     <td>${p.grupo ? '<span class="pill pill-gold">'+p.grupo+'</span>' : '—'}</td>
-                    <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a></td>
+                    <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a>${p.nombreFantasia ? '<br><small style="color:var(--text-3);font-size:10px;">'+escHtml(p.nombreFantasia)+'</small>' : ''}</td>
                     <td>${p.cuit||'—'}</td>
                     <td><span class="badge-rol badge-blue">${p.condicionIVA||'—'}</span></td>
                     <td>${p.rubro||'—'}</td>
@@ -10998,7 +11064,7 @@
         var baseEl = document.getElementById('lfRetBase');
         var base = parseFloat(baseEl.value) || (importe > 0 ? Math.round(importe / 1.21) : 0);
         var provNombre = document.getElementById('leerFactProv').value.trim();
-        var prov = proveedores.find(function(p){ return p.razonSocial === provNombre; }) || null;
+        var prov = buscarProveedorPorNombre(provNombre);
         var fecha  = document.getElementById('lfFechaPago').value || new Date().toISOString().substring(0,10);
         var mesAno = fecha.substring(0,7);
         var rets = calcularRetenciones(base, prov, provNombre, mesAno);
@@ -11044,7 +11110,7 @@
         if (!inp || !aviso || !btn) return;
         var val = inp.value.trim();
         if (!val) { aviso.style.display = 'none'; btn.style.display = 'none'; return; }
-        var existe = proveedores.some(function(p){ return p.razonSocial.toLowerCase() === val.toLowerCase(); });
+        var existe = !!buscarProveedorPorNombre(val);
         aviso.style.display = existe ? 'none' : '';
         btn.style.display   = existe ? 'none' : '';
         // Actualizar presupuestos filtrados por proveedor
@@ -11059,7 +11125,7 @@
         var condIva = document.getElementById('leerFactCondIva').value.trim();
         var dir     = document.getElementById('leerFactDir').value.trim();
         if (!prov) { alert('Escribí el nombre del proveedor primero.'); return; }
-        var yaExiste = proveedores.some(function(p){ return p.razonSocial.toLowerCase() === prov.toLowerCase(); });
+        var yaExiste = !!buscarProveedorPorNombre(prov);
         if (yaExiste) {
             document.getElementById('lfProvNuevoAviso').style.display = 'none';
             document.getElementById('lfBtnAltaProv').style.display   = 'none';
@@ -11232,13 +11298,10 @@
             dl.appendChild(o);
         });
 
-        // Pre-llenar el input con el nombre extraído (exacto o match parcial)
+        // Pre-llenar el input con el nombre extraído (exacto, por nombre de fantasía, o match parcial)
         if (datos.proveedor) {
-            var provNorm = (datos.proveedor||'').toLowerCase().trim();
-            var match = nombres.find(function(n){
-                return n.toLowerCase().includes(provNorm) || provNorm.includes(n.toLowerCase());
-            });
-            inp.value = match ? match : datos.proveedor;
+            var provMatch = buscarProveedorAprox(datos.proveedor);
+            inp.value = provMatch ? provMatch.razonSocial : datos.proveedor;
         } else {
             inp.value = '';
         }
@@ -11350,7 +11413,7 @@
                 var fechaPago  = document.getElementById('lfFechaPago').value || fecha;
                 var baseRet    = parseFloat(document.getElementById('lfRetBase').value) || montoPago;
                 var mesAno     = fechaPago.substring(0,7);
-                var provObj    = proveedores.find(function(p){ return p.razonSocial === prov; }) || null;
+                var provObj    = buscarProveedorPorNombre(prov);
                 var retenciones = []; var totalRet = 0;
                 if (mod === 'A') {
                     retenciones = _lfRetsCalculadas.filter(function(r){ return r.activa; });
@@ -11553,7 +11616,7 @@
         if (baseInp && !baseInp._editado) baseInp.value = netoDefault || '';
         const base = parseFloat(document.getElementById('factRetBase')?.value) || netoDefault;
         const nombreProv = document.getElementById('factProveedor').value;
-        const prov = proveedores.find(p => p.razonSocial === nombreProv) || null;
+        const prov = buscarProveedorPorNombre(nombreProv);
         const fechaPago = document.getElementById('factFechaPago')?.value || new Date().toISOString().substring(0,10);
         const mesAno = fechaPago.substring(0,7);
         const rets = calcularRetenciones(base, prov, nombreProv, mesAno);
@@ -11658,7 +11721,7 @@
             // Guardar historial de pago
             const baseRet = parseFloat(document.getElementById('factRetBase').value) || montoPago;
             const mesAno  = (fechaPago || '').substring(0,7);
-            const prov    = proveedores.find(p => p.razonSocial === nuevo.proveedor) || null;
+            const prov    = buscarProveedorPorNombre(nuevo.proveedor);
             let retenciones = []; let totalRet = 0;
             if (mod === 'A') {
                 retenciones = _factRetsCalculadas.filter(r => r.activa);
@@ -11805,7 +11868,7 @@
     // ══════════════════════════════════════════════════════════
     function abrirEnviarFacturaMail(idx) {
         var f = facturas[idx];
-        var prov = proveedores.find(function(p) { return p.razonSocial === f.proveedor; });
+        var prov = buscarProveedorPorNombre(f.proveedor);
         var emailProv = prov ? (prov.email || '') : '';
         document.getElementById('mailFactIdx').value = idx;
         document.getElementById('mailFactDestinatario').value = emailProv;
@@ -18578,7 +18641,7 @@
     }
 
     function verFichaProveedor(nombre) {
-        var prov = proveedores.find(function(p){ return p.razonSocial === nombre; });
+        var prov = buscarProveedorPorNombre(nombre);
         document.getElementById('fichaProv_titulo').textContent = '🏢 ' + nombre;
         var fmtA = function(n){ return '$' + Math.round(n||0).toLocaleString('es-AR'); };
 
@@ -25287,12 +25350,9 @@
         var docEstadoEl = document.getElementById('docEstado');
         if (docEstadoEl) docEstadoEl.textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
       }
-      if (f.proveedor && typeof proveedores !== 'undefined') {
-        var nombres = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
-        var provNorm = String(f.proveedor).toLowerCase().trim();
-        var match = nombres.find(function(n){ return n.toLowerCase() === provNorm; }) ||
-          nombres.find(function(n){ return n.toLowerCase().includes(provNorm) || provNorm.includes(n.toLowerCase()); });
-        if (typeof poblarSelectProveedores === 'function') poblarSelectProveedores(match || f.proveedor);
+      if (f.proveedor && typeof buscarProveedorAprox === 'function') {
+        var provMatchRk = buscarProveedorAprox(f.proveedor);
+        if (typeof poblarSelectProveedores === 'function') poblarSelectProveedores(provMatchRk ? provMatchRk.razonSocial : f.proveedor);
       }
       if (typeof presupChequearProvNuevo === 'function') presupChequearProvNuevo();
     }, 200);
