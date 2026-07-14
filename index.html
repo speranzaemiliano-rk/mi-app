@@ -25021,6 +25021,13 @@
       btn.onclick = function() { rkCargarFactura(factDatos); btn.textContent = '✓ Abriendo formulario…'; btn.disabled = true; };
       div.appendChild(btn);
     }
+    if (factDatos && factDatos.tipo === 'presupuesto') {
+      var btnPr = document.createElement('button');
+      btnPr.textContent = '📥 Cargar en Presupuestos';
+      btnPr.style.cssText = 'display:block;margin-top:10px;padding:7px 14px;background:linear-gradient(135deg,#1A73E8,#1565C0);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;';
+      btnPr.onclick = function() { rkCargarPresupuesto(factDatos); btnPr.textContent = '✓ Abriendo formulario…'; btnPr.disabled = true; };
+      div.appendChild(btnPr);
+    }
     if (factDatos && factDatos.tipo === 'constanciaAfip') {
       var btnP = document.createElement('button');
       btnP.textContent = '🏢 Cargar como proveedor';
@@ -25188,6 +25195,36 @@
         window._leerFactArchivoTipo = f._pdfMime || 'application/pdf';
       }
       if (typeof _mostrarPreviewFactura === 'function') _mostrarPreviewFactura(f);
+    }, 200);
+  };
+
+  // Abre el formulario real de "Agregar Presupuesto" precargado con lo que detectó Gemini
+  // en el PDF adjuntado al chat (mismo flujo que "📎 Leer con IA" de la pestaña Presupuestos).
+  window.rkCargarPresupuesto = function(f) {
+    _rkAbierto = false;
+    document.getElementById('rk-agente-panel').classList.remove('abierto');
+    if (typeof mostrarTab === 'function') mostrarTab('Presupuestos');
+    setTimeout(function() {
+      if (typeof agregarFila === 'function') agregarFila();
+      var setVal = function(id, v) { var el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setVal('fecha', f.fecha);
+      setVal('concepto', f.concepto);
+      setVal('rubro', f.rubro);
+      setVal('presupuesto', f.monto);
+      if (f._pdfBase64) {
+        window._leerPresupArchivoDB64 = f._pdfBase64;
+        window._leerPresupArchivoTipo = f._pdfMime || 'application/pdf';
+        var docEstadoEl = document.getElementById('docEstado');
+        if (docEstadoEl) docEstadoEl.textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
+      }
+      if (f.proveedor && typeof proveedores !== 'undefined') {
+        var nombres = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
+        var provNorm = String(f.proveedor).toLowerCase().trim();
+        var match = nombres.find(function(n){ return n.toLowerCase() === provNorm; }) ||
+          nombres.find(function(n){ return n.toLowerCase().includes(provNorm) || provNorm.includes(n.toLowerCase()); });
+        if (typeof poblarSelectProveedores === 'function') poblarSelectProveedores(match || f.proveedor);
+      }
+      if (typeof presupChequearProvNuevo === 'function') presupChequearProvNuevo();
     }, 200);
   };
 
@@ -25571,9 +25608,10 @@
         contents: [{ role: 'user', parts: [
           { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
           { text: 'Analizá este documento y clasificalo. Respondé SOLO con un JSON válido, sin texto fuera del JSON.\n'
-              + 'Si es una factura o comprobante comercial, usá esta estructura exacta:\n{"tipo":"factura","proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","netoGravado":0.00,"importeIVA":0.00,"importe":0.00,"moneda":"ARS"}\n'
+              + 'Si es una factura o comprobante comercial (ya emitido, con CAE/numeración fiscal), usá esta estructura exacta:\n{"tipo":"factura","proveedor":"...","cuit":"...","condicionIva":"...","direccion":"...","tipoComprobante":"A|B|C","numero":"...","fecha":"YYYY-MM-DD","vencimiento":"YYYY-MM-DD","cae":"...","vencimientoCae":"YYYY-MM-DD","descripcion":"...","netoGravado":0.00,"importeIVA":0.00,"importe":0.00,"moneda":"ARS"}\n'
+              + 'Si es un presupuesto o cotización de un proveedor (una propuesta de precio para un trabajo, obra o materiales, SIN CAE ni numeración fiscal), usá esta estructura exacta:\n{"tipo":"presupuesto","proveedor":"...","concepto":"...","rubro":"...","monto":0.00,"fecha":"YYYY-MM-DD"}\n'
               + 'Si es una constancia de inscripción / constancia de CUIT de AFIP (padrón de contribuyentes), usá esta estructura exacta:\n{"tipo":"constanciaAfip","razonSocial":"...","cuit":"...","condicionIVA":"Responsable Inscripto|Monotributista|Exento|No Responsable|Consumidor Final","domicilio":"...","actividad":"..."}\n'
-              + 'Si no es ninguna de las dos cosas, respondé: {"tipo":"otro"}\n'
+              + 'Si no es ninguna de las tres cosas, respondé: {"tipo":"otro"}\n'
               + 'Usá null en los campos que no encuentres.' }
         ]}],
         generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
@@ -25689,12 +25727,12 @@
               var m = jsonStr.match(/\{[\s\S]*\}/);
               if (m) factDatos = JSON.parse(m[0]);
             } catch(e) {}
-            if (factDatos && factDatos.tipo === 'factura') {
+            if (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'presupuesto')) {
               factDatos._pdfBase64 = pdfBase64;
               factDatos._pdfMime = 'application/pdf';
               factDatos._pdfNombre = pdfNombre;
             }
-            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
+            rkMensajeBot(respuestaVisible, (factDatos && (factDatos.tipo === 'factura' || factDatos.tipo === 'constanciaAfip' || factDatos.tipo === 'presupuesto')) ? factDatos : null, null, provDatos, aporteDatos, mailDatos, ingresoDatos);
           });
         } else if (promesaTareasAudio) {
           promesaTareasAudio.then(function(extData) {
