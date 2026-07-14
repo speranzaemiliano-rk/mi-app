@@ -3287,6 +3287,7 @@
                                 <button id="presupVistaBtn_cerrados" class="presup-vista-btn" onclick="setPresupVista('cerrados')" title="Presupuestos pagados al 100%">Cerrados</button>
                                 <button id="presupVistaBtn_todos" class="presup-vista-btn" onclick="setPresupVista('todos')" title="Todos los presupuestos">Todos</button>
                             </div>
+                            <button class="btn btn-outline btn-sm" onclick="abrirLeerPresup()" title="Subir PDF o foto del presupuesto y extraer los datos automáticamente">📎 Leer con IA</button>
                             <span class="results-count" id="filtroResultados"></span>
                         </div>
                     </div>
@@ -4981,8 +4982,10 @@
                 </div>
                 <div class="form-group">
                     <label>Proveedor</label>
-                    <select id="proveedor" required></select>
+                    <select id="proveedor" required onchange="presupChequearProvNuevo()"></select>
                     <div class="form-hint" id="avisoSinProveedor" style="display:none;">No hay proveedores cargados. Agregá uno desde la pestaña "Proveedores".</div>
+                    <div class="form-hint" id="presupProvNuevoAviso" style="display:none;color:var(--warn);">⚠️ Este proveedor no está cargado en el sistema todavía.</div>
+                    <button type="button" class="btn btn-outline btn-sm" id="presupBtnAltaProv" style="display:none;margin-top:6px;" onclick="presupDarDeAltaProv()">➕ Dar de alta este proveedor</button>
                 </div>
                 <div class="form-group">
                     <label>Concepto</label>
@@ -5040,6 +5043,31 @@
                     <button type="submit" class="btn btn-primary">Guardar</button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- ── MODAL: LEER PRESUPUESTO CON IA ── -->
+<div class="modal" id="modalLeerPresup">
+    <div class="modal-box">
+        <div class="modal-head">
+            <h2>📎 Leer Presupuesto con IA</h2>
+            <button class="modal-close" onclick="cerrarLeerPresup()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:13px;color:var(--text-3);margin-bottom:12px;">
+                Subí el PDF o la foto del presupuesto que te mandó el proveedor: la IA lee los datos y te deja
+                el formulario de "Agregar Presupuesto" precargado para que los revises antes de guardar.
+            </p>
+            <div class="form-group">
+                <label>Archivo (PDF, JPG o PNG)</label>
+                <input type="file" id="leerPresupArchivo" accept=".pdf,.jpg,.jpeg,.png">
+            </div>
+            <div class="form-hint" id="leerPresupEstado"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="cerrarLeerPresup()">Cancelar</button>
+                <button type="button" class="btn btn-gold" onclick="procesarPresupuestoArchivo()">🤖 Analizar y cargar</button>
+            </div>
         </div>
     </div>
 </div>
@@ -6159,6 +6187,159 @@
     }
 
     // ===================== AGREGAR / EDITAR PRESUPUESTO =====================
+
+    // Muestra/oculta el aviso + botón de alta rápida si el proveedor elegido/tipeado
+    // no está cargado todavía en el sistema (lo llenó la lectura por IA, o poblarSelectProveedores
+    // lo dejó ahí "de paso" aunque no exista como registro real).
+    function presupChequearProvNuevo() {
+        var sel = document.getElementById('proveedor');
+        var aviso = document.getElementById('presupProvNuevoAviso');
+        var btn = document.getElementById('presupBtnAltaProv');
+        if (!sel || !aviso || !btn) return;
+        var val = sel.value.trim();
+        var existe = !val || proveedores.some(function(p){ return p.razonSocial === val; });
+        aviso.style.display = existe ? 'none' : '';
+        btn.style.display = existe ? 'none' : '';
+    }
+
+    // Da de alta, con datos mínimos, al proveedor que quedó tipeado en el select
+    // (llegó de la lectura por IA y no existía en el sistema).
+    function presupDarDeAltaProv() {
+        var nombre = (document.getElementById('proveedor').value || '').trim();
+        if (!nombre) { alert('Elegí o escribí el nombre del proveedor primero.'); return; }
+        var yaExiste = proveedores.some(function(p){ return p.razonSocial.toLowerCase() === nombre.toLowerCase(); });
+        if (yaExiste) { presupChequearProvNuevo(); return; }
+        var nuevoProv = {
+            id: 'P-' + Date.now(), razonSocial: nombre, cuit: '', condicionIVA: 'Responsable Inscripto',
+            grupo: '', rubro: '', telefono: '', direccion: '',
+            ret78: false, ret94: false, ret119: false, ret30: false,
+            retSUSSIng: false, retSUSSConst: false, retSUSSLimp: false
+        };
+        proveedores.push(nuevoProv);
+        persistirProveedores();
+        poblarSelectProveedores(nombre);
+        presupChequearProvNuevo();
+        alert('✅ Proveedor "' + nombre + '" dado de alta. Podés completar el resto de sus datos en la sección Proveedores.');
+    }
+
+    // ── Leer presupuesto desde PDF/imagen con IA ───────────────────
+    var _leerPresupArchivoDB64 = null;
+    var _leerPresupArchivoTipo = null;
+
+    function abrirLeerPresup() {
+        document.getElementById('leerPresupArchivo').value = '';
+        document.getElementById('leerPresupEstado').textContent = '';
+        document.getElementById('modalLeerPresup').classList.add('active');
+    }
+
+    function cerrarLeerPresup() {
+        document.getElementById('modalLeerPresup').classList.remove('active');
+    }
+
+    async function procesarPresupuestoArchivo() {
+        var fileInput = document.getElementById('leerPresupArchivo');
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) { alert('Seleccioná un archivo PDF o imagen.'); return; }
+
+        var MAX_MB = 20;
+        if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_MB + ' MB.'); return; }
+
+        var estadoEl = document.getElementById('leerPresupEstado');
+        estadoEl.textContent = '⏳ Leyendo el archivo…';
+
+        try {
+            var b64 = await new Promise(function(res, rej) {
+                var r = new FileReader();
+                r.onload = function(){ res(r.result.split(',')[1]); };
+                r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
+                r.readAsDataURL(file);
+            });
+            var mimeType = file.type || 'application/pdf';
+
+            estadoEl.textContent = '🤖 Enviando a Gemini para análisis…';
+
+            var prompt = 'Analizá este presupuesto/cotización que un proveedor le envió a una empresa y extraé los ' +
+                'siguientes datos en formato JSON puro (sin markdown, sin explicación extra, solo el objeto JSON):\n' +
+                '{\n' +
+                '  "proveedor": "nombre o razón social de quien emite/cotiza el presupuesto",\n' +
+                '  "concepto": "descripción breve de qué se está presupuestando (obra, materiales, servicio, etc.)",\n' +
+                '  "rubro": "rubro o categoría del trabajo/material, o null",\n' +
+                '  "monto": importe total numérico del presupuesto en pesos argentinos, sin símbolo (ej: 150000.50), o null si no figura,\n' +
+                '  "fecha": "fecha de emisión del presupuesto en formato YYYY-MM-DD, o null"\n' +
+                '}\n' +
+                'Si algún dato no está disponible usá null. Respondé SOLO el JSON, sin texto adicional.';
+
+            var body = {
+                contents: [{ parts: [ { inline_data: { mime_type: mimeType, data: b64 } }, { text: prompt } ] }],
+                generationConfig: { temperature: 0, maxOutputTokens: 1024 }
+            };
+
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var resp, lastErrMsg;
+            for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
+                if (_mi > 0) {
+                    estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
+                    await new Promise(function(r){ setTimeout(r, 4000); });
+                }
+                resp = await _geminiProxy(MODELOS_PDF[_mi], body);
+                if (resp.ok) { lastErrMsg = null; break; }
+                var _ed = await resp.json().catch(function(){ return {}; });
+                lastErrMsg = (_ed.error && _ed.error.message) || ('Error ' + resp.status);
+            }
+            if (lastErrMsg) throw new Error(lastErrMsg);
+
+            var data = await resp.json();
+            var candidate = ((data.candidates||[])[0]||{});
+            var texto = ((candidate.content||{}).parts||[]).map(function(p){ return p.text||''; }).join('').trim();
+            texto = texto.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+            var extracted;
+            try {
+                extracted = JSON.parse(texto);
+            } catch(e1) {
+                try {
+                    var jsonMatch = texto.match(/\{[\s\S]*\}/);
+                    if (!jsonMatch) throw new Error('no match');
+                    extracted = JSON.parse(jsonMatch[0]);
+                } catch(e2) {
+                    console.error('Gemini respuesta cruda:', texto);
+                    var motivo = candidate.finishReason === 'MAX_TOKENS'
+                        ? 'La respuesta fue cortada. Intentá con un archivo más liviano.'
+                        : 'Gemini no devolvió JSON válido. Revisá la consola para más detalles.';
+                    throw new Error(motivo);
+                }
+            }
+
+            cerrarLeerPresup();
+            agregarFila();
+            if (extracted.fecha)     document.getElementById('fecha').value = extracted.fecha;
+            if (extracted.concepto)  document.getElementById('concepto').value = extracted.concepto;
+            if (extracted.rubro)     document.getElementById('rubro').value = extracted.rubro;
+            if (extracted.monto)     document.getElementById('presupuesto').value = extracted.monto;
+            // agregarFila() ya limpió las variables del archivo leído — las reasignamos después de llamarla
+            _leerPresupArchivoDB64 = b64;
+            _leerPresupArchivoTipo = mimeType;
+            document.getElementById('docEstado').textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
+            if (extracted.proveedor) {
+                var nombres = proveedores.map(function(p){ return p.razonSocial; }).filter(Boolean);
+                var provNorm = extracted.proveedor.toLowerCase().trim();
+                var match = nombres.find(function(n){ return n.toLowerCase() === provNorm; }) ||
+                    nombres.find(function(n){ return n.toLowerCase().includes(provNorm) || provNorm.includes(n.toLowerCase()); });
+                poblarSelectProveedores(match || extracted.proveedor);
+            }
+            presupChequearProvNuevo();
+            var alertas = [];
+            if (!extracted.proveedor) alertas.push('No se reconoció el proveedor — elegilo o escribilo.');
+            if (!extracted.monto) alertas.push('No se encontró el monto — ingresalo manualmente.');
+            if (alertas.length) alert('⚠️ ' + alertas.join('\n'));
+        } catch(err) {
+            var msgErr = err.message || 'Error al procesar el archivo.';
+            var esQuota = /quota|capacity|overloaded|saturad|demand|429|503/i.test(msgErr);
+            estadoEl.innerHTML = '❌ ' + msgErr +
+                (esQuota ? '<br><small>Gemini está saturado. Esperá unos segundos y reintentá.</small>' : '');
+        }
+    }
+
     function agregarFila() {
         editandoIndex = -1; docExistente = null;
         document.getElementById('modalTitle').textContent = 'Agregar Presupuesto';
@@ -6173,6 +6354,9 @@
         document.getElementById('docEstado').textContent = '';
         selModalidadPres('A');
         renderCheckboxesCompartir('checkboxesCompartirPres', 'panelCompartirPres');
+        _leerPresupArchivoDB64 = null;
+        _leerPresupArchivoTipo = null;
+        presupChequearProvNuevo();
         document.getElementById('modal').classList.add('active');
     }
 
@@ -6285,6 +6469,16 @@
                 const docId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(docId).set({ nombre: file.name, tipo: file.type, contenido: base64 });
                 nuevoDato.docId = docId; nuevoDato.docNombre = file.name; nuevoDato.docTipo = file.type;
+            } catch (err) { alert('No se pudo subir el documento: ' + (err.message || err)); return; }
+        } else if (_leerPresupArchivoDB64) {
+            // Viene de "📎 Leer con IA": adjuntamos el mismo archivo que se usó para extraer los datos.
+            try {
+                document.getElementById('docEstado').textContent = 'Subiendo documento…';
+                const extArchivo = (_leerPresupArchivoTipo||'').startsWith('image/') ? ('.' + (_leerPresupArchivoTipo||'image/jpeg').split('/')[1]) : '.pdf';
+                const docId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                await REF_DOCS.child(docId).set({ nombre: 'presupuesto' + extArchivo, tipo: _leerPresupArchivoTipo, contenido: 'data:' + _leerPresupArchivoTipo + ';base64,' + _leerPresupArchivoDB64 });
+                nuevoDato.docId = docId; nuevoDato.docNombre = 'presupuesto' + extArchivo; nuevoDato.docTipo = _leerPresupArchivoTipo;
+                _leerPresupArchivoDB64 = null; _leerPresupArchivoTipo = null;
             } catch (err) { alert('No se pudo subir el documento: ' + (err.message || err)); return; }
         }
         if (editandoIndex >= 0) { nuevoDato.recibo = anterior.recibo || generarNumeroRecibo(); datos[editandoIndex] = nuevoDato; }
