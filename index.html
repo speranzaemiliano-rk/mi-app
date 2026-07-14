@@ -38,7 +38,7 @@
         };
         const ADMIN_EMAIL = "speranzaemiliano@gmail.com";
 
-        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES;
+        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES, REF_VENCIMIENTOS;
         let FIREBASE_OK = false;
         let FIREBASE_ERROR = '';
 
@@ -60,6 +60,7 @@
             REF_CAJA     = null;
             REF_INGRESOS = null;
             REF_BANCO    = null;
+            REF_VENCIMIENTOS = null;
             REF_ROLES        = db.ref('roles');
             REF_USUARIOS     = db.ref('usuarios');
             REF_SOLICITUDES  = db.ref('solicitudesBorrado');
@@ -2633,6 +2634,9 @@
                     <button class="nav-item nav-sub" id="tabBtnDocumentos" data-navkey="documentos" onclick="mostrarTab('Documentos')" title="Comprobantes sin factura (pagos B)">
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">folder_open</span> Documentos
                     </button>
+                    <button class="nav-item nav-sub" id="tabBtnVencimientos" data-navkey="vencimientos" onclick="mostrarTab('Vencimientos')" title="Agenda de vencimientos de servicios (luz, internet, alquiler, etc.)">
+                        <span class="nav-drag-handle">⠿</span><span class="nav-icon">event_upcoming</span> Vencimientos
+                    </button>
                     <div style="height:1px;background:rgba(255,255,255,.08);margin:4px 12px;"></div>
                     <button class="nav-item nav-sub" id="tabBtnPagos" data-navkey="pagosprov" onclick="mostrarTab('Pagos')" title="Todos los pagos a proveedores">
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">credit_card</span> Pagos a Proveedores
@@ -3544,6 +3548,55 @@
                     </div>
                 </div>
             </div><!-- /panelDocumentos -->
+
+            <div class="tab-panel" id="panelVencimientos">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Servicios en agenda</div>
+                        <div class="stat-value" id="vencTotal">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Vencidos</div>
+                        <div class="stat-value" id="vencVencidos" style="color:var(--err);">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Vencen en 10 días</div>
+                        <div class="stat-value" id="vencProximos" style="color:var(--warn);">0</div>
+                    </div>
+                </div>
+                <div class="table-card">
+                    <div class="table-card-head">
+                        <h3>Agenda de Vencimientos <span style="font-weight:400;color:var(--text-3);font-size:12px;">(luz, gas, internet, alquiler, etc.)</span></h3>
+                        <button class="btn btn-primary btn-sm" id="btnAgregarVenc" onclick="abrirModalVencimiento()">＋ Subir factura de servicio</button>
+                    </div>
+                    <div class="search-row">
+                        <input type="text" class="search-input" id="buscadorVenc" oninput="renderVencimientos()" placeholder="Buscar por alias, empresa…">
+                        <select id="filtroVencEstado" onchange="renderVencimientos()" style="width:auto; min-width:160px;">
+                            <option value="">Todos los estados</option>
+                            <option value="vencido">Vencidos</option>
+                            <option value="proximo">Vencen en 10 días</option>
+                            <option value="aldia">Al día</option>
+                            <option value="pagado">Pagados</option>
+                        </select>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',0,this)">Alias<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',1,this)">Empresa<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',2,this)">Vencimiento<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',3,this)" style="text-align:right;">Monto<i class="si">⇅</i></th>
+                                    <th>Aviso</th>
+                                    <th>Estado<i class="si">⇅</i></th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vencimientosBody"><tr><td colspan="7" class="empty-msg">No hay vencimientos cargados.</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div><!-- /panelVencimientos -->
 
             <!-- TAB: RESUMEN INGRESOS -->
             <div class="tab-panel" id="panelResumenIngresos">
@@ -5600,6 +5653,7 @@
         REF_INGRESOS = db.ref(base + '/ingresos');
         REF_BANCO        = db.ref(base + '/banco');  // Cuentas bancarias: por empresa/proyecto
         REF_CONTADOR_OP  = db.ref(base + '/contadorOP');  // Numeración correlativa órdenes de pago
+        REF_VENCIMIENTOS = db.ref(base + '/vencimientosServicios');  // Agenda de vencimientos de servicios
         actualizarRefsIngresos();
         actualizarRefTareas();  // Pizarrón de tareas: por empresa, no compartido
     }
@@ -5809,7 +5863,7 @@
         if (empresaActual) mostrarSplashEmpresa(empresaActual.nombre);
         renderProyectoSelector();
         desconectarListeners();
-        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         limpiarIngresos();
         renderizar(); renderFacturas(); renderProveedores();
@@ -5828,7 +5882,7 @@
         renderProyectoSelector();
         desconectarListeners();
         // Limpiar estado en memoria ANTES de cargar nuevo proyecto
-        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         limpiarIngresos();
         renderizar(); renderFacturas(); renderProveedores();
@@ -6000,6 +6054,15 @@
             }
             renderDocumentos();
         }); activeListeners.push({ref:l9, event:'value'});
+
+        const l10 = REF_VENCIMIENTOS;
+        const refPathVenc = l10.toString();
+        l10.on('value', (snap) => {
+            if (REF_VENCIMIENTOS && REF_VENCIMIENTOS.toString() !== refPathVenc) return;
+            const val = snap.val();
+            vencimientos = val ? (Array.isArray(val) ? val.filter(Boolean) : Object.values(val)) : [];
+            renderVencimientos();
+        }); activeListeners.push({ref:l10, event:'value'});
 
         cargarDatosIngresos();
     }
@@ -8484,7 +8547,7 @@
     function mostrarTab(nombre) {
         const ALL_TABS = [
             'Home','Desarrollos',
-            'Presupuestos','Proveedores','Facturas','Documentos',
+            'Presupuestos','Proveedores','Facturas','Documentos','Vencimientos',
             'ResumenIngresos','Ventas','Alquileres','Servicios','IngGeneral','Inversiones',
             'Egresos','CompRecibidos','Pagos','Caja','CajaGeneral','PlanTrabajo',
             'EfectivoPesos','EfectivoUSD','CuentasBancarias','Config','Tesoreria','Reportes','Remuneraciones'
@@ -8516,7 +8579,7 @@
         });
 
         // Submenú Proveedores (ahora incluye Pagos)
-        const SUB_PROV = ['Presupuestos','Proveedores','Facturas','Documentos','Pagos'];
+        const SUB_PROV = ['Presupuestos','Proveedores','Facturas','Documentos','Vencimientos','Pagos'];
         SUB_PROV.forEach(t => {
             const btn = document.getElementById('tabBtn' + t);
             if (btn) btn.classList.toggle('active', t === nombre);
@@ -8534,7 +8597,7 @@
         if (provMenuBtn) provMenuBtn.classList.toggle('active', SUB_PROV.includes(nombre));
 
         // Grupo Egresos (engloba Resumen + Proveedores y sus secciones)
-        const EGRESOS_GROUP = ['Egresos','CompRecibidos','Presupuestos','Proveedores','Facturas','Documentos','Pagos'];
+        const EGRESOS_GROUP = ['Egresos','CompRecibidos','Presupuestos','Proveedores','Facturas','Documentos','Vencimientos','Pagos'];
         const egrMenuBtn = document.getElementById('tabBtnEgresosMenu');
         if (egrMenuBtn) egrMenuBtn.classList.toggle('active', EGRESOS_GROUP.includes(nombre));
 
@@ -8570,6 +8633,7 @@
             'Proveedores':       'Datos de Proveedores',
             'Facturas':          'Facturas de Proveedores',
             'Documentos':        'Comprobantes de Pago (sin factura)',
+            'Vencimientos':      'Agenda de Vencimientos de Servicios',
             'Ventas':            'Ventas — Unidades Funcionales',
             'Alquileres':        'Alquileres — Contratos',
             'Servicios':         'Servicios del Estudio de Arquitectura',
@@ -8596,6 +8660,7 @@
         if (nombre === 'Dashboard')        renderDashboard();
         if (nombre === 'Egresos')          renderEgresos();
         if (nombre === 'CompRecibidos')    renderCompRecibidos();
+        if (nombre === 'Vencimientos')     renderVencimientos();
         if (nombre === 'Pagos')             renderPagos();
         if (nombre === 'ResumenIngresos')  renderResumenIngresos();
         if (nombre === 'CajaGeneral')      renderCajaGeneral();
@@ -13016,6 +13081,9 @@
     // =================== DOCUMENTOS ===================
     let documentos = [];
     let editandoDocId = null;
+    // =================== VENCIMIENTOS (agenda de servicios) ===================
+    let vencimientos = [];
+    let editandoVencId = null;
     let docModalidadActual = 'B';
     // Comprobantes emitidos (recibos / facturas-tipo que emite el estudio)
     let comprobantesEmitidos = [];
@@ -13653,6 +13721,343 @@
         REF_DOCS.child(id).remove();
     }
 
+    // =================== VENCIMIENTOS (agenda de servicios) ===================
+
+    function abrirModalVencimiento(id) {
+        editandoVencId = id || null;
+        var v = id ? (vencimientos||[]).find(function(x){ return x.id === id; }) : null;
+        document.getElementById('modalVencTitle').textContent = v ? '✏ Editar vencimiento' : '⏰ Subir factura de servicio';
+        document.getElementById('vencArchivo').value = '';
+        document.getElementById('vencEstado').textContent = '';
+        document.getElementById('vencAlerta').style.display = 'none';
+        if (v) {
+            document.getElementById('vencAlias').value = v.alias || '';
+            document.getElementById('vencEmpresaProveedora').value = v.empresaProveedora || '';
+            document.getElementById('vencCuit').value = v.cuit || '';
+            document.getElementById('vencFecha').value = v.fechaVencimiento || '';
+            document.getElementById('vencMonto').value = v.monto || '';
+            document.getElementById('vencMoneda').value = v.moneda || 'ARS';
+            document.getElementById('vencDescripcion').value = v.descripcion || '';
+            document.getElementById('vencAviso10').checked = !v.diasAviso || v.diasAviso.indexOf(10) !== -1;
+            document.getElementById('vencAviso5').checked  = !v.diasAviso || v.diasAviso.indexOf(5)  !== -1;
+            document.getElementById('vencEmailAlerta').value = v.emailAlerta || '';
+            _setVencRecurrente(!!v.recurrente);
+            document.getElementById('vencPaso1').style.display = 'none';
+            document.getElementById('vencPaso2').style.display = '';
+        } else {
+            ['vencAlias','vencEmpresaProveedora','vencCuit','vencFecha','vencMonto','vencDescripcion','vencEmailAlerta'].forEach(function(fid) {
+                var el = document.getElementById(fid); if (el) el.value = '';
+            });
+            document.getElementById('vencMoneda').value = 'ARS';
+            document.getElementById('vencAviso10').checked = true;
+            document.getElementById('vencAviso5').checked = true;
+            _setVencRecurrente(false);
+            document.getElementById('vencPaso1').style.display = '';
+            document.getElementById('vencPaso2').style.display = 'none';
+        }
+        document.getElementById('modalVencimiento').classList.add('active');
+    }
+
+    function cerrarModalVencimiento() {
+        document.getElementById('modalVencimiento').classList.remove('active');
+        editandoVencId = null;
+    }
+
+    function _vencIrACargaManual() {
+        document.getElementById('vencPaso1').style.display = 'none';
+        document.getElementById('vencPaso2').style.display = '';
+    }
+
+    function _setVencRecurrente(si) {
+        document.getElementById('vencRecurrente').value = si ? 'true' : 'false';
+        document.getElementById('vencRecurrenteSiBtn').className = 'modalidad-btn' + (si ? ' selected-A' : '');
+        document.getElementById('vencRecurrenteNoBtn').className = 'modalidad-btn' + (!si ? ' selected-B' : '');
+    }
+
+    async function procesarVencimientoPDF() {
+        var fileInput = document.getElementById('vencArchivo');
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) { alert('Seleccioná un archivo PDF o imagen.'); return; }
+
+        var MAX_MB = 20;
+        if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_MB + ' MB.'); return; }
+
+        var estadoEl = document.getElementById('vencEstado');
+        estadoEl.textContent = '⏳ Leyendo el archivo…';
+
+        try {
+            var b64 = await new Promise(function(res, rej) {
+                var r = new FileReader();
+                r.onload = function(){ res(r.result.split(',')[1]); };
+                r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
+                r.readAsDataURL(file);
+            });
+
+            estadoEl.textContent = '🤖 Enviando a Gemini para análisis…';
+            var mimeType = file.type || 'application/pdf';
+
+            var prompt = 'Analizá esta factura de un servicio (luz, gas, internet, alquiler, expensas, etc.) y extraé los siguientes datos en formato JSON puro (sin markdown, sin explicación extra, solo el objeto JSON):\n' +
+                '{\n' +
+                '  "empresaProveedora": "nombre de la empresa que emite la factura (ej: EDESUR, Telecom, Metrogas)",\n' +
+                '  "cuit": "CUIT del emisor con guiones (ej: 20-12345678-9), o null",\n' +
+                '  "fechaVencimiento": "fecha límite de pago en formato YYYY-MM-DD, o null si no figura",\n' +
+                '  "monto": importe total a pagar numérico sin símbolo de moneda (ej: 15000.50), o null si no figura,\n' +
+                '  "moneda": "ARS o USD",\n' +
+                '  "descripcion": "descripción breve del servicio facturado (ej: Factura de electricidad, período tal)"\n' +
+                '}\n' +
+                'Si algún campo no está disponible usá null. Respondé SOLO el JSON, sin texto adicional.';
+
+            var body = {
+                contents: [{ parts: [ { inline_data: { mime_type: mimeType, data: b64 } }, { text: prompt } ] }],
+                generationConfig: { temperature: 0, maxOutputTokens: 1024 }
+            };
+
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var resp, lastErrMsg;
+            for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
+                if (_mi > 0) {
+                    estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
+                    await new Promise(function(r){ setTimeout(r, 4000); });
+                }
+                resp = await _geminiProxy(MODELOS_PDF[_mi], body);
+                if (resp.ok) { lastErrMsg = null; break; }
+                var _ed = await resp.json().catch(function(){ return {}; });
+                lastErrMsg = (_ed.error && _ed.error.message) || ('Error ' + resp.status);
+            }
+            if (lastErrMsg) throw new Error(lastErrMsg);
+
+            var data = await resp.json();
+            var candidate = ((data.candidates||[])[0]||{});
+            var texto = ((candidate.content||{}).parts||[]).map(function(p){ return p.text||''; }).join('').trim();
+            texto = texto.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+            var extracted;
+            try {
+                extracted = JSON.parse(texto);
+            } catch(e1) {
+                try {
+                    var jsonMatch = texto.match(/\{[\s\S]*\}/);
+                    if (!jsonMatch) throw new Error('no match');
+                    extracted = JSON.parse(jsonMatch[0]);
+                } catch(e2) {
+                    console.error('Gemini respuesta cruda:', texto);
+                    var motivo = candidate.finishReason === 'MAX_TOKENS'
+                        ? 'La respuesta fue cortada. Intentá con un PDF más pequeño.'
+                        : 'Gemini no devolvió JSON válido. Revisá la consola para más detalles.';
+                    throw new Error(motivo);
+                }
+            }
+
+            estadoEl.textContent = '✅ Datos extraídos. Revisá y confirmá antes de guardar.';
+            _mostrarPreviewVencimiento(extracted);
+
+        } catch(err) {
+            var msgErr = err.message || 'Error al procesar el archivo.';
+            var esQuota = /quota|capacity|overloaded|saturad|demand|429|503/i.test(msgErr);
+            estadoEl.innerHTML = '❌ ' + msgErr +
+                (esQuota ? '<br><small>Gemini está saturado. Esperá unos segundos y reintentá.</small>' : '') +
+                '<br><button onclick="procesarVencimientoPDF()" style="margin-top:8px;padding:6px 14px;font-size:12px;border-radius:8px;border:1px solid var(--blue);background:#fff;color:var(--blue);cursor:pointer;">🔄 Reintentar</button>';
+        }
+    }
+
+    function _mostrarPreviewVencimiento(datos) {
+        if (datos.empresaProveedora) document.getElementById('vencEmpresaProveedora').value = datos.empresaProveedora;
+        if (datos.cuit)              document.getElementById('vencCuit').value = datos.cuit;
+        if (datos.fechaVencimiento)  document.getElementById('vencFecha').value = datos.fechaVencimiento;
+        if (datos.monto)             document.getElementById('vencMonto').value = datos.monto;
+        if (datos.moneda)            document.getElementById('vencMoneda').value = datos.moneda;
+        if (datos.descripcion)       document.getElementById('vencDescripcion').value = datos.descripcion;
+
+        var aliasEl = document.getElementById('vencAlias');
+        if (!aliasEl.value && datos.empresaProveedora) aliasEl.value = datos.empresaProveedora;
+
+        var alertaEl = document.getElementById('vencAlerta');
+        var alertas = [];
+        if (!datos.fechaVencimiento) alertas.push('⚠️ No se encontró la fecha de vencimiento — ingresala manualmente.');
+        if (!datos.monto) alertas.push('⚠️ No se encontró el monto — ingresalo manualmente si corresponde.');
+        if (alertas.length) { alertaEl.innerHTML = alertas.join('<br>'); alertaEl.style.display = ''; }
+        else { alertaEl.style.display = 'none'; }
+
+        document.getElementById('vencPaso1').style.display = 'none';
+        document.getElementById('vencPaso2').style.display = '';
+        document.getElementById('modalVencTitle').textContent = '✅ Confirmá los datos extraídos';
+        setTimeout(function(){ aliasEl.focus(); }, 50);
+    }
+
+    async function guardarVencimiento() {
+        var alias = document.getElementById('vencAlias').value.trim();
+        var fecha = document.getElementById('vencFecha').value;
+        if (!alias) { alert('Ingresá un alias para el servicio (ej: Luz oficina).'); return; }
+        if (!fecha) { alert('La fecha de vencimiento es obligatoria.'); return; }
+
+        var diasAviso = [];
+        if (document.getElementById('vencAviso10').checked) diasAviso.push(10);
+        if (document.getElementById('vencAviso5').checked)  diasAviso.push(5);
+
+        var anterior = editandoVencId ? (vencimientos||[]).find(function(x){ return x.id === editandoVencId; }) : null;
+        var fechaCambio = anterior && anterior.fechaVencimiento !== fecha;
+
+        var nuevo = {
+            id: editandoVencId || ('VS-' + Date.now() + '-' + Math.floor(Math.random()*1000)),
+            alias: alias,
+            empresaProveedora: document.getElementById('vencEmpresaProveedora').value.trim(),
+            cuit: document.getElementById('vencCuit').value.trim(),
+            fechaVencimiento: fecha,
+            monto: parseFloat(document.getElementById('vencMonto').value) || 0,
+            moneda: document.getElementById('vencMoneda').value || 'ARS',
+            descripcion: document.getElementById('vencDescripcion').value.trim(),
+            diasAviso: diasAviso.length ? diasAviso : [10, 5],
+            emailAlerta: document.getElementById('vencEmailAlerta').value.trim(),
+            recurrente: document.getElementById('vencRecurrente').value === 'true',
+            pagado: anterior ? !!anterior.pagado : false,
+            fechaPago: anterior ? (anterior.fechaPago || null) : null,
+            recordatorios: (anterior && !fechaCambio) ? (anterior.recordatorios || {}) : {},
+            adjuntoId: anterior ? (anterior.adjuntoId || null) : null,
+            adjuntoNombre: anterior ? (anterior.adjuntoNombre || null) : null,
+            creadoEn: anterior ? (anterior.creadoEn || Date.now()) : Date.now()
+        };
+
+        var fileInput = document.getElementById('vencArchivo');
+        var file = fileInput.files && fileInput.files[0];
+
+        try {
+            if (file) {
+                var MAX_MB = 20;
+                if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_MB + ' MB.'); return; }
+                var b64 = await new Promise(function(res, rej) {
+                    var r = new FileReader();
+                    r.onload = function(){ res(r.result.split(',')[1]); };
+                    r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
+                    r.readAsDataURL(file);
+                });
+                var docId = 'VENC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                var esImg = (file.type||'').startsWith('image/');
+                var ext = esImg ? ('.' + (file.type||'image/jpeg').split('/')[1]) : '.pdf';
+                var nombreArchivo = alias.replace(/[^a-zA-Z0-9\-_]/g, '_') + ext;
+                await REF_DOCS.child(docId).set({ nombre: nombreArchivo, tipo: file.type || 'application/pdf', contenido: b64 });
+                nuevo.adjuntoId = docId;
+                nuevo.adjuntoNombre = nombreArchivo;
+            }
+            await REF_VENCIMIENTOS.child(nuevo.id).set(nuevo);
+            cerrarModalVencimiento();
+        } catch (err) {
+            alert('No se pudo guardar: ' + (err.message || err));
+        }
+    }
+
+    // Calcula el estado visual de un vencimiento (pagado / vencido / próximo (≤10 días) / al día)
+    function _vencEstado(v) {
+        if (v.pagado) return { estado:'pagado', label:'Pagado', cssClass:'badge-ok' };
+        if (!v.fechaVencimiento) return { estado:'aldia', label:'Sin fecha', cssClass:'badge-warn' };
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var fv = new Date(v.fechaVencimiento + 'T00:00:00');
+        var dias = Math.round((fv - hoy) / 86400000);
+        if (dias < 0)  return { estado:'vencido', label:'Vencido hace ' + Math.abs(dias) + ' día' + (Math.abs(dias)===1?'':'s'), cssClass:'badge-err', dias:dias };
+        if (dias <= 10) return { estado:'proximo', label:'Vence en ' + dias + ' día' + (dias===1?'':'s'), cssClass:'badge-warn', dias:dias };
+        return { estado:'aldia', label:'Al día', cssClass:'badge-ok', dias:dias };
+    }
+
+    function renderVencimientos() {
+        if (!vencimientos) return;
+        var busq = (document.getElementById('buscadorVenc')?.value || '').toLowerCase();
+        var filtroEst = document.getElementById('filtroVencEstado')?.value || '';
+        var list = vencimientos.filter(function(v) {
+            var txt = ((v.alias||'') + (v.empresaProveedora||'')).toLowerCase();
+            if (busq && txt.indexOf(busq) === -1) return false;
+            if (filtroEst && _vencEstado(v).estado !== filtroEst) return false;
+            return true;
+        });
+        list.sort(function(a,b){ return (a.fechaVencimiento||'').localeCompare(b.fechaVencimiento||''); });
+        var tbody = document.getElementById('vencimientosBody');
+        if (!tbody) return;
+
+        var total = vencimientos.length;
+        var vencidos = vencimientos.filter(function(v){ return !v.pagado && _vencEstado(v).estado === 'vencido'; }).length;
+        var proximos = vencimientos.filter(function(v){ return !v.pagado && _vencEstado(v).estado === 'proximo'; }).length;
+        var el = function(id){ return document.getElementById(id); };
+        if (el('vencTotal'))     el('vencTotal').textContent = total;
+        if (el('vencVencidos'))  el('vencVencidos').textContent = vencidos;
+        if (el('vencProximos'))  el('vencProximos').textContent = proximos;
+
+        if (list.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay vencimientos cargados.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = '';
+        list.forEach(function(v) {
+            var est = _vencEstado(v);
+            var mon = v.moneda === 'USD' ? 'USD ' : '$';
+            var avisoTxt = (v.diasAviso && v.diasAviso.length) ? v.diasAviso.join('/') + ' días' : '—';
+            var tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escHtml(v.alias||'—')}</strong>${v.recurrente ? ' <span title="Se repite todos los meses">🔁</span>' : ''}</td>
+                <td>${escHtml(v.empresaProveedora||'—')}</td>
+                <td>${v.fechaVencimiento ? formatearFecha(v.fechaVencimiento) : '—'}</td>
+                <td style="text-align:right;">${v.monto ? mon + v.monto.toLocaleString('es-AR') : '—'}</td>
+                <td>${avisoTxt}</td>
+                <td><span class="pill ${est.cssClass}">${est.label}</span></td>
+                <td><div class="action-btns">
+                    ${!v.pagado ? `<button class="btn btn-gold btn-sm" onclick="marcarVencimientoPagado('${v.id}')">✓ Pagado</button>` : ''}
+                    ${v.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver factura" onclick="descargarDoc('${v.adjuntoId}','${escHtml(v.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
+                    <button class="btn btn-outline btn-sm" onclick="abrirModalVencimiento('${v.id}')">✏</button>
+                    <button class="btn btn-danger-sm" onclick="eliminarVencimiento('${v.id}')">✕</button>
+                </div></td>`;
+            tbody.appendChild(tr);
+        });
+    }
+
+    // Próximo vencimiento mensual: mismo día del mes siguiente, o último día si ese mes no lo tiene (ej: 31 → 28/29/30).
+    function _proximoVencimientoMensual(fechaStr) {
+        var f = new Date(fechaStr + 'T00:00:00');
+        var y = f.getFullYear(), m = f.getMonth(), d = f.getDate();
+        var next = new Date(y, m + 1, d);
+        if (next.getDate() !== d) next = new Date(y, m + 2, 0);
+        var yyyy = next.getFullYear();
+        var mm = String(next.getMonth() + 1).padStart(2, '0');
+        var dd = String(next.getDate()).padStart(2, '0');
+        return yyyy + '-' + mm + '-' + dd;
+    }
+
+    function _crearProximoVencimiento(v) {
+        var nuevo = {
+            id: 'VS-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+            alias: v.alias,
+            empresaProveedora: v.empresaProveedora || '',
+            cuit: v.cuit || '',
+            fechaVencimiento: _proximoVencimientoMensual(v.fechaVencimiento),
+            monto: v.monto || 0,
+            moneda: v.moneda || 'ARS',
+            descripcion: v.descripcion || '',
+            diasAviso: v.diasAviso || [10, 5],
+            emailAlerta: v.emailAlerta || '',
+            recurrente: true,
+            pagado: false,
+            fechaPago: null,
+            recordatorios: {},
+            adjuntoId: null,
+            adjuntoNombre: null,
+            creadoEn: Date.now()
+        };
+        REF_VENCIMIENTOS.child(nuevo.id).set(nuevo);
+    }
+
+    function marcarVencimientoPagado(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!v) return;
+        if (!confirm('¿Marcar "' + (v.alias||'este vencimiento') + '" como pagado?')) return;
+        var hoy = new Date().toISOString().slice(0,10);
+        REF_VENCIMIENTOS.child(id).update({ pagado: true, fechaPago: hoy }).then(function() {
+            if (v.recurrente) _crearProximoVencimiento(v);
+        });
+    }
+
+    function eliminarVencimiento(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!confirm('¿Eliminar este vencimiento de la agenda?')) return;
+        if (v && v.adjuntoId) REF_DOCS.child(v.adjuntoId).remove();
+        REF_VENCIMIENTOS.child(id).remove();
+    }
+
     // Elimina el movimiento de caja que proviene del pago de un Documento.
     // Quita el pago del documento y ofrece eliminar también el documento completo.
     function eliminarMovPagoDoc(docId, pagoId) {
@@ -13882,7 +14287,7 @@
 
         // Limpiar estado previo antes de cargar nueva empresa/proyecto
         desconectarListeners();
-        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         datosInicializado = false;
 
@@ -21917,6 +22322,89 @@
     </div>
 </div>
 
+<div class="modal" id="modalVencimiento">
+    <div class="modal-box modal-box-wide">
+        <div class="modal-head">
+            <h2 id="modalVencTitle">⏰ Subir factura de servicio</h2>
+            <button class="modal-close" onclick="cerrarModalVencimiento()">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="vencPaso1">
+                <div class="form-group">
+                    <label>Archivo de la factura (PDF o foto)</label>
+                    <input type="file" id="vencArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+                    <div class="form-hint" id="vencEstado"></div>
+                </div>
+                <div class="modal-footer" style="justify-content:space-between;">
+                    <button class="btn btn-outline" onclick="_vencIrACargaManual()">✏ Cargar los datos a mano</button>
+                    <button class="btn btn-primary" onclick="procesarVencimientoPDF()">🤖 Leer con IA</button>
+                </div>
+            </div>
+            <div id="vencPaso2" style="display:none;">
+                <div id="vencAlerta" class="form-hint" style="display:none;color:var(--warn);margin-bottom:8px;"></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label>Alias del servicio *</label>
+                        <input type="text" id="vencAlias" placeholder="Ej: Luz oficina, Internet, Alquiler">
+                    </div>
+                    <div class="form-group">
+                        <label>Empresa / proveedor</label>
+                        <input type="text" id="vencEmpresaProveedora" placeholder="Ej: EDESUR, Telecom">
+                    </div>
+                    <div class="form-group">
+                        <label>CUIT del proveedor</label>
+                        <input type="text" id="vencCuit" placeholder="20-12345678-9">
+                    </div>
+                    <div class="form-group">
+                        <label>Fecha de vencimiento *</label>
+                        <input type="date" id="vencFecha">
+                    </div>
+                    <div class="form-group">
+                        <label>Monto</label>
+                        <input type="number" id="vencMonto" placeholder="0.00" min="0" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Moneda</label>
+                        <select id="vencMoneda">
+                            <option value="ARS">ARS — Pesos</option>
+                            <option value="USD">USD — Dólares</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Descripción</label>
+                    <input type="text" id="vencDescripcion" placeholder="Concepto del servicio (opcional)">
+                </div>
+                <div class="form-group">
+                    <label>Avisar por mail con</label>
+                    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="vencAviso10" checked style="width:auto;"> 10 días de anticipación</label>
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="vencAviso5" checked style="width:auto;"> 5 días de anticipación</label>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label>Email de alerta <span style="color:var(--text-3);font-weight:400;">(opcional, si no se completa usa el email de la empresa)</span></label>
+                        <input type="email" id="vencEmailAlerta" placeholder="alguien@empresa.com">
+                    </div>
+                    <div class="form-group">
+                        <label>¿Se repite todos los meses?</label>
+                        <div class="modalidad-toggle" style="margin-top:2px;">
+                            <button type="button" class="modalidad-btn selected-B" id="vencRecurrenteNoBtn" onclick="_setVencRecurrente(false)">No</button>
+                            <button type="button" class="modalidad-btn" id="vencRecurrenteSiBtn" onclick="_setVencRecurrente(true)">✓ Sí, mensual</button>
+                        </div>
+                        <input type="hidden" id="vencRecurrente" value="false">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="cerrarModalVencimiento()">Cancelar</button>
+                    <button class="btn btn-primary" onclick="guardarVencimiento()">Guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ── MODAL: EMPRESA ── -->
 <div class="modal" id="modalEmpresa">
     <div class="modal-box modal-box-wide">
@@ -21994,6 +22482,7 @@
                     <div class="form-group">
                         <label>Email de contacto</label>
                         <input type="email" id="empEmail" placeholder="contacto@empresa.com">
+                        <div class="form-hint">También se usa para las alertas de la Agenda de Vencimientos, salvo que cargues un email distinto en cada vencimiento.</div>
                     </div>
                     <div class="form-group">
                         <label>Sitio web</label>
