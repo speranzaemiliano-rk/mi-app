@@ -7697,7 +7697,7 @@
         var _rh = buildReciboHeader('Comprobante de Retención', nroComp, emision, {
             nombre: provNombre || '—',
             label: 'Sujeto retenido',
-            detalle: [provCuit ? 'CUIT: ' + provCuit : '', provCondIva, provDir].filter(Boolean).join(' · ')
+            detalle: [provCuit ? 'CUIT: ' + provCuit : '', provCondIva].filter(Boolean).join(' · ') + (provDir ? '<br>' + provDir : '')
         });
 
         var retsHTML = rets.map(function(r){
@@ -8494,7 +8494,7 @@
       + '.partes{display:flex;gap:20px;margin-bottom:26px;padding:16px 20px;background:#fafafa;border-left:3px solid var(--gold);border-radius:4px;}'
       + '.parte{flex:1;}'
       + '.parte-label{font-size:9px;color:var(--gold);font-weight:800;margin-bottom:5px;text-transform:uppercase;letter-spacing:.14em;}'
-      + '.parte-nombre{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:3px;}'
+      + '.parte-nombre{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:7px;}'
       + '.parte-dato{font-size:11px;color:var(--muted);line-height:1.7;}'
       + 'table.tbl{width:100%;border-collapse:collapse;margin-bottom:28px;}'
       + 'table.tbl thead tr{background:var(--ink);}'
@@ -13655,29 +13655,43 @@
         }
     }
 
-    // Puebla el select de proveedor de "Agregar Comprobante", con opción para dar de alta uno nuevo sin salir del modal.
+    // Puebla el buscador de proveedor de "Agregar Comprobante" (input + datalist, permite tipear para buscar).
     function docPoblarProveedores(seleccionado) {
-        const sel = document.getElementById('docProveedor');
-        if (!sel) return;
-        const cur = seleccionado !== undefined ? seleccionado : sel.value;
-        sel.innerHTML = '<option value="">— Seleccioná proveedor —</option>';
+        const inp = document.getElementById('docProveedor');
+        const list = document.getElementById('docProveedorList');
+        if (!inp || !list) return;
+        const cur = seleccionado !== undefined ? seleccionado : inp.value;
+        list.innerHTML = '';
         proveedores.slice().sort((a,b) => (a.razonSocial||'').localeCompare(b.razonSocial||'')).forEach(p => {
             const o = document.createElement('option');
-            o.value = p.razonSocial; o.textContent = p.razonSocial;
-            sel.appendChild(o);
+            o.value = p.razonSocial;
+            list.appendChild(o);
         });
-        const oNuevo = document.createElement('option'); oNuevo.value = '__nuevo__'; oNuevo.textContent = '＋ Nuevo proveedor…'; sel.appendChild(oNuevo);
-        if (cur && cur !== '__nuevo__') sel.value = cur;
+        inp.value = cur || '';
+        docOnProveedorInput();
+    }
+
+    // Mientras se tipea: avisa si el nombre no coincide con ningún proveedor cargado.
+    function docOnProveedorInput() {
+        const inp = document.getElementById('docProveedor');
+        const hint = document.getElementById('docProveedorHint');
+        if (!inp || !hint) return;
+        const val = inp.value.trim();
+        if (!val || buscarProveedorPorNombre(val)) { hint.textContent = ''; return; }
+        hint.textContent = 'No encontramos este proveedor. Tocá ＋ para darlo de alta.';
     }
 
     function docOnProveedorChange() {
-        const sel = document.getElementById('docProveedor');
-        if (sel.value === '__nuevo__') { sel.value = ''; docAltaProveedorRapida(); }
+        docOnProveedorInput();
     }
 
     // Alta rápida de proveedor sin perder el comprobante que se está cargando
     function docAltaProveedorRapida() {
+        const escrito = (document.getElementById('docProveedor').value || '').trim();
         agregarProveedor();
+        if (escrito && !buscarProveedorPorNombre(escrito)) {
+            document.getElementById('provRazon').value = escrito;
+        }
         const mp = document.getElementById('modalProv');
         if (mp) mp.style.zIndex = 600; // por encima de modalDoc
         window._provAltaCallback = function(nuevoProv) {
@@ -13748,12 +13762,16 @@
     }
 
     async function guardarDoc() {
-        const proveedor = document.getElementById('docProveedor').value;
+        const proveedor = document.getElementById('docProveedor').value.trim();
         const fecha = document.getElementById('docFecha').value;
         const descripcion = document.getElementById('docDescripcion').value.trim();
         const importe = parseFloat(document.getElementById('docImporte').value) || 0;
         if (!proveedor || !fecha || !descripcion || !importe) {
             alert('Completá los campos obligatorios: proveedor, fecha, descripción e importe.');
+            return;
+        }
+        if (!buscarProveedorPorNombre(proveedor)) {
+            alert('No encontramos "' + proveedor + '" entre los proveedores cargados. Tocá el botón ＋ para darlo de alta antes de guardar.');
             return;
         }
         // Si ya tiene pagos registrados vía el botón "Pagar" (pagosHistorial), ese historial
@@ -18090,6 +18108,13 @@
         abrirCobroCochera(idx);
     }
 
+    // Editar una cuota ya pagada (fecha, monto, forma de cobro) desde el Estado de Cuenta.
+    window.ecEditarCobroCuota = function(cIdx) {
+        var idx = parseInt(document.getElementById('ecIdx').value);
+        document.getElementById('modalEstadoCuenta').classList.remove('active');
+        abrirEditarCobroVenta(idx, cIdx);
+    };
+
     function _renderEstadoCuenta(v) {
         var nc         = v.nroCuotas || 0;
         var montoBase  = v.construccionBase || 0;
@@ -18193,13 +18218,15 @@
                 var fechaISOS = fechasSimple[j] || (d0Simple ? (function(j2){ var d=new Date(d0Simple); d.setMonth(d.getMonth()+j2); return d.toISOString().slice(0,10); })(j) : '');
                 var pagadaS = cobrosSimple.some(function(c){ return c.nroCuota === nroCuotaS; });
                 var cobroRegS = cobrosSimple.find(function(c){ return c.nroCuota === nroCuotaS; });
+                var _cobroRealS = pagadaS ? (v.cobrosHistorial||[]).findIndex(function(c){ return c.comp===compKeySimple && c.nroCuota===nroCuotaS; }) : -1;
                 var dVS = fechaISOS ? new Date(fechaISOS+'T00:00:00') : null;
                 var vencidaS = !pagadaS && dVS && dVS < hoy;
                 var diasRestantesS = (!pagadaS && dVS) ? Math.ceil((dVS - hoy) / 86400000) : null;
 
                 var estadoHtmlS, trBgS;
                 if (pagadaS) {
-                    estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
+                    estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>'
+                        + (_cobroRealS >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealS+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '');
                     trBgS = '#F8FFF8';
                 } else if (vencidaS) {
                     estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida hace '+Math.abs(diasRestantesS)+' Días</span>';
@@ -18233,13 +18260,15 @@
                 var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
                 var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
                 var cobroReg = cobros.find(function(c){ return c.nroCuota === nroCuota; });
+                var _cobroRealEC = pagada ? (v.cobrosHistorial||[]).findIndex(function(c){ return c.comp==='cuota' && c.nroCuota===nroCuota; }) : -1;
                 var dV = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
                 var vencida = !pagada && dV && dV < hoy;
                 var diasRestantes = (!pagada && dV) ? Math.ceil((dV - hoy) / 86400000) : null;
 
                 var estadoHtml, trBg;
                 if (pagada) {
-                    estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
+                    estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>'
+                        + (_cobroRealEC >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealEC+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '');
                     trBg = '#F8FFF8';
                 } else if (vencida) {
                     estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida hace '+Math.abs(diasRestantes)+' Días</span>';
@@ -22545,9 +22574,12 @@
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Proveedor *</label>
-                    <select id="docProveedor" onchange="docOnProveedorChange()">
-                        <option value="">— Seleccioná proveedor —</option>
-                    </select>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="docProveedor" list="docProveedorList" autocomplete="off" placeholder="Escribí para buscar…" style="flex:1;" oninput="docOnProveedorInput()" onchange="docOnProveedorChange()">
+                        <datalist id="docProveedorList"></datalist>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="docAltaProveedorRapida()" title="Nuevo proveedor" style="flex-shrink:0;">＋</button>
+                    </div>
+                    <div class="form-hint" id="docProveedorHint" style="color:var(--warn);"></div>
                 </div>
                 <div class="form-group">
                     <label>Fecha *</label>
