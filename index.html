@@ -5033,6 +5033,13 @@
                     <input type="file" id="docArchivo" accept=".pdf,.doc,.docx" style="font-size:12px; padding:6px;">
                     <div class="form-hint" id="docEstado"></div>
                 </div>
+                <div class="form-group" id="presupVincularFactWrap">
+                    <label>Vincular una factura ya cargada <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                    <select id="presupVincularFact" style="width:100%;">
+                        <option value="">— Ninguna —</option>
+                    </select>
+                    <div class="form-hint">Solo aparecen facturas que todavía no están vinculadas a ningún presupuesto.</div>
+                </div>
                 <!-- Panel compartir -->
                 <div id="panelCompartirPres" style="display:none; margin-bottom:16px; border:1px solid #E5CC88; border-radius:10px; padding:14px; background:var(--gold-pale);">
                     <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--warn); margin-bottom:10px;">Compartir con otras empresas/proyectos</div>
@@ -6243,6 +6250,45 @@
     // ── Leer presupuesto desde PDF/imagen con IA ───────────────────
     var _leerPresupArchivoDB64 = null;
     var _leerPresupArchivoTipo = null;
+    var _leerPresupArchivoNombre = null;
+
+    // Muestra, en lugar del hint de texto simple, una tarjeta clara de que el archivo
+    // leído por IA ya está listo para adjuntarse (con link para verlo y para quitarlo).
+    function _mostrarArchivoPresupPendiente() {
+        var el = document.getElementById('docEstado');
+        if (!el) return;
+        if (!_leerPresupArchivoDB64) { el.innerHTML = ''; return; }
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--gold-pale);border:1px solid #E5CC88;border-radius:8px;margin-top:4px;">' +
+            '<span>📎</span>' +
+            '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;">' + escHtml(_leerPresupArchivoNombre || 'archivo analizado') + ' — ya está cargado, se adjunta al guardar</span>' +
+            '<a href="#" onclick="_verArchivoPresupPendiente();return false;" style="font-size:12px;font-weight:600;">ver</a>' +
+            '<a href="#" onclick="presupQuitarArchivoPendiente();return false;" style="font-size:12px;color:var(--danger);">quitar</a>' +
+            '</div>';
+    }
+
+    function _verArchivoPresupPendiente() {
+        if (!_leerPresupArchivoDB64) return;
+        try {
+            var byteStr = atob(_leerPresupArchivoDB64);
+            var arr = new Uint8Array(byteStr.length);
+            for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
+            var blob = new Blob([arr], { type: _leerPresupArchivoTipo || 'application/pdf' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.target = '_blank'; a.rel = 'noopener';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+        } catch(e) { alert('No se pudo abrir el archivo.'); }
+    }
+
+    // Descarta el archivo leído por IA sin guardarlo (para adjuntar otro manualmente en su lugar).
+    function presupQuitarArchivoPendiente() {
+        _leerPresupArchivoDB64 = null;
+        _leerPresupArchivoTipo = null;
+        _leerPresupArchivoNombre = null;
+        var el = document.getElementById('docEstado');
+        if (el) el.innerHTML = '';
+    }
 
     function abrirLeerPresup() {
         document.getElementById('leerPresupArchivo').value = '';
@@ -6337,7 +6383,8 @@
             // agregarFila() ya limpió las variables del archivo leído — las reasignamos después de llamarla
             _leerPresupArchivoDB64 = b64;
             _leerPresupArchivoTipo = mimeType;
-            document.getElementById('docEstado').textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
+            _leerPresupArchivoNombre = file.name;
+            _mostrarArchivoPresupPendiente();
             if (extracted.proveedor) {
                 var provMatch = buscarProveedorAprox(extracted.proveedor);
                 poblarSelectProveedores(provMatch ? provMatch.razonSocial : extracted.proveedor);
@@ -6371,7 +6418,10 @@
         renderCheckboxesCompartir('checkboxesCompartirPres', 'panelCompartirPres');
         _leerPresupArchivoDB64 = null;
         _leerPresupArchivoTipo = null;
+        _leerPresupArchivoNombre = null;
         presupChequearProvNuevo();
+        const wrapVinc = document.getElementById('presupVincularFactWrap');
+        if (wrapVinc) { wrapVinc.style.display = ''; poblarFacturasSinPresupuesto(); }
         document.getElementById('modal').classList.add('active');
     }
 
@@ -6412,6 +6462,9 @@
         // En edicion no se re-comparte
         const panelPres = document.getElementById('panelCompartirPres');
         if (panelPres) panelPres.style.display = 'none';
+        // Vincular factura existente: solo tiene sentido al crear un presupuesto nuevo
+        const wrapVinc = document.getElementById('presupVincularFactWrap');
+        if (wrapVinc) wrapVinc.style.display = 'none';
         document.getElementById('modal').classList.add('active');
     }
 
@@ -6428,6 +6481,21 @@
             if (aviso) aviso.style.display = 'none';
             nombres.forEach(n => { const o = document.createElement('option'); o.value = o.textContent = n; if (n === seleccionado) o.selected = true; sel.appendChild(o); });
         }
+    }
+
+    // Lista, para vincular a un presupuesto nuevo, las facturas que ya están cargadas
+    // pero todavía no quedaron vinculadas a ningún presupuesto.
+    function poblarFacturasSinPresupuesto() {
+        const sel = document.getElementById('presupVincularFact');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Ninguna —</option>';
+        facturas.forEach((f, idx) => {
+            if (f.presupuestoIdx !== undefined) return;
+            const opt = document.createElement('option');
+            opt.value = idx;
+            opt.textContent = (f.proveedor || '—') + (f.numero ? ' Nº' + f.numero : '') + ' — $' + Math.round(f.importe || 0).toLocaleString('es-AR');
+            sel.appendChild(opt);
+        });
     }
 
     function poblarDatalists() {
@@ -6490,16 +6558,26 @@
             try {
                 document.getElementById('docEstado').textContent = 'Subiendo documento…';
                 const extArchivo = (_leerPresupArchivoTipo||'').startsWith('image/') ? ('.' + (_leerPresupArchivoTipo||'image/jpeg').split('/')[1]) : '.pdf';
+                const nombreArch = _leerPresupArchivoNombre || ('presupuesto' + extArchivo);
                 const docId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-                await REF_DOCS.child(docId).set({ nombre: 'presupuesto' + extArchivo, tipo: _leerPresupArchivoTipo, contenido: 'data:' + _leerPresupArchivoTipo + ';base64,' + _leerPresupArchivoDB64 });
-                nuevoDato.docId = docId; nuevoDato.docNombre = 'presupuesto' + extArchivo; nuevoDato.docTipo = _leerPresupArchivoTipo;
-                _leerPresupArchivoDB64 = null; _leerPresupArchivoTipo = null;
+                await REF_DOCS.child(docId).set({ nombre: nombreArch, tipo: _leerPresupArchivoTipo, contenido: 'data:' + _leerPresupArchivoTipo + ';base64,' + _leerPresupArchivoDB64 });
+                nuevoDato.docId = docId; nuevoDato.docNombre = nombreArch; nuevoDato.docTipo = _leerPresupArchivoTipo;
+                _leerPresupArchivoDB64 = null; _leerPresupArchivoTipo = null; _leerPresupArchivoNombre = null;
             } catch (err) { alert('No se pudo subir el documento: ' + (err.message || err)); return; }
         }
+        const _esPresupNuevo = editandoIndex < 0;
         if (editandoIndex >= 0) { nuevoDato.recibo = anterior.recibo || generarNumeroRecibo(); datos[editandoIndex] = nuevoDato; }
         else { nuevoDato.recibo = generarNumeroRecibo(); datos.push(nuevoDato); }
         cerrarModal();
         persistir();
+        // Vincular una factura ya cargada (elegida en "Vincular una factura ya cargada")
+        if (_esPresupNuevo) {
+            const vincFactIdx = parseInt(document.getElementById('presupVincularFact').value);
+            if (!isNaN(vincFactIdx) && facturas[vincFactIdx]) {
+                facturas[vincFactIdx].presupuestoIdx = datos.length - 1;
+                persistirFacturas();
+            }
+        }
         // Compartir con proyectos seleccionados
         const selPres = leerSeleccionCompartir('checkboxesCompartirPres');
         if (selPres.length > 0) {
@@ -25380,8 +25458,8 @@
       if (f._pdfBase64) {
         window._leerPresupArchivoDB64 = f._pdfBase64;
         window._leerPresupArchivoTipo = f._pdfMime || 'application/pdf';
-        var docEstadoEl = document.getElementById('docEstado');
-        if (docEstadoEl) docEstadoEl.textContent = '📎 Se va a adjuntar el archivo analizado al guardar.';
+        window._leerPresupArchivoNombre = f._pdfNombre || null;
+        if (typeof _mostrarArchivoPresupPendiente === 'function') _mostrarArchivoPresupPendiente();
       }
       if (f.proveedor && typeof buscarProveedorAprox === 'function') {
         var provMatchRk = buscarProveedorAprox(f.proveedor);
