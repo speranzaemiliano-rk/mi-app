@@ -960,9 +960,10 @@ if (mailBotConfigurado()) {
 
 // ═══════════════════════════════════════════════════════════════════
 //  AGENDA DE VENCIMIENTOS — alerta por mail de servicios próximos a vencer
-//  Lee empresas/*/proyectos/*/vencimientosServicios desde Firebase Admin,
-//  y manda un mail (por el mismo SMTP del mail bot) cuando faltan los días
-//  indicados en `diasAviso` de cada vencimiento y todavía no se avisó.
+//  Lee global/vencimientosServicios (colección plana, cruza todas las
+//  empresas — cada registro trae su propio empresaId) y manda un mail
+//  (por el mismo SMTP del mail bot) cuando faltan los días indicados en
+//  `diasAviso` de cada vencimiento y todavía no se avisó.
 // ═══════════════════════════════════════════════════════════════════
 let _vencimientosCorriendo = false;
 
@@ -980,47 +981,46 @@ async function revisarVencimientos() {
 
     let revisados = 0, avisados = 0;
     try {
-        const snap = await admin.database().ref('empresas').once('value');
-        const empresasVal = snap.val() || {};
+        const [vencSnap, empSnap] = await Promise.all([
+            admin.database().ref('global/vencimientosServicios').once('value'),
+            admin.database().ref('empresas').once('value')
+        ]);
+        const vencimientosVal = vencSnap.val() || {};
+        const empresasVal = empSnap.val() || {};
         const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
 
-        for (const empId of Object.keys(empresasVal)) {
-            const emp = empresasVal[empId] || {};
+        for (const vencId of Object.keys(vencimientosVal)) {
+            const v = vencimientosVal[vencId];
+            if (!v || v.pagado || !v.fechaVencimiento) continue;
+            revisados++;
+            const fechaVenc = new Date(v.fechaVencimiento + 'T00:00:00');
+            if (isNaN(fechaVenc.getTime())) continue;
+            const diasRestantes = Math.round((fechaVenc - hoy) / 86400000);
+            if (diasRestantes < 0) continue;
+            const diasAviso = Array.isArray(v.diasAviso) && v.diasAviso.length ? v.diasAviso : [10, 5];
+            const recordatorios = v.recordatorios || {};
+
+            const emp = (v.empresaId && empresasVal[v.empresaId]) || {};
             const emailEmpresa = (emp.datos && emp.datos.email) || '';
-            const proyectos = emp.proyectos || {};
-            for (const proyId of Object.keys(proyectos)) {
-                const vencimientos = (proyectos[proyId] || {}).vencimientosServicios || {};
-                for (const vencId of Object.keys(vencimientos)) {
-                    const v = vencimientos[vencId];
-                    if (!v || v.pagado || !v.fechaVencimiento) continue;
-                    revisados++;
-                    const fechaVenc = new Date(v.fechaVencimiento + 'T00:00:00');
-                    if (isNaN(fechaVenc.getTime())) continue;
-                    const diasRestantes = Math.round((fechaVenc - hoy) / 86400000);
-                    if (diasRestantes < 0) continue;
-                    const diasAviso = Array.isArray(v.diasAviso) && v.diasAviso.length ? v.diasAviso : [10, 5];
-                    const recordatorios = v.recordatorios || {};
 
-                    for (const dia of diasAviso) {
-                        if (diasRestantes > dia || recordatorios[String(dia)]) continue;
-                        const destino = v.emailAlerta || emailEmpresa || emailDefault;
-                        if (!destino) continue;
+            for (const dia of diasAviso) {
+                if (diasRestantes > dia || recordatorios[String(dia)]) continue;
+                const destino = v.emailAlerta || emailEmpresa || emailDefault;
+                if (!destino) continue;
 
-                        const asunto = '⏰ Vence "' + (v.alias || v.empresaProveedora || 'un servicio') + '" en ' + diasRestantes + ' día(s)';
-                        const cuerpo = 'Hola,\n\n' +
-                            'El servicio "' + (v.alias || '(sin alias)') + '"' + (v.empresaProveedora ? ' de ' + v.empresaProveedora : '') + '\n' +
-                            'vence el ' + v.fechaVencimiento + ' (en ' + diasRestantes + ' día(s)).\n' +
-                            (v.monto ? 'Monto: ' + (v.moneda || 'ARS') + ' ' + v.monto + '\n' : '') +
-                            '\nEmpresa: ' + (emp.nombre || empId) +
-                            '\n\n— Agenda de Vencimientos, RK Gestión Multiempresa';
+                const asunto = '⏰ Vence "' + (v.alias || v.empresaProveedora || 'un servicio') + '" en ' + diasRestantes + ' día(s)';
+                const cuerpo = 'Hola,\n\n' +
+                    'El servicio "' + (v.alias || '(sin alias)') + '"' + (v.empresaProveedora ? ' de ' + v.empresaProveedora : '') + '\n' +
+                    'vence el ' + v.fechaVencimiento + ' (en ' + diasRestantes + ' día(s)).\n' +
+                    (v.monto ? 'Monto: ' + (v.moneda || 'ARS') + ' ' + v.monto + '\n' : '') +
+                    '\nEmpresa: ' + (emp.nombre || v.empresaId || 'sin asignar') +
+                    '\n\n— Agenda de Vencimientos, RK Gestión Multiempresa';
 
-                        await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to: destino, subject: asunto, text: cuerpo });
-                        await admin.database()
-                            .ref('empresas/' + empId + '/proyectos/' + proyId + '/vencimientosServicios/' + vencId + '/recordatorios/' + dia)
-                            .set(true);
-                        avisados++;
-                    }
-                }
+                await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to: destino, subject: asunto, text: cuerpo });
+                await admin.database()
+                    .ref('global/vencimientosServicios/' + vencId + '/recordatorios/' + dia)
+                    .set(true);
+                avisados++;
             }
         }
     } finally {

@@ -49,9 +49,10 @@
             auth = firebase.auth();
             db = firebase.database();
             REF_DATOS    = null;  // Se asigna en actualizarRefs() al elegir empresa/proyecto
-            // Proveedores y grupos son GLOBALES (compartidos entre todas las empresas/proyectos)
+            // Proveedores, grupos y vencimientos son GLOBALES (compartidos entre todas las empresas/proyectos)
             REF_PROV     = db.ref('global/proveedores');
             REF_GRUPOS   = db.ref('global/grupos');
+            REF_VENCIMIENTOS = db.ref('global/vencimientosServicios');
             REF_CAC      = null;
             REF_DOCS     = null;
             REF_TC       = null;
@@ -60,7 +61,6 @@
             REF_CAJA     = null;
             REF_INGRESOS = null;
             REF_BANCO    = null;
-            REF_VENCIMIENTOS = null;
             REF_ROLES        = db.ref('roles');
             REF_USUARIOS     = db.ref('usuarios');
             REF_SOLICITUDES  = db.ref('solicitudesBorrado');
@@ -2544,6 +2544,12 @@
             </button>
             </div>
 
+            <div class="nav-block" data-navkey="vencimientos">
+            <button class="nav-item nav-group-header" id="tabBtnVencimientos" onclick="mostrarTab('Vencimientos')" title="Agenda de vencimientos de servicios (luz, internet, alquiler, etc.), de todas las empresas">
+                <span class="nav-drag-handle">⠿</span><span class="nav-icon">event_upcoming</span> Vencimientos
+            </button>
+            </div>
+
             <div class="nav-block" data-navkey="desarrollos">
             <button class="nav-item nav-group-header" id="tabBtnDesarrollos" onclick="mostrarTab('Desarrollos')" title="Desarrollos inmobiliarios">
                 <span class="nav-drag-handle">⠿</span><span class="nav-icon">apartment</span> Desarrollos Inmobiliarios
@@ -2633,9 +2639,6 @@
                     </button>
                     <button class="nav-item nav-sub" id="tabBtnDocumentos" data-navkey="documentos" onclick="mostrarTab('Documentos')" title="Comprobantes sin factura (pagos B)">
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">folder_open</span> Documentos
-                    </button>
-                    <button class="nav-item nav-sub" id="tabBtnVencimientos" data-navkey="vencimientos" onclick="mostrarTab('Vencimientos')" title="Agenda de vencimientos de servicios (luz, internet, alquiler, etc.)">
-                        <span class="nav-drag-handle">⠿</span><span class="nav-icon">event_upcoming</span> Vencimientos
                     </button>
                     <div style="height:1px;background:rgba(255,255,255,.08);margin:4px 12px;"></div>
                     <button class="nav-item nav-sub" id="tabBtnPagos" data-navkey="pagosprov" onclick="mostrarTab('Pagos')" title="Todos los pagos a proveedores">
@@ -3570,7 +3573,10 @@
                         <button class="btn btn-primary btn-sm" id="btnAgregarVenc" onclick="abrirModalVencimiento()">＋ Subir factura de servicio</button>
                     </div>
                     <div class="search-row">
-                        <input type="text" class="search-input" id="buscadorVenc" oninput="renderVencimientos()" placeholder="Buscar por alias, empresa…">
+                        <input type="text" class="search-input" id="buscadorVenc" oninput="renderVencimientos()" placeholder="Buscar por alias, proveedor…">
+                        <select id="filtroVencEmpresa" onchange="renderVencimientos()" style="width:auto; min-width:160px;">
+                            <option value="">Todas las empresas</option>
+                        </select>
                         <select id="filtroVencEstado" onchange="renderVencimientos()" style="width:auto; min-width:160px;">
                             <option value="">Todos los estados</option>
                             <option value="vencido">Vencidos</option>
@@ -3585,14 +3591,15 @@
                                 <tr>
                                     <th class="sortable" onclick="sortTable('vencimientosBody',0,this)">Alias<i class="si">⇅</i></th>
                                     <th class="sortable" onclick="sortTable('vencimientosBody',1,this)">Empresa<i class="si">⇅</i></th>
-                                    <th class="sortable" onclick="sortTable('vencimientosBody',2,this)">Vencimiento<i class="si">⇅</i></th>
-                                    <th class="sortable" onclick="sortTable('vencimientosBody',3,this)" style="text-align:right;">Monto<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',2,this)">Proveedor<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',3,this)">Vencimiento<i class="si">⇅</i></th>
+                                    <th class="sortable" onclick="sortTable('vencimientosBody',4,this)" style="text-align:right;">Monto<i class="si">⇅</i></th>
                                     <th>Aviso</th>
                                     <th>Estado<i class="si">⇅</i></th>
                                     <th>Acciones</th>
                                 </tr>
                             </thead>
-                            <tbody id="vencimientosBody"><tr><td colspan="7" class="empty-msg">No hay vencimientos cargados.</td></tr></tbody>
+                            <tbody id="vencimientosBody"><tr><td colspan="8" class="empty-msg">No hay vencimientos cargados.</td></tr></tbody>
                         </table>
                     </div>
                 </div>
@@ -5660,7 +5667,7 @@
         REF_INGRESOS = db.ref(base + '/ingresos');
         REF_BANCO        = db.ref(base + '/banco');  // Cuentas bancarias: por empresa/proyecto
         REF_CONTADOR_OP  = db.ref(base + '/contadorOP');  // Numeración correlativa órdenes de pago
-        REF_VENCIMIENTOS = db.ref(base + '/vencimientosServicios');  // Agenda de vencimientos de servicios
+        // REF_VENCIMIENTOS es GLOBAL (ver arriba): la agenda cruza todas las empresas/proyectos
         actualizarRefsIngresos();
         actualizarRefTareas();  // Pizarrón de tareas: por empresa, no compartido
     }
@@ -5870,7 +5877,7 @@
         if (empresaActual) mostrarSplashEmpresa(empresaActual.nombre);
         renderProyectoSelector();
         desconectarListeners();
-        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         limpiarIngresos();
         renderizar(); renderFacturas(); renderProveedores();
@@ -5889,7 +5896,7 @@
         renderProyectoSelector();
         desconectarListeners();
         // Limpiar estado en memoria ANTES de cargar nuevo proyecto
-        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         limpiarIngresos();
         renderizar(); renderFacturas(); renderProveedores();
@@ -8646,6 +8653,10 @@
         const btnDesarrollos = document.getElementById('tabBtnDesarrollos');
         if (btnDesarrollos) btnDesarrollos.classList.toggle('active', nombre === 'Desarrollos');
 
+        // Botón Vencimientos (top-level, fuera de Egresos: agenda cruza todas las empresas)
+        const btnVencimientos = document.getElementById('tabBtnVencimientos');
+        if (btnVencimientos) btnVencimientos.classList.toggle('active', nombre === 'Vencimientos');
+
         // Topbar: ocultar en Home y Dashboard, mostrar en el resto
         var topbar = document.querySelector('.topbar');
         if (topbar) topbar.style.display = (nombre === 'Home' || nombre === 'Dashboard') ? 'none' : '';
@@ -8657,7 +8668,7 @@
         });
 
         // Submenú Proveedores (ahora incluye Pagos)
-        const SUB_PROV = ['Presupuestos','Proveedores','Facturas','Documentos','Vencimientos','Pagos'];
+        const SUB_PROV = ['Presupuestos','Proveedores','Facturas','Documentos','Pagos'];
         SUB_PROV.forEach(t => {
             const btn = document.getElementById('tabBtn' + t);
             if (btn) btn.classList.toggle('active', t === nombre);
@@ -8675,7 +8686,7 @@
         if (provMenuBtn) provMenuBtn.classList.toggle('active', SUB_PROV.includes(nombre));
 
         // Grupo Egresos (engloba Resumen + Proveedores y sus secciones)
-        const EGRESOS_GROUP = ['Egresos','CompRecibidos','Presupuestos','Proveedores','Facturas','Documentos','Vencimientos','Pagos'];
+        const EGRESOS_GROUP = ['Egresos','CompRecibidos','Presupuestos','Proveedores','Facturas','Documentos','Pagos'];
         const egrMenuBtn = document.getElementById('tabBtnEgresosMenu');
         if (egrMenuBtn) egrMenuBtn.classList.toggle('active', EGRESOS_GROUP.includes(nombre));
 
@@ -13841,6 +13852,15 @@
         document.getElementById('vencArchivo').value = '';
         document.getElementById('vencEstado').textContent = '';
         document.getElementById('vencAlerta').style.display = 'none';
+
+        var dl = document.getElementById('vencProvList');
+        if (dl) {
+            dl.innerHTML = '';
+            (proveedores||[]).map(function(p){ return p.razonSocial; }).filter(Boolean).forEach(function(n){
+                var o = document.createElement('option'); o.value = n; dl.appendChild(o);
+            });
+        }
+
         if (v) {
             document.getElementById('vencAlias').value = v.alias || '';
             document.getElementById('vencEmpresaProveedora').value = v.empresaProveedora || '';
@@ -13853,6 +13873,8 @@
             document.getElementById('vencAviso5').checked  = !v.diasAviso || v.diasAviso.indexOf(5)  !== -1;
             document.getElementById('vencEmailAlerta').value = v.emailAlerta || '';
             _setVencRecurrente(!!v.recurrente);
+            _vencPoblarEmpresasSelect(v.empresaId);
+            _vencPoblarProyectos(v.proyectoId);
             document.getElementById('vencPaso1').style.display = 'none';
             document.getElementById('vencPaso2').style.display = '';
         } else {
@@ -13863,9 +13885,12 @@
             document.getElementById('vencAviso10').checked = true;
             document.getElementById('vencAviso5').checked = true;
             _setVencRecurrente(false);
+            _vencPoblarEmpresasSelect(null);
+            _vencPoblarProyectos(null);
             document.getElementById('vencPaso1').style.display = '';
             document.getElementById('vencPaso2').style.display = 'none';
         }
+        vencChequearProvNuevo();
         document.getElementById('modalVencimiento').classList.add('active');
     }
 
@@ -13883,6 +13908,76 @@
         document.getElementById('vencRecurrente').value = si ? 'true' : 'false';
         document.getElementById('vencRecurrenteSiBtn').className = 'modalidad-btn' + (si ? ' selected-A' : '');
         document.getElementById('vencRecurrenteNoBtn').className = 'modalidad-btn' + (!si ? ' selected-B' : '');
+    }
+
+    // Empresa a la que se le asigna el vencimiento (independiente de la empresa/proyecto activo)
+    function _vencPoblarEmpresasSelect(empIdSel) {
+        var sel = document.getElementById('vencAsignEmpresa');
+        if (!sel) return;
+        sel.innerHTML = '';
+        (empresas||[]).forEach(function(e) {
+            var o = document.createElement('option');
+            o.value = e.id; o.textContent = e.nombre;
+            sel.appendChild(o);
+        });
+        sel.value = empIdSel || (empresaActual ? empresaActual.id : '');
+    }
+
+    // Proyecto/desarrollo dependiente de la empresa elegida arriba
+    function _vencPoblarProyectos(proyIdSel) {
+        var selEmp  = document.getElementById('vencAsignEmpresa');
+        var selProy = document.getElementById('vencAsignProyecto');
+        if (!selEmp || !selProy) return;
+        var emp = (empresas||[]).find(function(e){ return e.id === selEmp.value; });
+        selProy.innerHTML = '<option value="">— Toda la empresa —</option>';
+        (emp && emp.proyectos || []).forEach(function(p) {
+            var o = document.createElement('option');
+            o.value = p.id; o.textContent = p.nombre;
+            selProy.appendChild(o);
+        });
+        selProy.value = proyIdSel || '';
+    }
+
+    // Chequea si el proveedor tipeado ya existe en el maestro global de Proveedores;
+    // si no, muestra el aviso y el botón para darlo de alta sin salir del modal.
+    function vencChequearProvNuevo() {
+        var inp   = document.getElementById('vencEmpresaProveedora');
+        var aviso = document.getElementById('vencProvNuevoAviso');
+        var btn   = document.getElementById('vencBtnAltaProv');
+        if (!inp || !aviso || !btn) return;
+        var val = inp.value.trim();
+        if (!val) { aviso.style.display = 'none'; btn.style.display = 'none'; return; }
+        var existe = !!buscarProveedorPorNombre(val);
+        aviso.style.display = existe ? 'none' : '';
+        btn.style.display   = existe ? 'none' : '';
+    }
+
+    // Da de alta el proveedor con los datos ya cargados, para poder usarlo después al registrar el pago.
+    function vencDarDeAltaProv() {
+        var prov = document.getElementById('vencEmpresaProveedora').value.trim();
+        var cuit = document.getElementById('vencCuit').value.trim();
+        if (!prov) { alert('Escribí el nombre del proveedor primero.'); return; }
+        if (buscarProveedorPorNombre(prov)) {
+            document.getElementById('vencProvNuevoAviso').style.display = 'none';
+            document.getElementById('vencBtnAltaProv').style.display   = 'none';
+            return;
+        }
+        var nuevoProv = {
+            id:           'P-' + Date.now(),
+            razonSocial:  prov,
+            cuit:         cuit || '',
+            condicionIVA: 'Responsable Inscripto',
+            grupo: '', rubro: '', telefono: '', direccion: '',
+            ret78: false, ret94: false, ret119: false, ret30: false,
+            retSUSSIng: false, retSUSSConst: false, retSUSSLimp: false
+        };
+        proveedores.push(nuevoProv);
+        persistirProveedores();
+        var dl = document.getElementById('vencProvList');
+        if (dl) { var o = document.createElement('option'); o.value = prov; dl.appendChild(o); }
+        document.getElementById('vencProvNuevoAviso').style.display = 'none';
+        document.getElementById('vencBtnAltaProv').style.display   = 'none';
+        alert('✅ Proveedor "' + prov + '" dado de alta. Ya lo podés usar para registrar el pago desde Facturas o Pagos a Proveedores.');
     }
 
     async function procesarVencimientoPDF() {
@@ -13981,6 +14076,7 @@
 
         var aliasEl = document.getElementById('vencAlias');
         if (!aliasEl.value && datos.empresaProveedora) aliasEl.value = datos.empresaProveedora;
+        vencChequearProvNuevo();
 
         var alertaEl = document.getElementById('vencAlerta');
         var alertas = [];
@@ -13998,7 +14094,9 @@
     async function guardarVencimiento() {
         var alias = document.getElementById('vencAlias').value.trim();
         var fecha = document.getElementById('vencFecha').value;
+        var empresaId = document.getElementById('vencAsignEmpresa').value;
         if (!alias) { alert('Ingresá un alias para el servicio (ej: Luz oficina).'); return; }
+        if (!empresaId) { alert('Elegí a qué empresa corresponde este vencimiento.'); return; }
         if (!fecha) { alert('La fecha de vencimiento es obligatoria.'); return; }
 
         var diasAviso = [];
@@ -14007,10 +14105,13 @@
 
         var anterior = editandoVencId ? (vencimientos||[]).find(function(x){ return x.id === editandoVencId; }) : null;
         var fechaCambio = anterior && anterior.fechaVencimiento !== fecha;
+        var proyectoId = document.getElementById('vencAsignProyecto').value || null;
 
         var nuevo = {
             id: editandoVencId || ('VS-' + Date.now() + '-' + Math.floor(Math.random()*1000)),
             alias: alias,
+            empresaId: empresaId,
+            proyectoId: proyectoId,
             empresaProveedora: document.getElementById('vencEmpresaProveedora').value.trim(),
             cuit: document.getElementById('vencCuit').value.trim(),
             fechaVencimiento: fecha,
@@ -14023,8 +14124,7 @@
             pagado: anterior ? !!anterior.pagado : false,
             fechaPago: anterior ? (anterior.fechaPago || null) : null,
             recordatorios: (anterior && !fechaCambio) ? (anterior.recordatorios || {}) : {},
-            adjuntoId: anterior ? (anterior.adjuntoId || null) : null,
-            adjuntoNombre: anterior ? (anterior.adjuntoNombre || null) : null,
+            adjunto: anterior ? (anterior.adjunto || null) : null,
             creadoEn: anterior ? (anterior.creadoEn || Date.now()) : Date.now()
         };
 
@@ -14041,13 +14141,13 @@
                     r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
                     r.readAsDataURL(file);
                 });
-                var docId = 'VENC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 var esImg = (file.type||'').startsWith('image/');
                 var ext = esImg ? ('.' + (file.type||'image/jpeg').split('/')[1]) : '.pdf';
-                var nombreArchivo = alias.replace(/[^a-zA-Z0-9\-_]/g, '_') + ext;
-                await REF_DOCS.child(docId).set({ nombre: nombreArchivo, tipo: file.type || 'application/pdf', contenido: b64 });
-                nuevo.adjuntoId = docId;
-                nuevo.adjuntoNombre = nombreArchivo;
+                nuevo.adjunto = {
+                    nombre:    alias.replace(/[^a-zA-Z0-9\-_]/g, '_') + ext,
+                    tipo:      file.type || 'application/pdf',
+                    contenido: b64
+                };
             }
             await REF_VENCIMIENTOS.child(nuevo.id).set(nuevo);
             cerrarModalVencimiento();
@@ -14070,12 +14170,25 @@
 
     function renderVencimientos() {
         if (!vencimientos) return;
+
+        // La agenda es global (todas las empresas): poblar el filtro de empresa una sola vez.
+        var selEmpFiltro = document.getElementById('filtroVencEmpresa');
+        if (selEmpFiltro && selEmpFiltro.options.length <= 1) {
+            (empresas||[]).forEach(function(e) {
+                var o = document.createElement('option');
+                o.value = e.id; o.textContent = e.nombre;
+                selEmpFiltro.appendChild(o);
+            });
+        }
+
         var busq = (document.getElementById('buscadorVenc')?.value || '').toLowerCase();
         var filtroEst = document.getElementById('filtroVencEstado')?.value || '';
+        var filtroEmp = selEmpFiltro ? selEmpFiltro.value : '';
         var list = vencimientos.filter(function(v) {
             var txt = ((v.alias||'') + (v.empresaProveedora||'')).toLowerCase();
             if (busq && txt.indexOf(busq) === -1) return false;
             if (filtroEst && _vencEstado(v).estado !== filtroEst) return false;
+            if (filtroEmp && v.empresaId !== filtroEmp) return false;
             return true;
         });
         list.sort(function(a,b){ return (a.fechaVencimiento||'').localeCompare(b.fechaVencimiento||''); });
@@ -14091,7 +14204,7 @@
         if (el('vencProximos'))  el('vencProximos').textContent = proximos;
 
         if (list.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay vencimientos cargados.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">No hay vencimientos cargados.</td></tr>';
             return;
         }
         tbody.innerHTML = '';
@@ -14099,9 +14212,16 @@
             var est = _vencEstado(v);
             var mon = v.moneda === 'USD' ? 'USD ' : '$';
             var avisoTxt = (v.diasAviso && v.diasAviso.length) ? v.diasAviso.join('/') + ' días' : '—';
+            var emp = (empresas||[]).find(function(e){ return e.id === v.empresaId; });
+            var empLabel = emp ? emp.nombre : '(empresa eliminada)';
+            if (emp && v.proyectoId) {
+                var proy = (emp.proyectos||[]).find(function(p){ return p.id === v.proyectoId; });
+                if (proy) empLabel += ' · ' + proy.nombre;
+            }
             var tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${escHtml(v.alias||'—')}</strong>${v.recurrente ? ' <span title="Se repite todos los meses">🔁</span>' : ''}</td>
+                <td>${escHtml(empLabel)}</td>
                 <td>${escHtml(v.empresaProveedora||'—')}</td>
                 <td>${v.fechaVencimiento ? formatearFecha(v.fechaVencimiento) : '—'}</td>
                 <td style="text-align:right;">${v.monto ? mon + v.monto.toLocaleString('es-AR') : '—'}</td>
@@ -14109,12 +14229,37 @@
                 <td><span class="pill ${est.cssClass}">${est.label}</span></td>
                 <td><div class="action-btns">
                     ${!v.pagado ? `<button class="btn btn-gold btn-sm" onclick="marcarVencimientoPagado('${v.id}')">✓ Pagado</button>` : ''}
-                    ${v.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver factura" onclick="descargarDoc('${v.adjuntoId}','${escHtml(v.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
+                    ${v.adjunto ? `<button class="btn btn-outline btn-sm" title="Ver factura" onclick="descargarVencimientoAdjunto('${v.id}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalVencimiento('${v.id}')">✏</button>
                     <button class="btn btn-danger-sm" onclick="eliminarVencimiento('${v.id}')">✕</button>
                 </div></td>`;
             tbody.appendChild(tr);
         });
+    }
+
+    // Abre el adjunto embebido de un vencimiento (base64 guardado en el propio registro).
+    function descargarVencimientoAdjunto(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!v || !v.adjunto || !v.adjunto.contenido) { alert('El adjunto no está disponible.'); return; }
+        var tipo   = v.adjunto.tipo || 'application/octet-stream';
+        var nombre = v.adjunto.nombre || 'factura';
+        try {
+            var base64  = v.adjunto.contenido.indexOf(',') !== -1 ? v.adjunto.contenido.split(',')[1] : v.adjunto.contenido;
+            var byteStr = atob(base64);
+            var arr     = new Uint8Array(byteStr.length);
+            for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
+            var blob = new Blob([arr], { type: tipo });
+            var url  = URL.createObjectURL(blob);
+            var esPDF    = tipo.indexOf('pdf') !== -1 || nombre.toLowerCase().endsWith('.pdf');
+            var esImagen = tipo.indexOf('image/') === 0;
+            var a = document.createElement('a');
+            if (esPDF || esImagen) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; }
+            else { a.href = url; a.download = nombre; }
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+        } catch (e) {
+            alert('No se pudo abrir el adjunto: ' + (e.message || e));
+        }
     }
 
     // Próximo vencimiento mensual: mismo día del mes siguiente, o último día si ese mes no lo tiene (ej: 31 → 28/29/30).
@@ -14133,6 +14278,8 @@
         var nuevo = {
             id: 'VS-' + Date.now() + '-' + Math.floor(Math.random()*1000),
             alias: v.alias,
+            empresaId: v.empresaId,
+            proyectoId: v.proyectoId || null,
             empresaProveedora: v.empresaProveedora || '',
             cuit: v.cuit || '',
             fechaVencimiento: _proximoVencimientoMensual(v.fechaVencimiento),
@@ -14145,8 +14292,7 @@
             pagado: false,
             fechaPago: null,
             recordatorios: {},
-            adjuntoId: null,
-            adjuntoNombre: null,
+            adjunto: null,
             creadoEn: Date.now()
         };
         REF_VENCIMIENTOS.child(nuevo.id).set(nuevo);
@@ -14163,9 +14309,7 @@
     }
 
     function eliminarVencimiento(id) {
-        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
         if (!confirm('¿Eliminar este vencimiento de la agenda?')) return;
-        if (v && v.adjuntoId) REF_DOCS.child(v.adjuntoId).remove();
         REF_VENCIMIENTOS.child(id).remove();
     }
 
@@ -14398,7 +14542,7 @@
 
         // Limpiar estado previo antes de cargar nueva empresa/proyecto
         desconectarListeners();
-        datos = []; facturas = []; documentos = []; cuentasBancarias = []; vencimientos = [];
+        datos = []; facturas = []; documentos = []; cuentasBancarias = [];
         ingresos = []; caja = { ars: 0, usd: 0 };
         datosInicializado = false;
 
@@ -22459,8 +22603,23 @@
                         <input type="text" id="vencAlias" placeholder="Ej: Luz oficina, Internet, Alquiler">
                     </div>
                     <div class="form-group">
-                        <label>Empresa / proveedor</label>
-                        <input type="text" id="vencEmpresaProveedora" placeholder="Ej: EDESUR, Telecom">
+                        <label>Empresa *<span style="color:var(--text-3);font-weight:400;"> (a quién le corresponde este gasto)</span></label>
+                        <select id="vencAsignEmpresa" onchange="_vencPoblarProyectos()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Proyecto / Desarrollo</label>
+                        <select id="vencAsignProyecto">
+                            <option value="">— Toda la empresa —</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Proveedor <span style="color:var(--text-3);font-weight:400;">(quién emite la factura)</span></label>
+                        <input type="text" id="vencEmpresaProveedora" list="vencProvList" placeholder="Ej: EDESUR, Telecom" oninput="vencChequearProvNuevo()">
+                        <datalist id="vencProvList"></datalist>
+                        <button type="button" id="vencBtnAltaProv" class="btn btn-gold btn-sm" onclick="vencDarDeAltaProv()" style="display:none;white-space:nowrap;margin-top:6px;">➕ Dar de alta como proveedor</button>
+                        <div id="vencProvNuevoAviso" style="display:none;margin-top:6px;font-size:12px;color:var(--warn);padding:6px 10px;background:var(--warn-bg);border-left:3px solid var(--warn);border-radius:3px;">
+                            ⚠️ Este proveedor no está cargado todavía. Dalo de alta para poder usarlo después al registrar el pago.
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>CUIT del proveedor</label>
