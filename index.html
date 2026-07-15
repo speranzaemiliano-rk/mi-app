@@ -16938,6 +16938,11 @@
         document.getElementById('alqDepMeses').value = '1';
         _poblarSelectsMesIPC();
         document.getElementById('alqIPCResultado').innerHTML = '';
+        document.getElementById('alqIPCAplicarWrap').style.display = 'none';
+        _alqAjustesCanonWorking = (a && a.ajustesCanon) ? a.ajustesCanon.slice() : [];
+        _renderAjustesCanonLista();
+        document.getElementById('alqArchivo').value = '';
+        _renderEstadoAdjunto('alqArchivoEstado', a && a.adjuntoNombre, a && a.adjuntoId);
         var hoy = new Date();
         if (a) {
             document.getElementById('alqUnidad').value       = a.unidad || '';
@@ -16991,13 +16996,52 @@
 
     function _poblarSelectsMesIPC() {
         var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-        ['alqIPCMesBase','alqIPCMesFin'].forEach(function(id) {
+        ['alqIPCMesBase','alqIPCMesFin','alqIPCVigDesdeMes'].forEach(function(id) {
             var sel = document.getElementById(id);
             if (!sel || sel.options.length) return;
             meses.forEach(function(m, i) {
                 var o = document.createElement('option'); o.value = i+1; o.textContent = m; sel.appendChild(o);
             });
         });
+    }
+
+    // Historial de ajustes de canon (a partir de qué período rige cada monto). Se arma en memoria
+    // mientras el modal está abierto y se persiste en guardarAlquiler(). Permite que el Plan de
+    // pagos sepa qué canon correspondía a cada mes SIN tocar los meses ya cobrados (quedan
+    // congelados con lo que realmente se cobró, sin importar los ajustes que se carguen después).
+    var _alqAjustesCanonWorking = [];
+    function _renderAjustesCanonLista() {
+        var cont = document.getElementById('alqAjustesLista');
+        if (!cont) return;
+        if (!_alqAjustesCanonWorking.length) { cont.innerHTML = ''; return; }
+        var meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        var ordenados = _alqAjustesCanonWorking.slice().sort(function(a,b){ return a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0; });
+        cont.innerHTML = '<div style="color:var(--text-3);margin-bottom:3px;">Ajustes de canon cargados:</div>' + ordenados.map(function(aj) {
+            var p = aj.periodo.split('-');
+            var lbl = meses[parseInt(p[1],10)-1] + ' ' + p[0];
+            return '<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;">'
+                + '<span>Desde ' + lbl + ': <strong>$' + Math.round(aj.monto).toLocaleString('es-AR') + '</strong></span>'
+                + '<button type="button" onclick="_quitarAjusteCanon(\'' + aj.periodo + '\')" style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:12px;" title="Quitar">✕</button>'
+                + '</div>';
+        }).join('');
+    }
+    function _quitarAjusteCanon(periodo) {
+        _alqAjustesCanonWorking = _alqAjustesCanonWorking.filter(function(a){ return a.periodo !== periodo; });
+        _renderAjustesCanonLista();
+    }
+
+    // Canon vigente en un período dado, según el historial de ajustes cargado. Si el contrato
+    // todavía no tiene ningún ajuste con período registrado, se usa el canon actual "plano" (como
+    // antes). Si ya tiene ajustes, un período anterior a todos ellos usa el canon inicial del
+    // contrato — así un ajuste nuevo (a futuro) nunca modifica lo que se ve en meses ya cobrados.
+    function _canonVigenteEnPeriodo(canonInicial, canonActualFlat, ajustes, periodo) {
+        var ordenados = (ajustes||[]).slice().sort(function(a,b){ return a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0; });
+        if (!ordenados.length) return canonActualFlat || canonInicial || 0;
+        var aplicable = null;
+        for (var i = 0; i < ordenados.length; i++) {
+            if (ordenados[i].periodo <= periodo) aplicable = ordenados[i]; else break;
+        }
+        return aplicable ? aplicable.monto : (canonInicial || 0);
     }
 
     // Consulta al backend (que a su vez proxea el CSV oficial de INDEC) la variación de
@@ -17011,21 +17055,28 @@
         var mesFin = parseInt(document.getElementById('alqIPCMesFin').value) || 0;
         var anioFin = parseInt(document.getElementById('alqIPCAnioFin').value) || 0;
         var resDiv = document.getElementById('alqIPCResultado');
+        var aplicarWrap = document.getElementById('alqIPCAplicarWrap');
         if (!mesIni || !anioIni || !mesFin || !anioFin) { resDiv.textContent = 'Completá mes y año de ambos períodos.'; return; }
         resDiv.textContent = '⏳ Consultando IPC de INDEC…';
+        aplicarWrap.style.display = 'none';
         _alqIPCNuevoCanon = null;
         _fetchBackend('/ipc/variacion?anioIni='+anioIni+'&mesIni='+mesIni+'&anioFin='+anioFin+'&mesFin='+mesFin)
             .then(function(r) {
                 if (!r || r.ok === false) { resDiv.textContent = '⚠️ ' + (r && r.error || 'No se pudo obtener el dato de INDEC.'); return; }
                 var pctRedondeado = r.variacionPct.toFixed(1);
                 var pctTexto = pctRedondeado.replace('.', ',') + '%';
-                var canonBase = parseFloat(document.getElementById('alqCanon').value) || 0;
+                var canonInicial = parseFloat(document.getElementById('alqCanon').value) || 0;
+                var periodoBase = anioIni + '-' + String(mesIni).padStart(2,'0');
+                var canonActualFlat = parseFloat(document.getElementById('alqCanonActual').value) || 0;
+                var canonBase = _canonVigenteEnPeriodo(canonInicial, canonActualFlat, _alqAjustesCanonWorking, periodoBase);
                 var extra = '';
                 if (canonBase > 0) {
                     var ajuste = ((canonBase * parseFloat(pctRedondeado)) / 100).toFixed(1);
                     _alqIPCNuevoCanon = parseFloat((canonBase + parseFloat(ajuste)).toFixed(2));
-                    extra = '<br>Canon actualizado: <strong>$' + _alqIPCNuevoCanon.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</strong> '
-                        + '<button type="button" class="btn btn-gold btn-sm" style="margin-left:6px;" onclick="aplicarIPCAlCanon()">Aplicar al canon actual</button>';
+                    extra = '<br>Canon actualizado: <strong>$' + _alqIPCNuevoCanon.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</strong>';
+                    document.getElementById('alqIPCVigDesdeMes').value = mesFin;
+                    document.getElementById('alqIPCVigDesdeAnio').value = anioFin;
+                    aplicarWrap.style.display = '';
                 }
                 resDiv.innerHTML = '✅ Variación IPC: <strong>' + pctTexto + '</strong> (INDEC, Nacional Nivel General — mismo criterio que ikiwi.net.ar)' + extra;
             })
@@ -17034,13 +17085,25 @@
 
     function aplicarIPCAlCanon() {
         if (_alqIPCNuevoCanon == null) return;
-        document.getElementById('alqCanonActual').value = _alqIPCNuevoCanon;
+        var mes = parseInt(document.getElementById('alqIPCVigDesdeMes').value) || 0;
+        var anio = parseInt(document.getElementById('alqIPCVigDesdeAnio').value) || 0;
+        if (!mes || !anio) { alert('Elegí a partir de qué período rige este canon.'); return; }
+        var periodo = anio + '-' + String(mes).padStart(2,'0');
+        _alqAjustesCanonWorking = _alqAjustesCanonWorking.filter(function(a){ return a.periodo !== periodo; });
+        _alqAjustesCanonWorking.push({ periodo: periodo, monto: _alqIPCNuevoCanon });
+        _renderAjustesCanonLista();
+        // "Canon actual" siempre refleja el ajuste más reciente cargado — los meses ya
+        // cobrados no se tocan, el Plan de pagos los muestra congelados con lo que se cobró.
+        var masReciente = _alqAjustesCanonWorking.slice().sort(function(a,b){ return a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0; }).pop();
+        if (masReciente) document.getElementById('alqCanonActual').value = masReciente.monto;
+        alert('Canon actualizado a $' + _alqIPCNuevoCanon.toLocaleString('es-AR') + ' a partir de ' + periodo + '. Los meses ya cobrados no se modifican.');
     }
 
 
-    function guardarAlquiler() {
+    async function guardarAlquiler() {
         var unidad = document.getElementById('alqUnidad').value.trim();
         if (!unidad) { alert('El código/nombre de la unidad es obligatorio.'); return; }
+        var existente = editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null;
         var nuevo = {
             unidad,
             tipo:        document.getElementById('alqTipo').value,
@@ -17059,12 +17122,26 @@
             ipcAnioBase: parseInt(document.getElementById('alqIPCAnioBase').value) || null,
             ipcMesFin:   parseInt(document.getElementById('alqIPCMesFin').value) || null,
             ipcAnioFin:  parseInt(document.getElementById('alqIPCAnioFin').value) || null,
+            ajustesCanon: _alqAjustesCanonWorking.slice(),
             depMoneda:   document.getElementById('alqDepMoneda').value,
             deposito:    parseFloat(document.getElementById('alqDeposito').value) || 0,
             depMeses:    parseInt(document.getElementById('alqDepMeses').value) || 1,
             obs:         document.getElementById('alqObs').value.trim(),
-            cobrosHistorial: (editandoAlqIdx >= 0 && alquileres[editandoAlqIdx] && alquileres[editandoAlqIdx].cobrosHistorial) || []
+            adjuntoId:     existente ? (existente.adjuntoId || '')     : '',
+            adjuntoNombre: existente ? (existente.adjuntoNombre || '') : '',
+            adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : '',
+            cobrosHistorial: (existente && existente.cobrosHistorial) || []
         };
+        var archivoContrato = document.getElementById('alqArchivo').files[0];
+        if (archivoContrato) {
+            if (archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            try {
+                var base64Contrato = await leerArchivoBase64(archivoContrato);
+                var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                await REF_DOCS.child(adjIdContrato).set({ nombre: archivoContrato.name, tipo: archivoContrato.type, contenido: base64Contrato });
+                nuevo.adjuntoId = adjIdContrato; nuevo.adjuntoNombre = archivoContrato.name; nuevo.adjuntoTipo = archivoContrato.type;
+            } catch (err) { alert('No se pudo subir el contrato: ' + (err.message || err)); return; }
+        }
         if (editandoAlqIdx >= 0) alquileres[editandoAlqIdx] = nuevo;
         else alquileres.push(nuevo);
         cerrarModalAlquiler();
@@ -17077,10 +17154,11 @@
         document.getElementById('cobroAlqIdx').value   = idx;
         document.getElementById('cobroAlqLabel').textContent = a.unidad || '';
         document.getElementById('cobroAlqFecha').valueAsDate = new Date();
-        document.getElementById('cobroAlqMonto').value = a.canonActual || a.canon || '';
-        document.getElementById('cobroAlqRef').value   = '';
         var hoy = new Date();
-        document.getElementById('cobroAlqPeriodo').value = periodoPrefill || hoy.toISOString().substring(0,7);
+        var periodo = periodoPrefill || hoy.toISOString().substring(0,7);
+        document.getElementById('cobroAlqMonto').value = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || '';
+        document.getElementById('cobroAlqRef').value   = '';
+        document.getElementById('cobroAlqPeriodo').value = periodo;
         document.getElementById('cobroAlqConcepto').value = 'alquiler';
         var modalCobro = document.getElementById('modalCobroAlquiler');
         modalCobro.style.zIndex = 600; // por encima del modal de Plan de pagos, si está abierto
@@ -17184,7 +17262,6 @@
         var hint = document.getElementById('planAlqHint');
         if (tit) tit.textContent = (a.unidad||'') + (a.inquilino ? ' · ' + a.inquilino : '');
         var monSym = a.moneda === 'USD' ? 'USD ' : '$';
-        var canonRef = a.canonActual || a.canon || 0;
         var hoy = new Date(); hoy.setHours(0,0,0,0);
         var hoyPeriodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
         if (!a.inicio) { tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Este contrato no tiene fecha de inicio cargada.</td></tr>'; if (hint) hint.textContent = ''; return; }
@@ -17205,8 +17282,12 @@
             var periodo = cursor.getFullYear() + '-' + String(cursor.getMonth()+1).padStart(2,'0');
             var cobrosDelPeriodo = (a.cobrosHistorial||[]).filter(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
             var cobrado = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.monto||0); }, 0);
+            // Canon esperado de ESTE período puntual (según el historial de ajustes, no el canon
+            // "actual" en vivo) — así un ajuste que se aplique a futuro nunca recalcula ni cambia
+            // el estado de un mes que ya se cobró.
+            var canonPeriodo = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo);
             var estado, estadoHtml;
-            if (canonRef > 0 && cobrado >= canonRef * 0.98) {
+            if (canonPeriodo > 0 && cobrado >= canonPeriodo * 0.98) {
                 estado = 'pagada';
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
             } else if (cobrado > 0) {
@@ -17230,7 +17311,7 @@
             var mesLbl = cursor.toLocaleDateString('es-AR', {month:'long', year:'numeric'});
             filas.push('<tr style="background:' + (estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
                 + '<td style="padding:7px 10px;text-transform:capitalize;">' + mesLbl + '</td>'
-                + '<td style="padding:7px 10px;text-align:right;">' + monSym + Math.round(canonRef).toLocaleString('es-AR') + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;">' + monSym + Math.round(canonPeriodo).toLocaleString('es-AR') + '</td>'
                 + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (cobrado>0 ? monSym+Math.round(cobrado).toLocaleString('es-AR') : '—') + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;">' + estadoHtml + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + accion + '</td>'
@@ -17290,7 +17371,8 @@
                       '<button class="btn btn-outline btn-sm" title="Plan de pagos" onclick="abrirPlanAlquiler(' + idx + ')">📅 Plan</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosAlquiler(' + idx + ')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalAlquiler(' + idx + ')">✏</button> ' +
-                      '<button class="btn btn-outline btn-sm" title="Ver contrato" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
+                      '<button class="btn btn-outline btn-sm" title="Generar contrato imprimible" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
+                      (a.adjuntoId ? '<button class="btn btn-outline btn-sm" title="Ver contrato adjunto" onclick="descargarDoc(\'' + a.adjuntoId + '\',\'' + escHtml(a.adjuntoNombre||'').replace(/'/g,"\\'") + '\')">📎</button> ' : '') +
                       btnElim('alquiler', idx)
                     : '—';
                 var tr = document.createElement('tr');
@@ -24288,6 +24370,15 @@
           </div>
           <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="calcularIPCAlquiler()">📊 Calcular variación IPC (INDEC)</button>
           <div class="form-hint" id="alqIPCResultado"></div>
+          <div id="alqIPCAplicarWrap" style="display:none;margin-top:8px;padding:8px;background:var(--surface);border-radius:6px;">
+            <div style="font-size:10px;color:var(--text-3);margin-bottom:4px;">Aplicar este canon a partir de (los meses ya cobrados no se tocan):</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select id="alqIPCVigDesdeMes" style="flex:1;"></select>
+              <input type="number" id="alqIPCVigDesdeAnio" min="2016" step="1" style="width:90px;">
+              <button type="button" class="btn btn-gold btn-sm" onclick="aplicarIPCAlCanon()">Aplicar</button>
+            </div>
+          </div>
+          <div id="alqAjustesLista" style="margin-top:8px;font-size:11px;"></div>
         </div>
       </div>
 
@@ -24316,6 +24407,11 @@
       <div class="form-group">
         <label>Observaciones</label>
         <input type="text" id="alqObs" placeholder="Opcional">
+      </div>
+      <div class="form-group">
+        <label>Contrato (PDF o foto) <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+        <input type="file" id="alqArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+        <div class="form-hint" id="alqArchivoEstado"></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalAlquiler()">Cancelar</button>
