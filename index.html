@@ -16936,6 +16936,9 @@
             var el = document.getElementById(id); if (el) el.value = '';
         });
         document.getElementById('alqDepMeses').value = '1';
+        _poblarSelectsMesIPC();
+        document.getElementById('alqIPCResultado').innerHTML = '';
+        var hoy = new Date();
         if (a) {
             document.getElementById('alqUnidad').value       = a.unidad || '';
             document.getElementById('alqDireccion').value    = a.direccion || '';
@@ -16954,18 +16957,80 @@
             document.getElementById('alqDepMeses').value     = a.depMeses || '1';
             document.getElementById('alqTipo').value         = a.tipo || 'departamento';
             document.getElementById('alqObs').value          = a.obs || '';
+            var inicioD = a.inicio ? new Date(a.inicio+'T00:00:00') : hoy;
+            document.getElementById('alqIPCMesBase').value  = a.ipcMesBase  || (inicioD.getMonth()+1);
+            document.getElementById('alqIPCAnioBase').value = a.ipcAnioBase || inicioD.getFullYear();
+            document.getElementById('alqIPCMesFin').value   = a.ipcMesFin   || (hoy.getMonth()+1);
+            document.getElementById('alqIPCAnioFin').value  = a.ipcAnioFin  || hoy.getFullYear();
         } else {
             document.getElementById('alqMoneda').value     = 'ARS';
             document.getElementById('alqIndice').value     = 'IPC';
             document.getElementById('alqFrecuencia').value = '3';
             document.getElementById('alqDepMoneda').value  = 'ARS';
-            document.getElementById('alqInicio').valueAsDate = new Date();
+            document.getElementById('alqInicio').valueAsDate = hoy;
+            document.getElementById('alqIPCMesBase').value  = hoy.getMonth()+1;
+            document.getElementById('alqIPCAnioBase').value = hoy.getFullYear();
+            document.getElementById('alqIPCMesFin').value   = hoy.getMonth()+1;
+            document.getElementById('alqIPCAnioFin').value  = hoy.getFullYear();
         }
+        onAlqIndiceChange();
         document.getElementById('modalAlquiler').classList.add('active');
     }
 
     function cerrarModalAlquiler() { document.getElementById('modalAlquiler').classList.remove('active'); }
     function onAlqMonedaChange() {}
+
+    // Muestra el bloque de índice CAC o el de la calculadora de IPC según lo elegido.
+    function onAlqIndiceChange() {
+        var indice = document.getElementById('alqIndice').value;
+        var cacSec = document.getElementById('alqCACSector');
+        var ipcSec = document.getElementById('alqIPCSector');
+        if (cacSec) cacSec.style.display = (indice === 'CAC') ? 'grid' : 'none';
+        if (ipcSec) ipcSec.style.display = (indice === 'IPC') ? '' : 'none';
+    }
+
+    function _poblarSelectsMesIPC() {
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        ['alqIPCMesBase','alqIPCMesFin'].forEach(function(id) {
+            var sel = document.getElementById(id);
+            if (!sel || sel.options.length) return;
+            meses.forEach(function(m, i) {
+                var o = document.createElement('option'); o.value = i+1; o.textContent = m; sel.appendChild(o);
+            });
+        });
+    }
+
+    // Consulta al backend (que a su vez proxea el CSV oficial de INDEC) la variación de
+    // IPC Nacional Nivel General entre el período base y el período actual del contrato.
+    var _alqIPCFactor = null;
+    function calcularIPCAlquiler() {
+        var mesIni = parseInt(document.getElementById('alqIPCMesBase').value) || 0;
+        var anioIni = parseInt(document.getElementById('alqIPCAnioBase').value) || 0;
+        var mesFin = parseInt(document.getElementById('alqIPCMesFin').value) || 0;
+        var anioFin = parseInt(document.getElementById('alqIPCAnioFin').value) || 0;
+        var resDiv = document.getElementById('alqIPCResultado');
+        if (!mesIni || !anioIni || !mesFin || !anioFin) { resDiv.textContent = 'Completá mes y año de ambos períodos.'; return; }
+        resDiv.textContent = '⏳ Consultando IPC de INDEC…';
+        _alqIPCFactor = null;
+        _fetchBackend('/ipc/variacion?anioIni='+anioIni+'&mesIni='+mesIni+'&anioFin='+anioFin+'&mesFin='+mesFin)
+            .then(function(r) {
+                if (!r || r.ok === false) { resDiv.textContent = '⚠️ ' + (r && r.error || 'No se pudo obtener el dato de INDEC.'); return; }
+                _alqIPCFactor = r.factor;
+                var pct = r.variacionPct.toLocaleString('es-AR', {maximumFractionDigits:1});
+                var canonBase = parseFloat(document.getElementById('alqCanon').value) || 0;
+                var nuevoCanon = canonBase > 0 ? Math.round(canonBase * r.factor) : null;
+                resDiv.innerHTML = '✅ Variación IPC: <strong>' + pct + '%</strong> (INDEC, Nacional Nivel General)'
+                    + (nuevoCanon ? '<br>Canon actualizado: <strong>$' + nuevoCanon.toLocaleString('es-AR') + '</strong> '
+                        + '<button type="button" class="btn btn-gold btn-sm" style="margin-left:6px;" onclick="aplicarIPCAlCanon()">Aplicar al canon actual</button>' : '');
+            })
+            .catch(function() { resDiv.textContent = '⚠️ No se pudo conectar con el backend para consultar IPC.'; });
+    }
+
+    function aplicarIPCAlCanon() {
+        var canonBase = parseFloat(document.getElementById('alqCanon').value) || 0;
+        if (!_alqIPCFactor || !canonBase) return;
+        document.getElementById('alqCanonActual').value = Math.round(canonBase * _alqIPCFactor);
+    }
 
     function guardarAlquiler() {
         var unidad = document.getElementById('alqUnidad').value.trim();
@@ -16984,6 +17049,10 @@
             frecuencia:  parseInt(document.getElementById('alqFrecuencia').value) || 3,
             cacBase:     parseFloat(document.getElementById('alqCACBase').value) || 0,
             cacActual:   parseFloat(document.getElementById('alqCACActual').value) || 0,
+            ipcMesBase:  parseInt(document.getElementById('alqIPCMesBase').value) || null,
+            ipcAnioBase: parseInt(document.getElementById('alqIPCAnioBase').value) || null,
+            ipcMesFin:   parseInt(document.getElementById('alqIPCMesFin').value) || null,
+            ipcAnioFin:  parseInt(document.getElementById('alqIPCAnioFin').value) || null,
             depMoneda:   document.getElementById('alqDepMoneda').value,
             deposito:    parseFloat(document.getElementById('alqDeposito').value) || 0,
             depMeses:    parseInt(document.getElementById('alqDepMeses').value) || 1,
@@ -17034,6 +17103,48 @@
 
     function eliminarAlquiler(idx) {
         if (confirm('¿Eliminar este contrato de alquiler?')) { alquileres.splice(idx, 1); persistirAlquileres(); }
+    }
+
+    // ── Editar un cobro de alquiler ya registrado (fecha, monto, período, etc.) ──
+    var _editCobroAlqIdx = -1, _editCobroAlqCIdx = -1;
+    function abrirEditarCobroAlquiler(idx, cIdx) {
+        var a = alquileres[idx]; if (!a) return;
+        var c = (a.cobrosHistorial||[])[cIdx]; if (!c) return;
+        _editCobroAlqIdx = idx; _editCobroAlqCIdx = cIdx;
+        document.getElementById('ecaLabel').textContent = (a.unidad||'') + ' · cobro N°' + (cIdx+1);
+        document.getElementById('ecaFecha').value    = c.fecha || '';
+        document.getElementById('ecaPeriodo').value  = c.periodo || '';
+        document.getElementById('ecaMonto').value    = c.monto || '';
+        document.getElementById('ecaRef').value      = c.ref || '';
+        document.getElementById('ecaConcepto').value = c.concepto || 'alquiler';
+        document.getElementById('ecaModalidad').value= c.tipoAB === 'A' ? 'A' : 'B';
+        document.getElementById('modalEditarCobroAlq').classList.add('active');
+    }
+    function cerrarEditarCobroAlquiler() { document.getElementById('modalEditarCobroAlq').classList.remove('active'); }
+    function guardarEdicionCobroAlquiler() {
+        var a = alquileres[_editCobroAlqIdx]; if (!a) return;
+        var c = (a.cobrosHistorial||[])[_editCobroAlqCIdx]; if (!c) return;
+        var monto = parseFloat(document.getElementById('ecaMonto').value) || 0;
+        var fecha = document.getElementById('ecaFecha').value;
+        if (!monto || monto <= 0) { alert('Ingresá un monto válido.'); return; }
+        if (!fecha) { alert('Ingresá la fecha.'); return; }
+        c.fecha     = fecha;
+        c.periodo   = document.getElementById('ecaPeriodo').value;
+        c.monto     = monto;
+        c.ref       = document.getElementById('ecaRef').value.trim();
+        c.concepto  = document.getElementById('ecaConcepto').value;
+        c.tipoAB    = document.getElementById('ecaModalidad').value === 'A' ? 'A' : 'B';
+        cerrarEditarCobroAlquiler();
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+    }
+    function eliminarCobroAlquiler(idx, cIdx) {
+        var a = alquileres[idx]; if (!a) return;
+        var c = (a.cobrosHistorial||[])[cIdx]; if (!c) return;
+        if (!confirm('¿Eliminar este cobro de $' + Number(c.monto||0).toLocaleString('es-AR') + '?')) return;
+        a.cobrosHistorial.splice(cIdx, 1);
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
     }
 
     function renderAlquileres() {
@@ -18509,16 +18620,43 @@
         var a = alquileres[idx]; if (!a) return;
         var hist = a.cobrosHistorial || [];
         if (!hist.length) { alert('Este contrato no tiene cobros registrados aún.'); return; }
-        var lista = hist.map(function(c, i) {
-            var monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
-            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' | ' + (c.periodo||'') + (c.ref ? ' Ref: '+c.ref : '');
-        }).join('\n');
-        var sel = prompt('Cobros del contrato ' + (a.unidad||'') + ':\n\n' + lista + '\n\nNúmero a reimprimir (1-' + hist.length + '):');
-        if (!sel) return;
-        var i = parseInt(sel) - 1;
-        if (isNaN(i) || i < 0 || i >= hist.length) { alert('Número inválido.'); return; }
-        var c = hist[i];
-        imprimirComprobanteAlquiler(a, c.monto, c.fecha, c.periodo, c.concepto, c.ref);
+        var monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
+        var ex = document.getElementById('_mhistAlq'); if (ex) ex.remove();
+        var overlay = document.createElement('div');
+        overlay.id = '_mhistAlq';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:10px;width:100%;max-width:560px;max-height:80vh;display:flex;flex-direction:column;border-top:3px solid #1a3a6b;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3);';
+        var closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '&times;'; closeBtn.style.cssText = 'border:none;background:none;font-size:20px;cursor:pointer;color:#666;line-height:1;';
+        closeBtn.onclick = function(){ overlay.remove(); };
+        var headDiv = document.createElement('div');
+        headDiv.style.cssText = 'padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #eee;';
+        headDiv.innerHTML = '<div style="font-weight:700;font-size:14px;color:#1a3a6b;">💵 Cobros — ' + (a.unidad||'') + '</div>';
+        headDiv.appendChild(closeBtn);
+        var lista = document.createElement('div'); lista.style.cssText = 'overflow-y:auto;flex:1;';
+        hist.forEach(function(c, i) {
+            var row = document.createElement('div');
+            row.style.cssText = 'padding:10px 20px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+            var txt = document.createElement('div');
+            txt.innerHTML = '<div style="font-weight:600;font-size:13px;color:#1a1a2e;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + '</div>'
+                + '<div style="font-size:11px;color:#777;margin-top:2px;">' + (c.periodo||'') + (c.ref ? ' · Ref: ' + c.ref : '') + '</div>';
+            var btns = document.createElement('div');
+            btns.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+            var btnImp = document.createElement('button'); btnImp.className = 'btn btn-outline btn-sm'; btnImp.title = 'Reimprimir'; btnImp.textContent = '🖨️';
+            btnImp.onclick = function(){ overlay.remove(); imprimirComprobanteAlquiler(a, c.monto, c.fecha, c.periodo, c.concepto, c.ref); };
+            var btnEd = document.createElement('button'); btnEd.className = 'btn btn-outline btn-sm'; btnEd.title = 'Editar'; btnEd.textContent = '✏️';
+            btnEd.onclick = function(){ overlay.remove(); abrirEditarCobroAlquiler(idx, i); };
+            var btnDel = document.createElement('button'); btnDel.className = 'btn btn-danger-sm'; btnDel.title = 'Eliminar'; btnDel.textContent = '✕';
+            btnDel.onclick = function(){ overlay.remove(); eliminarCobroAlquiler(idx, i); };
+            btns.appendChild(btnImp); btns.appendChild(btnEd); btns.appendChild(btnDel);
+            row.appendChild(txt); row.appendChild(btns);
+            lista.appendChild(row);
+        });
+        box.appendChild(headDiv); box.appendChild(lista);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
     }
 
     function abrirHistorialCobrosServicio(idx) {
@@ -24006,7 +24144,7 @@
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
           <div class="form-group" style="margin:0;">
             <label>Índice de actualización</label>
-            <select id="alqIndice">
+            <select id="alqIndice" onchange="onAlqIndiceChange()">
               <option value="IPC">IPC (Índice de Precios al Consumidor)</option>
               <option value="ICL">ICL (Índice Contratos de Locación)</option>
               <option value="CAC">CAC (Cámara Argentina de Construcción)</option>
@@ -24024,7 +24162,7 @@
             </select>
           </div>
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;" id="alqCACSector" style="display:none;">
+        <div id="alqCACSector" style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
           <div class="form-group" style="margin:0;">
             <label>Índice CAC base</label>
             <input type="number" id="alqCACBase" step="0.01" min="0" placeholder="Ej: 5234.50">
@@ -24033,6 +24171,28 @@
             <label>Índice CAC actual</label>
             <input type="number" id="alqCACActual" step="0.01" min="0" placeholder="Ej: 5891.20">
           </div>
+        </div>
+        <div id="alqIPCSector" style="display:none;margin-top:10px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px;">
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:10px;">Mes base</label>
+              <select id="alqIPCMesBase"></select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:10px;">Año base</label>
+              <input type="number" id="alqIPCAnioBase" min="2016" step="1" placeholder="Ej: 2025">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:10px;">Mes actual</label>
+              <select id="alqIPCMesFin"></select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:10px;">Año actual</label>
+              <input type="number" id="alqIPCAnioFin" min="2016" step="1" placeholder="Ej: 2026">
+            </div>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="calcularIPCAlquiler()">📊 Calcular variación IPC (INDEC)</button>
+          <div class="form-hint" id="alqIPCResultado"></div>
         </div>
       </div>
 
@@ -24108,6 +24268,48 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalCobroAlquiler()">Cancelar</button>
         <button type="button" class="btn btn-gold" onclick="guardarCobroAlquiler()">Registrar Cobro</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL: EDITAR COBRO DE ALQUILER ═══════════════ -->
+<div class="modal" id="modalEditarCobroAlq">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>✏️ Editar cobro — <span id="ecaLabel" style="color:var(--gold);"></span></h2>
+      <button class="modal-close" onclick="cerrarEditarCobroAlquiler()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group"><label>Fecha del cobro *</label><input type="date" id="ecaFecha"></div>
+        <div class="form-group"><label>Período que cubre</label><input type="month" id="ecaPeriodo"></div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group"><label>Monto cobrado *</label><input type="number" id="ecaMonto" step="0.01" min="0" placeholder="0"></div>
+        <div class="form-group"><label>Referencia / Recibo</label><input type="text" id="ecaRef" placeholder="Opcional"></div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group">
+          <label>Concepto</label>
+          <select id="ecaConcepto">
+            <option value="alquiler">Alquiler mensual</option>
+            <option value="deposito">Depósito de garantía</option>
+            <option value="expensas">Expensas</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Comprobante</label>
+          <select id="ecaModalidad">
+            <option value="B">B — Efectivo</option>
+            <option value="A">A — Banco</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cerrarEditarCobroAlquiler()">Cancelar</button>
+        <button type="button" class="btn btn-gold" onclick="guardarEdicionCobroAlquiler()">💾 Guardar cambios</button>
       </div>
     </div>
   </div>

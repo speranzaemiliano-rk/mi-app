@@ -1068,6 +1068,73 @@ function requireAdmin(res) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  IPC (INDEC) — para la calculadora de actualización de alquileres.
+//  Proxea el CSV oficial de INDEC (evita CORS desde el navegador) y lo
+//  cachea en memoria porque INDEC solo publica un valor nuevo por mes.
+// ═══════════════════════════════════════════════════════════════════
+const IPC_CSV_URL = 'https://www.indec.gob.ar/ftp/calculadora_ipc/variacion_ipc.csv';
+let _ipcCache = null; // { data: [{anio,mes,valor}], fetchedAt: Date }
+const IPC_CACHE_MS = 12 * 60 * 60 * 1000; // 12hs
+
+async function obtenerSerieIPC() {
+    if (_ipcCache && (Date.now() - _ipcCache.fetchedAt) < IPC_CACHE_MS) return _ipcCache.data;
+    const resp = await fetch(IPC_CSV_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!resp.ok) throw new Error('INDEC respondió ' + resp.status);
+    const texto = await resp.text();
+    const filas = texto.split(/\r?\n/).filter(Boolean);
+    const data = [];
+    for (let i = 1; i < filas.length; i++) {
+        const c = filas[i].split(';');
+        if (c.length < 6) continue;
+        const region = (c[3] || '').trim();
+        const rama   = (c[5] || '').trim();
+        if (region !== 'Nacional' || rama !== 'NIVEL GENERAL') continue;
+        const anio  = parseInt(c[0], 10);
+        const mes   = parseInt(c[1], 10);
+        const valor = parseFloat(c[2]);
+        if (!anio || !mes || isNaN(valor)) continue;
+        data.push({ anio, mes, valor });
+    }
+    data.sort(function(a, b) { return (a.anio - b.anio) || (a.mes - b.mes); });
+    _ipcCache = { data, fetchedAt: Date.now() };
+    return data;
+}
+
+// GET /ipc/serie — devuelve la serie completa (IPC Nacional, Nivel General) [{anio,mes,valor}]
+app.get('/ipc/serie', async (req, res) => {
+    try {
+        const data = await obtenerSerieIPC();
+        res.json({ ok: true, region: 'Nacional', rama: 'NIVEL GENERAL', fuente: IPC_CSV_URL, serie: data });
+    } catch (e) {
+        res.status(502).json({ ok: false, error: 'No se pudo obtener la serie de IPC de INDEC: ' + e.message });
+    }
+});
+
+// GET /ipc/variacion?anioIni=&mesIni=&anioFin=&mesFin() — variación % y factor de ajuste entre dos períodos
+app.get('/ipc/variacion', async (req, res) => {
+    try {
+        const anioIni = parseInt(req.query.anioIni, 10);
+        const mesIni  = parseInt(req.query.mesIni, 10);
+        const anioFin = parseInt(req.query.anioFin, 10);
+        const mesFin  = parseInt(req.query.mesFin, 10);
+        if (!anioIni || !mesIni || !anioFin || !mesFin) {
+            return res.status(400).json({ ok: false, error: 'Faltan anioIni, mesIni, anioFin o mesFin.' });
+        }
+        const data = await obtenerSerieIPC();
+        const ini = data.find(function(d) { return d.anio === anioIni && d.mes === mesIni; });
+        const fin = data.find(function(d) { return d.anio === anioFin && d.mes === mesFin; });
+        if (!ini || !fin) {
+            return res.status(404).json({ ok: false, error: 'No hay datos de IPC para alguno de los dos períodos pedidos.' });
+        }
+        const variacionPct = ((fin.valor - ini.valor) / ini.valor) * 100;
+        const factor = fin.valor / ini.valor;
+        res.json({ ok: true, ini, fin, variacionPct, factor });
+    } catch (e) {
+        res.status(502).json({ ok: false, error: 'No se pudo calcular la variación de IPC: ' + e.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
 //  GEMINI PROXY — para que la API key no se exponga en el frontend
 //  El frontend manda el body completo de Gemini y el modelo; el backend
 //  agrega la key y reenvía. Así la key vive solo en el servidor.
