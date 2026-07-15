@@ -17065,7 +17065,7 @@
         persistirAlquileres();
     }
 
-    function abrirModalCobroAlquiler(idx) {
+    function abrirModalCobroAlquiler(idx, periodoPrefill) {
         editandoAlqIdx = idx;
         var a = alquileres[idx];
         document.getElementById('cobroAlqIdx').value   = idx;
@@ -17074,7 +17074,7 @@
         document.getElementById('cobroAlqMonto').value = a.canonActual || a.canon || '';
         document.getElementById('cobroAlqRef').value   = '';
         var hoy = new Date();
-        document.getElementById('cobroAlqPeriodo').value = hoy.toISOString().substring(0,7);
+        document.getElementById('cobroAlqPeriodo').value = periodoPrefill || hoy.toISOString().substring(0,7);
         document.getElementById('cobroAlqConcepto').value = 'alquiler';
         document.getElementById('modalCobroAlquiler').classList.add('active');
     }
@@ -17098,6 +17098,7 @@
         var alqSnap = alquileres[idx];
         cerrarModalCobroAlquiler();
         persistirAlquileres();
+        _refrescarPlanAlquilerSiAbierto(idx);
         if (confirm('Cobro registrado ('+nroReciboAlq+'). ¿Emitir comprobante?')) imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq);
     }
 
@@ -17134,9 +17135,11 @@
         c.ref       = document.getElementById('ecaRef').value.trim();
         c.concepto  = document.getElementById('ecaConcepto').value;
         c.tipoAB    = document.getElementById('ecaModalidad').value === 'A' ? 'A' : 'B';
+        var idxEditado = _editCobroAlqIdx;
         cerrarEditarCobroAlquiler();
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
+        _refrescarPlanAlquilerSiAbierto(idxEditado);
     }
     function eliminarCobroAlquiler(idx, cIdx) {
         var a = alquileres[idx]; if (!a) return;
@@ -17145,6 +17148,87 @@
         a.cobrosHistorial.splice(cIdx, 1);
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
+        _refrescarPlanAlquilerSiAbierto(idx);
+    }
+
+    // ── Plan de pagos mensual del contrato (como el Estado de Cuenta de Ventas) ──
+    var _planAlqIdx = -1;
+    function abrirPlanAlquiler(idx) {
+        _planAlqIdx = idx;
+        _renderPlanAlquiler();
+        document.getElementById('modalPlanAlquiler').classList.add('active');
+    }
+    function cerrarPlanAlquiler() {
+        _planAlqIdx = -1;
+        document.getElementById('modalPlanAlquiler').classList.remove('active');
+    }
+    function _refrescarPlanAlquilerSiAbierto(idx) {
+        var modal = document.getElementById('modalPlanAlquiler');
+        if (_planAlqIdx === idx && modal && modal.classList.contains('active')) _renderPlanAlquiler();
+    }
+    function _renderPlanAlquiler() {
+        var idx = _planAlqIdx;
+        var a = alquileres[idx]; if (!a) return;
+        var tbody = document.getElementById('planAlqBody');
+        var tit = document.getElementById('planAlqTitulo');
+        var hint = document.getElementById('planAlqHint');
+        if (tit) tit.textContent = (a.unidad||'') + (a.inquilino ? ' · ' + a.inquilino : '');
+        var monSym = a.moneda === 'USD' ? 'USD ' : '$';
+        var canonRef = a.canonActual || a.canon || 0;
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        var hoyPeriodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
+        if (!a.inicio) { tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Este contrato no tiene fecha de inicio cargada.</td></tr>'; if (hint) hint.textContent = ''; return; }
+        var inicioD = new Date(a.inicio+'T00:00:00');
+        var finD = a.fin ? new Date(a.fin+'T00:00:00') : null;
+        var sinFin = !finD;
+        if (sinFin) {
+            var seisAdelante = new Date(hoy.getFullYear(), hoy.getMonth()+6, 1);
+            var unAnioDesdeInicio = new Date(inicioD.getFullYear(), inicioD.getMonth()+11, 1);
+            finD = seisAdelante > unAnioDesdeInicio ? seisAdelante : unAnioDesdeInicio;
+        }
+        if (hint) hint.textContent = sinFin ? 'Este contrato no tiene fecha de fin cargada — se muestran los meses desde el inicio hasta 6 meses a futuro.' : '';
+        var cursor = new Date(inicioD.getFullYear(), inicioD.getMonth(), 1);
+        var limite = new Date(finD.getFullYear(), finD.getMonth(), 1);
+        var filas = [];
+        var n = 0;
+        while (cursor <= limite && n < 240) {
+            var periodo = cursor.getFullYear() + '-' + String(cursor.getMonth()+1).padStart(2,'0');
+            var cobrosDelPeriodo = (a.cobrosHistorial||[]).filter(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
+            var cobrado = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.monto||0); }, 0);
+            var estado, estadoHtml;
+            if (canonRef > 0 && cobrado >= canonRef * 0.98) {
+                estado = 'pagada';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
+            } else if (cobrado > 0) {
+                estado = 'parcial';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FEF9EE;color:#B7791F;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">◐ Parcial</span>';
+            } else if (periodo < hoyPeriodo) {
+                estado = 'vencida';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida</span>';
+            } else {
+                estado = 'pendiente';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#F1F3F4;color:#5F6368;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500;">⏳ Pendiente</span>';
+            }
+            var accion = '';
+            if (estado === 'pagada' || estado === 'parcial') {
+                var cIdx = (a.cobrosHistorial||[]).findIndex(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
+                if (cIdx >= 0) accion += '<button type="button" class="btn btn-outline btn-sm" onclick="abrirEditarCobroAlquiler(' + idx + ',' + cIdx + ')" title="Editar cobro">✏️</button> ';
+            }
+            if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
+                accion += '<button type="button" class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ',\'' + periodo + '\')">💵 ' + (estado==='parcial' ? 'Completar' : 'Cobrar') + '</button>';
+            }
+            var mesLbl = cursor.toLocaleDateString('es-AR', {month:'long', year:'numeric'});
+            filas.push('<tr style="background:' + (estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
+                + '<td style="padding:7px 10px;text-transform:capitalize;">' + mesLbl + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;">' + monSym + Math.round(canonRef).toLocaleString('es-AR') + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (cobrado>0 ? monSym+Math.round(cobrado).toLocaleString('es-AR') : '—') + '</td>'
+                + '<td style="padding:7px 10px;text-align:center;">' + estadoHtml + '</td>'
+                + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + accion + '</td>'
+                + '</tr>');
+            cursor.setMonth(cursor.getMonth() + 1);
+            n++;
+        }
+        tbody.innerHTML = filas.join('');
     }
 
     function renderAlquileres() {
@@ -17193,6 +17277,7 @@
                 var freqLabel = ({3:'Trim.',4:'Cuatrim.',6:'Semest.',12:'Anual'})[a.frecuencia] || (a.frecuencia+'m');
                 var acciones = puedeEditar
                     ? '<button class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ')">💵 Cobrar</button> ' +
+                      '<button class="btn btn-outline btn-sm" title="Plan de pagos" onclick="abrirPlanAlquiler(' + idx + ')">📅 Plan</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Reimprimir cobro anterior" onclick="abrirHistorialCobrosAlquiler(' + idx + ')">🖨️</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalAlquiler(' + idx + ')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Ver contrato" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
@@ -24310,6 +24395,36 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarEditarCobroAlquiler()">Cancelar</button>
         <button type="button" class="btn btn-gold" onclick="guardarEdicionCobroAlquiler()">💾 Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL: PLAN DE PAGOS DE ALQUILER ═══════════════ -->
+<div class="modal" id="modalPlanAlquiler">
+  <div class="modal-box modal-box-wide" style="max-width:680px;">
+    <div class="modal-head">
+      <h2>📅 Plan de pagos — <span id="planAlqTitulo" style="color:var(--gold);"></span></h2>
+      <button class="modal-close" onclick="cerrarPlanAlquiler()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-hint" id="planAlqHint" style="margin-bottom:8px;"></div>
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:60vh;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead style="position:sticky;top:0;background:var(--ink);">
+            <tr>
+              <th style="padding:8px 10px;text-align:left;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:400;">Período</th>
+              <th style="padding:8px 10px;text-align:right;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:400;">Canon</th>
+              <th style="padding:8px 10px;text-align:right;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:400;">Cobrado</th>
+              <th style="padding:8px 10px;text-align:center;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:400;">Estado</th>
+              <th style="padding:8px 10px;text-align:center;color:#fff;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:400;">Acción</th>
+            </tr>
+          </thead>
+          <tbody id="planAlqBody"></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cerrarPlanAlquiler()">Cerrar</button>
       </div>
     </div>
   </div>
