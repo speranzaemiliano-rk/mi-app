@@ -4199,13 +4199,13 @@
                   <div id="secVisibilidadMenu" style="display:none; border-top:1px solid var(--border);padding-top:20px;margin-top:20px;">
                     <h4 style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:8px;">🧭 Visibilidad del Menú Lateral</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;">
-                      Elegí qué secciones del menú se muestran. Podés ocultarlas para todos los usuarios, o solo para un usuario puntual
-                      (el ajuste por usuario tiene prioridad sobre el general).
+                      Elegí qué secciones del menú se muestran: para todos (global), para una empresa o proyecto puntual,
+                      o para un usuario puntual. Prioridad de más general a más específica: global → empresa → proyecto → usuario.
                     </p>
                     <div class="form-group" style="max-width:340px;margin-bottom:12px;">
                       <label>Aplicar a</label>
                       <select id="visMenuUsuarioSel" onchange="cambiarVisibilidadMenuUsuario(this.value)" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">
-                        <option value="__global__">🌐 Todos los usuarios (global)</option>
+                        <option value="__global__">🌐 Todos (global)</option>
                       </select>
                     </div>
                     <div id="visMenuLista" style="background:var(--bg-2);border-radius:10px;padding:4px 16px;"></div>
@@ -5874,6 +5874,7 @@
             proyectoActual = null;
         }
         _actualizarSidebarContexto();
+        if (typeof aplicarVisibilidadMenu === 'function') aplicarVisibilidadMenu();
         if (empresaActual) mostrarSplashEmpresa(empresaActual.nombre);
         renderProyectoSelector();
         desconectarListeners();
@@ -5893,6 +5894,7 @@
             proyectoActual = empresaActual.proyectos.find(p => p.id === proyId) || null;
         }
         _actualizarSidebarContexto();
+        if (typeof aplicarVisibilidadMenu === 'function') aplicarVisibilidadMenu();
         renderProyectoSelector();
         desconectarListeners();
         // Limpiar estado en memoria ANTES de cargar nuevo proyecto
@@ -9441,13 +9443,13 @@
         {key:'usuarios',           label:'— Usuarios'},
         {key:'solicitudes',        label:'— Solicitudes'}
     ];
-    var menuVisibilidadCfg = { global:{}, usuarios:{} };
+    var menuVisibilidadCfg = { global:{}, usuarios:{}, empresas:{}, proyectos:{} };
     var _visMenuUsuarioActual = '__global__';
 
     function cargarVisibilidadMenu() {
         db.ref('global/config/menuVisibilidad').on('value', function(snap) {
             var val = snap.val() || {};
-            menuVisibilidadCfg = { global: val.global || {}, usuarios: val.usuarios || {} };
+            menuVisibilidadCfg = { global: val.global || {}, usuarios: val.usuarios || {}, empresas: val.empresas || {}, proyectos: val.proyectos || {} };
             aplicarVisibilidadMenu();
             if (esSuperAdmin) renderVisibilidadMenuPanel();
         });
@@ -9455,14 +9457,19 @@
 
     function aplicarVisibilidadMenu() {
         var uid = auth.currentUser ? auth.currentUser.uid : null;
-        var overridesUsuario = (uid && menuVisibilidadCfg.usuarios[uid]) || {};
+        var overridesUsuario  = (uid && menuVisibilidadCfg.usuarios[uid]) || {};
+        var overridesEmpresa  = (empresaActual && menuVisibilidadCfg.empresas[empresaActual.id]) || {};
+        var overridesProyecto = (proyectoActual && menuVisibilidadCfg.proyectos[proyectoActual.id]) || {};
         MENU_ITEMS_VISIBILIDAD.forEach(function(item) {
             // Puede ser un .nav-block de primer nivel, un .sub-block anidado, o un
             // botón individual (nav-item) — todos llevan su propio data-navkey.
             var bloque = document.querySelector('[data-navkey="' + item.key + '"]');
             if (!bloque) return;
-            var val = overridesUsuario[item.key];
-            if (val === undefined) val = menuVisibilidadCfg.global[item.key];
+            // Prioridad, de más general a más específica: global < empresa < proyecto < usuario.
+            var val = menuVisibilidadCfg.global[item.key];
+            if (overridesEmpresa[item.key] !== undefined)  val = overridesEmpresa[item.key];
+            if (overridesProyecto[item.key] !== undefined) val = overridesProyecto[item.key];
+            if (overridesUsuario[item.key] !== undefined)  val = overridesUsuario[item.key];
             bloque.style.display = (val === false) ? 'none' : '';
         });
     }
@@ -9470,14 +9477,26 @@
     function poblarSelectVisMenuUsuarios() {
         var sel = document.getElementById('visMenuUsuarioSel');
         if (!sel) return;
+        var opts = '<optgroup label="General"><option value="__global__">🌐 Todos (global)</option></optgroup>';
+        if (empresas && empresas.length) {
+            opts += '<optgroup label="Por empresa">' + empresas.map(function(e) {
+                return '<option value="emp:' + e.id + '">🏢 ' + e.nombre + '</option>';
+            }).join('') + '</optgroup>';
+            var proyOpts = [];
+            empresas.forEach(function(e) {
+                (e.proyectos || []).forEach(function(p) {
+                    proyOpts.push('<option value="proy:' + p.id + '">📁 ' + e.nombre + ' · ' + p.nombre + '</option>');
+                });
+            });
+            if (proyOpts.length) opts += '<optgroup label="Por proyecto">' + proyOpts.join('') + '</optgroup>';
+        }
         REF_USUARIOS.once('value').then(function(snap) {
             var usuarios = snap.val() || {};
-            var opts = '<option value="__global__">🌐 Todos los usuarios (global)</option>';
-            Object.keys(usuarios).forEach(function(uid) {
+            var usuOpts = Object.keys(usuarios).map(function(uid) {
                 var email = usuarios[uid].email || uid;
-                opts += '<option value="' + uid + '">' + email + '</option>';
-            });
-            sel.innerHTML = opts;
+                return '<option value="' + uid + '">👤 ' + email + '</option>';
+            }).join('');
+            sel.innerHTML = opts + (usuOpts ? '<optgroup label="Por usuario">' + usuOpts + '</optgroup>' : '');
             sel.value = _visMenuUsuarioActual;
         });
     }
@@ -9492,7 +9511,10 @@
         if (!cont) return;
         var scope = _visMenuUsuarioActual;
         var esGlobal = scope === '__global__';
-        var overrides = esGlobal ? menuVisibilidadCfg.global : (menuVisibilidadCfg.usuarios[scope] || {});
+        var overrides = esGlobal ? menuVisibilidadCfg.global
+            : scope.indexOf('emp:') === 0  ? (menuVisibilidadCfg.empresas[scope.slice(4)] || {})
+            : scope.indexOf('proy:') === 0 ? (menuVisibilidadCfg.proyectos[scope.slice(5)] || {})
+            : (menuVisibilidadCfg.usuarios[scope] || {});
         cont.innerHTML = MENU_ITEMS_VISIBILIDAD.map(function(item) {
             var val = overrides[item.key];
             var opciones;
@@ -9501,7 +9523,7 @@
                 opciones = '<option value="visible"' + (visible ? ' selected' : '') + '>Visible</option>' +
                            '<option value="oculto"' + (!visible ? ' selected' : '') + '>Oculto</option>';
             } else {
-                opciones = '<option value="heredar"' + (val === undefined ? ' selected' : '') + '>Heredar de global</option>' +
+                opciones = '<option value="heredar"' + (val === undefined ? ' selected' : '') + '>Heredar</option>' +
                            '<option value="visible"' + (val === true ? ' selected' : '') + '>Visible</option>' +
                            '<option value="oculto"' + (val === false ? ' selected' : '') + '>Oculto</option>';
             }
@@ -9516,10 +9538,15 @@
         var scope = _visMenuUsuarioActual;
         if (scope === '__global__') {
             db.ref('global/config/menuVisibilidad/global/' + key).set(val !== 'oculto');
-        } else if (val === 'heredar') {
-            db.ref('global/config/menuVisibilidad/usuarios/' + scope + '/' + key).remove();
+            return;
+        }
+        var rama = scope.indexOf('emp:') === 0  ? 'empresas/' + scope.slice(4)
+            : scope.indexOf('proy:') === 0 ? 'proyectos/' + scope.slice(5)
+            : 'usuarios/' + scope;
+        if (val === 'heredar') {
+            db.ref('global/config/menuVisibilidad/' + rama + '/' + key).remove();
         } else {
-            db.ref('global/config/menuVisibilidad/usuarios/' + scope + '/' + key).set(val === 'visible');
+            db.ref('global/config/menuVisibilidad/' + rama + '/' + key).set(val === 'visible');
         }
     }
 
@@ -21775,6 +21802,7 @@
         var cambio = !empresaActual || empresaActual.id!==emp.id || !proyectoActual || proyectoActual.id!==proy.id;
         var empCambio = !empresaActual || empresaActual.id!==emp.id;
         empresaActual=emp; proyectoActual=proy;
+        if (typeof aplicarVisibilidadMenu === 'function') aplicarVisibilidadMenu();
         if (empCambio) mostrarSplashEmpresa(emp.nombre);
         if (cambio) {
             _hYaCargo = false;
