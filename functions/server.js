@@ -1257,5 +1257,47 @@ app.post('/usuarios/reset-password', async (req, res) => {
     }
 });
 
+// Reenvía el mail para definir contraseña usando Admin SDK + el mismo SMTP del
+// mail bot. A diferencia de auth.sendPasswordResetEmail() del lado del cliente,
+// acá getUserByEmail() no está afectado por la "protección de enumeración de
+// email" de Firebase (esa protección hace que el cliente resuelva "OK" aunque
+// el email no tenga cuenta real, y por eso el mail nunca llegaba para usuarios
+// que quedaron cargados solo en la base de datos sin una cuenta de Auth real).
+app.post('/usuarios/reenviar-clave', async (req, res) => {
+    if (!requireAdmin(res)) return;
+    try {
+        var b = req.body || {};
+        if (!b.email) return res.status(400).json({ error: 'Falta email.' });
+        var user;
+        try {
+            user = await admin.auth().getUserByEmail(b.email);
+        } catch (e) {
+            if (e.code === 'auth/user-not-found') {
+                return res.status(404).json({ error: 'No existe una cuenta de acceso real para ' + b.email + ' (quedó cargado solo en la base de datos por un alta vieja). Quitalo y volvé a crearlo con "➕ Crear usuario".' });
+            }
+            throw e;
+        }
+        if (!mailBotConfigurado()) return res.status(500).json({ error: 'Faltan MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD en Railway para poder mandar el mail.' });
+        var link = await admin.auth().generatePasswordResetLink(b.email);
+        var nodemailer = require('nodemailer');
+        var mailUser = process.env.MAIL_BOT_USER;
+        var mailPass = process.env.MAIL_BOT_APP_PASSWORD;
+        var transporter = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user: mailUser, pass: mailPass } });
+        await transporter.sendMail({
+            from: '"RK Gestión Multiempresa" <' + mailUser + '>',
+            to: b.email,
+            subject: 'Definí tu contraseña de acceso — RK Gestión Multiempresa',
+            text: 'Hola' + (user.displayName ? ' ' + user.displayName : '') + ',\n\n'
+                + 'Hacé click en el siguiente link para definir tu contraseña de acceso a RK · Gestión Multiempresa:\n\n'
+                + link + '\n\n'
+                + 'Si no lo pediste vos, podés ignorar este mail.\n\n'
+                + '— RK Gestión Multiempresa'
+        });
+        res.json({ ok: true, email: b.email });
+    } catch (e) {
+        res.status(500).json({ error: e.message, detalle: detalleErrorMail(e) });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`RK Backend (AFIP + Belvo + Prometeo + WhatsApp + MailBot) corriendo en puerto ${PORT}`));

@@ -10899,26 +10899,21 @@
         var email = document.getElementById('eutEmail').value;
         if (!email) return;
         var msg = document.getElementById('eutMsg');
-        msg.textContent = 'Verificando cuenta…';
-        // Firebase "resuelve OK" el envío de mail de recuperación aunque el email no
-        // tenga una cuenta de Auth real (protección anti-enumeración) — por eso no
-        // alcanza con mirar si la promesa se cumplió. Chequeamos antes si existe la
-        // cuenta para poder avisar la causa más probable si nunca llega el mail.
-        // (fetchSignInMethodsForEmail puede devolver vacío igual en proyectos con
-        // "protección de enumeración de email" activada, así que igual mandamos el
-        // mail aunque dé vacío — solo cambia el tono del aviso.)
-        auth.fetchSignInMethodsForEmail(email).catch(function(){ return null; }).then(function(metodos) {
-            var existeConfirmado = !!(metodos && metodos.length);
-            msg.textContent = 'Enviando…';
-            return auth.sendPasswordResetEmail(email).then(function() {
-                if (existeConfirmado) {
-                    msg.innerHTML = '<span style="color:var(--success);">✅ Mail para definir contraseña enviado a ' + escHtml(email) + '. Si no aparece en unos minutos, revisá la carpeta de spam/promociones.</span>';
-                } else {
-                    msg.innerHTML = '<span style="color:var(--warn);">⚠️ Se pidió el envío, pero no pude confirmar que ' + escHtml(email) + ' tenga una cuenta de acceso real creada. Si no llega nada en unos minutos (revisando spam), es probable que este usuario haya quedado cargado solo en la base de datos por un alta vieja — quitalo y volvé a crearlo con "➕ Crear usuario".</span>';
-                }
-            });
+        msg.textContent = 'Enviando…';
+        // Se manda desde el backend (Admin SDK + SMTP del mail bot) en vez de
+        // auth.sendPasswordResetEmail() del cliente: Firebase "resuelve OK" ese
+        // envío aunque el email no tenga una cuenta de Auth real (protección
+        // anti-enumeración), así que del lado del cliente nunca podíamos saber si
+        // el mail realmente había salido.
+        _fetchBackend('/usuarios/reenviar-clave', { method: 'POST', body: { email: email } })
+        .then(function(data) {
+            if (data.error) {
+                msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(data.error) + '</span>';
+                return;
+            }
+            msg.innerHTML = '<span style="color:var(--success);">✅ Mail para definir contraseña enviado a ' + escHtml(email) + '. Si no aparece en unos minutos, revisá la carpeta de spam/promociones.</span>';
         }).catch(function(e) {
-            msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(e.message) + '</span>';
+            msg.innerHTML = '<span style="color:var(--danger);">⚠️ ' + escHtml(String(e && e.message || e)) + '</span>';
         });
     }
 
@@ -10946,15 +10941,20 @@
             });
         })
         .then(function() {
-            secondaryApp.auth().sendPasswordResetEmail(email).catch(function(){});
-            _enviarMailAccesoUsuario(email, nombre, true);
-            msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '. Se le envió un mail para que defina su contraseña.</span>';
-            document.getElementById('nuevoUserEmail').value = '';
-            document.getElementById('nuevoUserNombre').value = '';
-            document.getElementById('nuevoUserPass').value = '';
-            secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); });
-            cargarListaUsuarios();
-            cargarUsuariosBackend();
+            // Esperar a que termine sendPasswordResetEmail antes de borrar secondaryApp:
+            // si se borraba la app secundaria mientras el pedido seguía en vuelo, el mail
+            // podía no llegar a mandarse nunca.
+            return secondaryApp.auth().sendPasswordResetEmail(email).catch(function(){}).then(function() {
+                _enviarMailAccesoUsuario(email, nombre, true);
+                msg.innerHTML = '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '. Se le envió un mail para que defina su contraseña.</span>';
+                document.getElementById('nuevoUserEmail').value = '';
+                document.getElementById('nuevoUserNombre').value = '';
+                document.getElementById('nuevoUserPass').value = '';
+                return secondaryApp.auth().signOut().then(function(){ secondaryApp.delete(); });
+            }).then(function() {
+                cargarListaUsuarios();
+                cargarUsuariosBackend();
+            });
         })
         .catch(function(e) {
             var errores = {
