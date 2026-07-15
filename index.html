@@ -12649,6 +12649,7 @@
         ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
         alquileres.filter(function(a){return (a.moneda||'ARS')!=='USD';}).forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
+        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
         var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
         var saldoNeto=saldoIni+entradas-salidas;
         if(document.getElementById('cbIngresosBancarios'))document.getElementById('cbIngresosBancarios').textContent=fmt(entradas);
@@ -12661,6 +12662,7 @@
                 var sal=0,ent=0;
                 datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
                 facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=p.monto||0;});});
+                documentos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=p.monto||0;});});
                 ingGeneral.forEach(function(ig){if(!ig.esBancario||ig.cuentaId!==(cb.id||cb.banco))return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')sal+=ig.monto||0;else ent+=ig.monto||0;});
                 ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
                 alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
@@ -12702,6 +12704,18 @@
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'factura', srcRef:fIdx });
         }); });
+        (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
+            if (hist.length) {
+                hist.forEach(function(p){
+                    if (p.modalidad !== 'A') return;
+                    var cId = p.cuentaId||'';
+                    var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'documento', srcRef:d.id });
+                });
+            } else if ((d.pagado||0) > 0 && d.modalidad === 'A') {
+                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id });
+            }
+        });
         ingGeneral.forEach(function(ig, igIdx){
             if (!ig.esBancario) return;
             var cId = ig.cuentaId||'';
@@ -12853,6 +12867,17 @@
                 if (p.modalidad !== 'B') return;
                 movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
             });
+        });
+        (documentos||[]).filter(d => (d.moneda||'ARS') === 'ARS').forEach(d => {
+            var hist = d.pagosHistorial || [];
+            if (hist.length > 0) {
+                hist.forEach(p => {
+                    if (p.modalidad !== 'B') return;
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'documento', srcRef:d.id });
+                });
+            } else if ((d.pagado||0) > 0 && (d.modalidad||'B') === 'B') {
+                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: d.pagado, srcTipo:'documento', srcRef:d.id });
+            }
         });
 
         movs.sort((a,b) => (a.fecha||'').localeCompare(b.fecha||''));
