@@ -4202,11 +4202,20 @@
                       Elegí qué secciones del menú se muestran: para todos (global), para una empresa o proyecto puntual,
                       o para un usuario puntual. Prioridad de más general a más específica: global → empresa → proyecto → usuario.
                     </p>
-                    <div class="form-group" style="max-width:340px;margin-bottom:12px;">
-                      <label>Aplicar a</label>
-                      <select id="visMenuUsuarioSel" onchange="cambiarVisibilidadMenuUsuario(this.value)" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">
-                        <option value="__global__">🌐 Todos (global)</option>
-                      </select>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                      <div class="form-group" style="max-width:220px;margin:0;">
+                        <label>Ámbito</label>
+                        <select id="visMenuTipoAmbito" onchange="cambiarVisMenuTipoAmbito()" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);">
+                          <option value="global">🌐 Global (todos)</option>
+                          <option value="empresa">🏢 Una empresa puntual</option>
+                          <option value="proyecto">📁 Un proyecto puntual</option>
+                          <option value="usuario">👤 Un usuario puntual</option>
+                        </select>
+                      </div>
+                      <div class="form-group" id="visMenuEntidadWrap" style="max-width:320px;margin:0;display:none;">
+                        <label>Cuál</label>
+                        <select id="visMenuEntidadSel" onchange="cambiarVisibilidadMenuUsuario(this.value)" style="font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-1);color:var(--text-1);width:100%;"></select>
+                      </div>
                     </div>
                     <div id="visMenuLista" style="background:var(--bg-2);border-radius:10px;padding:4px 16px;"></div>
                   </div>
@@ -9475,35 +9484,59 @@
         });
     }
 
+    var _visMenuUsuariosCache = [];
     function poblarSelectVisMenuUsuarios() {
-        var sel = document.getElementById('visMenuUsuarioSel');
-        if (!sel) return;
-        var opts = '<optgroup label="General"><option value="__global__">🌐 Todos (global)</option></optgroup>';
-        if (empresas && empresas.length) {
-            opts += '<optgroup label="Por empresa">' + empresas.map(function(e) {
-                return '<option value="emp:' + e.id + '">🏢 ' + e.nombre + '</option>';
-            }).join('') + '</optgroup>';
-            var proyOpts = [];
-            empresas.forEach(function(e) {
-                (e.proyectos || []).forEach(function(p) {
-                    proyOpts.push('<option value="proy:' + p.id + '">📁 ' + e.nombre + ' · ' + p.nombre + '</option>');
-                });
-            });
-            if (proyOpts.length) opts += '<optgroup label="Por proyecto">' + proyOpts.join('') + '</optgroup>';
-        }
         REF_USUARIOS.once('value').then(function(snap) {
             var usuarios = snap.val() || {};
-            var usuOpts = Object.keys(usuarios).map(function(uid) {
-                var email = usuarios[uid].email || uid;
-                return '<option value="' + uid + '">👤 ' + email + '</option>';
-            }).join('');
-            sel.innerHTML = opts + (usuOpts ? '<optgroup label="Por usuario">' + usuOpts + '</optgroup>' : '');
-            sel.value = _visMenuUsuarioActual;
+            _visMenuUsuariosCache = Object.keys(usuarios).map(function(uid) {
+                return { uid: uid, email: usuarios[uid].email || uid };
+            });
+            // Sincronizar el selector de "Ámbito" con el scope actual (por si venía de antes)
+            var tipoSel = document.getElementById('visMenuTipoAmbito');
+            if (tipoSel) {
+                var scope = _visMenuUsuarioActual;
+                tipoSel.value = scope === '__global__' ? 'global'
+                    : scope.indexOf('emp:') === 0  ? 'empresa'
+                    : scope.indexOf('proy:') === 0 ? 'proyecto'
+                    : 'usuario';
+            }
+            cambiarVisMenuTipoAmbito();
         });
     }
 
+    // Repuebla el segundo selector ("Cuál") según el ámbito elegido (empresa/proyecto/usuario).
+    function cambiarVisMenuTipoAmbito() {
+        var tipoSel = document.getElementById('visMenuTipoAmbito');
+        var wrap = document.getElementById('visMenuEntidadWrap');
+        var sel = document.getElementById('visMenuEntidadSel');
+        if (!tipoSel || !wrap || !sel) return;
+        var tipo = tipoSel.value;
+        if (tipo === 'global') {
+            wrap.style.display = 'none';
+            cambiarVisibilidadMenuUsuario('__global__');
+            return;
+        }
+        wrap.style.display = '';
+        var opts = '';
+        if (tipo === 'empresa') {
+            opts = (empresas||[]).map(function(e){ return '<option value="emp:' + e.id + '">' + e.nombre + '</option>'; }).join('');
+        } else if (tipo === 'proyecto') {
+            (empresas||[]).forEach(function(e){
+                (e.proyectos||[]).forEach(function(p){ opts += '<option value="proy:' + p.id + '">' + e.nombre + ' · ' + p.nombre + '</option>'; });
+            });
+        } else if (tipo === 'usuario') {
+            opts = _visMenuUsuariosCache.map(function(u){ return '<option value="' + u.uid + '">' + u.email + '</option>'; }).join('');
+        }
+        sel.innerHTML = opts || '<option value="">— No hay opciones —</option>';
+        // Mantener seleccionada la entidad actual si sigue en la lista, si no, la primera disponible.
+        var scope = _visMenuUsuarioActual;
+        var sigueValida = Array.prototype.some.call(sel.options, function(o){ return o.value === scope; });
+        sel.value = sigueValida ? scope : (sel.options[0] ? sel.options[0].value : '');
+        cambiarVisibilidadMenuUsuario(sel.value);
+    }
+
     function cambiarVisibilidadMenuUsuario(val) {
-        _visMenuUsuarioActual = val;
+        _visMenuUsuarioActual = val || '__global__';
         renderVisibilidadMenuPanel();
     }
 
