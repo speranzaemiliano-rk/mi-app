@@ -17002,7 +17002,9 @@
 
     // Consulta al backend (que a su vez proxea el CSV oficial de INDEC) la variación de
     // IPC Nacional Nivel General entre el período base y el período actual del contrato.
-    var _alqIPCFactor = null;
+    // El redondeo replica el de ikiwi.net.ar/calculadoras/inflacion-ipc: primero se redondea
+    // el % de variación a 1 decimal, y recién ahí se aplica al monto (no al revés).
+    var _alqIPCNuevoCanon = null;
     function calcularIPCAlquiler() {
         var mesIni = parseInt(document.getElementById('alqIPCMesBase').value) || 0;
         var anioIni = parseInt(document.getElementById('alqIPCAnioBase').value) || 0;
@@ -17011,26 +17013,30 @@
         var resDiv = document.getElementById('alqIPCResultado');
         if (!mesIni || !anioIni || !mesFin || !anioFin) { resDiv.textContent = 'Completá mes y año de ambos períodos.'; return; }
         resDiv.textContent = '⏳ Consultando IPC de INDEC…';
-        _alqIPCFactor = null;
+        _alqIPCNuevoCanon = null;
         _fetchBackend('/ipc/variacion?anioIni='+anioIni+'&mesIni='+mesIni+'&anioFin='+anioFin+'&mesFin='+mesFin)
             .then(function(r) {
                 if (!r || r.ok === false) { resDiv.textContent = '⚠️ ' + (r && r.error || 'No se pudo obtener el dato de INDEC.'); return; }
-                _alqIPCFactor = r.factor;
-                var pct = r.variacionPct.toLocaleString('es-AR', {maximumFractionDigits:1});
+                var pctRedondeado = r.variacionPct.toFixed(1);
+                var pctTexto = pctRedondeado.replace('.', ',') + '%';
                 var canonBase = parseFloat(document.getElementById('alqCanon').value) || 0;
-                var nuevoCanon = canonBase > 0 ? Math.round(canonBase * r.factor) : null;
-                resDiv.innerHTML = '✅ Variación IPC: <strong>' + pct + '%</strong> (INDEC, Nacional Nivel General)'
-                    + (nuevoCanon ? '<br>Canon actualizado: <strong>$' + nuevoCanon.toLocaleString('es-AR') + '</strong> '
-                        + '<button type="button" class="btn btn-gold btn-sm" style="margin-left:6px;" onclick="aplicarIPCAlCanon()">Aplicar al canon actual</button>' : '');
+                var extra = '';
+                if (canonBase > 0) {
+                    var ajuste = ((canonBase * parseFloat(pctRedondeado)) / 100).toFixed(1);
+                    _alqIPCNuevoCanon = parseFloat((canonBase + parseFloat(ajuste)).toFixed(2));
+                    extra = '<br>Canon actualizado: <strong>$' + _alqIPCNuevoCanon.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</strong> '
+                        + '<button type="button" class="btn btn-gold btn-sm" style="margin-left:6px;" onclick="aplicarIPCAlCanon()">Aplicar al canon actual</button>';
+                }
+                resDiv.innerHTML = '✅ Variación IPC: <strong>' + pctTexto + '</strong> (INDEC, Nacional Nivel General — mismo criterio que ikiwi.net.ar)' + extra;
             })
             .catch(function() { resDiv.textContent = '⚠️ No se pudo conectar con el backend para consultar IPC.'; });
     }
 
     function aplicarIPCAlCanon() {
-        var canonBase = parseFloat(document.getElementById('alqCanon').value) || 0;
-        if (!_alqIPCFactor || !canonBase) return;
-        document.getElementById('alqCanonActual').value = Math.round(canonBase * _alqIPCFactor);
+        if (_alqIPCNuevoCanon == null) return;
+        document.getElementById('alqCanonActual').value = _alqIPCNuevoCanon;
     }
+
 
     function guardarAlquiler() {
         var unidad = document.getElementById('alqUnidad').value.trim();
