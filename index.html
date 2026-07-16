@@ -550,6 +550,83 @@
             color: var(--text-1);
         }
 
+        .global-search-wrap {
+            position: relative;
+            flex: 1 1 auto;
+            max-width: 420px;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+        }
+        .global-search-icon {
+            position: absolute;
+            left: 12px;
+            font-size: 13px;
+            color: var(--text-3);
+            pointer-events: none;
+        }
+        .global-search-input {
+            width: 100%;
+            padding: 8px 30px 8px 34px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-pill);
+            font-size: 13px;
+            color: var(--text-1);
+            background: var(--surface-2);
+        }
+        .global-search-input:focus { background: #fff; border-color: var(--gold); outline: none; }
+        .global-search-clear {
+            position: absolute;
+            right: 8px;
+            background: none;
+            border: none;
+            color: var(--text-3);
+            cursor: pointer;
+            font-size: 13px;
+            padding: 4px;
+        }
+        .global-search-results {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            min-width: 320px;
+            max-height: 60vh;
+            overflow-y: auto;
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 12px 32px rgba(0,0,0,.16);
+            z-index: 500;
+        }
+        .global-search-results.active { display: block; }
+        .gs-group-title {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            color: var(--text-3);
+            padding: 8px 14px 4px;
+        }
+        .gs-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 14px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+        }
+        .gs-item:hover { background: var(--surface-2); }
+        .gs-item-icon { font-size: 16px; flex-shrink: 0; }
+        .gs-item-text { min-width: 0; flex: 1; }
+        .gs-item-titulo { font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gs-item-sub { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gs-empty { padding: 16px 14px; font-size: 12px; color: var(--text-3); text-align: center; }
+        @media (max-width: 900px) {
+            .global-search-wrap { display: none; }
+        }
+
         /* ── BUTTONS ── */
         button { cursor: pointer; font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif; transition: all .12s; }
 
@@ -2753,6 +2830,12 @@
             </button>
             <div class="topbar-title" id="topbarTitle">Presupuestos y Pagos</div>
             <span id="topbarEmpresaChip" onclick="mostrarTab('Home')" title="Ir al inicio" style="display:none;cursor:pointer;align-items:center;gap:5px;background:rgba(201,168,76,.13);border:1px solid rgba(201,168,76,.35);color:rgba(201,168,76,.95);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;letter-spacing:.03em;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;"></span>
+            <div class="global-search-wrap" id="globalSearchWrap">
+                <span class="global-search-icon">🔎</span>
+                <input type="text" id="globalSearchInput" class="global-search-input" placeholder="Buscar en todo el sistema…" autocomplete="off" oninput="onGlobalSearchInput()" onkeydown="onGlobalSearchKeydown(event)" onfocus="onGlobalSearchInput()">
+                <button type="button" id="globalSearchClear" class="global-search-clear" title="Limpiar" onclick="cerrarBusquedaGlobal()" style="display:none;">✕</button>
+                <div class="global-search-results" id="globalSearchResults"></div>
+            </div>
             <button class="btn-refresh" id="btnRefresh" onclick="refreshTabActivo()" title="Actualizar">↻</button>
             <div class="topbar-actions">
                 <div class="tc-chip">
@@ -8711,6 +8794,186 @@
         win.document.open(); win.document.write(html); win.document.close();
     }
 
+
+    // ===================== BUSCADOR GLOBAL =====================
+    var _gsDebounce = null;
+    var _gsAcciones = [];
+    function onGlobalSearchInput() {
+        clearTimeout(_gsDebounce);
+        _gsDebounce = setTimeout(ejecutarBusquedaGlobal, 150);
+    }
+    function onGlobalSearchKeydown(ev) {
+        if (ev.key === 'Escape') {
+            cerrarBusquedaGlobal();
+            var input = document.getElementById('globalSearchInput');
+            if (input) input.blur();
+        }
+    }
+    function cerrarBusquedaGlobal() {
+        var input = document.getElementById('globalSearchInput');
+        if (input) input.value = '';
+        var res = document.getElementById('globalSearchResults');
+        if (res) { res.classList.remove('active'); res.innerHTML = ''; }
+        var clearBtn = document.getElementById('globalSearchClear');
+        if (clearBtn) clearBtn.style.display = 'none';
+        _gsAcciones = [];
+    }
+    function _gsMatch(campos, q) {
+        var txt = campos.filter(Boolean).join(' ').toLowerCase();
+        return txt.indexOf(q) !== -1;
+    }
+    function _gsIrA(tab, fn) {
+        cerrarBusquedaGlobal();
+        mostrarTab(tab);
+        setTimeout(fn, 30);
+    }
+    function ejecutarBusquedaGlobal() {
+        var input = document.getElementById('globalSearchInput');
+        var resBox = document.getElementById('globalSearchResults');
+        var clearBtn = document.getElementById('globalSearchClear');
+        if (!input || !resBox) return;
+        var q = (input.value || '').trim().toLowerCase();
+        if (clearBtn) clearBtn.style.display = q ? '' : 'none';
+        if (q.length < 2) { resBox.classList.remove('active'); resBox.innerHTML = ''; return; }
+
+        var MAXG = 6;
+        var grupos = [];
+
+        var itFact = [];
+        facturas.forEach(function(f, i) {
+            if (itFact.length >= MAXG || !_gsMatch([f.proveedor, f.numero, f.descripcion], q)) return;
+            itFact.push({ icon:'🧾', titulo:(f.proveedor||'—')+(f.numero?' · N°'+f.numero:''),
+                sub:'Factura · '+(f.descripcion||'—')+' · $'+Math.round(f.importe||0).toLocaleString('es-AR'),
+                accion: function(){ _gsIrA('Facturas', function(){ editarFactura(i); }); } });
+        });
+        if (itFact.length) grupos.push({ titulo:'Facturas', items: itFact });
+
+        var itDoc = [];
+        documentos.forEach(function(d) {
+            if (itDoc.length >= MAXG || !_gsMatch([d.proveedor, d.numero, d.descripcion, d.nro], q)) return;
+            var id = d.id;
+            itDoc.push({ icon:'📄', titulo:(d.proveedor||'—')+(d.numero?' · '+d.numero:''),
+                sub:'Documento · '+(d.descripcion||'—')+' · $'+Math.round(d.importe||0).toLocaleString('es-AR'),
+                accion: function(){ _gsIrA('Documentos', function(){ abrirModalDoc(id); }); } });
+        });
+        if (itDoc.length) grupos.push({ titulo:'Documentos', items: itDoc });
+
+        var itPresup = [];
+        datos.forEach(function(d, i) {
+            if (itPresup.length >= MAXG || !_gsMatch([d.proveedor, d.concepto, d.rubro], q)) return;
+            itPresup.push({ icon:'📋', titulo:(d.proveedor||'—')+' · '+(d.concepto||'—'), sub:'Presupuesto'+(d.rubro?' · '+d.rubro:''),
+                accion: function(){ _gsIrA('Presupuestos', function(){ editarFila(i); }); } });
+        });
+        if (itPresup.length) grupos.push({ titulo:'Presupuestos', items: itPresup });
+
+        var itProv = [];
+        proveedores.forEach(function(p) {
+            if (itProv.length >= MAXG || !_gsMatch([p.razonSocial, p.cuit, p.rubro, p.grupo, p.telefono, p.direccion], q)) return;
+            var nom = p.razonSocial;
+            itProv.push({ icon:'🏢', titulo:p.razonSocial||'—', sub:(p.cuit?'CUIT '+p.cuit:'')+(p.rubro?' · '+p.rubro:''),
+                accion: function(){ _gsIrA('Proveedores', function(){ verFichaProveedor(nom); }); } });
+        });
+        if (itProv.length) grupos.push({ titulo:'Proveedores', items: itProv });
+
+        var itVenta = [];
+        ventas.forEach(function(v, i) {
+            if (itVenta.length >= MAXG || !_gsMatch([v.uf, v.comprador], q)) return;
+            itVenta.push({ icon:'🏗️', titulo:(v.comprador||'—')+' · UF '+(v.uf||'—'), sub:'Venta UF',
+                accion: function(){ _gsIrA('Ventas', function(){ abrirModalVenta(i); }); } });
+        });
+        if (itVenta.length) grupos.push({ titulo:'Ventas UF', items: itVenta });
+
+        var itAlq = [];
+        alquileres.forEach(function(a, i) {
+            if (itAlq.length >= MAXG || !_gsMatch([a.inquilino, a.unidad, a.direccion], q)) return;
+            itAlq.push({ icon:'🔑', titulo:(a.inquilino||'—')+' · '+(a.unidad||'—'), sub:'Alquiler'+(a.direccion?' · '+a.direccion:''),
+                accion: function(){ _gsIrA('Alquileres', function(){ abrirModalAlquiler(i); }); } });
+        });
+        if (itAlq.length) grupos.push({ titulo:'Alquileres', items: itAlq });
+
+        var itServ = [];
+        servicios.forEach(function(s, i) {
+            if (itServ.length >= MAXG || !_gsMatch([s.cliente, s.descripcion], q)) return;
+            itServ.push({ icon:'🛠️', titulo:s.cliente||'—', sub:'Servicio'+(s.descripcion?' · '+s.descripcion:''),
+                accion: function(){ _gsIrA('Servicios', function(){ abrirModalServicio(i); }); } });
+        });
+        if (itServ.length) grupos.push({ titulo:'Servicios del Estudio', items: itServ });
+
+        var itIng = [];
+        ingGeneral.forEach(function(ig, i) {
+            if (itIng.length >= MAXG || !_gsMatch([ig.origen, ig.referencia, ig.obs, ig.tipo], q)) return;
+            itIng.push({ icon:'💰', titulo:ig.origen||ig.tipo||'—', sub:'Ingresos Generales · $'+Math.round(ig.monto||0).toLocaleString('es-AR'),
+                accion: function(){ _gsIrA('IngGeneral', function(){ abrirModalIngGeneral(i); }); } });
+        });
+        if (itIng.length) grupos.push({ titulo:'Ingresos Generales', items: itIng });
+
+        var itPago = [];
+        datos.forEach(function(d, di) {
+            (d.pagosHistorial||[]).forEach(function(p, pi) {
+                if (itPago.length >= MAXG || !_gsMatch([d.proveedor, d.concepto], q)) return;
+                itPago.push({ icon:'💳', titulo:(d.proveedor||'—')+' · '+(d.concepto||'—'),
+                    sub:'Pago presupuesto · $'+Math.round((p.capital||0)+(p.mayores||0)||p.montoPagado||0).toLocaleString('es-AR')+(p.fecha?' · '+formatearFecha(p.fecha):''),
+                    accion: function(){ _gsIrA('Pagos', function(){ abrirEditarPago('presup', di, pi); }); } });
+            });
+        });
+        facturas.forEach(function(f, fi) {
+            (f.pagosHistorial||[]).forEach(function(p, pi) {
+                if (itPago.length >= MAXG || !_gsMatch([f.proveedor, f.numero, f.descripcion], q)) return;
+                itPago.push({ icon:'💳', titulo:(f.proveedor||'—')+(f.numero?' · N°'+f.numero:''),
+                    sub:'Pago factura · $'+Math.round(p.monto||0).toLocaleString('es-AR')+(p.fecha?' · '+formatearFecha(p.fecha):''),
+                    accion: function(){ _gsIrA('Pagos', function(){ abrirEditarPago('factura', fi, pi); }); } });
+            });
+        });
+        documentos.forEach(function(d) {
+            (d.pagosHistorial||[]).forEach(function(p, pi) {
+                if (itPago.length >= MAXG || !_gsMatch([d.proveedor, d.numero, d.descripcion], q)) return;
+                var id = d.id;
+                itPago.push({ icon:'💳', titulo:(d.proveedor||'—')+(d.numero?' · '+d.numero:''),
+                    sub:'Pago documento · $'+Math.round(p.monto||0).toLocaleString('es-AR')+(p.fecha?' · '+formatearFecha(p.fecha):''),
+                    accion: function(){ _gsIrA('Pagos', function(){ abrirEditarPago('doc', id, pi); }); } });
+            });
+        });
+        if (itPago.length) grupos.push({ titulo:'Pagos', items: itPago });
+
+        _gsAcciones = [];
+        if (!grupos.length) {
+            resBox.innerHTML = '<div class="gs-empty">Sin resultados para "' + escHtml(input.value) + '".</div>';
+            resBox.classList.add('active');
+            return;
+        }
+        var html = '';
+        grupos.forEach(function(g) {
+            html += '<div class="gs-group-title">' + escHtml(g.titulo) + '</div>';
+            g.items.forEach(function(it) {
+                var idx = _gsAcciones.length;
+                _gsAcciones.push(it.accion);
+                html += '<div class="gs-item" data-idx="' + idx + '">' +
+                    '<span class="gs-item-icon">' + it.icon + '</span>' +
+                    '<div class="gs-item-text"><div class="gs-item-titulo">' + escHtml(it.titulo) + '</div><div class="gs-item-sub">' + escHtml(it.sub) + '</div></div>' +
+                    '</div>';
+            });
+        });
+        resBox.innerHTML = html;
+        resBox.classList.add('active');
+    }
+    (function() {
+        var resBox = document.getElementById('globalSearchResults');
+        if (resBox) {
+            resBox.addEventListener('click', function(ev) {
+                var el = ev.target.closest('.gs-item');
+                if (!el) return;
+                var idx = parseInt(el.getAttribute('data-idx'));
+                if (!isNaN(idx) && _gsAcciones[idx]) _gsAcciones[idx]();
+            });
+        }
+        document.addEventListener('click', function(ev) {
+            var wrap = document.getElementById('globalSearchWrap');
+            if (wrap && !wrap.contains(ev.target)) {
+                var res = document.getElementById('globalSearchResults');
+                if (res) res.classList.remove('active');
+            }
+        });
+    })();
 
     // ===================== PESTAÑAS =====================
     var _tabActivo='Presupuestos';
