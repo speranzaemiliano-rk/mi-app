@@ -627,6 +627,57 @@
             .global-search-wrap { display: none; }
         }
 
+        /* Buscador del sidebar (overlay tipo paleta) */
+        .gs-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.45);
+            z-index: 2000;
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 10vh;
+        }
+        .gs-overlay-box {
+            width: 92%;
+            max-width: 560px;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.3);
+            overflow: hidden;
+            max-height: 75vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .gs-overlay-inputwrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+        .gs-overlay-inputwrap input {
+            flex: 1;
+            border: none;
+            outline: none;
+            font-size: 16px;
+            color: var(--text-1);
+            background: transparent;
+        }
+        .gs-overlay-close {
+            background: none;
+            border: none;
+            color: var(--text-3);
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 6px;
+        }
+        .gs-overlay-results {
+            overflow-y: auto;
+            display: none;
+        }
+        .gs-overlay-results.active { display: block; }
+
         /* ── BUTTONS ── */
         button { cursor: pointer; font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif; transition: all .12s; }
 
@@ -2621,6 +2672,13 @@
             </button>
             </div>
 
+            <!-- ── BUSCADOR GLOBAL ── -->
+            <div class="nav-block">
+            <button class="nav-item nav-group-header" id="btnBuscadorSidebar" onclick="abrirBuscadorOverlay()" title="Buscar en todo el sistema">
+                <span class="nav-icon">search</span> Buscar
+            </button>
+            </div>
+
             <div class="nav-block" data-navkey="vencimientos">
             <button class="nav-item nav-group-header" id="tabBtnVencimientos" onclick="mostrarTab('Vencimientos')" title="Agenda de vencimientos de servicios (luz, internet, alquiler, etc.), de todas las empresas">
                 <span class="nav-drag-handle">⠿</span><span class="nav-icon">event_upcoming</span> Vencimientos
@@ -2850,6 +2908,18 @@
                     <button class="btn btn-outline btn-sm" onclick="actualizarTipoCambio()">✓</button>
                 </div>
                 <div class="readonly-badge" id="badgeSoloLectura">🔒 Solo lectura</div>
+            </div>
+        </div>
+
+        <!-- BUSCADOR GLOBAL (overlay abierto desde el sidebar) -->
+        <div class="gs-overlay" id="gsOverlay">
+            <div class="gs-overlay-box">
+                <div class="gs-overlay-inputwrap">
+                    <span style="font-size:16px;color:var(--text-3);">🔎</span>
+                    <input type="text" id="gsOverlayInput" placeholder="Buscar en todo el sistema…" autocomplete="off" oninput="onGsOverlayInput()" onkeydown="onGsOverlayKeydown(event)">
+                    <button type="button" class="gs-overlay-close" title="Cerrar" onclick="cerrarBuscadorOverlay()">✕</button>
+                </div>
+                <div class="gs-overlay-results" id="gsOverlayResults"></div>
             </div>
         </div>
 
@@ -8848,6 +8918,7 @@
     }
     function _gsIrA(tab, fn) {
         cerrarBusquedaGlobal();
+        cerrarBuscadorOverlay();
         mostrarTab(tab);
         setTimeout(fn, 30);
     }
@@ -8859,7 +8930,11 @@
         var q = (input.value || '').trim().toLowerCase();
         if (clearBtn) clearBtn.style.display = q ? '' : 'none';
         if (q.length < 2) { resBox.classList.remove('active'); resBox.innerHTML = ''; return; }
-
+        _gsRenderInto(_gsBuildGrupos(q), resBox, input.value);
+    }
+    // Construye la lista de grupos de resultados a partir del texto buscado.
+    // Reutilizada por el buscador de la barra superior y el del sidebar (overlay).
+    function _gsBuildGrupos(q) {
         var MAXG = 6;
         var grupos = [];
 
@@ -8969,9 +9044,13 @@
         });
         if (itEmit.length) grupos.push({ titulo:'Comprobantes Emitidos', items: itEmit });
 
+        return grupos;
+    }
+    // Renderiza los grupos dentro de un contenedor de resultados y registra las acciones.
+    function _gsRenderInto(grupos, resBox, rawText) {
         _gsAcciones = [];
         if (!grupos.length) {
-            resBox.innerHTML = '<div class="gs-empty">Sin resultados para "' + escHtml(input.value) + '".</div>';
+            resBox.innerHTML = '<div class="gs-empty">Sin resultados para "' + escHtml(rawText) + '".</div>';
             resBox.classList.add('active');
             return;
         }
@@ -8990,6 +9069,38 @@
         resBox.innerHTML = html;
         resBox.classList.add('active');
     }
+
+    // ── Buscador del sidebar (overlay tipo paleta, funciona desde cualquier pantalla) ──
+    var _gsOvDebounce = null;
+    function abrirBuscadorOverlay() {
+        var ov = document.getElementById('gsOverlay');
+        if (!ov) return;
+        ov.style.display = 'flex';
+        var res = document.getElementById('gsOverlayResults');
+        if (res) { res.innerHTML = ''; res.classList.remove('active'); }
+        var input = document.getElementById('gsOverlayInput');
+        if (input) { input.value = ''; setTimeout(function(){ input.focus(); }, 30); }
+        if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
+    }
+    function cerrarBuscadorOverlay() {
+        var ov = document.getElementById('gsOverlay');
+        if (ov) ov.style.display = 'none';
+        _gsAcciones = [];
+    }
+    function onGsOverlayInput() {
+        clearTimeout(_gsOvDebounce);
+        _gsOvDebounce = setTimeout(function() {
+            var input = document.getElementById('gsOverlayInput');
+            var res = document.getElementById('gsOverlayResults');
+            if (!input || !res) return;
+            var q = (input.value || '').trim().toLowerCase();
+            if (q.length < 2) { res.classList.remove('active'); res.innerHTML = ''; return; }
+            _gsRenderInto(_gsBuildGrupos(q), res, input.value);
+        }, 150);
+    }
+    function onGsOverlayKeydown(ev) {
+        if (ev.key === 'Escape') cerrarBuscadorOverlay();
+    }
     (function() {
         var resBox = document.getElementById('globalSearchResults');
         if (resBox) {
@@ -8998,6 +9109,21 @@
                 if (!el) return;
                 var idx = parseInt(el.getAttribute('data-idx'));
                 if (!isNaN(idx) && _gsAcciones[idx]) _gsAcciones[idx]();
+            });
+        }
+        var ovRes = document.getElementById('gsOverlayResults');
+        if (ovRes) {
+            ovRes.addEventListener('click', function(ev) {
+                var el = ev.target.closest('.gs-item');
+                if (!el) return;
+                var idx = parseInt(el.getAttribute('data-idx'));
+                if (!isNaN(idx) && _gsAcciones[idx]) _gsAcciones[idx]();
+            });
+        }
+        var ov = document.getElementById('gsOverlay');
+        if (ov) {
+            ov.addEventListener('click', function(ev) {
+                if (ev.target === ov) cerrarBuscadorOverlay();
             });
         }
         document.addEventListener('click', function(ev) {
