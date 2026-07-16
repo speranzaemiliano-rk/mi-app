@@ -5519,6 +5519,23 @@
                             </div>
                             <input type="hidden" id="factModalidadPago" value="A">
                         </div>
+                        <div id="factGrupoCuenta" class="form-group" style="margin-bottom:10px;">
+                            <label>Cuenta bancaria origen</label>
+                            <select id="factCuentaBancaria" style="width:100%;"><option value="">— Sin especificar —</option></select>
+                            <div style="margin-top:8px;">
+                                <label>Medio de pago</label>
+                                <select id="factMedioPago" style="width:100%;" onchange="_actualizarLabelNroCbte('factNroComprobante','factMedioPago')">
+                                    <option value="Transferencia">Transferencia</option>
+                                    <option value="Cheque">Cheque</option>
+                                    <option value="Débito">Débito</option>
+                                    <option value="Acreditación">Acreditación bancaria</option>
+                                </select>
+                            </div>
+                            <div style="margin-top:8px;">
+                                <label id="factNroComprobanteLbl">Nº de transferencia</label>
+                                <input type="text" id="factNroComprobante" placeholder="Ej: 000123456789" style="width:100%;">
+                            </div>
+                        </div>
                         <div class="form-group" style="margin-bottom:10px;">
                             <label>Fecha del pago</label>
                             <input type="date" id="factFechaPago">
@@ -11469,6 +11486,15 @@
         document.getElementById('lfModABtn').className = 'modalidad-btn' + (m === 'A' ? ' selected-A' : '');
         document.getElementById('lfModBBtn').className = 'modalidad-btn' + (m === 'B' ? ' selected-A' : '');
         document.getElementById('lfPanelRet').style.display = m === 'A' ? 'block' : 'none';
+        var grupoCta = document.getElementById('lfGrupoCuenta');
+        if (grupoCta) grupoCta.style.display = m === 'A' ? '' : 'none';
+        if (m === 'A') {
+            var selC = document.getElementById('lfCuentaBancaria');
+            if (selC) {
+                selC.innerHTML = '<option value="">— Sin especificar —</option>';
+                cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; selC.appendChild(o); });
+            }
+        }
         lfRecalcRet();
     }
 
@@ -11795,7 +11821,8 @@
             direccionEmisor:  dir || '',
             tipoComprobante:  tipoComp || '',
             cae:              cae || '',
-            vencimientoCae:   vencCae || ''
+            vencimientoCae:   vencCae || '',
+            netoGravado:      window._lfNetoGravado || 0
         };
 
         if (tipoCarga === 'presup') {
@@ -11835,21 +11862,29 @@
                     retenciones = _lfRetsCalculadas.filter(function(r){ return r.activa; });
                     totalRet = retenciones.reduce(function(s,r){ return s + r.monto; }, 0);
                 }
+                var cuentaId = mod === 'A' ? (document.getElementById('lfCuentaBancaria') ? document.getElementById('lfCuentaBancaria').value : '') : '';
+                var medioBancario = mod === 'A' ? (document.getElementById('lfMedioPago') ? document.getElementById('lfMedioPago').value : '') : '';
+                var nroComprobante = mod === 'A' ? (document.getElementById('lfNroComprobante') ? document.getElementById('lfNroComprobante').value.trim() : '') : '';
                 nueva.pagado = montoPago;
                 nueva.estado = montoPago >= importe ? 'pagada' : 'parcial';
-                nueva.pagosHistorial = [{
+                var nuevoPago = {
                     pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                     monto: montoPago, baseImponible: baseRet,
-                    retenciones: retenciones.map(function(r){ return { codigo: r.codigo, monto: r.monto }; }),
-                    totalRet: totalRet
-                }];
+                    retenciones: retenciones.map(function(r){ return { codigo: r.codigo, desc: r.desc, monto: r.monto }; }),
+                    totalRet: totalRet,
+                    cuentaId: cuentaId, medioBancario: medioBancario, nroComprobante: nroComprobante
+                };
+                nueva.pagosHistorial = [nuevoPago];
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
                 cerrarLeerFactPDF();
                 var msgPago = 'Pago: $' + Math.round(montoPago).toLocaleString('es-AR') +
                     (totalRet > 0 ? '\nRetenciones: $' + Math.round(totalRet).toLocaleString('es-AR') +
                     '\nNeto al proveedor: $' + Math.round(montoPago-totalRet).toLocaleString('es-AR') : '');
                 if (confirm('✅ Factura y pago registrados.\n' + msgPago + '\n\n¿Imprimir recibo?')) {
-                    imprimirReciboFactura(nueva, montoPago, fechaPago, mod, retenciones, totalRet);
+                    imprimirReciboFactura(nueva, montoPago, fechaPago, mod, retenciones, totalRet, nroComprobante);
+                }
+                if (totalRet > 0 && confirm('¿Imprimir también el comprobante de retención?')) {
+                    imprimirComprobanteRetencion(nueva.proveedor, nuevoPago, nueva.numero);
                 }
             } else {
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
@@ -11979,7 +12014,16 @@
         document.getElementById('factModABtn').className = 'modalidad-btn' + (m === 'A' ? ' selected-A' : '');
         document.getElementById('factModBBtn').className = 'modalidad-btn' + (m === 'B' ? ' selected-B' : '');
         document.getElementById('factPanelRetenciones').style.display = m === 'A' ? 'block' : 'none';
-        if (m === 'A') recalcularRetencionesFactura();
+        var grupoCta = document.getElementById('factGrupoCuenta');
+        if (grupoCta) grupoCta.style.display = m === 'A' ? '' : 'none';
+        if (m === 'A') {
+            var selC = document.getElementById('factCuentaBancaria');
+            if (selC) {
+                selC.innerHTML = '<option value="">— Sin especificar —</option>';
+                cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; selC.appendChild(o); });
+            }
+            recalcularRetencionesFactura();
+        }
     }
 
     // Cuando cambia el proveedor en la factura, filtrar presupuestos de ese proveedor
@@ -12088,7 +12132,8 @@
             moneda:      document.getElementById('factMoneda').value,
             pagado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].pagado || 0) : 0,
             estado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].estado || 'pendiente') : 'pendiente',
-            tipo:        document.getElementById('factTipo').value || 'presup'
+            tipo:        document.getElementById('factTipo').value || 'presup',
+            netoGravado: window._factNetoGravado || 0
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
@@ -12147,14 +12192,22 @@
                 retenciones = _factRetsCalculadas.filter(r => r.activa);
                 totalRet = retenciones.reduce((s,r) => s + r.monto, 0);
             }
+            const cuentaId = mod === 'A' ? (document.getElementById('factCuentaBancaria')?.value || '') : '';
+            const medioBancario = mod === 'A' ? (document.getElementById('factMedioPago')?.value || '') : '';
+            const nroComprobante = mod === 'A' ? (document.getElementById('factNroComprobante')?.value.trim() || '') : '';
             nuevo.pagosHistorial = nuevo.pagosHistorial || [];
-            nuevo.pagosHistorial.push({
+            const nuevoPago = {
                 pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                 monto: montoPago, baseImponible: baseRet,
-                retenciones: retenciones.map(r => ({codigo:r.codigo, monto:r.monto})), totalRet
-            });
+                retenciones: retenciones.map(r => ({codigo:r.codigo, desc:r.desc, monto:r.monto})), totalRet,
+                cuentaId, medioBancario, nroComprobante
+            };
+            nuevo.pagosHistorial.push(nuevoPago);
             if (confirm(`Pago registrado: $${Math.round(montoPago).toLocaleString('es-AR')}${totalRet > 0 ? `\nRetenciones: $${Math.round(totalRet).toLocaleString('es-AR')}\nNeto al proveedor: $${Math.round(montoPago-totalRet).toLocaleString('es-AR')}` : ''}.\n\n¿Imprimir recibo?`)) {
-                imprimirReciboFactura(nuevo, montoPago, fechaPago, mod, retenciones, totalRet);
+                imprimirReciboFactura(nuevo, montoPago, fechaPago, mod, retenciones, totalRet, nroComprobante);
+            }
+            if (totalRet > 0 && confirm('¿Imprimir también el comprobante de retención?')) {
+                imprimirComprobanteRetencion(nuevo.proveedor, nuevoPago, nuevo.numero);
             }
         }
 
@@ -25656,6 +25709,23 @@
                 <button type="button" class="modalidad-btn"            id="lfModBBtn" onclick="lfSelMod('B')">💵 B — Efectivo</button>
               </div>
               <input type="hidden" id="lfModalidad" value="A">
+            </div>
+            <div id="lfGrupoCuenta" class="form-group" style="margin-bottom:10px;">
+              <label>Cuenta bancaria origen</label>
+              <select id="lfCuentaBancaria" style="width:100%;"><option value="">— Sin especificar —</option></select>
+              <div style="margin-top:8px;">
+                <label>Medio de pago</label>
+                <select id="lfMedioPago" style="width:100%;" onchange="_actualizarLabelNroCbte('lfNroComprobante','lfMedioPago')">
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Débito">Débito</option>
+                  <option value="Acreditación">Acreditación bancaria</option>
+                </select>
+              </div>
+              <div style="margin-top:8px;">
+                <label id="lfNroComprobanteLbl">Nº de transferencia</label>
+                <input type="text" id="lfNroComprobante" placeholder="Ej: 000123456789" style="width:100%;">
+              </div>
             </div>
             <div class="form-group" style="margin-bottom:10px;">
               <label>Fecha del pago</label>
