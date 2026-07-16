@@ -5498,6 +5498,12 @@
                     <div class="form-hint" id="factArchivoEstado">Subí el PDF o imagen de la factura. Máx. 4 MB.</div>
                 </div>
 
+                <!-- Aviso cuando la factura ya está pagada por completo -->
+                <div id="factYaPagadaAviso" style="display:none; border:1px solid #E5CC88; border-radius:10px; padding:14px 16px; margin-bottom:16px; background:var(--gold-pale); font-size:13px; color:var(--warn);">
+                    ✓ Esta factura ya está pagada en su totalidad. No se puede volver a registrar un pago sobre ella.
+                    Si el pago está mal cargado, cerrá esta ventana, andá a la pestaña <strong>Pagos</strong>, buscá este pago y usá ✏️ para editarlo o eliminarlo.
+                </div>
+
                 <!-- Panel de pago inmediato: se muestra siempre, tanto en Pago Directo como aplicada a Presupuesto -->
                 <div id="factPagoInmediatoPanel" style="display:none; border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; background:var(--surface);">
                     <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-3); margin-bottom:12px;">💳 ¿Esta factura ya es un egreso?</div>
@@ -11977,6 +11983,15 @@
         selFactTipo(f.presupuestoIdx === undefined ? 'presup' : (f.tipo || 'presup'));
         selFactPagoInmediato(false); // en edición no re-pagamos
         selFactModalidad('A');
+        var _pendienteEdit = (f.importe||0) - (f.pagado||0);
+        var _avisoPagada = document.getElementById('factYaPagadaAviso');
+        var _panelInmediato = document.getElementById('factPagoInmediatoPanel');
+        if (_pendienteEdit <= 0 && (f.pagado||0) > 0) {
+            if (_avisoPagada) _avisoPagada.style.display = '';
+            if (_panelInmediato) _panelInmediato.style.display = 'none';
+        } else {
+            if (_avisoPagada) _avisoPagada.style.display = 'none';
+        }
         poblarPresupuestosFactura();
         if (f.presupuestoIdx !== undefined) {
             const sel = document.getElementById('factPresupuesto');
@@ -12171,6 +12186,10 @@
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
+        if (editandoFactIndex >= 0 && document.getElementById('factPagarAhora').value === 'true' && nuevo.pagado >= nuevo.importe) {
+            alert('Esta factura ya está pagada en su totalidad. No se puede registrar otro pago.\nSi el pago está mal cargado, editalo o eliminalo desde la pestaña Pagos (✏️).');
+            return;
+        }
 
         // Vincular a presupuesto si corresponde
         if (nuevo.tipo === 'presup') {
@@ -19886,6 +19905,38 @@
         alert('✓ Pago actualizado correctamente.');
     }
 
+    function eliminarPagoEditado() {
+        var src = document.getElementById('editPagoSrc').value;
+        var di  = parseInt(document.getElementById('editPagoDatoIdx').value);
+        var pi  = parseInt(document.getElementById('editPagoPagoIdx').value);
+        if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
+
+        if (src === 'presup') {
+            var d = datos[di];
+            if (!d || !d.pagosHistorial) { cerrarModalEditarPago(); return; }
+            d.pagosHistorial.splice(pi, 1);
+            d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)); }, 0);
+            d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
+            d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
+            persistir();
+        } else {
+            var f = facturas[di];
+            if (!f || !f.pagosHistorial) { cerrarModalEditarPago(); return; }
+            f.pagosHistorial.splice(pi, 1);
+            f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
+            f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
+            persistirFacturas();
+        }
+
+        cerrarModalEditarPago();
+        renderEgresos();
+        renderDetalleEgresos();
+        renderizar();
+        renderFacturas();
+        renderPagos();
+        alert('✓ Pago eliminado correctamente.');
+    }
+
     // ══════════════════════════════════════════════════════════
     // PROVEEDORES: PANEL DE PAGOS EXPANDIBLE POR FILA
     // ══════════════════════════════════════════════════════════
@@ -25351,6 +25402,7 @@
       </div>
 
       <div class="modal-footer">
+        <button type="button" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger);" onclick="eliminarPagoEditado()">🗑️ Eliminar pago</button>
         <button type="button" class="btn btn-outline" onclick="cerrarModalEditarPago()">Cancelar</button>
         <button type="button" class="btn btn-gold" onclick="guardarEditarPago()">Guardar cambios</button>
       </div>
