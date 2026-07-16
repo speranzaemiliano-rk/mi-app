@@ -7787,6 +7787,21 @@
                 rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[]});
             });
         });
+        (comprobantesEmitidos||[]).forEach(function(e){
+            if(!e.proveedorNombre||!e.afectaCaja||e.movTipo!=='egreso') return;
+            if(e.confidencial&&!esSuperAdmin) return;
+            if(filtM&&e.tipoAB!==filtM) return;
+            if(desde&&e.fecha&&e.fecha<desde) return;
+            if(hasta&&e.fecha&&e.fecha>hasta) return;
+            var conceptoE=e.tipoDoc==='factura'
+                ?((e.items&&e.items.length?(e.items[0].desc||''):'')+(e.items&&e.items.length>1?' +'+(e.items.length-1)+' ítem(s)':''))
+                :(e.concepto||'');
+            var txt=((e.proveedorNombre||'')+' '+(e.nro||'')+' '+conceptoE).toLowerCase();
+            if(q&&!txt.includes(q)) return;
+            var m=e.total||0;
+            tP+=m;tN+=m; if(e.tipoAB==='A') tB+=m; else tE+=m;
+            rows.push({fecha:e.fecha,prov:e.proveedorNombre||'—',concepto:(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—'),tipo:'Comprobante emitido',mod:e.tipoAB,capital:m,mayores:0,total:m,ret:0,neto:m,di:e.id,pi:0,esEmit:true,retenciones:[]});
+        });
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
         sel('pagTotalPagado',fmt(tP));sel('pagTotalBanco',fmt(tB));sel('pagTotalEfectivo',fmt(tE));
         sel('pagTotalRet',fmt(tR));sel('pagTotalNeto',fmt(tN));
@@ -7795,16 +7810,21 @@
         if(!rows.length){tbody.innerHTML='<tr><td colspan="11" class="empty-msg">No hay pagos registrados.</td></tr>';return;}
         rows.forEach(function(r){
             var modB=r.mod==='A'?'<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>':'<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
-            var tipB=r.esDoc?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Documento</span>':r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
-            var srcTipo=r.esDoc?'doc':(r.esFact?'factura':'presup');
-            var diArg=r.esDoc?("'"+r.di+"'"):r.di;
-            var fnImp=r.esDoc?'imprimirPagoDoc':(r.esFact?'imprimirPagoFact':'imprimirPagoPresup');
-            var fnRet=r.esDoc?'imprimirRetDoc':(r.esFact?'imprimirRetFact':'imprimirRetPresup');
-            var btnI='<button class="btn btn-outline btn-sm" onclick="'+fnImp+'('+diArg+','+r.pi+')" title="Imprimir recibo">🖨️</button>';
-            var btnR=r.ret>0?_retBtnsHTML(fnRet,diArg,r.pi,r.retenciones):'';
-            var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+srcTipo+'\','+diArg+','+r.pi+')" title="Editar">✏</button>':'';
+            var tipB=r.esEmit?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Comprob. emitido</span>':r.esDoc?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Documento</span>':r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
+            var btnI='', btnR='', btnE='';
+            if (r.esEmit) {
+                btnE = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEmitir(\''+r.di+'\')" title="Editar comprobante">✏</button>' : '';
+            } else {
+                var srcTipo=r.esDoc?'doc':(r.esFact?'factura':'presup');
+                var diArg=r.esDoc?("'"+r.di+"'"):r.di;
+                var fnImp=r.esDoc?'imprimirPagoDoc':(r.esFact?'imprimirPagoFact':'imprimirPagoPresup');
+                var fnRet=r.esDoc?'imprimirRetDoc':(r.esFact?'imprimirRetFact':'imprimirRetPresup');
+                btnI='<button class="btn btn-outline btn-sm" onclick="'+fnImp+'('+diArg+','+r.pi+')" title="Imprimir recibo">🖨️</button>';
+                btnR=r.ret>0?_retBtnsHTML(fnRet,diArg,r.pi,r.retenciones):'';
+                btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+srcTipo+'\','+diArg+','+r.pi+')" title="Editar">✏</button>':'';
+            }
             var tr=document.createElement('tr');
-            _filaMovClickeable(tr, r.esDoc?'documento':(r.esFact?'factura':'presupuesto'), r.di);
+            _filaMovClickeable(tr, r.esEmit?'emitido':(r.esDoc?'documento':(r.esFact?'factura':'presupuesto')), r.di);
             tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
@@ -8934,6 +8954,16 @@
             });
         });
         if (itPago.length) grupos.push({ titulo:'Pagos', items: itPago });
+
+        var itEmit = [];
+        (comprobantesEmitidos||[]).forEach(function(e) {
+            if (itEmit.length >= MAXG || (e.confidencial && !esSuperAdmin) || !_gsMatch([e.cliente, e.proveedorNombre, e.nro, e.concepto], q)) return;
+            var id = e.id;
+            itEmit.push({ icon:'🧾', titulo:(e.proveedorNombre||e.cliente||'—')+(e.nro?' · N°'+e.nro:''),
+                sub:'Comprobante emitido · $'+Math.round(e.total||0).toLocaleString('es-AR'),
+                accion: function(){ _gsIrA('Documentos', function(){ abrirModalEmitir(id); }); } });
+        });
+        if (itEmit.length) grupos.push({ titulo:'Comprobantes Emitidos', items: itEmit });
 
         _gsAcciones = [];
         if (!grupos.length) {
@@ -20451,6 +20481,34 @@
                     '<td></td>'+
                 '</tr>');
             }
+        });
+
+        // Comprobantes Emitidos asignados a este proveedor como egreso de caja/banco
+        // (vía "Emitir Comprobante" — circuito separado de Facturas/Documentos, antes
+        // nunca se reflejaba en la ficha del proveedor ni en Pagos).
+        (comprobantesEmitidos||[]).forEach(function(e) {
+            if (e.proveedorNombre !== nombre || !e.afectaCaja || e.movTipo !== 'egreso') return;
+            if (e.confidencial && !esSuperAdmin) return;
+            totalPagado += e.total||0;
+            var modBadge = e.tipoAB==='A'
+                ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
+                : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
+            var conceptoE = e.tipoDoc==='factura'
+                ? ((e.items&&e.items.length?(e.items[0].desc||''):'') + (e.items&&e.items.length>1?' +'+(e.items.length-1)+' ítem(s)':''))
+                : (e.concepto||'');
+            var editBtnE = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEmitir(\''+e.id+'\')" title="Editar comprobante">✏</button>' : '';
+            filas.push('<tr>'+
+                '<td>'+(e.fecha?formatearFecha(e.fecha):'—')+'</td>'+
+                '<td>Comprobante emitido</td>'+
+                '<td>'+(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—')+'</td>'+
+                '<td>'+modBadge+'</td>'+
+                '<td style="text-align:right;">'+fmtA(e.total||0)+'</td>'+
+                '<td style="text-align:right;">—</td>'+
+                '<td style="text-align:right;font-weight:600;">'+fmtA(e.total||0)+'</td>'+
+                '<td style="text-align:right;">—</td>'+
+                '<td style="text-align:right;color:var(--success);">'+fmtA(e.total||0)+'</td>'+
+                '<td><div class="action-btns">'+editBtnE+'</div></td>'+
+            '</tr>');
         });
 
         if (!filas.length) {
