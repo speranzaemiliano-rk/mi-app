@@ -12362,9 +12362,12 @@
                 const docBtn = f.docId
                     ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${f.docId}','${(f.docNombre||'factura').replace(/'/g,'')}')" title="Ver: ${(f.docNombre||'').replace(/"/g,'')}">📎 PDF</button>`
                     : '<span style="color:var(--text-3); font-size:12px;">—</span>';
+                const sumHist = (f.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
+                const pagadoInconsistente = Math.round(sumHist) !== Math.round(f.pagado||0);
                 const acciones = puedeEditar ? `
                     ${estado !== 'pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                     ${(f.pagosHistorial && f.pagosHistorial.length) ? `<button class="btn btn-outline btn-sm" title="Reimprimir recibo de pago anterior" onclick="abrirHistorialPagosFactura(${idx})">🖨️</button>` : ''}
+                    ${pagadoInconsistente ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(f.pagado||0).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
                     ${f.docId ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
                     ` + btnElim('factura', idx) : '—';
@@ -12393,6 +12396,22 @@
             const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + (f.importe - (f.pagado||0)), 0);
             el3.textContent = '$' + Math.round(total).toLocaleString('es-AR');
         }
+    }
+
+    // Corrige facturas cuyo campo "pagado" quedó desincronizado del historial real de
+    // pagos (por ejemplo, por datos migrados o un guardado duplicado antiguo): resetea
+    // pagado/estado para que coincidan con la suma real de pagosHistorial.
+    function corregirPagadoFactura(idx) {
+        const f = facturas[idx];
+        if (!f) return;
+        const sumHist = (f.pagosHistorial||[]).reduce((s,p) => s+(p.monto||0), 0);
+        const pagadoActual = f.pagado||0;
+        if (!confirm(`Monto pagado actual: $${Math.round(pagadoActual).toLocaleString('es-AR')}\nSegún el historial de pagos registrados: $${Math.round(sumHist).toLocaleString('es-AR')}\n\n¿Corregir el monto pagado de esta factura para que coincida con su historial?`)) return;
+        f.pagado = sumHist;
+        f.estado = (sumHist >= (f.importe||0) && (f.importe||0) > 0) ? 'pagada' : (sumHist > 0 ? 'parcial' : 'pendiente');
+        persistirFacturas();
+        renderFacturas();
+        alert('✓ Monto pagado corregido.');
     }
 
     // ══════════════════════════════════════════════════════════
