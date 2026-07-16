@@ -7692,6 +7692,18 @@
                 rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[]});
             });
         });
+        documentos.forEach(function(d){
+            (d.pagosHistorial||[]).forEach(function(p,pi){
+                if(filtM&&p.modalidad!==filtM) return;
+                if(desde&&p.fecha&&p.fecha<desde) return;
+                if(hasta&&p.fecha&&p.fecha>hasta) return;
+                var txt=((d.proveedor||'')+' '+(d.numero||'')+' '+(d.descripcion||'')).toLowerCase();
+                if(q&&!txt.includes(q)) return;
+                var m=p.monto||0,r=p.totalRet||0,n=m-r;
+                tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[]});
+            });
+        });
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
         sel('pagTotalPagado',fmt(tP));sel('pagTotalBanco',fmt(tB));sel('pagTotalEfectivo',fmt(tE));
         sel('pagTotalRet',fmt(tR));sel('pagTotalNeto',fmt(tN));
@@ -7700,18 +7712,23 @@
         if(!rows.length){tbody.innerHTML='<tr><td colspan="11" class="empty-msg">No hay pagos registrados.</td></tr>';return;}
         rows.forEach(function(r){
             var modB=r.mod==='A'?'<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>':'<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
-            var tipB=r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
-            var btnI=r.esFact?'<button class="btn btn-outline btn-sm" onclick="imprimirPagoFact('+r.di+','+r.pi+')" title="Imprimir recibo">🖨️</button>':'<button class="btn btn-outline btn-sm" onclick="imprimirPagoPresup('+r.di+','+r.pi+')" title="Imprimir recibo">🖨️</button>';
-            var btnR=r.ret>0?_retBtnsHTML(r.esFact?'imprimirRetFact':'imprimirRetPresup',r.di,r.pi,r.retenciones):'';
-            var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+(r.esFact?'factura':'presup')+'\','+r.di+','+r.pi+')" title="Editar">✏</button>':'';
+            var tipB=r.esDoc?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Documento</span>':r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
+            var srcTipo=r.esDoc?'doc':(r.esFact?'factura':'presup');
+            var diArg=r.esDoc?("'"+r.di+"'"):r.di;
+            var fnImp=r.esDoc?'imprimirPagoDoc':(r.esFact?'imprimirPagoFact':'imprimirPagoPresup');
+            var fnRet=r.esDoc?'imprimirRetDoc':(r.esFact?'imprimirRetFact':'imprimirRetPresup');
+            var btnI='<button class="btn btn-outline btn-sm" onclick="'+fnImp+'('+diArg+','+r.pi+')" title="Imprimir recibo">🖨️</button>';
+            var btnR=r.ret>0?_retBtnsHTML(fnRet,diArg,r.pi,r.retenciones):'';
+            var btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+srcTipo+'\','+diArg+','+r.pi+')" title="Editar">✏</button>':'';
             var tr=document.createElement('tr');
-            _filaMovClickeable(tr, r.esFact?'factura':'presupuesto', r.di);
+            _filaMovClickeable(tr, r.esDoc?'documento':(r.esFact?'factura':'presupuesto'), r.di);
             tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
     }
     function imprimirPagoPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;var desglose={capital:p.capital||p.montoPagado||0,mayores:p.mayores||0};imprimirReciboDato(d,(p.capital||p.montoPagado||0)+(p.mayores||0),p.fecha,desglose,p.modalidad,p.retenciones||[],p.totalRet||0);}
     function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0);}
+    function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0);}
 
     function _esRetSUSS(codigo) { return (codigo||'').indexOf('SUSS') === 0; }
     function _tiposRetPago(retenciones) {
@@ -7730,6 +7747,7 @@
 
     function imprimirRetPresup(di,pi,tipo){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p||!p.retenciones||!p.retenciones.length)return;imprimirComprobanteRetencion(d.proveedor,p,undefined,tipo);}
     function imprimirRetFact(fi,pi,tipo){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p||!p.retenciones||!p.retenciones.length)return;imprimirComprobanteRetencion(f.proveedor,p,f.numero,tipo);}
+    function imprimirRetDoc(docId,pi,tipo){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p||!p.retenciones||!p.retenciones.length)return;imprimirComprobanteRetencion(d.proveedor,p,d.numero,tipo);}
 
     function imprimirComprobanteRetencion(provNombre, pago, nroFact, tipo) {
         var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR'); };
@@ -19812,6 +19830,10 @@
             var d = datos[datoIdx];
             p = d.pagosHistorial[pagoIdx];
             label = (d.proveedor||'') + ' — ' + (d.concepto||'');
+        } else if (src === 'doc') {
+            var doc = documentos.find(function(x){ return x.id === datoIdx; });
+            p = doc.pagosHistorial[pagoIdx];
+            label = (doc.proveedor||'') + ' — ' + (doc.numero||doc.descripcion||'');
         } else {
             var f = facturas[datoIdx];
             p = f.pagosHistorial[pagoIdx];
@@ -19850,14 +19872,18 @@
         var total = cap + may;
         var totalRet = 0;
         // Mostrar retenciones del pago original (solo lectura en edición simple)
-        var src = document.getElementById('editPagoSrc').value;
-        var di  = parseInt(document.getElementById('editPagoDatoIdx').value);
-        var pi  = parseInt(document.getElementById('editPagoPagoIdx').value);
+        var src   = document.getElementById('editPagoSrc').value;
+        var diRaw = document.getElementById('editPagoDatoIdx').value;
+        var di    = src === 'doc' ? diRaw : parseInt(diRaw);
+        var pi    = parseInt(document.getElementById('editPagoPagoIdx').value);
         var rets = [];
         if (src === 'presup' && datos[di] && datos[di].pagosHistorial && datos[di].pagosHistorial[pi]) {
             rets = datos[di].pagosHistorial[pi].retenciones || [];
         } else if (src === 'factura' && facturas[di] && facturas[di].pagosHistorial && facturas[di].pagosHistorial[pi]) {
             rets = facturas[di].pagosHistorial[pi].retenciones || [];
+        } else if (src === 'doc') {
+            var docR = documentos.find(function(x){ return x.id === di; });
+            if (docR && docR.pagosHistorial && docR.pagosHistorial[pi]) rets = docR.pagosHistorial[pi].retenciones || [];
         }
         var desgEl = document.getElementById('editPagoRetDesglose');
         if (desgEl) {
@@ -19881,7 +19907,8 @@
 
     function guardarEditarPago() {
         var src    = document.getElementById('editPagoSrc').value;
-        var di     = parseInt(document.getElementById('editPagoDatoIdx').value);
+        var diRaw  = document.getElementById('editPagoDatoIdx').value;
+        var di     = src === 'doc' ? diRaw : parseInt(diRaw);
         var pi     = parseInt(document.getElementById('editPagoPagoIdx').value);
         var fecha  = document.getElementById('editPagoFecha').value;
         var cap    = parseFloat(document.getElementById('editPagoCapital').value)||0;
@@ -19904,6 +19931,15 @@
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
             persistir();
+        } else if (src === 'doc') {
+            var doc = documentos.find(function(x){ return x.id === di; });
+            if (!doc) { cerrarModalEditarPago(); return; }
+            var pd = doc.pagosHistorial[pi];
+            pd.fecha     = fecha;
+            pd.monto     = cap;
+            pd.modalidad = mod;
+            doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
+            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
         } else {
             var f = facturas[di];
             var pf = f.pagosHistorial[pi];
@@ -19921,13 +19957,16 @@
         renderDetalleEgresos();
         renderizar();
         renderFacturas();
+        renderDocumentos();
+        renderPagos();
         alert('✓ Pago actualizado correctamente.');
     }
 
     function eliminarPagoEditado() {
-        var src = document.getElementById('editPagoSrc').value;
-        var di  = parseInt(document.getElementById('editPagoDatoIdx').value);
-        var pi  = parseInt(document.getElementById('editPagoPagoIdx').value);
+        var src   = document.getElementById('editPagoSrc').value;
+        var diRaw = document.getElementById('editPagoDatoIdx').value;
+        var di    = src === 'doc' ? diRaw : parseInt(diRaw);
+        var pi    = parseInt(document.getElementById('editPagoPagoIdx').value);
         if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
 
         if (src === 'presup') {
@@ -19938,6 +19977,12 @@
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
             persistir();
+        } else if (src === 'doc') {
+            var doc = documentos.find(function(x){ return x.id === di; });
+            if (!doc || !doc.pagosHistorial) { cerrarModalEditarPago(); return; }
+            doc.pagosHistorial.splice(pi, 1);
+            doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
+            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
         } else {
             var f = facturas[di];
             if (!f || !f.pagosHistorial) { cerrarModalEditarPago(); return; }
@@ -19952,6 +19997,7 @@
         renderDetalleEgresos();
         renderizar();
         renderFacturas();
+        renderDocumentos();
         renderPagos();
         alert('✓ Pago eliminado correctamente.');
     }
@@ -20089,11 +20135,13 @@
         // Pagos de documentos (comprobantes proveedor)
         documentos.forEach(function(d) {
             if (d.proveedor !== nombre) return;
-            (d.pagosHistorial||[]).forEach(function(p) {
+            (d.pagosHistorial||[]).forEach(function(p, pi) {
                 totalPagado += p.monto||0;
                 var modBadge = (p.tipoAB||p.modalidad||'B')==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
+                var retBtn = _retBtnsHTML('imprimirRetDoc', "'"+d.id+"'", pi, p.retenciones);
+                var editBtn = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\'doc\',\''+d.id+'\','+pi+')" title="Editar pago">✏</button>' : '';
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
                     '<td>Documento</td>'+
@@ -20104,7 +20152,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
-                    '<td></td>'+
+                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
