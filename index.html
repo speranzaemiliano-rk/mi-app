@@ -4435,6 +4435,7 @@
                       <h3>🏛️ Retenciones AFIP/ARCA</h3>
                       <div style="display:flex;gap:6px;">
                         <button class="btn btn-outline btn-sm" onclick="rptExportar('retenciones')">⬇️ Excel</button>
+                        <button class="btn btn-gold btn-sm" onclick="exportarSICORE()" title="Retenciones de Ganancias sobre pagos de Facturas, listas para importar en el aplicativo SICORE">📄 SICORE (Ganancias)</button>
                         <button class="btn btn-outline btn-sm" onclick="rptImprimir('retenciones')">🖨️ Imprimir</button>
                       </div>
                     </div>
@@ -9158,6 +9159,144 @@
             ? empresa + '_Reportes_' + periodoTag + '.xlsx'
             : empresa + '_' + (tipo === 'ventas' ? 'IVA-Ventas' : tipo === 'compras' ? 'IVA-Compras' : 'Retenciones') + '_' + periodoTag + '.xlsx';
         XLSX.writeFile(wb, nombre);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SICORE — Retenciones de Ganancias sobre pagos de Facturas, en el
+    // formato "Estándar Retenciones Versión 8.0" (importación SIAP/SICORE).
+    // Layout de 144 caracteres por línea, sin encabezado, un registro por
+    // retención efectivamente practicada. Solo cubre Ganancias (código de
+    // impuesto 217) — las retenciones SUSS quedan afuera porque son un
+    // régimen distinto, no se presentan por este aplicativo.
+    // Mapeo de régimen (código interno de la app → Código de Régimen SICORE,
+    // según Anexo VIII RG 830): 78→78 (bienes muebles/cambio), 94→94
+    // (locaciones obra/servicios), 119→116 (honorarios profesionales),
+    // 30/31/32→27 (alquileres).
+    // ══════════════════════════════════════════════════════════
+    var SICORE_REGIMEN_MAP = { '78': 78, '94': 94, '119': 116, '30/31/32': 27 };
+
+    function _sicorePad(valor, ancho) {
+        return String(Math.round(Number(valor) || 0)).padStart(ancho, '0').slice(-ancho);
+    }
+    function _sicorePadStr(valor, ancho) {
+        var s = String(valor || '').replace(/\D/g, '');
+        return s.padStart(ancho, '0').slice(-ancho);
+    }
+    function _sicoreDecimal(valor, digitosEnteros, decimales) {
+        var v = Math.abs(Number(valor) || 0).toFixed(decimales);
+        var partes = v.split('.');
+        return partes[0].padStart(digitosEnteros, '0') + ',' + (partes[1] || '').padEnd(decimales, '0');
+    }
+    function _sicoreFecha(fechaISO) {
+        var p = String(fechaISO || '').split('-');
+        if (p.length !== 3) return '  /  /    ';
+        return p[2].slice(0,2).padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[0].padStart(4,'0');
+    }
+    // "Número del comprobante": punto de venta INVERTIDO + número, total 16 dígitos
+    // (así lo requiere este formato de importación — confirmado contra la plantilla).
+    function _sicoreNumeroComprobante(numeroStr) {
+        var s = String(numeroStr || '').trim();
+        var m = s.match(/^(\d{1,5})[\s\-]+(\d{1,20})$/);
+        var ptoVta, numero;
+        if (m) {
+            ptoVta = m[1]; numero = m[2];
+        } else {
+            var digitos = s.replace(/\D/g, '');
+            if (digitos.length > 8) { ptoVta = digitos.slice(0, digitos.length - 8); numero = digitos.slice(-8); }
+            else { ptoVta = '1'; numero = digitos; }
+        }
+        var ptoVtaRev = ptoVta.padStart(4, '0').slice(-4).split('').reverse().join('');
+        return (ptoVtaRev + numero).padStart(16, '0').slice(-16);
+    }
+
+    function exportarSICORE() {
+        var f = rptFiltro();
+        var omitidos = [];
+        var filas = [];
+        (facturas || []).forEach(function(fa) {
+            (fa.pagosHistorial || []).forEach(function(p) {
+                if (!rptEnPeriodo(p.fecha, f)) return;
+                (p.retenciones || []).forEach(function(r) {
+                    if (!r.monto) return;
+                    var codReg = SICORE_REGIMEN_MAP[r.codigo];
+                    if (!codReg) { omitidos.push('Factura ' + (fa.numero||'—') + ' (' + (fa.proveedor||'—') + '): régimen "' + r.codigo + '" no es de Ganancias, se omite (ej. SUSS).'); return; }
+                    var prov = (typeof buscarProveedorPorNombre === 'function') ? buscarProveedorPorNombre(fa.proveedor) : null;
+                    var cuit = (prov && prov.cuit) || fa.cuit || '';
+                    if (!String(cuit).replace(/\D/g,'')) { omitidos.push('Factura ' + (fa.numero||'—') + ' (' + (fa.proveedor||'—') + '): no tiene CUIT cargado, se omite.'); return; }
+                    if (!fa.fecha) { omitidos.push('Factura ' + (fa.numero||'—') + ' (' + (fa.proveedor||'—') + '): no tiene fecha de emisión, se omite.'); return; }
+                    filas.push({
+                        fechaComp: fa.fecha,
+                        numComp: fa.numero || '',
+                        importe: fa.netoGravado || fa.importe || 0,
+                        codReg: codReg,
+                        base: p.baseImponible || p.monto || 0,
+                        fechaRet: p.fecha,
+                        importeRet: r.monto,
+                        cuit: cuit,
+                        proveedor: fa.proveedor || '',
+                        numeroFactura: fa.numero || '',
+                        desc: r.desc || r.codigo
+                    });
+                });
+            });
+        });
+        if (!filas.length) {
+            alert('No hay retenciones de Ganancias sobre pagos de Facturas en el período seleccionado' + (omitidos.length ? ' (se encontraron ' + omitidos.length + ' que se habrían omitido por datos faltantes).' : '.'));
+            return;
+        }
+        filas.sort(function(a,b){ return (a.fechaRet||'').localeCompare(b.fechaRet||''); });
+
+        // ── .txt de 144 caracteres por línea, para importar directo en SICORE ──
+        var lineas = filas.map(function(x, i) {
+            return _sicorePad(1, 2)                          // Código de comprobante: 1 = Factura
+                 + _sicoreFecha(x.fechaComp)                  // Fecha emisión comprobante
+                 + _sicoreNumeroComprobante(x.numComp)        // Número de comprobante (16)
+                 + _sicoreDecimal(x.importe, 13, 2)           // Importe del comprobante (neto)
+                 + _sicorePad(217, 3)                         // Código de impuesto: Ganancias
+                 + _sicorePad(x.codReg, 3)                    // Código de régimen
+                 + _sicorePad(1, 1)                           // Código de operación: 1 = Retención
+                 + _sicoreDecimal(x.base, 11, 2)               // Base de cálculo
+                 + _sicoreFecha(x.fechaRet)                   // Fecha emisión de la retención
+                 + _sicorePad(1, 2)                           // Código de condición: 1 = Inscripto
+                 + _sicorePad(0, 1)                           // Sujetos suspendidos: 0 = No
+                 + _sicoreDecimal(x.importeRet, 11, 2)         // Importe de la retención
+                 + _sicorePad(0, 6)                           // Porcentaje de exclusión: 0
+                 + _sicoreFecha(x.fechaRet)                   // Fecha emisión del boletín (= fecha retención)
+                 + _sicorePad(80, 2)                          // Tipo de documento: 80 = CUIT
+                 + _sicorePadStr(x.cuit, 20)                  // Número de documento del retenido
+                 + _sicorePad(i + 1, 14);                     // Número de certificado original (correlativo)
+        });
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        var periodoTag = meses[f.mes] + f.anio;
+        var empresa = empresaActual ? empresaActual.nombre.replace(/\s+/g,'_') : 'RK';
+        var nombreBase = empresa + '_SICORE-Ganancias_' + periodoTag;
+        var blobTxt = new Blob([lineas.join('\r\n') + '\r\n'], { type: 'text/plain' });
+        var urlTxt = URL.createObjectURL(blobTxt);
+        var aTxt = document.createElement('a'); aTxt.href = urlTxt; aTxt.download = nombreBase + '.txt';
+        document.body.appendChild(aTxt); aTxt.click(); document.body.removeChild(aTxt);
+        setTimeout(function(){ URL.revokeObjectURL(urlTxt); }, 5000);
+
+        // ── Excel de control, con las mismas columnas que la planilla de referencia ──
+        if (typeof XLSX !== 'undefined') {
+            var dataXls = filas.map(function(x) {
+                return {
+                    'Proveedor': x.proveedor, 'Factura': x.numeroFactura, 'CUIT': x.cuit,
+                    'Fecha Factura': x.fechaComp, 'Importe (neto)': x.importe,
+                    'Código Régimen': x.codReg, 'Descripción': x.desc,
+                    'Base de Cálculo': x.base, 'Fecha Retención': x.fechaRet,
+                    'Importe Retención': x.importeRet
+                };
+            });
+            var wbC = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wbC, XLSX.utils.json_to_sheet(dataXls), 'SICORE Ganancias');
+            XLSX.writeFile(wbC, nombreBase + '_control.xlsx');
+        }
+
+        var msg = '✅ Se generaron ' + filas.length + ' registro(s) para SICORE (' + periodoTag + ').\n\n' +
+            'Se descargó el .txt listo para importar y un Excel de control con el detalle.\n\n' +
+            'Antes de presentarlo, revisá: código de condición (se asumió 1=Inscripto para todos) y que el mapeo de régimen sea correcto: Reg.78→78, Reg.94→94, Reg.119→116 (honorarios), Reg.30/31/32→27 (alquileres).';
+        if (omitidos.length) msg += '\n\n⚠️ Se omitieron ' + omitidos.length + ' retención(es):\n' + omitidos.slice(0,10).join('\n') + (omitidos.length>10 ? '\n… y ' + (omitidos.length-10) + ' más.' : '');
+        alert(msg);
     }
 
     function togglePrincipalMenu() {
