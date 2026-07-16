@@ -11184,7 +11184,7 @@
         .then(function(mailEnviado) {
             _enviarMailAccesoUsuario(email, nombre, true);
             msg.innerHTML = mailEnviado
-                ? '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '. Se le envió un mail para que defina su contraseña.</span>'
+                ? '<span style="color:var(--success);">✅ Usuario creado: ' + escHtml(email) + '. Se le envió un mail para que defina su contraseña. Si no aparece en unos minutos, revisá la carpeta de spam/promociones.</span>'
                 : '<span style="color:var(--warn);">⚠️ Usuario creado: ' + escHtml(email) + ', pero el mail para definir la contraseña NO se pudo enviar (mirá la consola del navegador para el motivo). Podés reintentarlo con "🔑 Reenviar mail para definir contraseña" desde su ficha.</span>';
             document.getElementById('nuevoUserEmail').value = '';
             document.getElementById('nuevoUserNombre').value = '';
@@ -14286,6 +14286,8 @@
             const estadoClass = { pendiente:'badge-err', pagado:'badge-ok', parcial:'badge-warn' }[estado];
             const tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comp. X', otro:'Otro' };
             const mon = d.moneda === 'USD' ? 'USD ' : '$';
+            const sumHistDoc = (d.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
+            const pagadoIncons = Math.round(sumHistDoc) !== Math.round(pag);
             const tr = document.createElement('tr');
             _filaMovClickeable(tr, 'documento', d.id);
             tr.innerHTML = `
@@ -14300,12 +14302,28 @@
                 <td><div class="action-btns">
                     ${(d.pagado||0)<(d.importe||0)?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
                     ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Reimprimir">🖨️</button>`:''}
+                    ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
                     ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
                     <button class="btn btn-danger-sm" onclick="eliminarDoc('${d.id}')">✕</button>
                 </div></td>`;
             tbody.appendChild(tr);
         });
+    }
+
+    // Corrige documentos cuyo campo "pagado" quedó desincronizado del historial real de
+    // pagos (dato huérfano de antes de que el alta de comprobantes generara siempre su
+    // propia entrada en pagosHistorial al marcarlos pagados).
+    function corregirPagadoDoc(docId) {
+        const d = documentos.find(x => x.id === docId);
+        if (!d) return;
+        const sumHist = (d.pagosHistorial||[]).reduce((s,p) => s+(p.monto||0), 0);
+        const pagadoActual = d.pagado||0;
+        if (!confirm(`Monto pagado actual: $${Math.round(pagadoActual).toLocaleString('es-AR')}\nSegún el historial de pagos registrados: $${Math.round(sumHist).toLocaleString('es-AR')}\n\n¿Corregir el monto pagado de este comprobante para que coincida con su historial?`)) return;
+        d.pagado = sumHist;
+        REF_DOCS.child(d.id).update({ pagado: sumHist });
+        renderDocumentos();
+        alert('✓ Monto pagado corregido.');
     }
 
     function eliminarDoc(id) {
