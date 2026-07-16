@@ -7834,7 +7834,15 @@
         document.getElementById('pagoFDPendiente').textContent=fmt(pend);
         info.style.display='';
         var mi=document.getElementById('pagoFDMonto');if(mi&&(!mi.value||parseFloat(mi.value)===0))mi.value=Math.round(pend);
-        var bi=document.getElementById('pagoFDBase');if(bi&&(!bi.value||parseFloat(bi.value)===0))bi.value=Math.round(pend/1.21);
+        var bi=document.getElementById('pagoFDBase');
+        if(bi&&(!bi.value||parseFloat(bi.value)===0)){
+            // Si la factura tiene neto gravado cargado (ya sin IVA ni percepciones de IIBB), se
+            // escala proporcionalmente al monto pendiente en vez de estimar con importe/1.21.
+            var fRef = (_pagoFDTab==='fact' && typeof f !== 'undefined') ? f : null;
+            bi.value = (fRef && fRef.netoGravado > 0 && fRef.importe > 0)
+                ? Math.round(pend * (fRef.netoGravado / fRef.importe))
+                : Math.round(pend/1.21);
+        }
         pagoFDRecalcRet();
     }
     function pagoFDSelMod(m) {
@@ -11470,7 +11478,7 @@
         var importe = parseFloat(document.getElementById('leerFactImporte').value) || 0;
         var montoPago = parseFloat(document.getElementById('lfMontoPago').value) || importe;
         var baseEl = document.getElementById('lfRetBase');
-        var base = parseFloat(baseEl.value) || (importe > 0 ? Math.round(importe / 1.21) : 0);
+        var base = parseFloat(baseEl.value) || (window._lfNetoGravado > 0 ? Math.round(window._lfNetoGravado) : (importe > 0 ? Math.round(importe / 1.21) : 0));
         var provNombre = document.getElementById('leerFactProv').value.trim();
         var prov = buscarProveedorPorNombre(provNombre);
         var fecha  = document.getElementById('lfFechaPago').value || new Date().toISOString().substring(0,10);
@@ -11860,6 +11868,7 @@
 
     function agregarFactura() {
         editandoFactIndex = -1;
+        window._factNetoGravado = 0;
         document.getElementById('modalFactTitle').textContent = '🧾 Cargar Factura';
         document.getElementById('formFact').reset();
         document.getElementById('factFecha').valueAsDate = new Date();
@@ -11876,6 +11885,7 @@
     function editarFactura(index) {
         editandoFactIndex = index;
         const f = facturas[index];
+        window._factNetoGravado = f.netoGravado || 0;
         document.getElementById('modalFactTitle').textContent = '🧾 Editar Factura';
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
@@ -12020,7 +12030,9 @@
         const importe = parseFloat(document.getElementById('factImporte').value) || 0;
         const montoPago = parseFloat(document.getElementById('factMontoPago').value) || importe;
         const baseInp = document.getElementById('factRetBase');
-        var netoDefault = importe > 0 ? Math.round(importe / 1.21) : 0;
+        // Preferir el neto gravado guardado en la factura (ya excluye IVA y percepciones de
+        // IIBB) — si no está cargado, se estima como antes con importe/1.21.
+        var netoDefault = window._factNetoGravado > 0 ? Math.round(window._factNetoGravado) : (importe > 0 ? Math.round(importe / 1.21) : 0);
         if (baseInp && !baseInp._editado) baseInp.value = netoDefault || '';
         const base = parseFloat(document.getElementById('factRetBase')?.value) || netoDefault;
         const nombreProv = document.getElementById('factProveedor').value;
