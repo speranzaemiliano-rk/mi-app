@@ -17651,14 +17651,56 @@
         return 35;
     }
 
-    // Monto de vacaciones estimado = (sueldo / 25) × días.
-    function remMontoVacaciones(emp) {
-        var dias = remDiasVacaciones(emp.fechaIngreso);
-        return ((emp.sueldoBasico || 0) / 25) * dias;
+    // Meses trabajados en el semestre en curso (para el SAC proporcional). Si ingresó
+    // antes del semestre, son 6; si ingresó dentro, se cuentan los meses proporcionales.
+    function remMesesSemestre(fechaIngreso, ref) {
+        var hoy = ref ? new Date(ref) : new Date();
+        var anio = hoy.getFullYear();
+        var primerSem = hoy.getMonth() <= 5; // ene-jun
+        var inicioSem = new Date(anio, primerSem ? 0 : 6, 1);
+        var ing = fechaIngreso ? new Date(fechaIngreso + 'T00:00:00') : inicioSem;
+        var desde = ing > inicioSem ? ing : inicioSem;
+        var meses = (hoy.getFullYear() - desde.getFullYear()) * 12 + (hoy.getMonth() - desde.getMonth()) + 1;
+        if (meses < 0) meses = 0;
+        if (meses > 6) meses = 6;
+        return meses;
     }
 
-    // SAC (aguinaldo) semestral estimado = mejor sueldo del semestre / 2. Acá usamos el básico.
-    function remSacSemestral(emp) { return (emp.sueldoBasico || 0) / 2; }
+    // Remuneración mensual bruta (para SAC/vacaciones): básico + haberes remunerativos.
+    function remBrutoMensual(emp) {
+        var t = remTotalesConceptos(emp);
+        return (emp.sueldoBasico || 0) + t.haberes;
+    }
+
+    // Monto de vacaciones = (bruto / 25) × días (art. 155 LCT).
+    function remMontoVacaciones(emp) {
+        var dias = remDiasVacaciones(emp.fechaIngreso);
+        return (remBrutoMensual(emp) / 25) * dias;
+    }
+
+    // SAC (aguinaldo) proporcional = mejor remuneración mensual del semestre ÷ 12 × meses
+    // trabajados en el semestre. Usamos la mejor remuneración registrada (bruto actual, o el
+    // máximo del historial de sueldo si es mayor).
+    function remSacSemestral(emp) {
+        var mejor = remBrutoMensual(emp);
+        (emp.sueldoHistorial || []).forEach(function(h) { if ((h.monto || 0) > mejor) mejor = h.monto; });
+        var meses = remMesesSemestre(emp.fechaIngreso);
+        return (mejor / 12) * meses;
+    }
+
+    // Aportes de ley del empleado (solo relación de dependencia): Jubilación 11% +
+    // Ley 19032 (INSSJP) 3% + Obra Social 3% = 17% sobre la remuneración bruta.
+    var APORTE_JUBILACION = 0.11, APORTE_LEY19032 = 0.03, APORTE_OBRASOCIAL = 0.03;
+    function remAportesLey(emp) {
+        if ((emp.tipoContrato || 'dependencia') !== 'dependencia') {
+            return { jubilacion: 0, ley19032: 0, obraSocial: 0, total: 0, base: 0 };
+        }
+        var base = remBrutoMensual(emp);
+        var jub = base * APORTE_JUBILACION;
+        var ley = base * APORTE_LEY19032;
+        var os  = base * APORTE_OBRASOCIAL;
+        return { jubilacion: jub, ley19032: ley, obraSocial: os, total: jub + ley + os, base: base };
+    }
 
     // Suma de haberes y descuentos de los conceptos adicionales del empleado.
     function remTotalesConceptos(emp) {
@@ -17670,10 +17712,14 @@
         return { haberes: haberes, descuentos: descuentos };
     }
 
-    // Neto mensual a cobrar = básico + haberes - descuentos.
+    // Neto mensual a cobrar:
+    //  - Dependencia: bruto − aportes de ley (17%) − descuentos manuales.
+    //  - Monotributo: bruto − descuentos manuales (sin aportes de ley automáticos).
     function remNetoEmpleado(emp) {
         var t = remTotalesConceptos(emp);
-        return (emp.sueldoBasico || 0) + t.haberes - t.descuentos;
+        var bruto = (emp.sueldoBasico || 0) + t.haberes;
+        var aportes = remAportesLey(emp).total;
+        return bruto - aportes - t.descuentos;
     }
 
     function renderRemuneraciones() {
@@ -17828,18 +17874,28 @@
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var basico = parseFloat((document.getElementById('empSueldo') || {}).value) || 0;
         var fecha = (document.getElementById('empFechaIngreso') || {}).value || '';
+        var tipoContrato = (document.getElementById('empTipoContrato') || {}).value || 'dependencia';
         var conceptos = _empLeerConceptos();
-        var emp = { sueldoBasico: basico, fechaIngreso: fecha, conceptos: conceptos };
+        var emp = { sueldoBasico: basico, fechaIngreso: fecha, conceptos: conceptos, tipoContrato: tipoContrato };
         var t = remTotalesConceptos(emp);
+        var ap = remAportesLey(emp);
         var el = document.getElementById('empPreviewLiquidacion');
         if (!el) return;
-        el.innerHTML =
-            '<div style="display:flex;justify-content:space-between;"><span>Sueldo básico</span><span>' + fmt(basico) + '</span></div>' +
-            (t.haberes ? '<div style="display:flex;justify-content:space-between;color:var(--success);"><span>+ Haberes adicionales</span><span>' + fmt(t.haberes) + '</span></div>' : '') +
-            (t.descuentos ? '<div style="display:flex;justify-content:space-between;color:var(--danger);"><span>− Descuentos</span><span>' + fmt(t.descuentos) + '</span></div>' : '') +
-            '<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;"><span>Neto a cobrar</span><span>' + fmt(remNetoEmpleado(emp)) + '</span></div>' +
-            '<div style="display:flex;justify-content:space-between;color:var(--text-3);margin-top:4px;"><span>Vacaciones (' + remDiasVacaciones(fecha) + ' días) estimadas</span><span>' + fmt(remMontoVacaciones(emp)) + '</span></div>' +
-            '<div style="display:flex;justify-content:space-between;color:var(--text-3);"><span>Aguinaldo (SAC) semestral estimado</span><span>' + fmt(remSacSemestral(emp)) + '</span></div>';
+        var fila = function(lbl, val, color) { return '<div style="display:flex;justify-content:space-between;' + (color ? 'color:' + color + ';' : '') + '"><span>' + lbl + '</span><span>' + val + '</span></div>'; };
+        var html =
+            fila('Sueldo básico', fmt(basico)) +
+            (t.haberes ? fila('+ Haberes adicionales', fmt(t.haberes), 'var(--success)') : '');
+        if (ap.total > 0) {
+            html += fila('Remuneración bruta', fmt(ap.base)) +
+                fila('− Jubilación (11%)', fmt(ap.jubilacion), 'var(--danger)') +
+                fila('− Ley 19032 / INSSJP (3%)', fmt(ap.ley19032), 'var(--danger)') +
+                fila('− Obra social (3%)', fmt(ap.obraSocial), 'var(--danger)');
+        }
+        html += (t.descuentos ? fila('− Descuentos', fmt(t.descuentos), 'var(--danger)') : '') +
+            '<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;"><span>Neto a cobrar' + (tipoContrato === 'monotributo' ? ' (monotributo)' : '') + '</span><span>' + fmt(remNetoEmpleado(emp)) + '</span></div>' +
+            fila('Vacaciones (' + remDiasVacaciones(fecha) + ' días) estimadas', fmt(remMontoVacaciones(emp)), 'var(--text-3)') +
+            fila('Aguinaldo (SAC) proporcional del semestre', fmt(remSacSemestral(emp)), 'var(--text-3)');
+        el.innerHTML = html;
     };
 
     window.abrirModalEmpleado = function(idx) {
@@ -17938,11 +17994,18 @@
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var emp2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
         var t = remTotalesConceptos(emp);
+        var ap = remAportesLey(emp);
+        var totalDesc = t.descuentos + ap.total;
         var filas = '<tr><td>Sueldo básico</td><td style="text-align:right;">' + fmt(emp.sueldoBasico) + '</td><td></td></tr>';
         (emp.conceptos || []).forEach(function(c) {
             var esDesc = c.tipo === 'descuento';
             filas += '<tr><td>' + escHtml(c.nombre || '') + '</td><td style="text-align:right;">' + (esDesc ? '' : fmt(c.monto)) + '</td><td style="text-align:right;">' + (esDesc ? fmt(c.monto) : '') + '</td></tr>';
         });
+        if (ap.total > 0) {
+            filas += '<tr><td>Jubilación (11%)</td><td></td><td style="text-align:right;">' + fmt(ap.jubilacion) + '</td></tr>' +
+                     '<tr><td>Ley 19032 / INSSJP (3%)</td><td></td><td style="text-align:right;">' + fmt(ap.ley19032) + '</td></tr>' +
+                     '<tr><td>Obra social (3%)</td><td></td><td style="text-align:right;">' + fmt(ap.obraSocial) + '</td></tr>';
+        }
         var emision = new Date().toLocaleDateString('es-AR');
         var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + '</title>' +
             '<style>body{font-family:Arial,sans-serif;padding:24px;color:#222;} h1{font-size:18px;} table{width:100%;border-collapse:collapse;margin-top:12px;} th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;} th{background:#f0f0f0;} .tot{font-weight:700;} .muted{color:#777;font-size:11px;margin-top:16px;}</style></head><body>' +
@@ -17951,10 +18014,10 @@
             '<div style="margin-top:8px;font-size:13px;">Empleado: <strong>' + escHtml(emp.nombre || '') + '</strong> · CUIL: ' + escHtml(emp.cuil || '—') + '<br>' +
             'Ingreso: ' + (emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') + ' · Puesto: ' + escHtml(emp.puesto || '—') + ' · ' + (emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia') + '</div>' +
             '<table><thead><tr><th>Concepto</th><th style="text-align:right;">Haberes</th><th style="text-align:right;">Descuentos</th></tr></thead><tbody>' + filas +
-            '<tr class="tot"><td>Totales</td><td style="text-align:right;">' + fmt((emp.sueldoBasico || 0) + t.haberes) + '</td><td style="text-align:right;">' + fmt(t.descuentos) + '</td></tr>' +
-            '<tr class="tot"><td>Neto a cobrar</td><td colspan="2" style="text-align:right;">' + fmt(remNetoEmpleado(emp)) + '</td></tr>' +
+            '<tr class="tot"><td>Totales</td><td style="text-align:right;">' + fmt((emp.sueldoBasico || 0) + t.haberes) + '</td><td style="text-align:right;">' + fmt(totalDesc) + '</td></tr>' +
+            '<tr class="tot"><td>Neto a cobrar' + (emp.tipoContrato === 'monotributo' ? ' (monotributo)' : '') + '</td><td colspan="2" style="text-align:right;">' + fmt(remNetoEmpleado(emp)) + '</td></tr>' +
             '</tbody></table>' +
-            '<div style="margin-top:14px;font-size:12px;">Vacaciones estimadas (' + remDiasVacaciones(emp.fechaIngreso) + ' días): <strong>' + fmt(remMontoVacaciones(emp)) + '</strong> · Aguinaldo (SAC) semestral estimado: <strong>' + fmt(remSacSemestral(emp)) + '</strong></div>' +
+            '<div style="margin-top:14px;font-size:12px;">Vacaciones estimadas (' + remDiasVacaciones(emp.fechaIngreso) + ' días): <strong>' + fmt(remMontoVacaciones(emp)) + '</strong> · Aguinaldo (SAC) proporcional del semestre: <strong>' + fmt(remSacSemestral(emp)) + '</strong></div>' +
             '<div class="muted">Documento estimativo generado el ' + emision + '. Los montos de vacaciones y SAC son aproximados; verificá con tu contador. No reemplaza el recibo oficial de sueldo.</div>' +
             '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
         var w = window.open('', '_blank', 'width=780,height=950');
