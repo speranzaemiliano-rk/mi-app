@@ -17352,6 +17352,18 @@
         }
     }
 
+    // Monto vigente de la cuota i de una venta cuotas_cac:
+    //  - si tiene un monto congelado/guardado (cuotaMontos[i]), lo usa;
+    //  - si no, aplica el factor CAC vigente (cacActual/cacBase) al monto base, para que el
+    //    valor actualizado se refleje aunque todavía no se haya registrado un cobro.
+    function _cuotaMontoVigente(v, i) {
+        var cm = (v.cuotaMontos || [])[i];
+        if (cm && cm > 0) return cm;
+        var base = v.construccionBase || 0;
+        var factor = (v.cacBase > 0 && v.cacActual > 0) ? (v.cacActual / v.cacBase) : 1;
+        return Math.round(base * factor);
+    }
+
     function resumenVenta(v) {
         // Retorna { precioUSD, cobradoUSD, precioARS, cobradoARS } — incluye el valor de la cochera si tiene valor aparte
         var res;
@@ -17363,11 +17375,9 @@
             // El total real es la suma de las nc cuotas, cada una con su monto vigente
             // (congelado al momento de pagarla, o el monto base si todavía está pendiente).
             var nc          = v.nroCuotas || 0;
-            var montoBase   = v.construccionBase || 0;
-            var cuotaMontos = v.cuotaMontos || [];
             var constTotal  = 0;
             for (var _i = 0; _i < nc; _i++) {
-                constTotal += (cuotaMontos[_i] && cuotaMontos[_i] > 0) ? cuotaMontos[_i] : montoBase;
+                constTotal += _cuotaMontoVigente(v, _i);
             }
             var constCob = v.construccionCobrado || 0;
             res = {
@@ -19865,7 +19875,7 @@
         var cuotasPagadas = 0, cuotasVencidas = 0, cuotasPendientes = 0;
         if (v.modalidad === 'cuotas_cac' && nc > 0) {
             for (var i = 0; i < nc; i++) {
-                var monto = (cuotaMontos[i] && cuotaMontos[i] > 0) ? cuotaMontos[i] : montoBase;
+                var monto = _cuotaMontoVigente(v, i);
                 totalCuotas += monto;
                 var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
                 if (pagada) { cobradoCuotas += monto; cuotasPagadas++; }
@@ -19971,7 +19981,7 @@
             tbody.innerHTML = '';
             for (var i = 0; i < nc; i++) {
                 var nroCuota = i + 1;
-                var monto = (cuotaMontos[i] && cuotaMontos[i] > 0) ? cuotaMontos[i] : montoBase;
+                var monto = _cuotaMontoVigente(v, i);
                 var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
                 var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
                 var cobroReg = cobros.find(function(c){ return c.nroCuota === nroCuota; });
@@ -20061,7 +20071,7 @@
         if (v.modalidad === 'cuotas_cac' && nc > 0) {
             for (var i = 0; i < nc; i++) {
                 var nroCuota = i + 1;
-                var monto = (cuotaMontos[i] && cuotaMontos[i] > 0) ? cuotaMontos[i] : montoBase;
+                var monto = _cuotaMontoVigente(v, i);
                 var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
                 var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
                 var cobroReg = cobros.find(function(c){ return c.nroCuota === nroCuota; });
@@ -20128,7 +20138,7 @@
         var totalCuotasNum = 0, cobCuotasNum = 0;
         if (v.modalidad === 'cuotas_cac') {
             for (var i = 0; i < nc; i++) {
-                var m = (cuotaMontos[i]&&cuotaMontos[i]>0) ? cuotaMontos[i] : montoBase;
+                var m = _cuotaMontoVigente(v, i);
                 totalCuotasNum += m;
                 if (cobros.some(function(c){ return c.nroCuota===i+1; })) cobCuotasNum += m;
             }
