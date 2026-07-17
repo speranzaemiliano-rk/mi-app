@@ -10,12 +10,18 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 |---|---|---|---|
 | 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | ✅ Código listo — falta deploy (ver abajo) |
 | 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | ✅ Reglas listas — falta publicar |
+| 2b | 🔴 CRÍTICO | El banner in-app sugería pegar reglas ABIERTAS (revertía las reglas por rol) | ✅ **Corregido** — el banner ya no sugiere reglas abiertas |
 | 3 | 🟠 ALTO | PDFs de facturas con lectura pública (`temp-pdf`, `.read: true`) | Pendiente |
 | 4 | 🟡 MEDIO | Sin validación de inputs ni rate limiting en el backend | Pendiente |
 | 5 | 🟡 MEDIO | Datos compartidos globalmente entre empresas (proveedores, grupos) | A evaluar |
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
 | 7 | 🟡 MEDIO | XSS almacenado: texto libre insertado en `innerHTML` sin escapar | ✅ Corregido en Desarrollos/Aportantes — resto del código sin auditar |
 | 8 | 🟢 BAJO | El Asistente RK envía un resumen de datos financieros a la API de Google Gemini en cada consulta | Por diseño — evaluar alcance |
+| 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Pagos corregidos** (escritura por-nodo) — alta/edición de presup./facturas: pendiente |
+
+### C2 (endpoints de usuarios) y C3 (backend fail-open) — hallazgos de auditoría 2026-07-17
+- **C2:** en `functions/server.js`, `requireAdmin` solo verifica que el SDK Admin esté inicializado, **no valida el rol de quien llama**. Cualquiera que pase el token compartido puede crear un superadmin o borrar usuarios. **Recomendación:** exigir `Authorization: Bearer <idToken>` de Firebase y verificar `roles/<uid> === 'superadmin'` antes de operar. *(Requiere deploy + enviar el idToken desde el front — pendiente.)*
+- **C3:** el backend queda **abierto** si falta `APP_API_TOKEN` en Railway (modo compatibilidad), y el token se guarda en `global/config/appToken`, legible por cualquier usuario autenticado (incluido `lector`). **Recomendación:** setear `APP_API_TOKEN`, hacer que el backend falle cerrado sin él, y migrar a verificación de idToken por request. *(Deploy manual — pendiente.)*
 
 > ### ✅ Mitigaciones aplicadas en código (faltan los pasos de despliegue)
 >
@@ -176,6 +182,28 @@ Claves del enfoque:
 **A evaluar:**
 - Si el modelo de negocio requiere confidencialidad estricta de estos datos frente a terceros, considerar acotar `rkResumenDatosApp()` a menos campos, o activarlo solo cuando el usuario lo pide explícitamente (en vez de en cada mensaje).
 - Confirmar los términos de retención de datos de la API de Gemini que se esté usando (v1beta `generateContent`).
+
+---
+
+## 🟠 9. Concurrencia — dos usuarios trabajando al mismo tiempo
+
+**Contexto:** el sistema usa Firebase Realtime Database con listeners `.on('value')` que mantienen arrays en memoria (`datos`, `facturas`, etc.). El riesgo es el **lost-update**: si el usuario B guarda con su copia del array desactualizada, borra lo que el usuario A acababa de escribir.
+
+**Estado tras la auditoría del 2026-07-17:**
+
+| Operación | Antes | Ahora |
+|---|---|---|
+| **Registrar/editar/eliminar pago** de factura o presupuesto | Reescribía el array COMPLETO (`persistir()` / `persistirFacturas()`) → **lost-update** | ✅ Escribe **solo el nodo del ítem** (`REF_FACTURAS.child(idx).update(...)` / `REF_DATOS.child(idx).update(...)`), igual que documentos |
+| **Pago de documento** | Ya era por-nodo (`REF_DOCS.child(id).update`) | ✅ Sin cambios |
+| **Numeración correlativa** (OP, comprobantes A/B) | `.transaction()` atómica | ✅ A prueba de concurrencia, sin cambios |
+| **Alta/edición de un presupuesto o factura** (el ítem en sí) | Reescribe el array completo | ⚠️ **Riesgo residual** — ver abajo |
+| **Otras colecciones array-completo** (ingresos/caja, cuentas bancarias, proveedores global, ventas, remuneraciones, alquileres, etc.) | Reescriben el array completo | ⚠️ **Riesgo residual** |
+
+**Por qué el fix de pagos es seguro:** el borrado usa `splice` + `set`, así que el array en RTDB queda **denso** (sin huecos `null`) y el índice en memoria coincide con la clave numérica de Firebase. Escribir `REF_X.child(String(idx)).update(...)` toca solo ese elemento.
+
+**Riesgo residual y recomendación:** las operaciones que todavía reescriben el array completo (alta/edición del ítem, saldos de cuentas bancarias, ingresos) pueden perder cambios si dos usuarios editan la MISMA colección en el mismo instante. Es mucho menos frecuente que los pagos, pero para eliminarlo del todo hay que **migrar esas colecciones de array a objeto indexado por `id`** en RTDB y usar `child(id).update/remove` en todas las escrituras. Es un cambio grande que conviene hacer con pruebas dedicadas.
+
+**Mientras tanto — pauta operativa para dos usuarios:** conviene que cada usuario trabaje en **empresas/proyectos distintos** (el aislamiento por `getBasePath()` hace que sus datos vivan en ramas separadas de la base, sin colisión). Si los dos tienen que trabajar sobre el mismo proyecto a la vez, evitar editar/crear el MISMO presupuesto o la MISMA factura simultáneamente; los pagos ya son seguros.
 
 ---
 

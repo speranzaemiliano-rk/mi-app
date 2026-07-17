@@ -2927,18 +2927,16 @@
         <div class="page-content" style="padding:0 32px 28px;">
             <!-- BANNER DE ERROR FIREBASE -->
             <div id="firebaseRulesBanner" style="display:none; background:#FEECEB; border:1px solid #F5B7B1; border-left:4px solid var(--danger); border-radius:10px; padding:16px 20px; margin-bottom:20px;">
-                <div style="font-weight:700; color:var(--danger); margin-bottom:8px; font-size:14px;">⚠️ Firebase está bloqueando el nodo "empresas"</div>
+                <div style="font-weight:700; color:var(--danger); margin-bottom:8px; font-size:14px;">⚠️ Estás en modo local temporal — Firebase bloqueó una escritura</div>
                 <div style="font-size:13px; color:var(--text-2); line-height:1.7;">
-                    Estás trabajando en modo local temporal. Para que las empresas y proyectos se guarden, entrá a
-                    <strong>Firebase Console → Realtime Database → Reglas</strong> y pegá estas reglas:
+                    Puede ser que tu usuario no tenga permiso de escritura (rol lector), o que falten publicar
+                    las reglas de la base. <strong>No pegues reglas abiertas</strong> (<code>.write: auth != null</code>):
+                    dejarían a cualquier usuario modificar todo y escalar a super administrador.
+                    <br>Si sos el administrador, publicá las reglas por rol del repo
+                    (<strong>database.rules.json</strong>) en <strong>Firebase Console → Realtime Database → Reglas</strong>,
+                    o corré <code>firebase deploy --only database</code>. Si no, pedile acceso a quien administra el sistema.
                 </div>
-                <pre style="background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:10px; font-size:12px; overflow-x:auto; color:var(--text-1);">{
-  "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null"
-  }
-}</pre>
-                <div style="font-size:12px; color:var(--text-3); margin-top:8px;">Luego recargá la página. <button onclick="document.getElementById('firebaseRulesBanner').style.display='none'" style="background:none; border:none; color:var(--danger); cursor:pointer; font-weight:600; text-decoration:underline;">Ocultar</button></div>
+                <div style="font-size:12px; color:var(--text-3); margin-top:8px;">Después recargá la página. <button onclick="document.getElementById('firebaseRulesBanner').style.display='none'" style="background:none; border:none; color:var(--danger); cursor:pointer; font-weight:600; text-decoration:underline;">Ocultar</button></div>
             </div>
 
             <!-- ══════════════ TAB: HOME ══════════════ -->
@@ -8285,7 +8283,10 @@
             f.pagosHistorial.push(entry);
             f.pagado=(f.pagado||0)+monto;
             f.estado=(f.pagado>=(f.importe||0)&&(f.importe||0)>0)?'pagada':'parcial';
-            persistirFacturas();
+            // Escribir SOLO el nodo de esta factura (no todo el array) para no pisar cambios
+            // de otro usuario trabajando en paralelo. El array de RTDB es denso (borrado por
+            // splice), así que el índice en memoria coincide con la clave numérica en Firebase.
+            REF_FACTURAS.child(String(idx)).update({pagosHistorial:f.pagosHistorial,pagado:f.pagado,estado:f.estado});
             sincronizarPagoPlan('factura',idx);
             itemImp={tipo:'fact',item:f,idx:idx};
         } else {
@@ -8852,7 +8853,18 @@
         lastPago.tipoAB = modalidadPago;
         datos[i].reciboCorrelativo = nroCorr;
         const datoPagado = datos[i];
-        cerrarPago(); persistir();
+        cerrarPago();
+        // Escribir SOLO el nodo de este presupuesto (no todo el array `datos`) para no pisar
+        // cambios de otro usuario en paralelo. Array RTDB denso → índice = clave numérica.
+        REF_DATOS.child(String(i)).update({
+            pagosHistorial:    datos[i].pagosHistorial,
+            pagado:            datos[i].pagado,
+            pagadoPresupuesto: datos[i].pagadoPresupuesto,
+            pagadoMayores:     datos[i].pagadoMayores,
+            indiceCACActual:   datos[i].indiceCACActual || 0,
+            recibo:            datos[i].recibo,
+            reciboCorrelativo: datos[i].reciboCorrelativo
+        });
         // Sincronizar pago en el Plan de Trabajo
         sincronizarPagoPlan('presup', i);
         if (confirm('Pago registrado. ¿Imprimir recibo?')) {
@@ -12960,7 +12972,8 @@
         else f.estado = 'parcial';
         if (!f.pagosHistorial) f.pagosHistorial = [];
         f.pagosHistorial.push({ pagoId: 'FP-'+Date.now(), fecha: new Date().toISOString().substring(0,10), monto, modalidad: 'B' });
-        persistirFacturas();
+        // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
+        REF_FACTURAS.child(String(index)).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         sincronizarPagoPlan('factura', index);
     }
 
@@ -20897,7 +20910,8 @@
             d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)); }, 0);
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
-            persistir();
+            // Solo el nodo de este presupuesto (evita pisar a otro usuario en paralelo)
+            REF_DATOS.child(String(di)).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores });
         } else if (src === 'doc') {
             var doc = documentos.find(function(x){ return x.id === di; });
             if (!doc) { cerrarModalEditarPago(); return; }
@@ -20918,7 +20932,8 @@
             // Recalcular pagado total de la factura
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
-            persistirFacturas();
+            // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
+            REF_FACTURAS.child(String(di)).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         }
 
         cerrarModalEditarPago();
@@ -20945,7 +20960,8 @@
             d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)); }, 0);
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
-            persistir();
+            // Solo el nodo de este presupuesto (evita pisar a otro usuario en paralelo)
+            REF_DATOS.child(String(di)).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores });
         } else if (src === 'doc') {
             var doc = documentos.find(function(x){ return x.id === di; });
             if (!doc || !doc.pagosHistorial) { cerrarModalEditarPago(); return; }
@@ -20958,7 +20974,8 @@
             f.pagosHistorial.splice(pi, 1);
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
-            persistirFacturas();
+            // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
+            REF_FACTURAS.child(String(di)).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         }
 
         cerrarModalEditarPago();
