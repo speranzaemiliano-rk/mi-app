@@ -17766,6 +17766,63 @@
         return out;
     }
 
+    // ── Historial de sueldo básico (filas dinámicas fecha + monto) ──
+    function _empSueldoHistHTML(h) {
+        h = h || {};
+        return '<div class="emp-sueldohist-fila" style="display:grid;grid-template-columns:170px 1fr 32px;gap:6px;margin-bottom:6px;align-items:center;">' +
+            '<input type="date" class="emp-sh-fecha" value="' + escHtml(h.fecha || '') + '">' +
+            '<input type="number" class="emp-sh-monto" step="0.01" min="0" placeholder="Sueldo básico" value="' + (h.monto != null ? h.monto : '') + '">' +
+            '<button type="button" onclick="this.closest(\'.emp-sueldohist-fila\').remove()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;" title="Quitar">✕</button>' +
+        '</div>';
+    }
+    window.empAgregarSueldoHist = function(fecha, monto) {
+        var cont = document.getElementById('empSueldoHistLista');
+        cont.insertAdjacentHTML('beforeend', _empSueldoHistHTML({ fecha: fecha || '', monto: (monto != null ? monto : '') }));
+    };
+    function _empLeerSueldoHist() {
+        var filas = document.querySelectorAll('#empSueldoHistLista .emp-sueldohist-fila');
+        var out = [];
+        filas.forEach(function(f) {
+            var fecha = f.querySelector('.emp-sh-fecha').value || '';
+            var monto = parseFloat(f.querySelector('.emp-sh-monto').value) || 0;
+            if (fecha || monto) out.push({ fecha: fecha, monto: monto });
+        });
+        out.sort(function(a, b) { return (a.fecha || '').localeCompare(b.fecha || ''); });
+        return out;
+    }
+
+    // ── Documentos adjuntos del legajo ──
+    var _empAdjuntosWorking = [];
+    function _empRenderAdjuntos() {
+        var cont = document.getElementById('empAdjuntosLista');
+        if (!cont) return;
+        if (!_empAdjuntosWorking.length) { cont.innerHTML = '<div style="font-size:12px;color:var(--text-3);">Sin documentos adjuntos.</div>'; return; }
+        cont.innerHTML = _empAdjuntosWorking.map(function(a, i) {
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
+                '<span style="flex:1;">📎 ' + escHtml(a.nombre || 'documento') + '</span>' +
+                '<button type="button" class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + a.id + '\',\'' + (a.nombre||'documento').replace(/'/g,'') + '\')" title="Ver">Ver</button>' +
+                '<button type="button" class="btn btn-danger-sm" onclick="empQuitarAdjunto(' + i + ')" title="Quitar">✕</button>' +
+            '</div>';
+        }).join('');
+    }
+    window.empSubirAdjunto = async function(inputEl) {
+        var file = inputEl && inputEl.files && inputEl.files[0];
+        if (!file) return;
+        if (file.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_DOC_MB + ' MB.'); inputEl.value = ''; return; }
+        try {
+            var base64 = await leerArchivoBase64(file);
+            var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
+            _empAdjuntosWorking.push({ id: id, nombre: file.name, tipo: file.type });
+            _empRenderAdjuntos();
+        } catch (e) { alert('No se pudo subir el archivo: ' + (e.message || e)); }
+        inputEl.value = '';
+    };
+    window.empQuitarAdjunto = function(i) {
+        _empAdjuntosWorking.splice(i, 1);
+        _empRenderAdjuntos();
+    };
+
     // Muestra el desglose de la liquidación en vivo dentro del modal.
     window.renderPreviewLiquidacion = function() {
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
@@ -17814,6 +17871,10 @@
         setVal('empObs', emp ? emp.obs : '');
         var cont = document.getElementById('empConceptosLista');
         cont.innerHTML = (emp && emp.conceptos && emp.conceptos.length) ? emp.conceptos.map(_empConceptoHTML).join('') : '';
+        var contSH = document.getElementById('empSueldoHistLista');
+        if (contSH) contSH.innerHTML = (emp && emp.sueldoHistorial && emp.sueldoHistorial.length) ? emp.sueldoHistorial.map(_empSueldoHistHTML).join('') : '';
+        _empAdjuntosWorking = (emp && emp.adjuntos) ? emp.adjuntos.slice() : [];
+        _empRenderAdjuntos();
         renderPreviewLiquidacion();
         document.getElementById('modalEmpleado').classList.add('active');
     };
@@ -17847,6 +17908,8 @@
             jornada: document.getElementById('empJornada').value || '',
             lugarTrabajo: (document.getElementById('empLugarTrabajo').value || '').trim(),
             conceptos: _empLeerConceptos(),
+            sueldoHistorial: _empLeerSueldoHist(),
+            adjuntos: _empAdjuntosWorking.slice(),
             obs: (document.getElementById('empObs').value || '').trim()
         };
         if (editandoEmpleadoIdx >= 0) {
@@ -25990,6 +26053,26 @@
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber')">+ Otro</button>
         </div>
         <div id="empConceptosLista"></div>
+      </div>
+
+      <div style="margin-top:4px; border-top:1px solid var(--border); padding-top:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <strong style="font-size:13px;">📈 Historial de sueldo básico</strong>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarSueldoHist()">+ Agregar aumento</button>
+        </div>
+        <div class="form-hint" style="margin-bottom:8px;">Registrá los cambios del sueldo básico con su fecha (ej. cada aumento), para ver la evolución. El sueldo básico de arriba es el vigente.</div>
+        <div id="empSueldoHistLista"></div>
+      </div>
+
+      <div style="margin-top:4px; border-top:1px solid var(--border); padding-top:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <strong style="font-size:13px;">📎 Documentos del legajo</strong>
+          <label class="btn btn-outline btn-sm" style="cursor:pointer; margin:0;">+ Adjuntar archivo
+            <input type="file" id="empAdjuntoInput" accept=".pdf,image/*" style="display:none;" onchange="empSubirAdjunto(this)">
+          </label>
+        </div>
+        <div class="form-hint" style="margin-bottom:8px;">DNI, contrato, alta temprana, exámenes, etc. Máx. 4 MB por archivo.</div>
+        <div id="empAdjuntosLista"></div>
       </div>
 
       <div class="form-group" style="margin-top:10px;">
