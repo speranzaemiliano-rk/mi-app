@@ -9716,35 +9716,35 @@
     function _sicorePad(valor, ancho) {
         return String(Math.round(Number(valor) || 0)).padStart(ancho, '0').slice(-ancho);
     }
-    function _sicorePadStr(valor, ancho) {
-        var s = String(valor || '').replace(/\D/g, '');
-        return s.padStart(ancho, '0').slice(-ancho);
+    // Importe con separador de miles (punto) redondeado a pesos enteros, rellenado a la
+    // izquierda con ceros hasta el ancho pedido. Ej: 6554656.5 con ancho 14 → "000006.554.657".
+    function _sicoreImporte(valor, ancho) {
+        var r = Math.round(Math.abs(Number(valor) || 0));
+        var str = String(r), out = '', cnt = 0;
+        for (var k = str.length - 1; k >= 0; k--) { out = str[k] + out; if (++cnt % 3 === 0 && k > 0) out = '.' + out; }
+        return out.padStart(ancho, '0').slice(-ancho);
     }
-    function _sicoreDecimal(valor, digitosEnteros, decimales) {
-        var v = Math.abs(Number(valor) || 0).toFixed(decimales);
-        var partes = v.split('.');
-        return partes[0].padStart(digitosEnteros, '0') + ',' + (partes[1] || '').padEnd(decimales, '0');
+    // Porcentaje: 2 enteros + '.' + 3 decimales. Ej: 0 → "00.000".
+    function _sicorePct(valor) {
+        var v = (Number(valor) || 0).toFixed(3).split('.');
+        return v[0].padStart(2, '0').slice(-2) + '.' + v[1];
     }
+    // Fecha DD/MM/AAAA con barras (10). Vacía → "00/00/0000".
     function _sicoreFecha(fechaISO) {
         var p = String(fechaISO || '').split('-');
-        if (p.length !== 3) return '  /  /    ';
+        if (p.length !== 3) return '00/00/0000';
         return p[2].slice(0,2).padStart(2,'0') + '/' + p[1].padStart(2,'0') + '/' + p[0].padStart(4,'0');
     }
-    // "Número del comprobante": punto de venta INVERTIDO + número, total 16 dígitos
-    // (así lo requiere este formato de importación — confirmado contra la plantilla).
+    // Número del comprobante: solo dígitos, rellenado con ceros a la izquierda hasta 16.
     function _sicoreNumeroComprobante(numeroStr) {
-        var s = String(numeroStr || '').trim();
-        var m = s.match(/^(\d{1,5})[\s\-]+(\d{1,20})$/);
-        var ptoVta, numero;
-        if (m) {
-            ptoVta = m[1]; numero = m[2];
-        } else {
-            var digitos = s.replace(/\D/g, '');
-            if (digitos.length > 8) { ptoVta = digitos.slice(0, digitos.length - 8); numero = digitos.slice(-8); }
-            else { ptoVta = '1'; numero = digitos; }
-        }
-        var ptoVtaRev = ptoVta.padStart(4, '0').slice(-4).split('').reverse().join('');
-        return (ptoVtaRev + numero).padStart(16, '0').slice(-16);
+        var s = String(numeroStr || '').replace(/\D/g, '');
+        return s.padStart(16, '0').slice(-16);
+    }
+    // CUIT/documento del retenido: dígitos, alineado a la IZQUIERDA y rellenado con
+    // espacios a la derecha hasta 20 (así figura en la plantilla de referencia).
+    function _sicoreDoc(cuit, ancho) {
+        var s = String(cuit || '').replace(/\D/g, '');
+        return (s + '                              ').slice(0, ancho);
     }
 
     function exportarSICORE() {
@@ -9784,25 +9784,26 @@
         }
         filas.sort(function(a,b){ return (a.fechaRet||'').localeCompare(b.fechaRet||''); });
 
-        // ── .txt de 144 caracteres por línea, para importar directo en SICORE ──
+        // ── .txt de 145 caracteres por línea, para importar directo en SICORE ──
+        // Diseño de registro (posiciones): ver plantilla de referencia SICORE.
         var lineas = filas.map(function(x, i) {
-            return _sicorePad(1, 2)                          // Código de comprobante: 1 = Factura
-                 + _sicoreFecha(x.fechaComp)                  // Fecha emisión comprobante
-                 + _sicoreNumeroComprobante(x.numComp)        // Número de comprobante (16)
-                 + _sicoreDecimal(x.importe, 13, 2)           // Importe del comprobante (neto)
-                 + _sicorePad(217, 3)                         // Código de impuesto: Ganancias
-                 + _sicorePad(x.codReg, 3)                    // Código de régimen
-                 + _sicorePad(1, 1)                           // Código de operación: 1 = Retención
-                 + _sicoreDecimal(x.base, 11, 2)               // Base de cálculo
-                 + _sicoreFecha(x.fechaRet)                   // Fecha emisión de la retención
-                 + _sicorePad(1, 2)                           // Código de condición: 1 = Inscripto
-                 + _sicorePad(0, 1)                           // Sujetos suspendidos: 0 = No
-                 + _sicoreDecimal(x.importeRet, 11, 2)         // Importe de la retención
-                 + _sicorePad(0, 6)                           // Porcentaje de exclusión: 0
-                 + _sicoreFecha(x.fechaRet)                   // Fecha emisión del boletín (= fecha retención)
-                 + _sicorePad(80, 2)                          // Tipo de documento: 80 = CUIT
-                 + _sicorePadStr(x.cuit, 20)                  // Número de documento del retenido
-                 + _sicorePad(i + 1, 14);                     // Número de certificado original (correlativo)
+            return _sicorePad(1, 2)                    // [1-2]    Código de comprobante: 01 = Factura
+                 + _sicoreFecha(x.fechaComp)            // [3-12]   Fecha emisión del comprobante
+                 + _sicoreNumeroComprobante(x.numComp)  // [13-28]  Número del comprobante (16)
+                 + _sicoreImporte(x.importe, 16)        // [29-44]  Importe del comprobante (16)
+                 + _sicorePad(217, 4)                   // [45-48]  Código de impuesto: 0217 = Ganancias
+                 + _sicorePad(x.codReg, 3)              // [49-51]  Código de régimen (3)
+                 + _sicorePad(1, 1)                     // [52]     Código de operación: 1 = Retención
+                 + _sicoreImporte(x.base, 14)           // [53-66]  Base de cálculo (14)
+                 + _sicoreFecha(x.fechaRet)             // [67-76]  Fecha emisión de la retención
+                 + _sicorePad(1, 2)                     // [77-78]  Código de condición: 01 = Inscripto
+                 + _sicorePad(0, 1)                     // [79]     Sujetos suspendidos: 0 = No
+                 + _sicoreImporte(x.importeRet, 14)     // [80-93]  Importe de la retención (14)
+                 + _sicorePct(0)                        // [94-99]  Porcentaje de exclusión: 00.000
+                 + _sicoreFecha('')                     // [100-109] Fecha publicación/fin vigencia: 00/00/0000
+                 + _sicorePad(80, 2)                    // [110-111] Tipo de documento: 80 = CUIT
+                 + _sicoreDoc(x.cuit, 20)               // [112-131] Número de documento del retenido (20)
+                 + _sicorePad(0, 14);                   // [132-145] Número de certificado original: 14 ceros
         });
         var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
         var periodoTag = meses[f.mes] + f.anio;
@@ -9816,13 +9817,14 @@
 
         // ── Excel de control, con las mismas columnas que la planilla de referencia ──
         if (typeof XLSX !== 'undefined') {
-            var dataXls = filas.map(function(x) {
+            var dataXls = filas.map(function(x, i) {
                 return {
                     'Proveedor': x.proveedor, 'Factura': x.numeroFactura, 'CUIT': x.cuit,
                     'Fecha Factura': x.fechaComp, 'Importe (neto)': x.importe,
                     'Código Régimen': x.codReg, 'Descripción': x.desc,
                     'Base de Cálculo': x.base, 'Fecha Retención': x.fechaRet,
-                    'Importe Retención': x.importeRet
+                    'Importe Retención': x.importeRet,
+                    'Línea TXT (145)': lineas[i]
                 };
             });
             var wbC = XLSX.utils.book_new();
