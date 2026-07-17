@@ -17893,23 +17893,31 @@
         if (!_empAdjuntosWorking.length) { cont.innerHTML = '<div style="font-size:12px;color:var(--text-3);">Sin documentos adjuntos.</div>'; return; }
         cont.innerHTML = _empAdjuntosWorking.map(function(a, i) {
             return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
-                '<span style="flex:1;">📎 ' + escHtml(a.nombre || 'documento') + '</span>' +
+                '<span style="flex:1;"><strong>' + escHtml(a.categoria || 'Otro') + '</strong> · 📎 ' + escHtml(a.nombre || 'documento') + '</span>' +
                 '<button type="button" class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + a.id + '\',\'' + (a.nombre||'documento').replace(/'/g,'') + '\')" title="Ver">Ver</button>' +
                 '<button type="button" class="btn btn-danger-sm" onclick="empQuitarAdjunto(' + i + ')" title="Quitar">✕</button>' +
             '</div>';
         }).join('');
     }
+    // Sube uno o varios archivos a la vez, todos etiquetados con el tipo elegido
+    // (DNI, Constancia de CUIT, Datos bancarios, etc.).
     window.empSubirAdjunto = async function(inputEl) {
-        var file = inputEl && inputEl.files && inputEl.files[0];
-        if (!file) return;
-        if (file.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_DOC_MB + ' MB.'); inputEl.value = ''; return; }
-        try {
-            var base64 = await leerArchivoBase64(file);
-            var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-            await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
-            _empAdjuntosWorking.push({ id: id, nombre: file.name, tipo: file.type });
-            _empRenderAdjuntos();
-        } catch (e) { alert('No se pudo subir el archivo: ' + (e.message || e)); }
+        var files = inputEl && inputEl.files ? Array.prototype.slice.call(inputEl.files) : [];
+        if (!files.length) return;
+        var categoria = (document.getElementById('empAdjuntoTipo') || {}).value || 'Otro';
+        var errores = [];
+        for (var f = 0; f < files.length; f++) {
+            var file = files[f];
+            if (file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
+            try {
+                var base64 = await leerArchivoBase64(file);
+                var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + f;
+                await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
+                _empAdjuntosWorking.push({ id: id, nombre: file.name, tipo: file.type, categoria: categoria });
+            } catch (e) { errores.push(file.name + ': ' + (e.message || e)); }
+        }
+        _empRenderAdjuntos();
+        if (errores.length) alert('No se pudieron subir algunos archivos:\n' + errores.join('\n'));
         inputEl.value = '';
     };
     window.empQuitarAdjunto = function(i) {
@@ -26176,13 +26184,22 @@
       </div>
 
       <div style="margin-top:4px; border-top:1px solid var(--border); padding-top:12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-          <strong style="font-size:13px;">📎 Documentos del legajo</strong>
-          <label class="btn btn-outline btn-sm" style="cursor:pointer; margin:0;">+ Adjuntar archivo
-            <input type="file" id="empAdjuntoInput" accept=".pdf,image/*" style="display:none;" onchange="empSubirAdjunto(this)">
+        <strong style="font-size:13px;">📎 Documentos del legajo</strong>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+          <select id="empAdjuntoTipo" style="width:auto; flex:1; min-width:160px;">
+            <option value="DNI">DNI</option>
+            <option value="Constancia de CUIT">Constancia de CUIT</option>
+            <option value="Datos bancarios">Datos bancarios (CBU)</option>
+            <option value="Contrato">Contrato</option>
+            <option value="Alta temprana">Alta temprana</option>
+            <option value="Certificado médico">Certificado médico</option>
+            <option value="Otro">Otro</option>
+          </select>
+          <label class="btn btn-outline btn-sm" style="cursor:pointer; margin:0;">+ Adjuntar archivo(s)
+            <input type="file" id="empAdjuntoInput" accept=".pdf,image/*" multiple style="display:none;" onchange="empSubirAdjunto(this)">
           </label>
         </div>
-        <div class="form-hint" style="margin-bottom:8px;">DNI, contrato, alta temprana, exámenes, etc. Máx. 4 MB por archivo.</div>
+        <div class="form-hint" style="margin:6px 0 8px;">Elegí el tipo y subí uno o varios archivos a la vez (DNI, Constancia de CUIT, datos bancarios, etc.). Máx. 4 MB por archivo.</div>
         <div id="empAdjuntosLista"></div>
       </div>
 
