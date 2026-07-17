@@ -9746,6 +9746,14 @@
         var s = String(cuit || '').replace(/\D/g, '');
         return (s + '                              ').slice(0, ancho);
     }
+    // Texto alfanumérico: mayúsculas, sin acentos ni caracteres raros, alineado a la
+    // izquierda y rellenado con espacios a la derecha hasta el ancho pedido.
+    function _sicoreTexto(valor, ancho) {
+        var t = String(valor || '').toUpperCase();
+        try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(e) {}
+        t = t.replace(/Ñ/g, 'N').replace(/[^A-Z0-9 ,\.\-\/]/g, ' ');
+        return (t + '                                             ').slice(0, ancho);
+    }
 
     function exportarSICORE() {
         var f = rptFiltro();
@@ -9772,6 +9780,11 @@
                         importeRet: r.monto,
                         cuit: cuit,
                         proveedor: fa.proveedor || '',
+                        razonSocial: (prov && prov.razonSocial) || fa.proveedor || '',
+                        direccion: (prov && (prov.direccion || prov.domicilio)) || fa.direccionEmisor || '',
+                        localidad: (prov && prov.localidad) || '',
+                        provincia: (prov && prov.provincia) || '',
+                        cp: (prov && (prov.cp || prov.codigoPostal)) || '',
                         numeroFactura: fa.numero || '',
                         desc: r.desc || r.codigo
                     });
@@ -9811,9 +9824,32 @@
         var nombreBase = empresa + '_SICORE-Ganancias_' + periodoTag;
         var blobTxt = new Blob([lineas.join('\r\n') + '\r\n'], { type: 'text/plain' });
         var urlTxt = URL.createObjectURL(blobTxt);
-        var aTxt = document.createElement('a'); aTxt.href = urlTxt; aTxt.download = nombreBase + '.txt';
+        var aTxt = document.createElement('a'); aTxt.href = urlTxt; aTxt.download = nombreBase + '_retenciones.txt';
         document.body.appendChild(aTxt); aTxt.click(); document.body.removeChild(aTxt);
         setTimeout(function(){ URL.revokeObjectURL(urlTxt); }, 5000);
+
+        // ── .txt de Sujetos Retenidos (83 caracteres): CUIT + razón social + domicilio ──
+        // SICORE importa aparte los datos de los sujetos (razón social, domicilio, etc.).
+        var sujetosMap = {};
+        filas.forEach(function(x) {
+            var cuitD = String(x.cuit || '').replace(/\D/g, '');
+            if (cuitD && !sujetosMap[cuitD]) sujetosMap[cuitD] = x;
+        });
+        var lineasSuj = Object.keys(sujetosMap).map(function(cuitD) {
+            var x = sujetosMap[cuitD];
+            return (cuitD + '           ').slice(0, 11)      // [1-11]  Nº de documento (CUIT, 11)
+                 + _sicoreTexto(x.razonSocial, 20)           // [12-31] Razón social (20)
+                 + _sicoreTexto(x.direccion, 20)             // [32-51] Domicilio fiscal (20)
+                 + _sicoreTexto(x.localidad, 20)             // [52-71] Localidad (20)
+                 + (String(x.provincia||'').replace(/\D/g,'') + '  ').slice(0,2)  // [72-73] Provincia (2)
+                 + (String(x.cp||'').replace(/[^A-Za-z0-9]/g,'') + '        ').slice(0,8)  // [74-81] CP (8)
+                 + _sicorePad(80, 2);                        // [82-83] Tipo de documento: 80 = CUIT
+        });
+        var blobSuj = new Blob([lineasSuj.join('\r\n') + '\r\n'], { type: 'text/plain' });
+        var urlSuj = URL.createObjectURL(blobSuj);
+        var aSuj = document.createElement('a'); aSuj.href = urlSuj; aSuj.download = nombreBase + '_sujetos.txt';
+        document.body.appendChild(aSuj); aSuj.click(); document.body.removeChild(aSuj);
+        setTimeout(function(){ URL.revokeObjectURL(urlSuj); }, 5000);
 
         // ── Excel de control, con las mismas columnas que la planilla de referencia ──
         if (typeof XLSX !== 'undefined') {
@@ -9829,11 +9865,21 @@
             });
             var wbC = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wbC, XLSX.utils.json_to_sheet(dataXls), 'SICORE Ganancias');
+            var dataSuj = Object.keys(sujetosMap).map(function(cuitD, i) {
+                var x = sujetosMap[cuitD];
+                return { 'CUIT': cuitD, 'Razón Social': x.razonSocial, 'Domicilio': x.direccion,
+                         'Localidad': x.localidad, 'Provincia': x.provincia, 'CP': x.cp,
+                         'Línea TXT (83)': lineasSuj[i] };
+            });
+            XLSX.utils.book_append_sheet(wbC, XLSX.utils.json_to_sheet(dataSuj), 'SICORE Sujetos');
             XLSX.writeFile(wbC, nombreBase + '_control.xlsx');
         }
 
-        var msg = '✅ Se generaron ' + filas.length + ' registro(s) para SICORE (' + periodoTag + ').\n\n' +
-            'Se descargó el .txt listo para importar y un Excel de control con el detalle.\n\n' +
+        var msg = '✅ Se generaron ' + filas.length + ' retención(es) de ' + lineasSuj.length + ' sujeto(s) para SICORE (' + periodoTag + ').\n\n' +
+            'Se descargaron DOS archivos .txt para importar en SICORE:\n' +
+            '  • ..._retenciones.txt → importá en "Retenciones/Percepciones".\n' +
+            '  • ..._sujetos.txt → importá en "Datos de los sujetos" (carga razón social y domicilio).\n' +
+            'Más un Excel de control con el detalle de ambos.\n\n' +
             'Antes de presentarlo, revisá: código de condición (se asumió 1=Inscripto para todos) y que el mapeo de régimen sea correcto: Reg.78→78, Reg.94→94, Reg.119→116 (honorarios), Reg.30/31/32→27 (alquileres).';
         if (omitidos.length) msg += '\n\n⚠️ Se omitieron ' + omitidos.length + ' retención(es):\n' + omitidos.slice(0,10).join('\n') + (omitidos.length>10 ? '\n… y ' + (omitidos.length-10) + ' más.' : '');
         alert(msg);
