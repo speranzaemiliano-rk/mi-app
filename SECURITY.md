@@ -18,7 +18,7 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
 | 7 | 🟡 MEDIO | XSS almacenado: texto libre insertado en `innerHTML` sin escapar | ✅ Corregido en Desarrollos/Aportantes — resto del código sin auditar |
 | 8 | 🟢 BAJO | El Asistente RK envía un resumen de datos financieros a la API de Google Gemini en cada consulta | Por diseño — evaluar alcance |
-| 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Migrado** — 17 colecciones con guardado por-diff keyed-by-id; queda solo tareas (pizarrón) |
+| 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Migrado completo** — las 18 colecciones con guardado por-diff keyed-by-id |
 
 ### C2 (endpoints de usuarios) y C3 (backend fail-open) — hallazgos de auditoría 2026-07-17
 - **C2:** ✅ **Corregido en código.** Los endpoints `/usuarios/*` ahora usan `requireSuperadmin(req,res)`, que exige `Authorization: Bearer <idToken>` de Firebase, lo verifica con Admin SDK y comprueba `roles/<uid> === 'superadmin'`. El frontend (`_fetchBackend`) ahora envía el idToken en todas las llamadas al backend. Sin idToken de superadmin → `401/403`. Corta la escalada de privilegios vía backend. *(Requiere **redeploy del backend en Railway** para tomar efecto; el front se despliega solo por GitHub Pages.)*
@@ -215,12 +215,11 @@ Claves del enfoque:
 | **Pago de documento** | Ya era por-nodo (`REF_DOCS.child(id).update`) | ✅ Sin cambios |
 | **Numeración correlativa** (OP, comprobantes A/B) | `.transaction()` atómica | ✅ A prueba de concurrencia, sin cambios |
 | **Alta/edición/borrado de presupuestos, facturas, ventas, ingresos (caja/banco), cuentas bancarias, proveedores, remuneraciones, alquileres, servicios, desarrollos, aportantes, comprobantes emitidos, plan de trabajo, grupos** | Reescribían el array completo | ✅ **Migradas** — guardado por-diff keyed-by-id (`_colPersist`) |
-| **Préstamos, importaciones ARCA (facturasARCA), comprobantes recibidos** | Reescribían el array completo | ✅ **Migradas** (`_colPersist`) |
-| **Tareas (pizarrón)** | Reescribe el array completo | ⚠️ Pendiente — usa un esquema `_key` propio; se migra aparte con cuidado |
+| **Préstamos, importaciones ARCA (facturasARCA), comprobantes recibidos, tareas (pizarrón)** | Reescribían el array completo | ✅ **Migradas** (`_colPersist`) |
 
 **Cómo funciona el guardado multiusuario (`_colPersist` + `_colProcesarCarga`):** cada colección se guarda como **objeto indexado por `id`** en RTDB (migración automática y determinística de array→objeto la primera vez). Al guardar se escribe con `update()` **solo lo que cambió o se agregó**, y `null` para lo borrado — nunca se toca lo que no está en el batch, así que **no se pisa lo que agregó/editó otro usuario en paralelo**. Solo si dos personas editan el MISMO ítem al mismo tiempo gana el último (aceptable y poco frecuente). La lógica está validada con una simulación de la semántica de Firebase (migración sin duplicados, edits concurrentes de ítems distintos, add concurrente que no se pierde, borrados).
 
-**Riesgo residual:** queda **solo 1** colección sin migrar — **tareas (pizarrón)** — que usa un esquema `_key` propio y se migra aparte con cuidado. Todas las demás (17) ya usan guardado por-nodo. El pizarrón de tareas es la de menor impacto financiero.
+**Estado:** ✅ **todas las colecciones (18) migradas** al guardado por-nodo. `_colProcesarCarga` soporta tanto colecciones guardadas como array (migración automática) como ya keyed por objeto (usa la clave de RTDB como id, ej. el pizarrón de tareas). No queda ninguna colección reescribiendo el array completo.
 
 **Pauta operativa:** cada usuario puede trabajar en la misma o en distinta empresa/proyecto; el guardado por-nodo evita las colisiones en las colecciones migradas. Para las 4 pendientes, evitar que dos usuarios editen esa MISMA colección en simultáneo.
 
