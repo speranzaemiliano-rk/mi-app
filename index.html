@@ -15894,8 +15894,23 @@
     // objeto keyed-by-id, y guarda el snapshot para el guardado por-diff. Devuelve el array.
     function _colProcesarCarga(coll, ref, val) {
         var eraArray = Array.isArray(val);
-        var arr = val ? (eraArray ? val.filter(Boolean) : Object.values(val)) : [];
-        arr.forEach(function(it, i) { if (it && !it.id) it.id = eraArray ? ('leg_' + i) : _colUidItem(); });
+        var arr = [];
+        if (val) {
+            if (eraArray) {
+                arr = val.filter(Boolean);
+                // Sin id → asignar uno determinístico por índice (para migración idempotente).
+                arr.forEach(function(it, i) { if (it && !it.id) it.id = 'leg_' + i; });
+            } else {
+                // Ya es objeto: usar la CLAVE de RTDB como id (así el guardado por-diff escribe
+                // en el mismo nodo y no duplica). Cubre colecciones ya keyed (ej. tareas con push-keys).
+                Object.keys(val).forEach(function(k) {
+                    var it = val[k];
+                    if (it == null) return;
+                    if (!it.id) it.id = k;
+                    arr.push(it);
+                });
+            }
+        }
         // Migración one-time: si venía como array, reescribir como objeto por id (determinístico
         // por índice → dos clientes que migran a la vez producen el mismo resultado).
         if (eraArray && arr.length && ref) {
@@ -22537,9 +22552,7 @@
             _migrarTareasLegacy();
         }
         REF_TAREAS.on('value', function(snap) {
-            tareas = [];
-            var v = snap.val();
-            if (v) { if (Array.isArray(v)) { tareas = v; } else { Object.keys(v).forEach(function(k){ tareas.push(Object.assign({}, v[k], {_key: k})); }); } }
+            tareas = _colProcesarCarga('tareas', REF_TAREAS, snap.val());
             renderTareas();
             _checkRecordatoriosTareas();
         });
@@ -22845,13 +22858,13 @@
             existente.titulo = titulo; existente.responsable = responsable; existente.emailResponsable = emailResp;
             existente.controlador = controlador; existente.emailControlador = emailCtrl;
             existente.fechaVencimiento = fecha; existente.intervaloDias = intervalo;
-            if (REF_TAREAS) REF_TAREAS.set(tareas);
+            if (REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
             cerrarModalTarea();
             return;
         }
         var nueva = { titulo: titulo, responsable: responsable, emailResponsable: emailResp, controlador: controlador, emailControlador: emailCtrl, fechaVencimiento: fecha, intervaloDias: intervalo, estado: 'pendiente', creadaEn: Date.now(), ultimoRecordatorio: null };
         tareas.push(nueva);
-        if (REF_TAREAS) REF_TAREAS.set(tareas);
+        if (REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
         cerrarModalTarea();
         if (emailResp) {
             _enviarEmailTarea(emailResp, 'Nueva tarea asignada: ' + titulo, responsable, titulo, fecha, 'Nueva tarea asignada', intervalo);
@@ -22863,7 +22876,7 @@
         if (!t) return;
         t.estado = 'completada';
         t.completadaEn = Date.now();
-        if (REF_TAREAS) REF_TAREAS.set(tareas);
+        if (REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
         if (t.emailControlador) {
             _enviarEmailTarea(t.emailControlador, 'Tarea completada: ' + t.titulo, t.controlador || 'Controlador', t.titulo, t.fechaVencimiento, 'Tarea completada por ' + t.responsable, null);
         }
@@ -22872,7 +22885,7 @@
     function eliminarTarea(idx) {
         if (!confirm('¿Eliminar esta tarea?')) return;
         tareas.splice(idx, 1);
-        if (REF_TAREAS) REF_TAREAS.set(tareas);
+        if (REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
     }
 
     function enviarRecordatorioTarea(idx) {
@@ -22895,7 +22908,7 @@
             .then(function(){ alert('✅ Recordatorio enviado a ' + t.emailResponsable); })
             .catch(function(e){ alert('❌ Error al enviar: ' + (e.text || e.message || String(e))); });
         t.ultimoRecordatorio = Date.now();
-        if (REF_TAREAS) REF_TAREAS.set(tareas);
+        if (REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
     }
 
     function _checkRecordatoriosTareas() {
@@ -22910,7 +22923,7 @@
                 cambio = true;
             }
         });
-        if (cambio && REF_TAREAS) REF_TAREAS.set(tareas);
+        if (cambio && REF_TAREAS) _colPersist('tareas', REF_TAREAS, tareas);
     }
 
     function _enviarEmailTarea(toEmail, asunto, nombre, titulo, fecha, tipoMsj, intervalo) {
