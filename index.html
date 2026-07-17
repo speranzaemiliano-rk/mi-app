@@ -8097,6 +8097,8 @@
         document.getElementById('pagoFDMonto').value='';
         document.getElementById('pagoFDFecha').value=new Date().toISOString().substring(0,10);
         document.getElementById('pagoFDBase').value='';
+        _pagoFDRetsManuales=[];
+        var _mlEl=document.getElementById('pagoFDRetManualLista'); if(_mlEl) _mlEl.innerHTML='';
         document.getElementById('pagoFDRetDesglose').innerHTML='';
         document.getElementById('pagoFDRetTotal').textContent='$0';
         document.getElementById('pagoFDRetNeto').textContent='$0';
@@ -8187,25 +8189,32 @@
         var desgEl=document.getElementById('pagoFDRetDesglose'),totalEl=document.getElementById('pagoFDRetTotal'),netoEl=document.getElementById('pagoFDRetNeto');
         if(!desgEl||!totalEl||!netoEl) return;
         var rets=(prov&&base>0)?calcularRetenciones(base,prov,provNombre,mesAno):[];
-        if(!rets.length){_pagoFDRetsCalculadas=[];desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'+(prov?'Este proveedor no tiene retenciones configuradas.':'Seleccioná un ítem para ver retenciones.')+'</div>';totalEl.textContent='$0';netoEl.textContent='$'+Math.round(monto).toLocaleString('es-AR');return;}
         if(!soloTotales){
             _pagoFDRetsCalculadas=rets.map(function(r){return Object.assign({},r,{activa:true});});
-            desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
-                return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
-                    +'<input type="checkbox" checked onchange="pagoFDToggleRet('+i+')" style="margin-top:3px;cursor:pointer;">'
-                    +'<span style="flex:1;"><strong>Reg.'+r.codigo+'</strong> — '+r.desc+'</span>'
-                    +'<strong style="color:var(--danger);white-space:nowrap;">$'+Math.round(r.monto).toLocaleString('es-AR')+'</strong>'
-                    +'</label>'
-                    +(r.nota?'<div style="font-size:11px;color:var(--text-3);padding-left:28px;margin-top:-4px;margin-bottom:4px;">'+r.nota+'</div>':'');
-            }).join('');
+            if(!rets.length){
+                desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'
+                    +(prov?'Este proveedor no tiene retenciones automáticas configuradas.':'Seleccioná un ítem para ver retenciones automáticas.')
+                    +' Podés agregar una retención manual con el botón de abajo.</div>';
+            } else {
+                desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
+                    return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
+                        +'<input type="checkbox" checked onchange="pagoFDToggleRet('+i+')" style="margin-top:3px;cursor:pointer;">'
+                        +'<span style="flex:1;"><strong>Reg.'+r.codigo+'</strong> — '+r.desc+'</span>'
+                        +'<strong style="color:var(--danger);white-space:nowrap;">$'+Math.round(r.monto).toLocaleString('es-AR')+'</strong>'
+                        +'</label>'
+                        +(r.nota?'<div style="font-size:11px;color:var(--text-3);padding-left:28px;margin-top:-4px;margin-bottom:4px;">'+r.nota+'</div>':'');
+                }).join('');
+            }
         } else {
             _pagoFDRetsCalculadas.forEach(function(r,i){
                 var nuevoCalc=rets.find(function(x){return x.codigo===r.codigo;});
                 if(nuevoCalc) r.monto=nuevoCalc.monto;
             });
         }
+        _pagoFDRenderRetManuales();
         var totalRet=0;
         _pagoFDRetsCalculadas.forEach(function(r){if(r.activa)totalRet+=r.monto;});
+        _pagoFDRetsManuales.forEach(function(r){if(r.activa)totalRet+=r.monto;});
         totalEl.textContent='$'+Math.round(totalRet).toLocaleString('es-AR');
         netoEl.textContent='$'+Math.round(monto-totalRet).toLocaleString('es-AR');
     }
@@ -8213,6 +8222,31 @@
         if(_pagoFDRetsCalculadas[idx]) _pagoFDRetsCalculadas[idx].activa=!_pagoFDRetsCalculadas[idx].activa;
         pagoFDRecalcRet(true);
     }
+    // ── Retenciones manuales (para proveedores sin régimen configurado, o retenciones puntuales) ──
+    var _pagoFDRetsManuales = [];
+    function _pagoFDRenderRetManuales() {
+        var cont=document.getElementById('pagoFDRetManualLista');
+        if(!cont) return;
+        cont.innerHTML=_pagoFDRetsManuales.map(function(r,i){
+            return '<div class="ret-row" style="display:flex;align-items:center;gap:8px;padding:6px 0;">'
+                +'<span style="flex:1;"><strong>'+escHtml(r.codigo||'Retención')+'</strong> <span style="font-size:10px;color:var(--text-3);">(manual)</span></span>'
+                +'<strong style="color:var(--danger);white-space:nowrap;">$'+Math.round(r.monto).toLocaleString('es-AR')+'</strong>'
+                +'<button type="button" onclick="pagoFDQuitarRetManual('+i+')" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:15px;" title="Quitar">✕</button>'
+                +'</div>';
+        }).join('');
+    }
+    window.pagoFDAgregarRetManual = function() {
+        var desc=window.prompt('¿Qué retención querés aplicar? (ej: IIBB CABA, Ganancias, SUSS, IVA…)', '');
+        if(desc==null) return;
+        desc=(desc||'').trim(); if(!desc){ alert('Poné una descripción para la retención.'); return; }
+        var mStr=window.prompt('Monto a retener ($) para "'+desc+'":', '');
+        if(mStr==null) return;
+        var monto=parseFloat(String(mStr).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,''))||0;
+        if(monto<=0){ alert('Ingresá un monto válido mayor a cero.'); return; }
+        _pagoFDRetsManuales.push({codigo:desc,desc:desc,monto:monto,activa:true,manual:true});
+        pagoFDRecalcRet();
+    };
+    window.pagoFDQuitarRetManual = function(i) { _pagoFDRetsManuales.splice(i,1); pagoFDRecalcRet(); };
     async function guardarPagoFD() {
         var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
         var mod=document.getElementById('pagoFDMod').value;
@@ -8226,7 +8260,8 @@
         var rets=[],totalRet=0,baseEste=0;
         if(mod==='A'){
             baseEste=parseFloat(document.getElementById('pagoFDBase').value)||monto;
-            rets=_pagoFDRetsCalculadas.filter(function(r){return r.activa;});
+            rets=_pagoFDRetsCalculadas.filter(function(r){return r.activa;})
+                .concat(_pagoFDRetsManuales.filter(function(r){return r.activa;}));
             totalRet=rets.reduce(function(s,r){return s+r.monto;},0);
         }
         var entry={pagoId:'FD-'+Date.now(),fecha:fecha,modalidad:mod,monto:monto,baseImponible:baseEste,
@@ -26718,6 +26753,8 @@
             <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
           </div>
           <div id="pagoFDRetDesglose"></div>
+          <div id="pagoFDRetManualLista"></div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="pagoFDAgregarRetManual()" style="margin:8px 0;">➕ Agregar retención manual</button>
           <div class="ret-total-row"><span>Retención total</span><strong id="pagoFDRetTotal" style="color:var(--danger);">$0</strong></div>
           <div class="ret-total-row" style="margin-top:4px;"><span>Neto a pagar al proveedor</span><strong id="pagoFDRetNeto" class="neto-val">$0</strong></div>
         </div>
