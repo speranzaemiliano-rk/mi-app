@@ -5242,9 +5242,21 @@
                     <div class="form-hint">A = Bancarizado (permite retenciones). B = Efectivo. Dual = ambas formas.</div>
                 </div>
                 <div class="form-group">
-                    <label>Índice CAC base</label>
+                    <label>Actualización por índice</label>
+                    <select id="presupTipoIndice" onchange="_presupTipoIndiceChange()">
+                        <option value="CAC">CAC — Cámara Argentina de la Construcción</option>
+                        <option value="IPC">IPC — Inflación (INDEC)</option>
+                        <option value="UVA">UVA</option>
+                        <option value="USD">Dólar</option>
+                        <option value="OTRO">Otro índice…</option>
+                    </select>
+                    <input type="text" id="presupTipoIndiceOtro" placeholder="Nombre del índice (ej: ICC, CVS…)" oninput="_presupTipoIndiceChange()" style="display:none; margin-top:6px;">
+                    <div class="form-hint">Elegí el índice con el que se van a calcular los mayores costos en cada pago. Los mayores costos se calculan igual para cualquier índice (valor actual ÷ valor base).</div>
+                </div>
+                <div class="form-group">
+                    <label id="cacBaseLabel">Índice base (CAC)</label>
                     <input type="number" id="cacBase" step="0.01" min="0" placeholder="Ej: 5234.50">
-                    <div class="form-hint">Índice vigente al momento de cargar el presupuesto. Se usa para calcular mayores costos en cada pago.</div>
+                    <div class="form-hint">Valor del índice al momento de cargar el presupuesto. Se usa para calcular mayores costos en cada pago.</div>
                 </div>
                 <div class="form-group" id="grupoPagado">
                     <label>Monto Pagado (capital)</label>
@@ -5349,8 +5361,8 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Índice CAC al momento de este pago &nbsp;<a href="https://www.cifrasonline.com.ar/indice-cac/" target="_blank" style="font-size:11px; color:var(--gold); text-decoration:none; font-weight:600;" title="Ver último índice CAC en Cifras Online">🔗 Ver último CAC</a></label>
-                    <input type="number" id="pagoIndice" step="0.01" min="0" oninput="actualizarPendientePago(true)" placeholder="Índice CAC de hoy">
+                    <label><span id="pagoIndiceLbl">Índice CAC al momento de este pago</span> &nbsp;<a id="pagoIndiceLink" href="https://www.cifrasonline.com.ar/indice-cac/" target="_blank" style="font-size:11px; color:var(--gold); text-decoration:none; font-weight:600;" title="Ver último índice CAC en Cifras Online">🔗 Ver último CAC</a></label>
+                    <input type="number" id="pagoIndice" step="0.01" min="0" oninput="actualizarPendientePago(true)" placeholder="Índice de hoy">
                     <div class="form-hint" id="pagoIndiceNota"></div>
                 </div>
 
@@ -5366,7 +5378,7 @@
                         <strong id="dCapital">$0</strong>
                     </div>
                     <div class="cac-row">
-                        <span>Mayores costos sobre ese capital (CAC)</span>
+                        <span id="dMayoresLbl">Mayores costos sobre ese capital (CAC)</span>
                         <strong class="cac-mayores-val" id="dMayores">$0</strong>
                     </div>
                     <div class="cac-row cac-total">
@@ -6692,6 +6704,7 @@
         document.getElementById('pagado').value = 0;
         document.getElementById('pagado').required = false;
         document.getElementById('cacBase').value = '';
+        _setPresupTipoIndice('CAC');
         document.getElementById('docEstado').textContent = '';
         selModalidadPres('A');
         renderCheckboxesCompartir('checkboxesCompartirPres', 'panelCompartirPres');
@@ -6712,6 +6725,39 @@
         });
     }
 
+    // ── Tipo de índice de actualización del presupuesto (CAC / IPC / UVA / Dólar / Otro) ──
+    // El cálculo de mayores costos es el mismo para cualquier índice (valor actual ÷ valor base);
+    // el tipo es solo la etiqueta que se muestra. Se guarda en item.indiceTipo.
+    function _presupTipoIndiceChange() {
+        var sel = document.getElementById('presupTipoIndice');
+        var otro = document.getElementById('presupTipoIndiceOtro');
+        var lbl = document.getElementById('cacBaseLabel');
+        if (!sel) return;
+        var esOtro = sel.value === 'OTRO';
+        if (otro) otro.style.display = esOtro ? '' : 'none';
+        var nombre = esOtro ? ((otro && otro.value) || 'índice') : sel.value;
+        if (lbl) lbl.textContent = 'Índice base (' + nombre + ')';
+    }
+    // Devuelve el tipo elegido (nombre del índice) para guardar.
+    function _leerPresupTipoIndice() {
+        var sel = document.getElementById('presupTipoIndice');
+        if (!sel) return 'CAC';
+        if (sel.value === 'OTRO') return ((document.getElementById('presupTipoIndiceOtro') || {}).value || 'Otro').trim() || 'Otro';
+        return sel.value;
+    }
+    // Prellena el selector desde un presupuesto guardado.
+    function _setPresupTipoIndice(tipo) {
+        var sel = document.getElementById('presupTipoIndice');
+        var otro = document.getElementById('presupTipoIndiceOtro');
+        if (!sel) return;
+        tipo = tipo || 'CAC';
+        if (['CAC','IPC','UVA','USD'].indexOf(tipo) !== -1) { sel.value = tipo; if (otro) otro.value = ''; }
+        else { sel.value = 'OTRO'; if (otro) otro.value = tipo; }
+        _presupTipoIndiceChange();
+    }
+    // Nombre del índice de un presupuesto (para mostrar en pagos, etc.).
+    function nombreIndicePresup(item) { return (item && item.indiceTipo) || 'CAC'; }
+
     function editarFila(index) {
         editandoIndex = index;
         const item = datos[index];
@@ -6730,6 +6776,7 @@
         document.getElementById('pagado').value      = c.pagCap;
         document.getElementById('entrega').value     = item.entrega;
         document.getElementById('cacBase').value     = item.indiceCACBase || '';
+        _setPresupTipoIndice(item.indiceTipo || 'CAC');
         document.getElementById('docArchivo').value  = '';
         var _de = document.getElementById('docEstado');
         if (docExistente && docExistente.docId) {
@@ -6839,6 +6886,7 @@
         else if (anterior && anterior.indiceCACBase) { nuevoDato.indiceCACBase = anterior.indiceCACBase; }
         nuevoDato.indiceCACActual = (anterior && anterior.indiceCACActual)
             ? anterior.indiceCACActual : (nuevoDato.indiceCACBase || 0);
+        nuevoDato.indiceTipo = _leerPresupTipoIndice();
         if (anterior && anterior.docId) { nuevoDato.docId = anterior.docId; nuevoDato.docNombre = anterior.docNombre; nuevoDato.docTipo = anterior.docTipo; }
         const fileInput = document.getElementById('docArchivo');
         const file = fileInput.files && fileInput.files[0];
@@ -8648,6 +8696,14 @@
             return;
         }
         const item = datos[i];
+        // Etiquetas según el índice elegido para este presupuesto (CAC / IPC / UVA / etc.)
+        const nomIdx = nombreIndicePresup(item);
+        const lblIdx = document.getElementById('pagoIndiceLbl');
+        const linkIdx = document.getElementById('pagoIndiceLink');
+        const lblMay = document.getElementById('dMayoresLbl');
+        if (lblIdx) lblIdx.textContent = 'Índice ' + nomIdx + ' al momento de este pago';
+        if (linkIdx) linkIdx.style.display = (nomIdx === 'CAC') ? '' : 'none';
+        if (lblMay) lblMay.textContent = 'Mayores costos sobre ese capital (' + nomIdx + ')';
         // Si cambió el presupuesto seleccionado (no está escribiendo índice), prellenamos índice y capital
         if (!alEscribirIndice) {
             inpIdx.value = item.indiceCACActual || item.indiceCACBase || '';
@@ -8672,11 +8728,11 @@
             const factor = idxPago / c.indiceBase;
             dFac.innerHTML = `Índice base: <strong>${c.indiceBase.toLocaleString('es-AR')}</strong> &nbsp;→&nbsp; Índice de pago: <strong>${idxPago.toLocaleString('es-AR')}</strong> &nbsp;|&nbsp; Factor: <strong>${factor.toFixed(4)}</strong><br>Mayores costos = $${Math.round(capitalAbonar).toLocaleString('es-AR')} × (${factor.toFixed(4)} − 1) = <strong>$${Math.round(mayoresAbonar).toLocaleString('es-AR')}</strong>`;
         } else {
-            dFac.textContent = c.indiceBase > 0 ? 'Ingresá el índice CAC de este pago para calcular mayores costos.' : 'Este presupuesto no tiene índice CAC base — no se calculan mayores costos.';
+            dFac.textContent = c.indiceBase > 0 ? ('Ingresá el índice ' + nomIdx + ' de este pago para calcular mayores costos.') : ('Este presupuesto no tiene índice ' + nomIdx + ' base — no se calculan mayores costos.');
         }
 
         if (nota) nota.textContent = item.indiceCACBase
-            ? `Índice base de este presupuesto: ${Number(item.indiceCACBase).toLocaleString('es-AR')}`
+            ? `Índice base de este presupuesto (${nomIdx}): ${Number(item.indiceCACBase).toLocaleString('es-AR')}`
             : 'Este presupuesto no tiene índice base cargado.';
 
         if (!alEscribirIndice) {
