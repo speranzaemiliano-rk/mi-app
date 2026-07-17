@@ -1,5 +1,5 @@
 // Service Worker — RK Gestión PWA
-const CACHE = 'rk-v75';
+const CACHE = 'rk-v76';
 const BASE  = '/mi-app/';
 
 // Archivos que se cachean al instalar (shell de la app)
