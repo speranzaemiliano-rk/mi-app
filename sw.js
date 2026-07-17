@@ -1,5 +1,5 @@
 // Service Worker — RK Gestión PWA
-const CACHE = 'rk-v69';
+const CACHE = 'rk-v70';
 const BASE  = '/mi-app/';
 
 // Archivos que se cachean al instalar (shell de la app)
@@ -15,7 +15,14 @@ self.addEventListener('install', function(e) {
   e.waitUntil(
     caches.open(CACHE).then(function(c) { return c.addAll(SHELL); })
   );
-  self.skipWaiting();
+  // NO llamamos skipWaiting() acá: el SW nuevo queda "en espera" para no recargar
+  // la app en medio del uso. Se activa recién cuando el usuario toca "Actualizar"
+  // (la página le manda el mensaje SKIP_WAITING).
+});
+
+// La página avisa cuando el usuario aceptó actualizar → activamos el SW nuevo.
+self.addEventListener('message', function(e) {
+  if (e.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', function(e) {

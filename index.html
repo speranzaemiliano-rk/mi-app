@@ -27285,17 +27285,50 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    // Si un Service Worker nuevo toma control (deploy nuevo), recargar una sola vez
-    // para que la pestaña ya abierta deje de correr JS viejo en memoria.
-    var _swReloading = false;
+    // Al detectar una versión nueva NO recargamos sola la app (eso interrumpía el uso,
+    // parecía que "se cerraba sola"). Mostramos un aviso discreto abajo y recargamos
+    // solo cuando el usuario toca "Actualizar".
+    var _swWantsReload = false;
+    var _swAvisoMostrado = false;
     navigator.serviceWorker.addEventListener('controllerchange', function() {
-      if (_swReloading) return;
-      _swReloading = true;
-      window.location.reload();
+      if (_swWantsReload) window.location.reload();
     });
+
+    function _swMostrarAviso(reg) {
+      if (_swAvisoMostrado) return;
+      _swAvisoMostrado = true;
+      var barra = document.createElement('div');
+      barra.id = 'swUpdateBanner';
+      barra.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:99999;'
+        + 'background:#0E0E0E;color:#fff;border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:12px;'
+        + 'box-shadow:0 10px 30px rgba(0,0,0,.35);font-size:13px;max-width:92vw;';
+      barra.innerHTML = '<span>🔄 Hay una versión nueva de la app.</span>'
+        + '<button id="swUpdateBtn" style="background:#C9A227;color:#0E0E0E;border:none;border-radius:7px;padding:6px 12px;font-weight:700;cursor:pointer;">Actualizar</button>'
+        + '<button id="swUpdateDismiss" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:16px;line-height:1;">✕</button>';
+      document.body.appendChild(barra);
+      document.getElementById('swUpdateBtn').onclick = function() {
+        _swWantsReload = true;
+        if (reg && reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+        else window.location.reload();
+      };
+      document.getElementById('swUpdateDismiss').onclick = function() {
+        barra.remove();
+      };
+    }
+
     window.addEventListener('load', function() {
       navigator.serviceWorker.register('/mi-app/sw.js').then(function(reg) {
-        // Revisar si hay versión nueva al volver a la pestaña y cada 1 hora
+        // Si ya hay un SW nuevo esperando (deploy ocurrido antes de abrir), avisamos.
+        if (reg.waiting && navigator.serviceWorker.controller) _swMostrarAviso(reg);
+        // Detectar cuando termina de instalarse una versión nueva.
+        reg.addEventListener('updatefound', function() {
+          var nuevo = reg.installing;
+          if (!nuevo) return;
+          nuevo.addEventListener('statechange', function() {
+            if (nuevo.state === 'installed' && navigator.serviceWorker.controller) _swMostrarAviso(reg);
+          });
+        });
+        // Revisar si hay versión nueva al volver a la pestaña y cada 1 hora.
         document.addEventListener('visibilitychange', function() {
           if (document.visibilityState === 'visible') reg.update().catch(function(){});
         });
