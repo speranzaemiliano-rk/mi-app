@@ -67,6 +67,32 @@ function _tokenIgual(a, b) {
     return crypto.timingSafeEqual(ba, bb);
 }
 
+// Rate limiting básico en memoria (sin dependencias): límite generoso por IP para
+// frenar abuso/DoS sin molestar el uso normal. Configurable con RATE_LIMIT_MAX y
+// RATE_LIMIT_WINDOW_MS. El webhook de WhatsApp queda exento (lo llama Meta).
+const _RL_MAX    = parseInt(process.env.RATE_LIMIT_MAX || '240', 10);        // req por ventana
+const _RL_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10); // 60s por defecto
+const _rlHits = new Map(); // ip -> { count, reset }
+app.use(function(req, res, next) {
+    if (req.path === '/whatsapp/webhook') return next();
+    var ip = (req.get('x-forwarded-for') || req.ip || 'desconocida').split(',')[0].trim();
+    var ahora = Date.now();
+    var e = _rlHits.get(ip);
+    if (!e || ahora > e.reset) { e = { count: 0, reset: ahora + _RL_WINDOW }; _rlHits.set(ip, e); }
+    e.count++;
+    if (e.count > _RL_MAX) {
+        res.set('Retry-After', String(Math.ceil((e.reset - ahora) / 1000)));
+        return res.status(429).json({ error: 'Demasiadas solicitudes. Esperá un momento y reintentá.' });
+    }
+    next();
+});
+// Limpieza periódica del mapa de rate limiting (evita crecer sin límite)
+var _rlCleanup = setInterval(function() {
+    var ahora = Date.now();
+    _rlHits.forEach(function(v, k) { if (ahora > v.reset) _rlHits.delete(k); });
+}, 5 * 60 * 1000);
+if (_rlCleanup.unref) _rlCleanup.unref();
+
 // Variables de entorno:
 //   AFIP_CUIT       → tu CUIT sin guiones
 //   AFIP_CERT       → contenido del archivo .crt (con \n reales)
@@ -1067,6 +1093,36 @@ function requireAdmin(res) {
     return true;
 }
 
+// Verificación fuerte para la gestión de usuarios: exige un ID token de Firebase
+// (Authorization: Bearer <idToken>) de un usuario con rol 'superadmin' en la base.
+// Corta la escalada de privilegios: sin esto, cualquiera con el token compartido podía
+// crear un superadmin o borrar usuarios. Devuelve el token decodificado, o null (ya
+// respondió con 401/403) si no autoriza.
+async function requireSuperadmin(req, res) {
+    if (!admin.apps.length) {
+        res.status(500).json({ error: 'Firebase Admin no está inicializado. Configurá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.' });
+        return null;
+    }
+    var authHeader = req.get('Authorization') || '';
+    var m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+        res.status(401).json({ error: 'Falta el token de identidad (iniciá sesión de nuevo).' });
+        return null;
+    }
+    try {
+        var decoded = await admin.auth().verifyIdToken(m[1].trim());
+        var rolSnap = await admin.database().ref('roles/' + decoded.uid).once('value');
+        if (rolSnap.val() !== 'superadmin') {
+            res.status(403).json({ error: 'Solo un Super Administrador puede gestionar usuarios.' });
+            return null;
+        }
+        return decoded;
+    } catch (e) {
+        res.status(401).json({ error: 'Token de identidad inválido o vencido. Iniciá sesión de nuevo.' });
+        return null;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  IPC (INDEC) — para la calculadora de actualización de alquileres.
 //  Proxea el CSV oficial de INDEC (evita CORS desde el navegador) y lo
@@ -1160,7 +1216,7 @@ app.post('/gemini', async (req, res) => {
 });
 
 app.get('/usuarios/listar', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var result = await admin.auth().listUsers(1000);
         var dbRoles = await admin.database().ref('roles').once('value');
@@ -1183,7 +1239,7 @@ app.get('/usuarios/listar', async (req, res) => {
 });
 
 app.post('/usuarios/crear', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var b = req.body || {};
         if (!b.email || !b.password) return res.status(400).json({ error: 'Faltan email y/o password.' });
@@ -1204,7 +1260,7 @@ app.post('/usuarios/crear', async (req, res) => {
 });
 
 app.post('/usuarios/eliminar', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var b = req.body || {};
         if (!b.uid) return res.status(400).json({ error: 'Falta uid.' });
@@ -1218,7 +1274,7 @@ app.post('/usuarios/eliminar', async (req, res) => {
 });
 
 app.post('/usuarios/deshabilitar', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var b = req.body || {};
         if (!b.uid) return res.status(400).json({ error: 'Falta uid.' });
@@ -1231,7 +1287,7 @@ app.post('/usuarios/deshabilitar', async (req, res) => {
 });
 
 app.post('/usuarios/rol', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var b = req.body || {};
         if (!b.uid || !b.rol) return res.status(400).json({ error: 'Faltan uid y/o rol.' });
@@ -1245,7 +1301,7 @@ app.post('/usuarios/rol', async (req, res) => {
 });
 
 app.post('/usuarios/reset-password', async (req, res) => {
-    if (!requireAdmin(res)) return;
+    if (!(await requireSuperadmin(req, res))) return;
     try {
         var b = req.body || {};
         if (!b.uid || !b.password) return res.status(400).json({ error: 'Faltan uid y/o password.' });

@@ -9,6 +9,7 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 | # | Severidad | Problema | Estado |
 |---|---|---|---|
 | 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | ✅ Código listo — falta deploy (ver abajo) |
+| 1b | 🔴 CRÍTICO | Endpoints `/usuarios/*` sin verificación de rol (escalada a superadmin vía backend) | ✅ **Corregido** — exigen idToken de superadmin (falta redeploy Railway) |
 | 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | ✅ Reglas listas — falta publicar |
 | 2b | 🔴 CRÍTICO | El banner in-app sugería pegar reglas ABIERTAS (revertía las reglas por rol) | ✅ **Corregido** — el banner ya no sugiere reglas abiertas |
 | 3 | 🟠 ALTO | PDFs de facturas con lectura pública (`temp-pdf`, `.read: true`) | Pendiente |
@@ -20,8 +21,25 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 | 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Pagos corregidos** (escritura por-nodo) — alta/edición de presup./facturas: pendiente |
 
 ### C2 (endpoints de usuarios) y C3 (backend fail-open) — hallazgos de auditoría 2026-07-17
-- **C2:** en `functions/server.js`, `requireAdmin` solo verifica que el SDK Admin esté inicializado, **no valida el rol de quien llama**. Cualquiera que pase el token compartido puede crear un superadmin o borrar usuarios. **Recomendación:** exigir `Authorization: Bearer <idToken>` de Firebase y verificar `roles/<uid> === 'superadmin'` antes de operar. *(Requiere deploy + enviar el idToken desde el front — pendiente.)*
-- **C3:** el backend queda **abierto** si falta `APP_API_TOKEN` en Railway (modo compatibilidad), y el token se guarda en `global/config/appToken`, legible por cualquier usuario autenticado (incluido `lector`). **Recomendación:** setear `APP_API_TOKEN`, hacer que el backend falle cerrado sin él, y migrar a verificación de idToken por request. *(Deploy manual — pendiente.)*
+- **C2:** ✅ **Corregido en código.** Los endpoints `/usuarios/*` ahora usan `requireSuperadmin(req,res)`, que exige `Authorization: Bearer <idToken>` de Firebase, lo verifica con Admin SDK y comprueba `roles/<uid> === 'superadmin'`. El frontend (`_fetchBackend`) ahora envía el idToken en todas las llamadas al backend. Sin idToken de superadmin → `401/403`. Corta la escalada de privilegios vía backend. *(Requiere **redeploy del backend en Railway** para tomar efecto; el front se despliega solo por GitHub Pages.)*
+- **C3:** el backend queda **abierto** si falta `APP_API_TOKEN` en Railway (modo compatibilidad), y el token se guarda en `global/config/appToken`, legible por cualquier usuario autenticado. **Recomendación (deploy manual):** setear `APP_API_TOKEN` en Railway. Nota: la gestión de usuarios (C2) ya no depende solo de ese token — exige idToken de superadmin aunque el token compartido falte o se filtre. Se agregó también **rate limiting** en memoria (configurable con `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS`).
+
+---
+
+## ✅ Checklist de despliegue de seguridad (pasos que hace el administrador en su consola)
+
+Estos pasos **no se pueden automatizar desde el código** — los tenés que hacer vos en las consolas correspondientes:
+
+1. **Publicar las reglas de Firebase** (activa la seguridad por rol — sin esto, todo depende del cliente):
+   - Firebase Console → Realtime Database → **Reglas** → pegar el contenido de `database.rules.json` → **Publicar**. O `firebase deploy --only database`.
+   - ⚠️ Antes: confirmá que tu usuario tenga `roles/<tu-uid> = superadmin`.
+2. **Redeploy del backend en Railway** (activa `requireSuperadmin` + rate limiting): push a la rama que Railway observa, o "Deploy" manual en Railway.
+3. **Setear variables en Railway:**
+   - `APP_API_TOKEN` = cadena larga y secreta → después pegala en la app (modal ARCA → "token del backend").
+   - `FIREBASE_SERVICE_ACCOUNT_BASE64` = base64 del JSON de service account (necesario para verificar idToken y para `/usuarios/*`).
+   - `ALLOWED_ORIGINS` = `https://speranzaemiliano-rk.github.io` (restringe CORS).
+   - (Opcional) `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` si querés ajustar el límite.
+4. **EmailJS:** en el panel de EmailJS, activar restricción por **dominio permitido** para que la public key no se pueda usar desde otro sitio.
 
 > ### ✅ Mitigaciones aplicadas en código (faltan los pasos de despliegue)
 >
