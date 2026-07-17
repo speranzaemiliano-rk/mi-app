@@ -18,7 +18,7 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
 | 7 | 🟡 MEDIO | XSS almacenado: texto libre insertado en `innerHTML` sin escapar | ✅ Corregido en Desarrollos/Aportantes — resto del código sin auditar |
 | 8 | 🟢 BAJO | El Asistente RK envía un resumen de datos financieros a la API de Google Gemini en cada consulta | Por diseño — evaluar alcance |
-| 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Pagos corregidos** (escritura por-nodo) — alta/edición de presup./facturas: pendiente |
+| 9 | 🟠 ALTO | Concurrencia: dos usuarios en paralelo podían pisarse los cambios (lost-update) | ✅ **Migrado** — 14 colecciones con guardado por-diff keyed-by-id; quedan 4 menos críticas |
 
 ### C2 (endpoints de usuarios) y C3 (backend fail-open) — hallazgos de auditoría 2026-07-17
 - **C2:** ✅ **Corregido en código.** Los endpoints `/usuarios/*` ahora usan `requireSuperadmin(req,res)`, que exige `Authorization: Bearer <idToken>` de Firebase, lo verifica con Admin SDK y comprueba `roles/<uid> === 'superadmin'`. El frontend (`_fetchBackend`) ahora envía el idToken en todas las llamadas al backend. Sin idToken de superadmin → `401/403`. Corta la escalada de privilegios vía backend. *(Requiere **redeploy del backend en Railway** para tomar efecto; el front se despliega solo por GitHub Pages.)*
@@ -214,14 +214,14 @@ Claves del enfoque:
 | **Registrar/editar/eliminar pago** de factura o presupuesto | Reescribía el array COMPLETO (`persistir()` / `persistirFacturas()`) → **lost-update** | ✅ Escribe **solo el nodo del ítem** (`REF_FACTURAS.child(idx).update(...)` / `REF_DATOS.child(idx).update(...)`), igual que documentos |
 | **Pago de documento** | Ya era por-nodo (`REF_DOCS.child(id).update`) | ✅ Sin cambios |
 | **Numeración correlativa** (OP, comprobantes A/B) | `.transaction()` atómica | ✅ A prueba de concurrencia, sin cambios |
-| **Alta/edición de un presupuesto o factura** (el ítem en sí) | Reescribe el array completo | ⚠️ **Riesgo residual** — ver abajo |
-| **Otras colecciones array-completo** (ingresos/caja, cuentas bancarias, proveedores global, ventas, remuneraciones, alquileres, etc.) | Reescriben el array completo | ⚠️ **Riesgo residual** |
+| **Alta/edición/borrado de presupuestos, facturas, ventas, ingresos (caja/banco), cuentas bancarias, proveedores, remuneraciones, alquileres, servicios, desarrollos, aportantes, comprobantes emitidos, plan de trabajo, grupos** | Reescribían el array completo | ✅ **Migradas** — guardado por-diff keyed-by-id (`_colPersist`) |
+| **Préstamos, tareas (pizarrón), importaciones ARCA, comprobantes recibidos** | Reescriben el array completo | ⚠️ **Riesgo residual** (menos crítico) |
 
-**Por qué el fix de pagos es seguro:** el borrado usa `splice` + `set`, así que el array en RTDB queda **denso** (sin huecos `null`) y el índice en memoria coincide con la clave numérica de Firebase. Escribir `REF_X.child(String(idx)).update(...)` toca solo ese elemento.
+**Cómo funciona el guardado multiusuario (`_colPersist` + `_colProcesarCarga`):** cada colección se guarda como **objeto indexado por `id`** en RTDB (migración automática y determinística de array→objeto la primera vez). Al guardar se escribe con `update()` **solo lo que cambió o se agregó**, y `null` para lo borrado — nunca se toca lo que no está en el batch, así que **no se pisa lo que agregó/editó otro usuario en paralelo**. Solo si dos personas editan el MISMO ítem al mismo tiempo gana el último (aceptable y poco frecuente). La lógica está validada con una simulación de la semántica de Firebase (migración sin duplicados, edits concurrentes de ítems distintos, add concurrente que no se pierde, borrados).
 
-**Riesgo residual y recomendación:** las operaciones que todavía reescriben el array completo (alta/edición del ítem, saldos de cuentas bancarias, ingresos) pueden perder cambios si dos usuarios editan la MISMA colección en el mismo instante. Es mucho menos frecuente que los pagos, pero para eliminarlo del todo hay que **migrar esas colecciones de array a objeto indexado por `id`** en RTDB y usar `child(id).update/remove` en todas las escrituras. Es un cambio grande que conviene hacer con pruebas dedicadas.
+**Riesgo residual:** quedan 4 colecciones menos críticas (préstamos, tareas, importaciones ARCA, comprobantes recibidos) que todavía reescriben el array completo. Recomendación: migrarlas con el mismo patrón `_colPersist` en una próxima iteración.
 
-**Mientras tanto — pauta operativa para dos usuarios:** conviene que cada usuario trabaje en **empresas/proyectos distintos** (el aislamiento por `getBasePath()` hace que sus datos vivan en ramas separadas de la base, sin colisión). Si los dos tienen que trabajar sobre el mismo proyecto a la vez, evitar editar/crear el MISMO presupuesto o la MISMA factura simultáneamente; los pagos ya son seguros.
+**Pauta operativa:** cada usuario puede trabajar en la misma o en distinta empresa/proyecto; el guardado por-nodo evita las colisiones en las colecciones migradas. Para las 4 pendientes, evitar que dos usuarios editen esa MISMA colección en simultáneo.
 
 ---
 
