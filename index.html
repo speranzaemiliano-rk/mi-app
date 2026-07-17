@@ -14395,6 +14395,99 @@
         }
     }
 
+    // Convierte un comprobante emitido (asignado a un proveedor como egreso) en una Factura
+    // o Documento de proveedor, con su pago ya registrado, y borra el emitido original.
+    window.convertirEmitidoAProveedor = function(id) {
+        var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
+        if (!e) return;
+        if (e.confidencial && !(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) { alert('Este comprobante es confidencial. Solo el Super Usuario puede convertirlo.'); return; }
+        var provNom = e.proveedorNombre || (e.proveedorId ? ((proveedores.find(function(p){return p.id===e.proveedorId;})||{}).razonSocial||'') : '');
+        if (!provNom) { alert('Este comprobante no está asignado a un proveedor, no se puede convertir.'); return; }
+        var destino = prompt('¿A dónde querés convertir "' + provNom + (e.nro?' — '+e.nro:'') + '"?\n\nEscribí:\n  F = Factura de proveedor\n  D = Documento de proveedor', 'D');
+        if (destino === null) return;
+        destino = destino.trim().toUpperCase();
+        if (destino !== 'F' && destino !== 'D') { alert('Escribí F (Factura) o D (Documento).'); return; }
+        var total = e.total || 0;
+        var mod = (e.tipoAB === 'A') ? 'A' : 'B';
+        if (!confirm('Se va a crear ' + (destino==='F'?'una FACTURA':'un DOCUMENTO') + ' de proveedor para ' + provNom + ' por $' + Math.round(total).toLocaleString('es-AR') + ' (ya pagado), y se va a borrar el comprobante emitido original.\n\n¿Confirmás?')) return;
+
+        var concepto = e.tipoDoc === 'factura'
+            ? ((e.items && e.items.length ? (e.items[0].desc||'') : '') + (e.items && e.items.length > 1 ? ' +' + (e.items.length-1) + ' ítem(s)' : ''))
+            : (e.concepto || '');
+        var pagoEntry = {
+            pagoId: 'CONV-' + Date.now(),
+            fecha: e.fecha || '',
+            modalidad: mod,
+            monto: total,
+            baseImponible: total,
+            retenciones: [],
+            totalRet: 0,
+            tipoAB: mod,
+            nroCorrelativo: e.nro || ''
+        };
+        if (mod === 'A' && e.cuentaId) pagoEntry.cuentaId = e.cuentaId;
+
+        if (destino === 'D') {
+            var docId = 'doc_' + Date.now();
+            var nuevoDoc = {
+                id: docId,
+                proveedor: provNom,
+                fecha: e.fecha || '',
+                numero: e.nro || '',
+                nro: e.nro || null,
+                tipo: 'otro',
+                descripcion: concepto || '—',
+                moneda: e.moneda || 'ARS',
+                importe: total,
+                pagado: total,
+                modalidad: mod,
+                observaciones: e.obs || '',
+                adjuntoId: e.adjuntoId || '',
+                adjuntoNombre: e.adjuntoNombre || '',
+                adjuntoTipo: e.adjuntoTipo || '',
+                pagosHistorial: [pagoEntry]
+            };
+            REF_DOCS.child(docId).set(nuevoDoc);
+        } else {
+            var factId = 'F-' + Date.now();
+            var nuevaFact = {
+                id: factId,
+                proveedor: provNom,
+                numero: e.nro || '',
+                fecha: e.fecha || '',
+                vencimiento: '',
+                descripcion: concepto || '—',
+                importe: total,
+                moneda: e.moneda || 'ARS',
+                pagado: total,
+                estado: 'pagada',
+                tipo: 'directo',
+                pagosHistorial: [pagoEntry]
+            };
+            if (e.adjuntoId) { nuevaFact.docId = e.adjuntoId; nuevaFact.docNombre = e.adjuntoNombre || ''; nuevaFact.docTipo = e.adjuntoTipo || ''; }
+            facturas.push(nuevaFact);
+            persistirFacturas();
+        }
+
+        // Borrar el emitido original + su movimiento de caja/banco asociado (el egreso pasa a
+        // reflejarse por el pago del nuevo documento/factura, así que no se pierde ni duplica).
+        var cambio = false;
+        for (var k = ingGeneral.length - 1; k >= 0; k--) {
+            if (ingGeneral[k] && ingGeneral[k].origenEmitidoId === id) { ingGeneral.splice(k, 1); cambio = true; }
+        }
+        if (cambio) persistirIngGeneral();
+        var ci = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
+        if (ci >= 0) { comprobantesEmitidos.splice(ci, 1); persistirEmitidos(); if (e.nro) _liberarNroComprobante(e.nro, e.tipoAB); }
+
+        renderEmitidos();
+        if (typeof renderDocumentos === 'function') renderDocumentos();
+        if (typeof renderFacturas === 'function') renderFacturas();
+        if (typeof renderPagos === 'function') renderPagos();
+        if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
+        if (typeof renderCuentasBancarias === 'function') renderCuentasBancarias();
+        alert('✅ Convertido a ' + (destino==='F'?'Factura':'Documento') + ' de proveedor. Se borró el comprobante emitido original.');
+    };
+
     function renderEmitidos() {
         var tbody = document.getElementById('emitidosBody');
         if (!tbody) return;
@@ -14444,6 +14537,7 @@
                 '<td><div class="action-btns">' +
                     '<button class="btn btn-outline btn-sm" title="Imprimir" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')">🖨️</button> ' +
                     (e.adjuntoId ? '<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc(\'' + e.adjuntoId + '\',\'' + escHtml(e.adjuntoNombre||'').replace(/'/g,"\\'") + '\')">📎</button> ' : '') +
+                    (editable && (e.proveedorId || e.proveedorNombre) ? '<button class="btn btn-outline btn-sm" title="Convertir a factura / documento de proveedor" onclick="convertirEmitidoAProveedor(\'' + e.id + '\')">🔄</button> ' : '') +
                     (editable ? '<button class="btn btn-outline btn-sm" title="Editar" onclick="abrirModalEmitir(\'' + e.id + '\')">✏</button> ' +
                                 '<button class="btn btn-outline btn-sm" title="Eliminar" onclick="eliminarEmitido(\'' + e.id + '\')">🗑</button>' : '') +
                 '</div></td>';
