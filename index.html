@@ -6781,6 +6781,25 @@
 
     const MAX_DOC_MB = 4;
 
+    // Sube (si hay uno elegido) el comprobante de transferencia/pago de un input file y lo
+    // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
+    async function _subirComprobantePago(fileInputId) {
+        var fi = document.getElementById(fileInputId);
+        var file = fi && fi.files && fi.files[0];
+        if (!file) return null;
+        if (file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
+        var base64 = await leerArchivoBase64(file);
+        var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+        await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
+        return { comprobanteId: id, comprobanteNombre: file.name, comprobanteTipo: file.type };
+    }
+    // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
+    function _btnVerComprobantePago(p) {
+        if (!p || !p.comprobanteId) return '';
+        var nom = (p.comprobanteNombre || 'comprobante').replace(/'/g, '');
+        return '<button class="btn btn-outline btn-sm" title="Ver comprobante de transferencia" onclick="descargarDoc(\'' + p.comprobanteId + '\',\'' + nom + '\')">📎</button>';
+    }
+
     document.getElementById('formPago').addEventListener('submit', async function(e) {
         e.preventDefault();
         const capPagado = parseFloat(document.getElementById('pagado').value) || 0;
@@ -7833,7 +7852,7 @@
                 if(q&&!txt.includes(q)) return;
                 var r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:d.concepto||'—',tipo:'Presupuesto',mod:p.modalidad,capital:p.capital||p.montoPagado||0,mayores:p.mayores||0,total:m,ret:r,neto:n,di:di,pi:pi,esFact:false,retenciones:p.retenciones||[]});
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:d.concepto||'—',tipo:'Presupuesto',mod:p.modalidad,capital:p.capital||p.montoPagado||0,mayores:p.mayores||0,total:m,ret:r,neto:n,di:di,pi:pi,esFact:false,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
             });
         });
         facturas.forEach(function(f,fi){
@@ -7845,7 +7864,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[]});
+                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
             });
         });
         documentos.forEach(function(d){
@@ -7857,7 +7876,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[]});
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
             });
         });
         (comprobantesEmitidos||[]).forEach(function(e){
@@ -7897,9 +7916,10 @@
                 btnR=r.ret>0?_retBtnsHTML(fnRet,diArg,r.pi,r.retenciones):'';
                 btnE=puedeEditar?'<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\''+srcTipo+'\','+diArg+','+r.pi+')" title="Editar">✏</button>':'';
             }
+            var btnV=_btnVerComprobantePago(r);
             var tr=document.createElement('tr');
             _filaMovClickeable(tr, r.esEmit?'emitido':(r.esDoc?'documento':(r.esFact?'factura':'presupuesto')), r.di);
-            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnE+'</div></td>';
+            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnV+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
     }
@@ -8020,6 +8040,7 @@
         _pagoFDPoblarItems(itemId);
         pagoFDSelMod('A');
         var nroCbteEl=document.getElementById('pagoFDNroComprobante'); if(nroCbteEl) nroCbteEl.value='';
+        var compEl=document.getElementById('pagoFDComprobante'); if(compEl) compEl.value='';
         var selC=document.getElementById('pagoFDCuenta');
         selC.innerHTML='<option value="">— Sin especificar —</option>';
         cuentasBancarias.forEach(function(cu){var o=document.createElement('option');o.value=cu.id||cu.banco;o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')';selC.appendChild(o);});
@@ -8149,6 +8170,11 @@
         if(mod==='A'&&cuentaId) entry.cuentaId=cuentaId;
         if(mod==='A'&&medio) entry.medioBancario=medio;
         if(mod==='A'&&nroCbteFD.trim()) entry.nroComprobante=nroCbteFD.trim();
+        // Comprobante de transferencia adjunto (opcional)
+        try {
+            var _comp=await _subirComprobantePago('pagoFDComprobante');
+            if(_comp){ entry.comprobanteId=_comp.comprobanteId; entry.comprobanteNombre=_comp.comprobanteNombre; entry.comprobanteTipo=_comp.comprobanteTipo; }
+        } catch(e){ return; }
         // Numeración correlativa A/B por empresa+proyecto
         entry.tipoAB = mod;
         entry.nroCorrelativo = await obtenerProximoComprobante(mod);
@@ -20292,6 +20318,14 @@
         document.getElementById('editPagoCAC').value     = p.indiceActual||'';
         selEditModalidad(p.modalidad||'B');
         recalcEditPago();
+        // Comprobante de transferencia adjunto
+        var compFile = document.getElementById('editPagoComprobante'); if (compFile) compFile.value = '';
+        var compActual = document.getElementById('editPagoComprobanteActual');
+        if (compActual) {
+            compActual.innerHTML = p.comprobanteId
+                ? '📎 Adjunto actual: <a href="javascript:void(0)" onclick="descargarDoc(\'' + p.comprobanteId + '\',\'' + (p.comprobanteNombre||'comprobante').replace(/'/g,'') + '\')" style="color:var(--blue);font-weight:600;text-decoration:underline;">' + escHtml(p.comprobanteNombre||'ver') + '</a>'
+                : '<span style="color:var(--text-3);">Sin comprobante adjunto.</span>';
+        }
         document.getElementById('modalEditarPago').classList.add('active');
     }
 
@@ -20347,7 +20381,7 @@
         if (ne) ne.textContent = fmtA(total - totalRet);
     }
 
-    function guardarEditarPago() {
+    async function guardarEditarPago() {
         var src    = document.getElementById('editPagoSrc').value;
         var diRaw  = document.getElementById('editPagoDatoIdx').value;
         var di     = src === 'doc' ? diRaw : parseInt(diRaw);
@@ -20359,6 +20393,12 @@
         var mod    = document.getElementById('editPagoModalidad').value;
         if (!fecha) { alert('La fecha es obligatoria.'); return; }
         if (cap <= 0) { alert('El capital debe ser mayor a cero.'); return; }
+        // Comprobante de transferencia (si se eligió uno nuevo)
+        var _comp = null;
+        try { _comp = await _subirComprobantePago('editPagoComprobante'); } catch(e) { return; }
+        function _aplicarComp(entry) {
+            if (_comp) { entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo; }
+        }
 
         if (src === 'presup') {
             var d = datos[di];
@@ -20368,6 +20408,7 @@
             p.mayores    = may;
             p.modalidad  = mod;
             if (cac > 0) p.indiceActual = cac;
+            _aplicarComp(p);
             // Recalcular pagado total del presupuesto
             d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)); }, 0);
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0); }, 0);
@@ -20380,6 +20421,7 @@
             pd.fecha     = fecha;
             pd.monto     = cap;
             pd.modalidad = mod;
+            _aplicarComp(pd);
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
         } else {
@@ -20388,6 +20430,7 @@
             pf.fecha     = fecha;
             pf.monto     = cap;
             pf.modalidad = mod;
+            _aplicarComp(pf);
             // Recalcular pagado total de la factura
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
@@ -20529,7 +20572,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(monto)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA(monto-(p.totalRet||0))+'</td>'+
-                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
+                    '<td><div class="action-btns">'+retBtn+_btnVerComprobantePago(p)+editBtn+'</div></td>'+
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
@@ -20569,7 +20612,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
-                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
+                    '<td><div class="action-btns">'+retBtn+_btnVerComprobantePago(p)+editBtn+'</div></td>'+
                 '</tr>');
             });
         });
@@ -20594,7 +20637,7 @@
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
-                    '<td><div class="action-btns">'+retBtn+editBtn+'</div></td>'+
+                    '<td><div class="action-btns">'+retBtn+_btnVerComprobantePago(p)+editBtn+'</div></td>'+
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
@@ -25944,6 +25987,13 @@
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;" id="editPagoRetManual"></div>
       </div>
 
+      <div class="form-group" style="margin-top:12px;">
+        <label>Comprobante de transferencia</label>
+        <div id="editPagoComprobanteActual" style="font-size:12px;margin-bottom:6px;"></div>
+        <input type="file" id="editPagoComprobante" accept=".pdf,image/*" style="font-size:13px;">
+        <div class="form-hint">Subí el PDF o imagen de la transferencia. Máx. 4 MB. Si ya hay uno, subir otro lo reemplaza.</div>
+      </div>
+
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" style="color:var(--danger);border-color:var(--danger);" onclick="eliminarPagoEditado()">🗑️ Eliminar pago</button>
         <button type="button" class="btn btn-outline" onclick="cerrarModalEditarPago()">Cancelar</button>
@@ -26098,6 +26148,11 @@
         <div style="margin-top:8px;">
           <label id="pagoFDNroComprobanteLbl">Nº de transferencia</label>
           <input type="text" id="pagoFDNroComprobante" placeholder="Ej: 000123456789" style="width:100%;">
+        </div>
+        <div style="margin-top:8px;">
+          <label>Comprobante de transferencia (opcional)</label>
+          <input type="file" id="pagoFDComprobante" accept=".pdf,image/*" style="font-size:13px;">
+          <div class="form-hint">Subí el PDF o imagen de la transferencia. Máx. 4 MB. También podés adjuntarlo después desde Pagos → ✏.</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
