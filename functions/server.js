@@ -14,14 +14,22 @@ const admin   = require('firebase-admin');
             var sa = JSON.parse(Buffer.from(sa64, 'base64').toString('utf8'));
             admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com' });
         } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+            // Limpia comillas envolventes si se pegaron por error del JSON.
+            var _limpiar = function(x) {
+                x = (x || '').trim();
+                if (x.length > 1 && ((x.charAt(0) === '"' && x.charAt(x.length - 1) === '"') ||
+                                     (x.charAt(0) === "'" && x.charAt(x.length - 1) === "'"))) x = x.slice(1, -1).trim();
+                return x;
+            };
             admin.initializeApp({
                 credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    projectId: _limpiar(process.env.FIREBASE_PROJECT_ID),
+                    clientEmail: _limpiar(process.env.FIREBASE_CLIENT_EMAIL),
                     privateKey: leerPem(process.env.FIREBASE_PRIVATE_KEY)
                 }),
                 databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com'
             });
+            console.log('[Firebase Admin] Inicializado con variables individuales (project/client/private key).');
         } else {
             console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar. Cargá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.');
         }
@@ -109,6 +117,11 @@ if (_rlCleanup.unref) _rlCleanup.unref();
 function leerPem(valor) {
     if (!valor) return '';
     var v = valor.trim();
+    // Sacar comillas envolventes si se copiaron por error al pegar el valor del JSON.
+    if (v.length > 1 && ((v.charAt(0) === '"' && v.charAt(v.length - 1) === '"') ||
+                         (v.charAt(0) === "'" && v.charAt(v.length - 1) === "'"))) {
+        v = v.slice(1, -1).trim();
+    }
     if (v.indexOf('-----BEGIN') !== -1) {
         return v.replace(/\\n/g, '\n');
     }
