@@ -17392,6 +17392,24 @@
         return tc > 0 ? (montoMoneda / tc) : 0;
     }
 
+    // Total de una venta cuotas_cac expresado en USD: terreno (USD) + cada cuota convertida
+    // a dólares (pagada → al dólar de su pago; pendiente → al dólar de hoy).
+    function _ventaTotalUsd(v) {
+        var terrenoUsd = v.terrenoUSD || 0, cuotasUsd = 0;
+        if (v.modalidad === 'cuotas_cac') {
+            var nc = v.nroCuotas || 0;
+            var esUSD = (v.cuotasMoneda === 'usd');
+            var cobros = (v.cobrosHistorial || []).filter(function(c){ return c.comp === 'cuota'; });
+            for (var i = 0; i < nc; i++) {
+                var monto = _cuotaMontoVigente(v, i);
+                var pagada = cobros.some(function(c){ return c.nroCuota === i + 1; });
+                var cobroReg = cobros.find(function(c){ return c.nroCuota === i + 1; });
+                cuotasUsd += _cuotaUsdValor(monto, esUSD, pagada, cobroReg);
+            }
+        }
+        return { terrenoUsd: terrenoUsd, cuotasUsd: cuotasUsd, totalUsd: terrenoUsd + cuotasUsd };
+    }
+
     // Celda "USD" de una cuota en ARS: la convierte al dólar del día en que se pagó
     // (registro.tc) si está pagada, o al dólar de hoy (exchangeRate) si todavía no venció/pagó.
     // Si la cuota ya está en USD, no hay conversión (devuelve '—').
@@ -17472,7 +17490,15 @@
                     : '<span class="badge-rol badge-warn">⏳ En curso</span>';
                 const modLabels = { total_usd:'USD Total', mixto:'USD + ARS', cuotas_cac:'Terreno + CAC', total_ars:'$ ARS Total' };
                 const tipos = { departamento:'Dto.', casa:'Casa', local:'Local', cochera:'Cochera', oficina:'Ofic.', otro:'Otro' };
-                const precioStr  = r.precioUSD > 0 ? fmtUSD(r.precioUSD) + (r.precioARS > 0 ? ' + ' + fmt(r.precioARS) : '') : fmt(r.precioARS);
+                var precioStr;
+                if (v.modalidad === 'cuotas_cac') {
+                    // Todo en USD: terreno + cuotas (cada una a su dólar) = total
+                    var _tu = _ventaTotalUsd(v);
+                    precioStr = '<strong>' + fmtUSD(_tu.totalUsd) + '</strong>'
+                        + '<br><small style="color:var(--text-3);font-size:10px;">Terreno ' + fmtUSD(_tu.terrenoUsd) + ' + Cuotas ' + fmtUSD(_tu.cuotasUsd) + '</small>';
+                } else {
+                    precioStr = r.precioUSD > 0 ? fmtUSD(r.precioUSD) + (r.precioARS > 0 ? ' + ' + fmt(r.precioARS) : '') : fmt(r.precioARS);
+                }
                 const cobradoStr = r.cobradoUSD > 0 ? fmtUSD(r.cobradoUSD) + (r.cobradoARS > 0 ? ' + ' + fmt(r.cobradoARS) : '') : fmt(r.cobradoARS);
                 const pendStr    = (pendUSD > 0 ? fmtUSD(pendUSD) + (pendARS > 0 ? ' + ' + fmt(pendARS) : '') : fmt(pendARS))
                     + ((pendARS > 0 && exchangeRate > 0) ? '<br><small style="color:var(--text-3);font-size:10px;">≈ ' + fmtUSD(pendARS / exchangeRate) + ' (dólar hoy)</small>' : '');
