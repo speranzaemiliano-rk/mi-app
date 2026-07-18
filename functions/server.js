@@ -152,11 +152,13 @@ function leerPem(valor) {
     if (v.indexOf('-----BEGIN') !== -1) {
         return v.replace(/\\n/g, '\n');
     }
+    // Tal vez es base64 del PEM completo: decodificar SOLO si el resultado parece un PEM
+    // (si no, devolvemos el valor tal cual para no generar basura binaria).
     try {
-        return Buffer.from(v, 'base64').toString('utf8');
-    } catch (_) {
-        return v;
-    }
+        var dec = Buffer.from(v, 'base64').toString('utf8');
+        if (dec.indexOf('-----BEGIN') !== -1) return dec.replace(/\\n/g, '\n');
+    } catch (_) {}
+    return v;
 }
 
 // Crea la instancia de Afip con las credenciales de entorno. Lanza si faltan.
