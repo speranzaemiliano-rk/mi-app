@@ -8,20 +8,32 @@ const admin   = require('firebase-admin');
 // variables individuales FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.
 var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
 (function initFirebaseAdmin() {
-    try {
-        if (admin.apps.length) return;
-        var sa64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-        _fbInit.tieneBase64      = !!sa64;
-        _fbInit.tieneProjectId   = !!process.env.FIREBASE_PROJECT_ID;
-        _fbInit.tieneClientEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
-        _fbInit.tienePrivateKey  = !!process.env.FIREBASE_PRIVATE_KEY;
-        if (sa64) {
-            _fbInit.metodo = 'base64';
+    if (admin.apps.length) return;
+    var DB_URL = 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com';
+    var sa64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+    _fbInit.tieneBase64      = !!sa64;
+    _fbInit.tieneProjectId   = !!process.env.FIREBASE_PROJECT_ID;
+    _fbInit.tieneClientEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
+    _fbInit.tienePrivateKey  = !!process.env.FIREBASE_PRIVATE_KEY;
+
+    // Intento 1: base64 del JSON completo. Si está pero es inválido, NO cortamos:
+    // caemos a las variables individuales (así un base64 viejo/roto no bloquea todo).
+    if (sa64) {
+        try {
             var sa = JSON.parse(Buffer.from(sa64, 'base64').toString('utf8'));
-            admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com' });
-        } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-            _fbInit.metodo = 'vars';
-            // Limpia comillas envolventes si se pegaron por error del JSON.
+            admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: DB_URL });
+            _fbInit.metodo = 'base64';
+            console.log('[Firebase Admin] Inicializado con FIREBASE_SERVICE_ACCOUNT_BASE64.');
+            return;
+        } catch (e) {
+            _fbInit.error = 'FIREBASE_SERVICE_ACCOUNT_BASE64 inválido: ' + e.message + '. Probando variables individuales…';
+            console.warn('[Firebase Admin] base64 inválido, uso variables individuales:', e.message);
+        }
+    }
+
+    // Intento 2: variables individuales (project_id + client_email + private_key).
+    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+        try {
             var _limpiar = function(x) {
                 x = (x || '').trim();
                 if (x.length > 1 && ((x.charAt(0) === '"' && x.charAt(x.length - 1) === '"') ||
@@ -38,15 +50,18 @@ var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
                     clientEmail: _limpiar(process.env.FIREBASE_CLIENT_EMAIL),
                     privateKey: _pk
                 }),
-                databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com'
+                databaseURL: DB_URL
             });
+            _fbInit.metodo = 'vars';
+            _fbInit.error = null; // se recuperó del base64 roto
             console.log('[Firebase Admin] Inicializado con variables individuales (project/client/private key).');
-        } else {
-            console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar. Cargá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.');
+            return;
+        } catch (e) {
+            _fbInit.error = e.message;
+            console.error('[Firebase Admin] Error al inicializar con variables individuales:', e.message);
         }
-    } catch (e) {
-        _fbInit.error = e.message;
-        console.error('[Firebase Admin] Error al inicializar:', e.message);
+    } else if (!sa64) {
+        console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar.');
     }
 })();
 
