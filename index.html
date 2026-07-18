@@ -17384,6 +17384,14 @@
         return Math.round(base * factor);
     }
 
+    // Valor en USD de una cuota: al dólar del pago (si está pagada y quedó registrado)
+    // o al dólar de hoy (si todavía no se pagó). Las cuotas ya en USD se devuelven igual.
+    function _cuotaUsdValor(montoMoneda, esUSD, pagada, cobroReg) {
+        if (esUSD) return montoMoneda;
+        var tc = (pagada && cobroReg && cobroReg.tc > 0) ? cobroReg.tc : (exchangeRate || 0);
+        return tc > 0 ? (montoMoneda / tc) : 0;
+    }
+
     // Celda "USD" de una cuota en ARS: la convierte al dólar del día en que se pagó
     // (registro.tc) si está pagada, o al dólar de hoy (exchangeRate) si todavía no venció/pagó.
     // Si la cuota ya está en USD, no hay conversión (devuelve '—').
@@ -17391,7 +17399,7 @@
         if (esUSD) return '—';
         var usadoTC = (pagada && cobroReg && cobroReg.tc > 0) ? cobroReg.tc : (exchangeRate || 0);
         if (!usadoTC) return '—';
-        var usd = montoMoneda / usadoTC;
+        var usd = _cuotaUsdValor(montoMoneda, esUSD, pagada, cobroReg);
         var nota = (pagada && cobroReg && cobroReg.tc > 0)
             ? ('TC pago ' + Math.round(cobroReg.tc))
             : ('TC hoy ' + Math.round(exchangeRate || 0));
@@ -19912,14 +19920,18 @@
         // Para cuotas_cac: usar montos individuales guardados
         var totalCuotas = 0, cobradoCuotas = 0, pendienteCuotas = 0;
         var cuotasPagadas = 0, cuotasVencidas = 0, cuotasPendientes = 0;
+        var totalUsdCuotas = 0, cobradoUsdCuotas = 0, pendienteUsdCuotas = 0; // cada cuota a su dólar
         if (v.modalidad === 'cuotas_cac' && nc > 0) {
             for (var i = 0; i < nc; i++) {
                 var monto = _cuotaMontoVigente(v, i);
                 totalCuotas += monto;
                 var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
-                if (pagada) { cobradoCuotas += monto; cuotasPagadas++; }
+                var cobroRegI = cobros.find(function(c){ return c.nroCuota === i+1; });
+                var usdCuota = _cuotaUsdValor(monto, esUSD, pagada, cobroRegI);
+                totalUsdCuotas += usdCuota;
+                if (pagada) { cobradoCuotas += monto; cobradoUsdCuotas += usdCuota; cuotasPagadas++; }
                 else {
-                    pendienteCuotas += monto;
+                    pendienteCuotas += monto; pendienteUsdCuotas += usdCuota;
                     var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
                     var dV = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
                     if (dV && dV < hoy) cuotasVencidas++; else cuotasPendientes++;
@@ -19948,6 +19960,14 @@
             document.getElementById('ecBloqueTerreno').style.display  = '';
             document.getElementById('ecBloqueCuotas').style.display   = '';
             document.getElementById('ecBloqueGenerico').style.display = 'none';
+            // Total sumado en USD: terreno (USD) + cuotas (cada una a su dólar)
+            var _totUsd = (terrenoTotal||0) + totalUsdCuotas;
+            var _cobUsd = (terrenoCobrado||0) + cobradoUsdCuotas;
+            var _penUsd = (terrenoPend||0) + pendienteUsdCuotas;
+            s('ecTotalUsd',   fmtU(_totUsd));
+            s('ecCobradoUsd', fmtU(_cobUsd));
+            s('ecPendUsd',    fmtU(_penUsd));
+            var _bU = document.getElementById('ecBloqueTotalUsd'); if (_bU) _bU.style.display = '';
         } else {
             s('ecGenPrecio',   r.precioUSD > 0 ? fmtU(r.precioUSD) + (r.precioARS > 0 ? ' + ' + fmtN(r.precioARS) : '') : fmtN(r.precioARS));
             s('ecGenCobrado',  r.cobradoUSD > 0 ? fmtU(r.cobradoUSD) + (r.cobradoARS > 0 ? ' + ' + fmtN(r.cobradoARS) : '') : fmtN(r.cobradoARS));
@@ -19955,6 +19975,7 @@
             document.getElementById('ecBloqueTerreno').style.display  = 'none';
             document.getElementById('ecBloqueCuotas').style.display   = 'none';
             document.getElementById('ecBloqueGenerico').style.display = '';
+            var _bU2 = document.getElementById('ecBloqueTotalUsd'); if (_bU2) _bU2.style.display = 'none';
         }
 
         // ── Tabla de cuotas ──
@@ -20179,11 +20200,16 @@
         var resumen = resumenVenta(v);
         var terrenoTotal = v.terrenoUSD||0, terrenoCob = v.terrenoCobrado||0;
         var totalCuotasNum = 0, cobCuotasNum = 0;
+        var totalUsdImp = 0, cobUsdImp = 0; // cada cuota a su dólar (pago o de hoy)
         if (v.modalidad === 'cuotas_cac') {
             for (var i = 0; i < nc; i++) {
                 var m = _cuotaMontoVigente(v, i);
                 totalCuotasNum += m;
-                if (cobros.some(function(c){ return c.nroCuota===i+1; })) cobCuotasNum += m;
+                var _pagImp = cobros.some(function(c){ return c.nroCuota===i+1; });
+                var _cobRegImp = cobros.find(function(c){ return c.nroCuota===i+1; });
+                var _uImp = _cuotaUsdValor(m, esUSD, _pagImp, _cobRegImp);
+                totalUsdImp += _uImp;
+                if (_pagImp) { cobCuotasNum += m; cobUsdImp += _uImp; }
             }
         }
 
@@ -20224,7 +20250,11 @@
             '<div style="height:8px;"></div>'+
             '<div class="tot-row2"><span>Cuotas — Total actualizado ('+nc+' cuotas)</span><span>'+fmtN(totalCuotasNum)+'</span></div>'+
             '<div class="tot-row2"><span>Cuotas — Cobrado ('+cobros.length+' cuotas)</span><span style="color:#1A6640;">'+fmtN(cobCuotasNum)+'</span></div>'+
-            '<div class="tot-final2"><span>Saldo pendiente cuotas</span><span style="color:'+(totalCuotasNum-cobCuotasNum>0?'#C0392B':'#1A6640')+';">'+fmtN(Math.max(totalCuotasNum-cobCuotasNum,0))+'</span></div>'
+            '<div class="tot-final2"><span>Saldo pendiente cuotas</span><span style="color:'+(totalCuotasNum-cobCuotasNum>0?'#C0392B':'#1A6640')+';">'+fmtN(Math.max(totalCuotasNum-cobCuotasNum,0))+'</span></div>'+
+            '<div style="height:10px;"></div>'+
+            '<div class="tot-row2"><span>Total operación en USD (terreno + cuotas a su dólar)</span><span>'+fmtU((terrenoTotal||0)+totalUsdImp)+'</span></div>'+
+            '<div class="tot-row2"><span>Cobrado en USD</span><span style="color:#1A6640;">'+fmtU((terrenoCob||0)+cobUsdImp)+'</span></div>'+
+            '<div class="tot-final2"><span>Pendiente en USD (dólar hoy)</span><span style="color:#C0392B;">'+fmtU(Math.max(((terrenoTotal||0)+totalUsdImp)-((terrenoCob||0)+cobUsdImp),0))+'</span></div>'
         :
             '<div class="tot-row2"><span>Precio total</span><span>'+( resumen.precioUSD>0?fmtU(resumen.precioUSD)+(resumen.precioARS>0?' + '+fmtN(resumen.precioARS):''):fmtN(resumen.precioARS))+'</span></div>'+
             '<div class="tot-row2"><span>Cobrado</span><span style="color:#1A6640;">'+( resumen.cobradoUSD>0?fmtU(resumen.cobradoUSD)+(resumen.cobradoARS>0?' + '+fmtN(resumen.cobradoARS):''):fmtN(resumen.cobradoARS))+'</span></div>'+
@@ -25604,6 +25634,25 @@
         <div style="margin-top:8px;background:#FAECEC;border:1px solid rgba(140,31,31,.12);border-radius:6px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:12px;color:var(--danger);font-weight:500;">Saldo pendiente cuotas</span>
           <span id="ecCuotasPend" style="font-size:16px;font-weight:700;color:var(--danger);font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;"></span>
+        </div>
+      </div>
+
+      <!-- Total sumado en USD (terreno + cada cuota a su dólar) -->
+      <div id="ecBloqueTotalUsd" style="display:none;margin-bottom:16px;background:#EEF3FB;border:1px solid rgba(26,58,107,.2);border-radius:8px;padding:12px 16px;">
+        <div style="font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--text-3);font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin-bottom:8px;">Total en USD — cada cuota al dólar de su fecha</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+          <div>
+            <div style="font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:var(--text-3);margin-bottom:2px;">Total operación</div>
+            <div id="ecTotalUsd" style="font-size:15px;font-weight:700;color:var(--text-1);font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;"></div>
+          </div>
+          <div>
+            <div style="font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:var(--success);margin-bottom:2px;">Cobrado</div>
+            <div id="ecCobradoUsd" style="font-size:15px;font-weight:700;color:var(--success);font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;"></div>
+          </div>
+          <div>
+            <div style="font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:var(--danger);margin-bottom:2px;">Pendiente (dólar hoy)</div>
+            <div id="ecPendUsd" style="font-size:15px;font-weight:700;color:var(--danger);font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;"></div>
+          </div>
         </div>
       </div>
 
