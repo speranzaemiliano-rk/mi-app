@@ -6,14 +6,21 @@ const admin   = require('firebase-admin');
 
 // Firebase Admin — se inicializa con service account (base64 del JSON) o con las
 // variables individuales FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.
+var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
 (function initFirebaseAdmin() {
     try {
         if (admin.apps.length) return;
         var sa64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+        _fbInit.tieneBase64      = !!sa64;
+        _fbInit.tieneProjectId   = !!process.env.FIREBASE_PROJECT_ID;
+        _fbInit.tieneClientEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
+        _fbInit.tienePrivateKey  = !!process.env.FIREBASE_PRIVATE_KEY;
         if (sa64) {
+            _fbInit.metodo = 'base64';
             var sa = JSON.parse(Buffer.from(sa64, 'base64').toString('utf8'));
             admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com' });
         } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+            _fbInit.metodo = 'vars';
             // Limpia comillas envolventes si se pegaron por error del JSON.
             var _limpiar = function(x) {
                 x = (x || '').trim();
@@ -21,11 +28,15 @@ const admin   = require('firebase-admin');
                                      (x.charAt(0) === "'" && x.charAt(x.length - 1) === "'"))) x = x.slice(1, -1).trim();
                 return x;
             };
+            var _pk = leerPem(process.env.FIREBASE_PRIVATE_KEY);
+            _fbInit.privateKeyEmpiezaBien = _pk.indexOf('-----BEGIN') === 0;
+            _fbInit.privateKeyTerminaBien = _pk.trim().indexOf('-----END') !== -1;
+            _fbInit.privateKeyLargo = _pk.length;
             admin.initializeApp({
                 credential: admin.credential.cert({
                     projectId: _limpiar(process.env.FIREBASE_PROJECT_ID),
                     clientEmail: _limpiar(process.env.FIREBASE_CLIENT_EMAIL),
-                    privateKey: leerPem(process.env.FIREBASE_PRIVATE_KEY)
+                    privateKey: _pk
                 }),
                 databaseURL: 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com'
             });
@@ -34,6 +45,7 @@ const admin   = require('firebase-admin');
             console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar. Cargá FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway.');
         }
     } catch (e) {
+        _fbInit.error = e.message;
         console.error('[Firebase Admin] Error al inicializar:', e.message);
     }
 })();
@@ -160,6 +172,24 @@ function detalleError(e) {
 }
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }));
+
+// Diagnóstico de Firebase Admin (protegido por el token). NO devuelve secretos:
+// solo qué variables están presentes, el método usado, si el private key tiene la
+// forma correcta, y el mensaje de error de init si hubo. Para depurar el service account.
+app.get('/diag/firebase', (req, res) => {
+    res.json({
+        inicializado: admin.apps.length > 0,
+        metodo: _fbInit.metodo,
+        tieneBase64: !!_fbInit.tieneBase64,
+        tieneProjectId: !!_fbInit.tieneProjectId,
+        tieneClientEmail: !!_fbInit.tieneClientEmail,
+        tienePrivateKey: !!_fbInit.tienePrivateKey,
+        privateKeyEmpiezaBien: !!_fbInit.privateKeyEmpiezaBien,
+        privateKeyTerminaBien: !!_fbInit.privateKeyTerminaBien,
+        privateKeyLargo: _fbInit.privateKeyLargo || 0,
+        error: _fbInit.error || null
+    });
+});
 
 // Importa todos los comprobantes emitidos.
 // Si se pasan ptoVta y tipoComp como query params, filtra por ellos.
