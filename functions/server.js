@@ -7,27 +7,45 @@ const admin   = require('firebase-admin');
 // Firebase Admin — se inicializa con service account (base64 del JSON) o con las
 // variables individuales FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.
 var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
+// Convierte un valor (JSON crudo del archivo, o base64 de ese JSON) en el objeto
+// service account. El más infalible: pegar el archivo entero como JSON.
+function _parseServiceAccount(str) {
+    var v = (str || '').trim();
+    if (!v) return null;
+    // 1) ¿Es el JSON crudo pegado directamente?
+    if (v.charAt(0) === '{') {
+        try { return JSON.parse(v); } catch (_) {}
+    }
+    // 2) ¿Es base64 del JSON?
+    try {
+        var dec = Buffer.from(v, 'base64').toString('utf8').trim();
+        if (dec.charAt(0) === '{') return JSON.parse(dec);
+    } catch (_) {}
+    return null;
+}
 (function initFirebaseAdmin() {
     if (admin.apps.length) return;
     var DB_URL = 'https://modo-prueba-bb8c2-default-rtdb.firebaseio.com';
-    var sa64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-    _fbInit.tieneBase64      = !!sa64;
+    // Acepta el JSON completo (crudo o base64) en FIREBASE_SERVICE_ACCOUNT o el nombre viejo _BASE64.
+    var saStr = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+    _fbInit.tieneBase64      = !!saStr;
     _fbInit.tieneProjectId   = !!process.env.FIREBASE_PROJECT_ID;
     _fbInit.tieneClientEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
     _fbInit.tienePrivateKey  = !!process.env.FIREBASE_PRIVATE_KEY;
 
-    // Intento 1: base64 del JSON completo. Si está pero es inválido, NO cortamos:
-    // caemos a las variables individuales (así un base64 viejo/roto no bloquea todo).
-    if (sa64) {
+    // Intento 1: JSON completo (crudo o base64). Si está pero es inválido, NO cortamos:
+    // caemos a las variables individuales (así un valor viejo/roto no bloquea todo).
+    if (saStr) {
         try {
-            var sa = JSON.parse(Buffer.from(sa64, 'base64').toString('utf8'));
+            var sa = _parseServiceAccount(saStr);
+            if (!sa) throw new Error('no es un JSON válido ni base64 de un JSON');
             admin.initializeApp({ credential: admin.credential.cert(sa), databaseURL: DB_URL });
-            _fbInit.metodo = 'base64';
-            console.log('[Firebase Admin] Inicializado con FIREBASE_SERVICE_ACCOUNT_BASE64.');
+            _fbInit.metodo = 'json/base64';
+            console.log('[Firebase Admin] Inicializado con FIREBASE_SERVICE_ACCOUNT (JSON/base64).');
             return;
         } catch (e) {
-            _fbInit.error = 'FIREBASE_SERVICE_ACCOUNT_BASE64 inválido: ' + e.message + '. Probando variables individuales…';
-            console.warn('[Firebase Admin] base64 inválido, uso variables individuales:', e.message);
+            _fbInit.error = 'FIREBASE_SERVICE_ACCOUNT inválido: ' + e.message + '. Probando variables individuales…';
+            console.warn('[Firebase Admin] service account inválido, uso variables individuales:', e.message);
         }
     }
 
@@ -60,7 +78,7 @@ var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
             _fbInit.error = e.message;
             console.error('[Firebase Admin] Error al inicializar con variables individuales:', e.message);
         }
-    } else if (!sa64) {
+    } else if (!saStr) {
         console.warn('[Firebase Admin] No se configuró service account — los endpoints /usuarios/* no van a funcionar.');
     }
 })();
