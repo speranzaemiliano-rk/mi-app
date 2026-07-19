@@ -17115,6 +17115,43 @@
 
     function cerrarModalCobroVenta() { document.getElementById('modalCobroVenta').classList.remove('active'); }
 
+    // Busca el dólar blue de una fecha (YYYY-MM-DD); si no hay dato ese día (finde/feriado)
+    // retrocede hasta 5 días. Llama cb(valorVenta|null).
+    function _buscarDolarHistorico(fecha, intentos, cb) {
+        var p = (fecha || '').split('-');
+        if (p.length !== 3) { cb(null); return; }
+        var url = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/blue/' + p[0] + '/' + p[1] + '/' + p[2];
+        fetch(url).then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+            if (d && d.venta > 0) { cb(d.venta, fecha); return; }
+            if (intentos > 0) {
+                var dt = new Date(fecha + 'T00:00:00'); dt.setDate(dt.getDate() - 1);
+                _buscarDolarHistorico(dt.toISOString().slice(0,10), intentos - 1, cb);
+            } else cb(null);
+        }).catch(function(){ cb(null); });
+    }
+
+    // Al cambiar la fecha del cobro, precargar el TC con el dólar de ESA fecha:
+    //  - hoy o futuro → dólar de hoy (exchangeRate)
+    //  - fecha pasada → dólar histórico de ese día (argentinadatos)
+    function _cvActualizarTCPorFecha() {
+        var fEl = document.getElementById('cobroVentaFecha');
+        var tcEl = document.getElementById('cobroVentaTC');
+        if (!fEl || !tcEl) return;
+        var fecha = fEl.value;
+        if (!fecha) return;
+        var hoyISO = new Date().toISOString().slice(0,10);
+        if (fecha >= hoyISO) {
+            if ((exchangeRate || 0) > 0) tcEl.value = Math.round(exchangeRate);
+            return;
+        }
+        var ph = tcEl.placeholder;
+        tcEl.placeholder = 'Buscando dólar de esa fecha…';
+        _buscarDolarHistorico(fecha, 5, function(valor){
+            tcEl.placeholder = ph;
+            if (valor > 0) tcEl.value = Math.round(valor);
+        });
+    }
+
     async function guardarCobroVenta() {
         const idx   = parseInt(document.getElementById('cobroVentaIdx').value);
         const comp  = document.getElementById('cobroVentaComponente').value;
@@ -25513,14 +25550,14 @@
             </div>
             <div class="form-group">
               <label>Fecha del cobro *</label>
-              <input type="date" id="cobroVentaFecha" required>
+              <input type="date" id="cobroVentaFecha" required onchange="_cvActualizarTCPorFecha()">
             </div>
           </div>
 
           <div class="form-group">
             <label>Dólar del día (TC) de este cobro</label>
             <input type="number" id="cobroVentaTC" step="0.01" min="0" placeholder="Ej: 1200">
-            <div class="form-hint">Se usa para mostrar la cuota en USD. Se pre-completa con el dólar de hoy; editalo si cobraste a otro valor.</div>
+            <div class="form-hint">Se usa para mostrar la cuota en USD. Se completa con el dólar <strong>de la fecha del cobro</strong> (si es una fecha pasada, busca el dólar histórico de ese día); editalo si cobraste a otro valor.</div>
           </div>
 
           <!-- CAC del cobro (solo cuotas_cac) -->
