@@ -16688,10 +16688,46 @@
         if (_ventaDocs.boleto) { nuevo.boletoDocId = _ventaDocs.boleto.docId; nuevo.boletoNombre = _ventaDocs.boleto.nombre; nuevo.boletoTipo = _ventaDocs.boleto.tipo; }
         if (_ventaDocs.plano)  { nuevo.planoDocId  = _ventaDocs.plano.docId;  nuevo.planoNombre  = _ventaDocs.plano.nombre;  nuevo.planoTipo  = _ventaDocs.plano.tipo;  }
 
+        // ── Cobro inicial al cargar la venta: generar el movimiento de caja/ingreso ──
+        // El monto "cobrado" que se tipea al crear la UF quedaba solo como campo suelto
+        // (terrenoCobrado / cobradoARS / cobradoUSD / construccionCobrado) y NO aparecía en
+        // caja, porque los movimientos de caja se derivan de cobrosHistorial. Para ventas
+        // nuevas generamos acá la entrada de cobrosHistorial equivalente (sin duplicar: el
+        // resumen sigue usando el campo suelto y la caja usa el historial), y luego ofrecemos
+        // emitir el comprobante/recibo en el momento.
+        var _cobrosIniciales = [];
+        if (editandoVentaIdx < 0) {
+            if (mod === 'total_ars' && nuevo.cobradoARS > 0) {
+                _cobrosIniciales.push({ comp: 'ars_general', monto: nuevo.cobradoARS });
+            } else if (mod === 'total_usd' && nuevo.cobradoUSD > 0) {
+                _cobrosIniciales.push({ comp: 'usd', monto: nuevo.cobradoUSD });
+            } else if (mod === 'mixto') {
+                if (nuevo.cobradoUSD > 0) _cobrosIniciales.push({ comp: 'usd', monto: nuevo.cobradoUSD });
+                if (nuevo.cobradoARS > 0) _cobrosIniciales.push({ comp: 'ars_general', monto: nuevo.cobradoARS });
+            } else if (mod === 'cuotas_cac') {
+                if (nuevo.terrenoCobrado > 0)     _cobrosIniciales.push({ comp: 'usd', monto: nuevo.terrenoCobrado });
+                if (nuevo.construccionCobrado > 0) _cobrosIniciales.push({ comp: 'ars_construccion', monto: nuevo.construccionCobrado, cac: nuevo.cacActual || nuevo.cacBase || 0 });
+            }
+        }
+        for (var _ci = 0; _ci < _cobrosIniciales.length; _ci++) {
+            var _c = _cobrosIniciales[_ci];
+            var _nroRec = await obtenerProximoComprobante('B');
+            var _reg = { fecha: nuevo.fecha, comp: _c.comp, monto: _c.monto, cac: _c.cac || 0, ref: 'Cobro inicial (carga de UF)', nroRecibo: _nroRec, tipoAB: 'B', inicial: true };
+            if ((exchangeRate || 0) > 0) _reg.tc = exchangeRate; // dólar del día de carga (para mostrar en USD)
+            nuevo.cobrosHistorial.push(_reg);
+        }
+
         if (editandoVentaIdx >= 0) { ventas[editandoVentaIdx] = nuevo; }
         else { ventas.push(nuevo); }
         cerrarModalVenta();
         persistirVentas();
+        // Ofrecer emitir el comprobante/recibo por el/los cobro(s) inicial(es)
+        if (_cobrosIniciales.length && confirm('Venta guardada. El cobro inicial quedó registrado en caja. ¿Emitir comprobante/recibo?')) {
+            var _snap = JSON.parse(JSON.stringify(nuevo));
+            nuevo.cobrosHistorial.filter(function(c){ return c.inicial; }).forEach(function(c){
+                imprimirReciboCobroVenta(_snap, c.monto, c.fecha, c.comp, c.cac || 0, c.ref, c.nroRecibo, null);
+            });
+        }
     }
 
     // Puebla el selector de cuenta bancaria del cobro y lo deja oculto (arranca en "B — Efectivo").
