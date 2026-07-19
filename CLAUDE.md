@@ -28,7 +28,7 @@ Ruta base por proyecto activo: `getBasePath()` → `empresas/<empresaId>/proyect
 
 **Por proyecto** (refs en JS): `REF_DATOS` (`/datos`), `REF_CAC` (`/indiceCAC`), `REF_DOCS` (`/documentos`), `REF_TC` (`/tipoCambio`), `REF_FACTURAS` (`/facturas`), `REF_CAJA` (`/caja`), `REF_INGRESOS` (`/ingresos`), `REF_BANCO` (`/banco`), `REF_CONTADOR_OP` (`/contadorOP`).
 
-**Globales** (compartidos entre empresas): `REF_EMPRESAS` (`empresas`), `REF_PROV` (`global/proveedores`), `REF_GRUPOS` (`global/grupos`), `REF_VENCIMIENTOS` (`global/vencimientosServicios` — agenda de vencimientos de servicios recurrentes, cruza todas las empresas/proyectos; cada registro guarda su propio `empresaId`/`proyectoId`, ver abajo), `REF_ROLES` (`roles`), `REF_USUARIOS` (`usuarios`), `REF_SOLICITUDES` (`solicitudesBorrado`), y `global/config/*` (geminiKey, googleClientId, emailjs).
+**Globales** (compartidos entre empresas): `REF_EMPRESAS` (`empresas`), `REF_PROV` (`global/proveedores`), `REF_GRUPOS` (`global/grupos`), `REF_VENCIMIENTOS` (`global/vencimientosServicios` — agenda de vencimientos de servicios recurrentes, cruza todas las empresas/proyectos; cada registro guarda su propio `empresaId`/`proyectoId`, ver abajo), `REF_ROLES` (`roles`), `REF_USUARIOS` (`usuarios`), `REF_SOLICITUDES` (`solicitudesBorrado`), y `global/config/*` (geminiKey, googleClientId, emailjs, `cacIndices` — tabla editable de índices CAC por mes con clave `YYYY-MM`, cargada por superadmin/editor en Config → «Índice CAC (mensual)»; autocompleta el CAC en Ventas/Cobros/Alquileres/Servicios/Presupuestos vía el selector de mes 📅 junto a cada campo, helper `_cacDeMes(mes)` / `cacAutofill(mes, targetId)`).
 
 Hay migración automática del esquema viejo `dashboardPagos` → `empresas/.../proyectos/...`.
 
