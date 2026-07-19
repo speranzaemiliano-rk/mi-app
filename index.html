@@ -4246,6 +4246,20 @@
                       </div>
                       <button class="btn btn-gold btn-sm" onclick="cacGuardarIndice()" style="margin-bottom:1px;">💾 Guardar mes</button>
                     </div>
+
+                    <details style="margin-top:14px;">
+                      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--gold);">📋 Importar varios meses de una vez</summary>
+                      <div style="padding:10px 0 0;">
+                        <p style="font-size:12px;color:var(--text-3);margin-bottom:8px;line-height:1.6;">
+                          Pegá una línea por mes con el <strong>mes y el valor</strong> del índice (Costo de Construcción). Acepta formatos como
+                          <code>2026-05 21035.60</code>, <code>MAY2026&nbsp;&nbsp;21.035,60</code> o <code>05/2026;21035,60</code>.
+                          Las líneas sin mes reconocible se ignoran.
+                        </p>
+                        <textarea id="cacBulkInput" rows="6" placeholder="2026-05 21035.60&#10;2026-04 20493.20&#10;2026-03 19771.20" style="width:100%;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:8px;"></textarea>
+                        <button class="btn btn-gold btn-sm" onclick="cacImportarLista()" style="margin-top:8px;">⬆️ Importar lista</button>
+                      </div>
+                    </details>
+
                     <div id="cacTablaWrap" style="margin-top:14px;"></div>
                     <div id="cfgCACStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                   </div>
@@ -10421,6 +10435,57 @@
             var vi = document.getElementById('cacValorInput'); if (vi) vi.value = '';
         }).catch(function() {
             if (st) st.textContent = '❌ No se pudo guardar (revisá permisos/conexión).';
+        });
+    }
+
+    // Interpreta un texto y devuelve el mes 'YYYY-MM' (o null si no lo reconoce).
+    function _cacParseMes(txt) {
+        txt = (txt || '').trim().toUpperCase();
+        var m = txt.match(/(20\d{2})[-\/.](0?[1-9]|1[0-2])(?!\d)/);           // 2026-05 / 2026/5
+        if (m) return m[1] + '-' + String(parseInt(m[2], 10)).padStart(2, '0');
+        m = txt.match(/(?<!\d)(0?[1-9]|1[0-2])[-\/.](20\d{2})/);              // 05/2026
+        if (m) return m[2] + '-' + String(parseInt(m[1], 10)).padStart(2, '0');
+        var meses = { ENE:'01', FEB:'02', MAR:'03', ABR:'04', MAY:'05', JUN:'06', JUL:'07', AGO:'08', SEP:'09', SEPT:'09', SET:'09', OCT:'10', NOV:'11', DIC:'12' };
+        m = txt.match(/([A-Z]{3,4})\s*\.?\s*\-?\s*(20\d{2})/);                // MAY2026 / SEPT 2025
+        if (m && meses[m[1]]) return m[2] + '-' + meses[m[1]];
+        return null;
+    }
+
+    // Interpreta un número en formato AR ("21.035,60") o internacional ("21035.60").
+    function _cacParseNum(txt) {
+        txt = (txt || '').replace(/[^0-9.,]/g, '').trim();
+        if (!txt) return 0;
+        if (txt.indexOf(',') > -1 && txt.lastIndexOf(',') > txt.lastIndexOf('.')) {
+            txt = txt.replace(/\./g, '').replace(',', '.');   // coma decimal (AR)
+        } else {
+            txt = txt.replace(/,/g, '');                      // punto decimal
+        }
+        return parseFloat(txt) || 0;
+    }
+
+    // Importa una lista pegada (una línea por mes). Escribe todo en un solo update.
+    function cacImportarLista() {
+        if (!puedeEditar) { alert('No tenés permisos para editar el índice CAC.'); return; }
+        var raw = (document.getElementById('cacBulkInput') || {}).value || '';
+        var st  = document.getElementById('cfgCACStatus');
+        if (!db) { if (st) st.textContent = '⚠️ Sin conexión.'; return; }
+        var mapa = {}, ok = 0, ignoradas = 0;
+        raw.split(/\r?\n/).forEach(function(l) {
+            if (!l.trim()) return;
+            var mes = _cacParseMes(l);
+            if (!mes) { ignoradas++; return; }
+            var anio = parseInt(mes.slice(0, 4), 10);
+            var nums = (l.match(/\d[\d.,]*/g) || []).map(_cacParseNum)
+                        .filter(function(n) { return n > 0 && n !== anio; });
+            var val = nums.length ? Math.max.apply(null, nums) : 0;   // el índice es el número más grande de la línea
+            if (val > 0) { mapa[mes] = val; ok++; } else { ignoradas++; }
+        });
+        if (!ok) { if (st) st.textContent = '⚠️ No se reconoció ningún mes/valor. Revisá el formato (ej: 2026-05 21035.60).'; return; }
+        db.ref('global/config/cacIndices').update(mapa).then(function() {
+            if (st) st.textContent = '✅ ' + ok + ' mes' + (ok !== 1 ? 'es' : '') + ' importado' + (ok !== 1 ? 's' : '') + (ignoradas ? ' · ' + ignoradas + ' línea(s) ignorada(s)' : '') + '.';
+            var ta = document.getElementById('cacBulkInput'); if (ta) ta.value = '';
+        }).catch(function() {
+            if (st) st.textContent = '❌ No se pudo importar (revisá permisos/conexión).';
         });
     }
 
