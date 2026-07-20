@@ -29667,7 +29667,15 @@
         _rkEsperando = false;
       })
       .catch(function(err) {
-        var detalle = (err && err.message) ? err.message : 'Verificá tu API key y conexión.';
+        // El error puede venir como: Error (.message), string (backend {error:"..."}),
+        // objeto de Gemini {error:{message}}, o TypeError de red ("Failed to fetch").
+        // Lo desarmamos para NO ocultar el motivo real detrás de un mensaje genérico.
+        var detalle =
+            (err && err.message) ? err.message
+          : (typeof err === 'string' && err) ? err
+          : (err && err.error) ? (typeof err.error === 'string' ? err.error : (err.error.message || JSON.stringify(err.error)))
+          : (err ? (function(){ try { return JSON.stringify(err); } catch(e){ return String(err); } })() : 'Sin detalle')
+          ;
         // Error de autenticación: la key es inválida/revocada. Falla igual con cualquier
         // modelo, así que no tiene sentido reintentar con el resto de MODELOS.
         var esAuth = (err && (err.status === 'UNAUTHENTICATED' || err.code === 401))
@@ -29677,13 +29685,19 @@
           if (mi < MODELOS.length) { intentar(); return; }
         }
         typing.remove();
-        var esQuota = /quota|capacity|overloaded|saturad|demand|429|503/i.test(detalle);
+        var esQuota = /quota|capacity|overloaded|demand|saturad|429|503/i.test(detalle);
         var esLimiteCero = /limit:\s*0/i.test(detalle);
-        var hint = esAuth
-          ? ' ⚠️ Tu API key de Gemini es inválida o fue revocada. Generá una nueva en https://aistudio.google.com/apikey y cargala en Config → Gemini (reemplazá la actual, no la agregues).'
-          : (esLimiteCero
-            ? ' ⚠️ Tu API key de Gemini no tiene cuota disponible (límite 0). Esto suele pasar cuando la cuenta de Google AI no tiene el plan gratuito habilitado en tu región o necesita facturación activada. Revisá tu plan en https://ai.dev/rate-limit o generá una API key nueva en Config → Gemini.'
-            : (esQuota ? ' ⚠️ Gemini está saturado. Esperá unos segundos y reintentá.' : ''));
+        var esBackendSinKey = /GEMINI_API_KEY no est|no está configurada en el servidor/i.test(detalle);
+        var esRed = /failed to fetch|networkerror|load failed|ERR_|conexión|conexion/i.test(detalle);
+        var hint = esBackendSinKey
+          ? ' ⚠️ El asistente usa el backend (Railway), no la key de la app. Falta configurar la variable GEMINI_API_KEY en Railway → Variables. La key de Config → Gemini sólo se usa para leer PDFs; el asistente necesita la del servidor.'
+          : esAuth
+          ? ' ⚠️ La API key de Gemini del servidor es inválida o fue revocada. Generá una nueva en https://aistudio.google.com/apikey y actualizá la variable GEMINI_API_KEY en Railway.'
+          : (esRed
+            ? ' ⚠️ No se pudo contactar el backend. Revisá que la URL del backend esté configurada (modal ARCA → “URL del backend”) y que el servicio de Railway esté activo.'
+            : (esLimiteCero
+              ? ' ⚠️ La API key de Gemini no tiene cuota disponible (límite 0). Revisá el plan de la cuenta de Google AI o generá una key nueva y actualizá GEMINI_API_KEY en Railway.'
+              : (esQuota ? ' ⚠️ Gemini está saturado. Esperá unos segundos y reintentá.' : '')));
         rkMensajeBot('Error al conectar con Gemini: ' + detalle + hint, null);
         document.getElementById('rk-agente-estado').textContent = 'Error';
         document.getElementById('rk-agente-enviar').disabled = false;
