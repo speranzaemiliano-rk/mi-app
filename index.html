@@ -13339,6 +13339,57 @@
         w.document.write(html); w.document.close();
     }
 
+    // Imprime el comprobante EN SÍ (recibo, ticket X, orden de pago, factura, etc.) — no el
+    // recibo de pago. Usa el encabezado compartido (empresa + proyecto).
+    function _imprimirComprobanteItem(d, tituloForzado) {
+        if (!d) return;
+        var tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comprobante X', factura:'Factura', otro:'Comprobante' };
+        var titulo = tituloForzado || tipoLabels[d.tipo] || 'Comprobante';
+        var mon = d.moneda === 'USD' ? 'USD ' : '$ ';
+        var fmt = function(n){ return mon + Number(n||0).toLocaleString('es-AR'); };
+        var emision = new Date().toLocaleDateString('es-AR');
+        var nroDoc = d.nro || d.numero || d.id || '';
+        var emp = getEmpresaParaRecibo();
+        var imp = d.importe || 0, pag = d.pagado || 0;
+        var estado = pag <= 0 ? 'Pendiente' : (pag >= imp ? 'Pagado' : 'Parcial');
+        var _rh = buildReciboHeader(titulo, nroDoc || null, d.fecha ? formatearFecha(d.fecha) : emision, {
+            label: 'Proveedor / Emisor', nombre: d.proveedor || '—', detalle: (d.descripcion || '')
+        });
+        var html =
+            '<html><head><meta charset="UTF-8"><title>' + titulo + ' ' + nroDoc + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
+            '<table class="tbl">' +
+            '<thead><tr><th>Descripción</th><th>N° Comprobante</th><th class="tr">Importe</th></tr></thead>' +
+            '<tbody><tr><td>' + (d.descripcion || '—') + '</td><td>' + (d.numero || d.nro || '—') + '</td><td class="tr">' + fmt(imp) + '</td></tr></tbody>' +
+            '<tfoot><tr><td colspan="2"><strong>Total</strong></td><td class="tr">' + fmt(imp) + '</td></tr></tfoot>' +
+            '</table>' +
+            '<div class="bottom">' +
+            '<div class="instrucciones"><div class="instr-titulo">Datos del comprobante</div><div class="instr-body">' +
+            'Tipo: ' + titulo +
+            '<br>Fecha: ' + (d.fecha ? formatearFecha(d.fecha) : emision) +
+            '<br>Estado: ' + estado +
+            (d.modalidad ? '<br>Modalidad: ' + (d.modalidad === 'A' ? 'Bancarizado (A)' : 'Efectivo (B)') : '') +
+            '</div></div>' +
+            '<div class="totales">' +
+            '<div class="tot-row"><span>Importe</span><span>' + fmt(imp) + '</span></div>' +
+            (pag > 0 ? '<div class="tot-row neto"><span>Pagado</span><span>' + fmt(pag) + '</span></div>' : '') +
+            (pag > 0 && pag < imp ? '<div class="tot-row ret"><span>Saldo</span><span>' + fmt(imp - pag) + '</span></div>' : '') +
+            '<div class="tot-final"><span>Total</span><span>' + fmt(imp) + '</span></div>' +
+            '</div></div>' +
+            '<div class="firmas"><div class="fi">Proveedor / Emisor — ' + (d.proveedor || '—') + '</div><div class="fi">Recibió — ' + emp.nombre + '</div></div>' +
+            '<div class="pie">' + titulo + ' ' + nroDoc + ' · Generado el ' + emision + ' · ' + emp.nombre + '</div>' +
+            '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+        var w = window.open('', '_blank', 'width=780,height=950');
+        if (!w) { alert('Bloqueaste las ventanas emergentes.'); return; }
+        w.document.write(html); w.document.close();
+    }
+    function imprimirDocumento(docId) {
+        var d = (documentos || []).find(function(x){ return x.id === docId; });
+        _imprimirComprobanteItem(d, null);
+    }
+    function imprimirComprobanteFacturaItem(idx) {
+        _imprimirComprobanteItem(facturas[idx], 'Factura');
+    }
+
     function pagarFactura(index) {
         const f = facturas[index];
         const pendiente = f.importe - (f.pagado || 0);
@@ -13386,6 +13437,7 @@
                 const pagadoInconsistente = Math.round(sumHist) !== Math.round(f.pagado||0);
                 const acciones = puedeEditar ? `
                     ${estado !== 'pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
+                    <button class="btn btn-outline btn-sm" onclick="imprimirComprobanteFacturaItem(${idx})" title="Imprimir esta factura como comprobante">📄</button>
                     ${(f.pagosHistorial && f.pagosHistorial.length) ? `<button class="btn btn-outline btn-sm" title="Reimprimir recibo de pago anterior" onclick="abrirHistorialPagosFactura(${idx})">🖨️</button>` : ''}
                     ${pagadoInconsistente ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(f.pagado||0).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
                     ${f.docId ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
@@ -15337,6 +15389,7 @@
                 nroCorrelativo: doc.nro
             }];
         }
+        const _esNuevoDoc = !editandoDocId;
         const docId = editandoDocId || 'doc_' + Date.now();
         REF_DOCS.child(docId).set({ ...doc, id: docId }).then(() => {
             cerrarModalDoc();
@@ -15345,6 +15398,11 @@
             if (tomarEgreso && !tieneHistorial && doc.pagado > 0) {
                 if (confirm('Comprobante guardado. ¿Imprimir recibo de pago?')) {
                     imprimirReciboFactura({ ...doc, id: docId }, doc.pagado, doc.fecha, doc.modalidad, [], 0, doc.nro);
+                }
+            } else if (_esNuevoDoc) {
+                // Ofrecer imprimir el comprobante EN SÍ (recibo / ticket X / orden de pago / etc.)
+                if (confirm('Comprobante guardado. ¿Imprimir el comprobante?')) {
+                    _imprimirComprobanteItem({ ...doc, id: docId }, null);
                 }
             }
         });
@@ -15404,7 +15462,8 @@
                 <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
                 <td><div class="action-btns">
                     ${(d.pagado||0)<(d.importe||0)?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
-                    ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Reimprimir">🖨️</button>`:''}
+                    <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
+                    ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Reimprimir recibo de pago">🖨️</button>`:''}
                     ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
                     ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
