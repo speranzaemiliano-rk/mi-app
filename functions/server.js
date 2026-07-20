@@ -1272,7 +1272,21 @@ app.get('/ipc/variacion', async (req, res) => {
         const ini = data.find(function(d) { return d.anio === anioIni && d.mes === mesIni; });
         const fin = data.find(function(d) { return d.anio === anioFin && d.mes === mesFin; });
         if (!ini || !fin) {
-            return res.status(404).json({ ok: false, error: 'No hay datos de IPC para alguno de los dos períodos pedidos.' });
+            const ult = data.length ? data[data.length - 1] : null;
+            const pri = data.length ? data[0] : null;
+            const faltan = [];
+            if (!ini) faltan.push(String(mesIni).padStart(2, '0') + '/' + anioIni);
+            if (!fin) faltan.push(String(mesFin).padStart(2, '0') + '/' + anioFin);
+            const ultTxt = ult ? (String(ult.mes).padStart(2, '0') + '/' + ult.anio) : '—';
+            const priTxt = pri ? (String(pri.mes).padStart(2, '0') + '/' + pri.anio) : '—';
+            return res.status(404).json({
+                ok: false,
+                error: 'El INDEC todavía no publicó el IPC de: ' + faltan.join(' y ') +
+                    '. Último mes disponible: ' + ultTxt + ' (la serie va de ' + priTxt + ' a ' + ultTxt +
+                    '). El IPC de cada mes se publica a mediados del mes siguiente — probá con un mes "hasta" más viejo.',
+                ultimoDisponible: ult,
+                primeroDisponible: pri
+            });
         }
         const variacionPct = ((fin.valor - ini.valor) / ini.valor) * 100;
         const factor = fin.valor / ini.valor;
