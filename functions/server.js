@@ -101,15 +101,29 @@ const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook'];
 app.use(function(req, res, next) {
     if (_RUTAS_SIN_TOKEN.indexOf(req.path) !== -1) return next();
     const esperado = process.env.APP_API_TOKEN;
+    // 1) Token compartido (X-App-Token / ?token=): camino rápido y retrocompatible.
+    const recibido = req.get('X-App-Token') || req.query.token;
+    if (esperado && recibido && _tokenIgual(recibido, esperado)) return next();
+    // 2) Sesión de Firebase: si el usuario está logueado en la app y manda un idToken válido
+    //    (Authorization: Bearer <idToken>), lo aceptamos como autenticación. Así la app no
+    //    depende de que el token compartido coincida — alcanza con estar logueado.
+    const authHeader = req.get('Authorization') || '';
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (m && m[1] && admin && admin.apps && admin.apps.length) {
+        admin.auth().verifyIdToken(m[1])
+            .then(function() { next(); })
+            .catch(function() {
+                if (!esperado) return next(); // sin token compartido configurado → modo compat
+                return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
+            });
+        return;
+    }
+    // 3) Sin idToken verificable: modo compatibilidad si no hay APP_API_TOKEN; si hay, rechazar.
     if (!esperado) {
-        console.warn('[seguridad] APP_API_TOKEN no configurado — ' + req.method + ' ' + req.path + ' se aceptó SIN autenticar. Configurá APP_API_TOKEN antes de usar esto con datos reales.');
+        console.warn('[seguridad] APP_API_TOKEN no configurado — ' + req.method + ' ' + req.path + ' se aceptó SIN autenticar. Configurá APP_API_TOKEN o usá la sesión de la app (idToken).');
         return next();
     }
-    const recibido = req.get('X-App-Token') || req.query.token;
-    if (!recibido || !_tokenIgual(recibido, esperado)) {
-        return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
-    }
-    next();
+    return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
 });
 
 function _tokenIgual(a, b) {

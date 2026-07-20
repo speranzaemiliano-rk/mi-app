@@ -11771,10 +11771,18 @@
         var headers = { 'Content-Type': 'application/json' };
         var t = getAppToken();
         if (t) headers['X-App-Token'] = t;
-        return fetch(url + '/gemini', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({ model: model, body: body })
+        // Adjuntar el idToken de Firebase (sesión del usuario) para que el backend autentique
+        // por login aunque el token compartido no coincida.
+        var _idTokenP = (typeof auth !== 'undefined' && auth && auth.currentUser)
+            ? auth.currentUser.getIdToken().catch(function(){ return null; })
+            : Promise.resolve(null);
+        return _idTokenP.then(function(idTok) {
+            if (idTok) headers['Authorization'] = 'Bearer ' + idTok;
+            return fetch(url + '/gemini', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({ model: model, body: body })
+            });
         });
     }
 
@@ -11909,6 +11917,11 @@
         var headers = {};
         var t = getAppToken();
         if (t) headers['X-App-Token'] = t;
+        var _idTokenP = (typeof auth !== 'undefined' && auth && auth.currentUser)
+            ? auth.currentUser.getIdToken().catch(function(){ return null; })
+            : Promise.resolve(null);
+        _idTokenP.then(function(idTok) {
+        if (idTok) headers['Authorization'] = 'Bearer ' + idTok;
         fetch(url.replace(/\/+$/, '') + '/diag', { headers: headers })
             .then(function(r) {
                 if (r.status === 401) {
@@ -11923,11 +11936,12 @@
             })
             .then(function(d) {
                 if (d === null) return;
-                if (st) st.textContent = '✅ Conexión OK con el backend. El token es correcto — el asistente y las demás funciones del backend ya deberían andar.';
+                if (st) st.textContent = '✅ Conexión OK con el backend (autenticado). El asistente y las demás funciones del backend ya deberían andar.';
             })
             .catch(function() {
                 if (st) st.textContent = '❌ No se pudo contactar el backend. Revisá la URL (modal de ARCA) y que el servicio de Railway esté activo.';
             });
+        });
     }
 
     function borrarAppToken() {
