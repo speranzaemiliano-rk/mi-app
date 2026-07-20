@@ -3763,7 +3763,8 @@
                     <div class="table-card-head">
                         <h3>Comprobantes emitidos <span style="font-weight:400;color:var(--text-3);font-size:12px;">(recibos y documentos que emitís e imprimís)</span></h3>
                         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                          <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos()" title="Reflejar en Ingresos los comprobantes que quedaron sin afectar caja (por ejemplo, los de antes)">💰 Reflejar en Ingresos</button>
+                          <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('ingreso')" title="Reflejar en la caja como INGRESO todos los comprobantes que quedaron sin afectar caja">⬆️💰 Reflejar todos como ingreso</button>
+                          <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('egreso')" title="Reflejar en la caja como EGRESO todos los comprobantes que quedaron sin afectar caja">⬇️💰 …como egreso</button>
                           <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir()">＋ Emitir recibo / documento</button>
                         </div>
                     </div>
@@ -15153,7 +15154,7 @@
                 '<td style="text-align:right;">' + mon + Math.round(e.total||0).toLocaleString('es-AR') + '</td>' +
                 '<td><div class="action-btns">' +
                     '<button class="btn btn-outline btn-sm" title="Imprimir" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')">🖨️</button> ' +
-                    (editable && !e.afectaCaja ? '<button class="btn btn-outline btn-sm" title="Reflejar como ingreso en la caja" onclick="reflejarEmitidoUno(\'' + e.id + '\')">💰</button> ' : '') +
+                    (editable && !e.afectaCaja ? '<button class="btn btn-outline btn-sm" title="Reflejar como INGRESO (entra plata)" onclick="reflejarEmitidoUno(\'' + e.id + '\',\'ingreso\')">⬆️💰</button> <button class="btn btn-outline btn-sm" title="Reflejar como EGRESO (sale plata)" onclick="reflejarEmitidoUno(\'' + e.id + '\',\'egreso\')">⬇️💰</button> ' : '') +
                     (e.adjuntoId ? '<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc(\'' + e.adjuntoId + '\',\'' + escHtml(e.adjuntoNombre||'').replace(/'/g,"\\'") + '\')">📎</button> ' : '') +
                     (editable && (e.proveedorId || e.proveedorNombre) ? '<button class="btn btn-outline btn-sm" title="Convertir a factura / documento de proveedor" onclick="convertirEmitidoAProveedor(\'' + e.id + '\')">🔄</button> ' : '') +
                     (editable ? '<button class="btn btn-outline btn-sm" title="Editar" onclick="abrirModalEmitir(\'' + e.id + '\')">✏</button> ' +
@@ -15163,35 +15164,38 @@
         });
     }
 
-    // Refleja en Ingresos un comprobante emitido que quedó "sin afectar caja": lo marca como
-    // ingreso y le genera el movimiento de caja/banco.
-    function reflejarEmitidoUno(id) {
+    // Refleja en la caja un comprobante emitido eligiendo la dirección: 'ingreso' o 'egreso'.
+    // Sirve para los que quedaron "sin afectar caja" y también para corregir uno cargado al revés.
+    function reflejarEmitidoUno(id, tipo) {
         if (typeof puedeEditar !== 'undefined' && !puedeEditar) return;
         var e = comprobantesEmitidos.find(function(x){ return x.id === id; });
         if (!e) return;
-        if (e.afectaCaja) { alert('Este comprobante ya está reflejado en la caja.'); return; }
-        if (!confirm('Reflejar el comprobante ' + (e.nro||'') + ' como INGRESO en la caja?')) return;
-        e.afectaCaja = true; e.movTipo = 'ingreso';
+        tipo = (tipo === 'egreso') ? 'egreso' : 'ingreso';
+        var etiqueta = tipo === 'egreso' ? 'EGRESO (sale plata)' : 'INGRESO (entra plata)';
+        if (!confirm('Reflejar el comprobante ' + (e.nro||'') + ' en la caja como ' + etiqueta + '?')) return;
+        e.afectaCaja = true; e.movTipo = tipo;
         _emitSincronizarMovCaja(e);
         persistirEmitidos();
         renderEmitidos();
     }
 
-    // Refleja en Ingresos TODOS los comprobantes emitidos que quedaron sin afectar caja
-    // (por ejemplo, los cargados antes de que el default fuera "ingreso").
-    function reflejarEmitidosEnIngresos() {
+    // Refleja en la caja TODOS los comprobantes emitidos que quedaron sin afectar caja
+    // (por ejemplo, los cargados antes de que el default fuera "ingreso"), con la dirección elegida.
+    function reflejarEmitidosEnIngresos(tipo) {
         if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para esta acción.'); return; }
+        tipo = (tipo === 'egreso') ? 'egreso' : 'ingreso';
+        var etiqueta = tipo === 'egreso' ? 'EGRESO' : 'INGRESO';
         var pendientes = (comprobantesEmitidos||[]).filter(function(e){ return e && !e.afectaCaja; });
         if (!pendientes.length) { alert('No hay comprobantes emitidos sin reflejar: todos ya generan su movimiento en la caja.'); return; }
-        if (!confirm('Se van a reflejar ' + pendientes.length + ' comprobante(s) emitido(s) como INGRESO en la caja (los que hoy figuran "sin afectar caja").\n\nCada uno generará su movimiento de ingreso y va a aparecer en Ingresos. ¿Continuar?')) return;
+        if (!confirm('Se van a reflejar ' + pendientes.length + ' comprobante(s) emitido(s) como ' + etiqueta + ' en la caja (los que hoy figuran "sin afectar caja").\n\n¿Continuar?\n\n(Si algunos son al revés, cancelá y usá los botones ⬆️/⬇️ de cada fila.)')) return;
         pendientes.forEach(function(e){
             e.afectaCaja = true;
-            e.movTipo = 'ingreso';
+            e.movTipo = tipo;
             _emitSincronizarMovCaja(e);
         });
         persistirEmitidos();
         renderEmitidos();
-        alert('✓ ' + pendientes.length + ' comprobante(s) reflejado(s) en Ingresos.');
+        alert('✓ ' + pendientes.length + ' comprobante(s) reflejado(s) como ' + etiqueta + '.');
     }
 
     function imprimirComprobanteEmitido(id) {
