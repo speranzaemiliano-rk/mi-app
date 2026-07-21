@@ -4,16 +4,16 @@
 
 ## Resumen ejecutivo
 
-El sistema tiene una arquitectura razonable (los certificados ARCA viven en el backend, no en el navegador), pero **el control de acceso real es débil**: los permisos se aplican solo en el navegador y el backend no exige autenticación. Hay dos problemas **críticos** que conviene resolver antes de usarlo con datos reales de varias empresas o con un backend de ARCA en producción.
+El sistema tiene una arquitectura razonable (los certificados ARCA viven en el backend, no en el navegador). Los puntos críticos originales (reglas de Firebase abiertas, backend sin autenticación) ya están **mitigados**: hay reglas de Firebase por rol publicadas y el backend exige token compartido o sesión de Firebase válida. Lo que sigue débil es que **ningún endpoint del backend distingue rol** más allá de `/usuarios/*` — cualquier usuario autenticado de la app, sea cual sea su rol, puede llamar a los endpoints sensibles (emitir facturas ARCA, open banking, Gemini). Ver tabla y C4 abajo.
 
 | # | Severidad | Problema | Estado |
 |---|---|---|---|
-| 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | ✅ Código listo — falta deploy (ver abajo) |
+| 1 | 🔴 CRÍTICO | Backend sin autenticación + CORS abierto a cualquier origen | ✅ Código listo (acepta `X-App-Token` o idToken de Firebase, ver C4 abajo) — confirmar que Railway tenga el deploy más reciente |
 | 1b | 🔴 CRÍTICO | Endpoints `/usuarios/*` sin verificación de rol (escalada a superadmin vía backend) | ✅ **Corregido** — exigen idToken de superadmin (falta redeploy Railway) |
-| 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | ✅ Reglas listas — falta publicar |
+| 2 | 🔴 CRÍTICO | Permisos solo en el cliente + reglas de Firebase demasiado abiertas (escalada a superadmin) | ✅ **Reglas por rol publicadas** en Firebase Console (confirmado por el usuario) |
 | 2b | 🔴 CRÍTICO | El banner in-app sugería pegar reglas ABIERTAS (revertía las reglas por rol) | ✅ **Corregido** — el banner ya no sugiere reglas abiertas |
 | 3 | 🟠 ALTO | PDFs de facturas con lectura pública (`temp-pdf`, `.read: true`) | Pendiente |
-| 4 | 🟡 MEDIO | Sin validación de inputs ni rate limiting en el backend | Pendiente |
+| 4 | 🟡 MEDIO | Sin validación de inputs en el backend | ✅ Rate limiting agregado — falta validar rangos/tipos de inputs |
 | 5 | 🟡 MEDIO | Datos compartidos globalmente entre empresas (proveedores, grupos) | A evaluar |
 | 6 | 🟢 BAJO | Secretos hardcodeados en el frontend (EmailJS, email admin) | A evaluar |
 | 7 | 🟡 MEDIO | XSS almacenado: texto libre insertado en `innerHTML` sin escapar | ✅ Corregido en Desarrollos/Aportantes — resto del código sin auditar |
@@ -23,6 +23,7 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 ### C2 (endpoints de usuarios) y C3 (backend fail-open) — hallazgos de auditoría 2026-07-17
 - **C2:** ✅ **Corregido en código.** Los endpoints `/usuarios/*` ahora usan `requireSuperadmin(req,res)`, que exige `Authorization: Bearer <idToken>` de Firebase, lo verifica con Admin SDK y comprueba `roles/<uid> === 'superadmin'`. El frontend (`_fetchBackend`) ahora envía el idToken en todas las llamadas al backend. Sin idToken de superadmin → `401/403`. Corta la escalada de privilegios vía backend. *(Requiere **redeploy del backend en Railway** para tomar efecto; el front se despliega solo por GitHub Pages.)*
 - **C3:** el backend queda **abierto** si falta `APP_API_TOKEN` en Railway (modo compatibilidad), y el token se guarda en `global/config/appToken`, legible por cualquier usuario autenticado. **Recomendación (deploy manual):** setear `APP_API_TOKEN` en Railway. Nota: la gestión de usuarios (C2) ya no depende solo de ese token — exige idToken de superadmin aunque el token compartido falte o se filtre. Se agregó también **rate limiting** en memoria (configurable con `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS`).
+- **C4 (2026-07-20, hallazgo de esta consolidación):** el middleware global del backend ahora acepta, además del `X-App-Token`, un **idToken de Firebase válido** (`Authorization: Bearer <idToken>`, cualquier usuario logueado en la app) — se agregó porque el token compartido a veces no coincidía entre dispositivos y dejaba el Asistente RK sin funcionar. **Análisis de superficie de exposición:** esto NO amplía quién puede llegar al backend. `global/config/appToken` (donde vive el token compartido) ya tenía `.read: auth != null` en `database.rules.json` — **cualquier usuario autenticado, incluido rol `lector`, ya podía leer ese token directo desde Firebase** (consola del navegador) y llamar al backend sin pasar por la UI. El idToken solo formaliza un camino que técnicamente ya existía. **Sí importa para el futuro:** ningún endpoint del backend (salvo `/usuarios/*`) distingue el ROL del usuario — un `lector` autenticado puede, hoy, emitir una factura real con `POST /afip` igual que un `superadmin`. Es la misma debilidad ya documentada en el punto 2 ("permisos solo en el cliente"), no algo nuevo introducido por el idToken. Si se necesita restringir `/afip` (y otros endpoints sensibles) a roles `admin`/`editor`, hay que agregar un chequeo de rol tipo `requireSuperadmin` pero para esos roles — no está hecho todavía.
 
 ---
 
@@ -143,13 +144,17 @@ Claves del enfoque:
 
 ---
 
-## 🟡 4. Sin validación de inputs ni rate limiting en el backend
+## 🟡 4. Sin validación de inputs en el backend (rate limiting ✅ agregado)
 
-**Dónde:** `functions/server.js` — los endpoints confían en `req.body`/`req.query` (`parseInt(cuitRecep)`, etc.) sin validar rangos ni tipos, y no hay límite de requests.
+**Dónde:** `functions/server.js` — los endpoints confían en `req.body`/`req.query` (`parseInt(cuitRecep)`, etc.) sin validar rangos ni tipos.
 
-**Riesgo:** abuso/DoS, errores de facturación por datos mal formados, costos en las APIs de banco.
+**Riesgo:** errores de facturación por datos mal formados, costos en las APIs de banco.
 
-**Cómo blindarlo:** validar los campos obligatorios y sus rangos antes de llamar a ARCA; sumar `express-rate-limit`; loguear intentos fallidos.
+**Cómo blindarlo:** validar los campos obligatorios y sus rangos antes de llamar a ARCA.
+
+> **Rate limiting:** ✅ ya agregado — límite en memoria por IP, configurable con `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` (ver C3 arriba).
+
+**Nota sobre adjuntos (2026-07-20):** los archivos que suben los usuarios (facturas, documentos, contratos) se comprimen del lado del cliente antes de guardarse como base64 en Realtime Database (`MAX_DOC_MB = 8`, con compresión automática de imágenes y PDF si superan el límite — ver `CLAUDE.md`). **Esto es una mejora de UX/performance, no un control de seguridad**: las reglas de Firebase no validan tamaño ni tipo de payload, así que un usuario con permiso de escritura y algo de conocimiento técnico podría escribir directamente vía el SDK de Firebase un payload arbitrariamente grande en cualquier ruta donde tenga permiso de escritura, sin pasar por la compresión de la UI. No es explotable por un usuario anónimo (requiere estar autenticado con rol ≠ lector), pero vale tenerlo presente si en el futuro se necesita un tope real de tamaño por nodo.
 
 ---
 
@@ -221,7 +226,16 @@ Claves del enfoque:
 
 **Estado:** ✅ **todas las colecciones (18) migradas** al guardado por-nodo. `_colProcesarCarga` soporta tanto colecciones guardadas como array (migración automática) como ya keyed por objeto (usa la clave de RTDB como id, ej. el pizarrón de tareas). No queda ninguna colección reescribiendo el array completo.
 
-**Pauta operativa:** cada usuario puede trabajar en la misma o en distinta empresa/proyecto; el guardado por-nodo evita las colisiones en las colecciones migradas. Para las 4 pendientes, evitar que dos usuarios editen esa MISMA colección en simultáneo.
+**Pauta operativa:** cada usuario puede trabajar en la misma o en distinta empresa/proyecto; el guardado por-nodo evita las colisiones en todas las colecciones (ya no hay pendientes).
+
+### Revisión de concurrencia — funciones agregadas 2026-07-19/20
+
+Con el volumen de features nuevas de esta sesión (CAC, Comprobantes emitidos, Alquileres, Documentos, Asistente), se auditó que todo lo nuevo respete el mismo patrón. Hallazgos:
+
+- **`global/config/cacIndices`** (tabla de índices CAC por mes): escritura por clave (`set('cacIndices/<mes>', valor)` / `update({mes:valor})` para importación masiva / `remove('cacIndices/<mes>')`). Cada mes es su propio nodo → dos usuarios editando meses distintos no chocan; el mismo mes en simultáneo es last-write-wins sobre un escalar (aceptable, no hay forma de "perder" datos de otro mes).
+- **`confirmarMoverAlquileres`** (mover contratos entre empresas/proyectos): un único `db.ref().update()` **multi-path atómico** con rutas absolutas (escribe en destino, `null` en origen, todo o nada). No usa `_colPersist` porque el destino es otra colección/proyecto, pero el patrón es seguro por diseño.
+- **`_emitSincronizarMovCaja`** (genera/actualiza el movimiento de caja de un comprobante emitido, `origenEmitidoId`): 🔧 **se encontró y corrigió** un caso real: el movimiento nuevo se agregaba a `ingGeneral` con un id **aleatorio** (`_colUidItem()`). Si dos usuarios reflejaban/editaban el **mismo** comprobante casi al mismo tiempo (ej. ambos tocan "⬆️💰 ingreso" para el mismo emitido), cada uno generaba un id distinto → **dos movimientos de caja duplicados** para un solo comprobante (no era un lost-update, pero sí un dato duplicado). Corregido: el id ahora es **determinístico** (`'emitmov_' + reg.id`), así ediciones concurrentes del mismo origen convergen al mismo nodo (last-write-wins sobre ESE movimiento, sin duplicar). Aplica tanto al alta/edición normal de un comprobante como a los botones nuevos de reflejar ingreso/egreso.
+- **Adjuntos** (compresión de imágenes/PDF, subida a `REF_DOCS`): cada adjunto se guarda bajo un id propio generado al momento de subir (`'DOC-' + Date.now() + '-' + random`) — no hay colisión posible entre subidas concurrentes de archivos distintos.
 
 ---
 
@@ -233,18 +247,21 @@ Claves del enfoque:
 - **Flujo de borrado con aprobación** — buena idea de control (hay que reforzarlo con reglas, ver punto 2). ✔
 - **Service Worker** no cachea llamadas a Firebase/Railway/Google — evita servir datos sensibles obsoletos. ✔
 - **Escape de HTML en el módulo de Desarrollos/Aportantes** (`escHtml()`) — corrige XSS almacenado en ese módulo; falta extenderlo al resto del archivo (ver punto 7). ✔
+- **Reglas de Firebase por rol publicadas** — el nodo `roles` solo lo escribe un superadmin, y las escrituras de datos exigen no ser `lector`. ✔
+- **Multiusuario:** las 18 colecciones guardan por-diff keyed-by-id (`_colPersist`); movimientos cross-link (ej. caja generada desde comprobantes emitidos) usan id determinístico para no duplicar bajo edición concurrente del mismo origen; mover datos entre proyectos usa `update()` multi-path atómico. ✔
 
 ---
 
 ## 🧭 Plan de acción sugerido (orden de prioridad)
 
-1. **Cerrar el backend** (punto 1): API token o verificación de ID token de Firebase + CORS restringido. *Impacto fiscal directo.*
-2. **Publicar reglas de Firebase reales** (punto 2): bloquear el nodo `roles` y exigir rol para escribir. *Aislamiento e integridad de datos.*
-3. **Endurecer `temp-pdf`** (punto 3): expiración + IDs aleatorios.
-4. Validación de inputs y rate limiting en el backend (punto 4).
-5. Restringir la key de EmailJS por dominio (punto 6).
-6. Extender `escHtml()` al resto de los módulos que interpolan texto libre en `innerHTML` (punto 7).
-7. Definir el alcance de datos que el Asistente RK puede enviar a Gemini (punto 8), si la confidencialidad frente a terceros es un requisito del negocio.
+Ya resuelto: cerrar el backend (punto 1, con retrocompatibilidad por idToken — ver C4), publicar las reglas de Firebase por rol (punto 2), rate limiting (punto 4), y migrar toda la concurrencia (punto 9). Queda pendiente:
+
+1. **Endurecer `temp-pdf`** (punto 3): expiración + IDs aleatorios.
+2. **Restringir por rol los endpoints sensibles del backend** (`/afip`, `/belvo/*`, `/prometeo/*`, `/gemini`) más allá del gate genérico de auth — hoy cualquier usuario autenticado de la app (incluido `lector`) puede llamarlos (ver C4).
+3. Validación de rangos/tipos de inputs en el backend (punto 4).
+4. Restringir la key de EmailJS por dominio (punto 6).
+5. Extender `escHtml()` al resto de los módulos que interpolan texto libre en `innerHTML` (punto 7).
+6. Definir el alcance de datos que el Asistente RK puede enviar a Gemini (punto 8), si la confidencialidad frente a terceros es un requisito del negocio.
 
 ---
 
