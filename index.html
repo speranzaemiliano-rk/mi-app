@@ -18,6 +18,7 @@
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.belvo.io/belvo-widget-1-stable.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -7000,24 +7001,67 @@
             img.src = url;
         });
     }
-    // Lee un archivo como dataURL. Si es una imagen grande (>1 MB), la comprime primero para
-    // que entre en el límite y ocupe poco en la base (fotos de comprobantes sacadas con el celu).
-    // ¿Es una imagen que podemos comprimir/redimensionar? (así no aplica el tope de tamaño:
-    // una foto pesada se achica sola en vez de rechazarse).
+    // Re-arma un PDF liviano: renderiza cada página con pdf.js y las vuelve a meter como
+    // imagen JPEG comprimida en un PDF nuevo con jsPDF. Pierde algo de nitidez de texto
+    // (queda como imagen), pero entra en el límite y ocupa mucho menos.
+    async function _comprimirPDF(file, escala, calidad) {
+        escala  = escala  || 1.5;
+        calidad = calidad || 0.6;
+        if (typeof pdfjsLib === 'undefined' || typeof window.jspdf === 'undefined') {
+            throw new Error('No se pudo cargar el compresor de PDF.');
+        }
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        var url = URL.createObjectURL(file);
+        try {
+            var pdf = await pdfjsLib.getDocument({ url: url }).promise;
+            var jsPDF = window.jspdf.jsPDF;
+            var outDoc = null;
+            var MMPORPX = 25.4 / 96; // pdf.js renderiza a 96dpi por defecto
+            for (var i = 1; i <= pdf.numPages; i++) {
+                var page = await pdf.getPage(i);
+                var viewport = page.getViewport({ scale: escala });
+                var canvas = document.createElement('canvas');
+                canvas.width = viewport.width; canvas.height = viewport.height;
+                await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+                var imgData = canvas.toDataURL('image/jpeg', calidad);
+                var wMM = viewport.width * MMPORPX, hMM = viewport.height * MMPORPX;
+                var orient = wMM > hMM ? 'l' : 'p';
+                if (!outDoc) outDoc = new jsPDF({ orientation: orient, unit: 'mm', format: [wMM, hMM] });
+                else outDoc.addPage([wMM, hMM], orient);
+                outDoc.addImage(imgData, 'JPEG', 0, 0, wMM, hMM);
+            }
+            if (!outDoc) throw new Error('El PDF no tiene páginas.');
+            return outDoc.output('datauristring');
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    }
+
+    // ¿Es un archivo que podemos comprimir? (así no aplica el tope de tamaño: se achica solo
+    // en vez de rechazarse). Imágenes: redimensionar+JPEG. PDF: re-renderizar más liviano.
     function _imgComprimible(file) {
         return !!(file && { 'image/jpeg':1, 'image/jpg':1, 'image/png':1, 'image/webp':1 }[file.type]);
     }
+    function _pdfComprimible(file) {
+        return !!(file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')));
+    }
+    function _archivoComprimible(file) { return _imgComprimible(file) || _pdfComprimible(file); }
+
+    const MAX_DOC_MB = 8;
+
+    // Lee un archivo como dataURL. Si es una imagen grande (>1 MB) o un PDF que supera el
+    // límite, lo comprime primero para que entre y ocupe poco en la base.
     function leerArchivoBase64(file) {
-        // Las imágenes >1 MB se comprimen; si es muy grande, se achica más para que entre.
         if (_imgComprimible(file) && file.size > 1024 * 1024) {
             var lado = file.size > 6 * 1024 * 1024 ? 1600 : 2200;
             var cal  = file.size > 6 * 1024 * 1024 ? 0.68 : 0.72;
             return _comprimirImagen(file, lado, cal).catch(function(){ return _leerArchivoTalCual(file); });
         }
+        if (_pdfComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) {
+            return _comprimirPDF(file).catch(function(){ return _leerArchivoTalCual(file); });
+        }
         return _leerArchivoTalCual(file);
     }
-
-    const MAX_DOC_MB = 8;
 
     // Sube (si hay uno elegido) el comprobante de transferencia/pago de un input file y lo
     // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
@@ -7025,7 +7069,7 @@
         var fi = document.getElementById(fileInputId);
         var file = fi && fi.files && fi.files[0];
         if (!file) return null;
-        if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
+        if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
         var base64 = await leerArchivoBase64(file);
         var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
         await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
@@ -7065,7 +7109,7 @@
         const fileInput = document.getElementById('docArchivo');
         const file = fileInput.files && fileInput.files[0];
         if (file) {
-            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El documento supera los ${MAX_DOC_MB} MB.`); return; }
+            if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El documento supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('docEstado').textContent = 'Subiendo documento…';
                 const base64 = await leerArchivoBase64(file);
@@ -11071,7 +11115,7 @@
         if (archivosCert && archivosCert.length) {
             for (let i = 0; i < archivosCert.length; i++) {
                 const archivoCert = archivosCert[i];
-                if (!_imgComprimible(archivoCert) && archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
+                if (!_archivoComprimible(archivoCert) && archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
                 try {
                     document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado ' + (i+1) + ' de ' + archivosCert.length + '…';
                     const base64Cert = await leerArchivoBase64(archivoCert);
@@ -13312,7 +13356,7 @@
         const fileInput = document.getElementById('factArchivo');
         const file = fileInput.files && fileInput.files[0];
         if (file) {
-            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El archivo supera los ${MAX_DOC_MB} MB.`); return; }
+            if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El archivo supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('factArchivoEstado').textContent = 'Subiendo archivo…';
                 const base64 = await leerArchivoBase64(file);
@@ -15044,7 +15088,7 @@
         };
         var archivoEmit = document.getElementById('emitArchivo').files[0];
         if (archivoEmit) {
-            if (!_imgComprimible(archivoEmit) && archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_archivoComprimible(archivoEmit) && archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 var base64Emit = await leerArchivoBase64(archivoEmit);
                 var adjIdEmit = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -15497,7 +15541,7 @@
         if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
         const archivoDoc = document.getElementById('docCompArchivo').files[0];
         if (archivoDoc) {
-            if (!_imgComprimible(archivoDoc) && archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_archivoComprimible(archivoDoc) && archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 const base64Doc = await leerArchivoBase64(archivoDoc);
                 const adjIdDoc = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -17061,7 +17105,7 @@
         var cont = document.getElementById(tipo==='boleto' ? 'ventaBoletoActual' : 'ventaPlanoActual');
         var f = inp && inp.files && inp.files[0];
         if(!f){ ventaRenderAdjunto(tipo); return; }
-        if(!_imgComprimible(f) && f.size > MAX_DOC_MB*1024*1024){
+        if(!_archivoComprimible(f) && f.size > MAX_DOC_MB*1024*1024){
             alert('El archivo supera los '+MAX_DOC_MB+' MB. Elegí uno más liviano.');
             inp.value=''; ventaRenderAdjunto(tipo); return;
         }
@@ -17195,7 +17239,7 @@
                 const inp = document.getElementById(tipo==='boleto' ? 'ventaBoletoFile' : 'ventaPlanoFile');
                 const file = inp && inp.files && inp.files[0];
                 if (file) {
-                    if (!_imgComprimible(file) && file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
+                    if (!_archivoComprimible(file) && file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
                     if (btn) { btn.disabled = true; btn.textContent = 'Subiendo '+tipo+'…'; }
                     const base64 = await leerArchivoBase64(file);
                     const docId = 'VENTA-'+tipo.toUpperCase()+'-'+Date.now()+'-'+Math.floor(Math.random()*1000);
@@ -18958,7 +19002,7 @@
         var errores = [];
         for (var f = 0; f < files.length; f++) {
             var file = files[f];
-            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
+            if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
             try {
                 var base64 = await leerArchivoBase64(file);
                 var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + f;
@@ -19395,7 +19439,7 @@
         };
         var archivoContrato = document.getElementById('alqArchivo').files[0];
         if (archivoContrato) {
-            if (!_imgComprimible(archivoContrato) && archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_archivoComprimible(archivoContrato) && archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 var base64Contrato = await leerArchivoBase64(archivoContrato);
                 var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
