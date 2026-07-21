@@ -18510,13 +18510,29 @@
 
     function persistirAlquileres()  { return _colPersist('alquileres', REF_ALQUILERES, alquileres).catch(function(e){ console.error(e); }); }
 
-    // ── Mover todos los alquileres del proyecto actual a otra empresa/proyecto ──
+    // ── Mover alquileres seleccionados del proyecto actual a otra empresa/proyecto ──
     function abrirMoverAlquileres() {
         if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para mover alquileres.'); return; }
-        var cant = (alquileres||[]).filter(Boolean).length;
-        if (!cant) { alert('Este proyecto no tiene alquileres para mover.'); return; }
-        var c = document.getElementById('mvAlqCant'); if (c) c.textContent = cant;
+        var lista = (alquileres||[]).filter(Boolean);
+        if (!lista.length) { alert('Este proyecto no tiene alquileres para mover.'); return; }
         var st = document.getElementById('mvAlqEstado'); if (st) st.textContent = '';
+        // Lista de contratos con checkbox (todos marcados por defecto)
+        var cont = document.getElementById('mvAlqLista');
+        if (cont) {
+            cont.innerHTML = '';
+            lista.forEach(function(a) {
+                var idx = alquileres.indexOf(a);
+                var row = document.createElement('label');
+                row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:13px;border-bottom:1px solid var(--border-soft,#eee);cursor:pointer;';
+                var mon = a.moneda === 'USD' ? 'USD ' : '$';
+                var canon = a.canonActual || a.canon || 0;
+                row.innerHTML = '<input type="checkbox" class="mvAlqChk" data-idx="' + idx + '" checked onchange="_mvAlqContar()">' +
+                    '<span style="flex:1;"><strong>' + escHtml(a.unidad||'—') + '</strong>' + (a.inquilino ? ' · ' + escHtml(a.inquilino) : '') + '</span>' +
+                    '<span style="color:var(--text-3);font-size:12px;white-space:nowrap;">' + mon + Math.round(canon).toLocaleString('es-AR') + '</span>';
+                cont.appendChild(row);
+            });
+        }
+        _mvAlqContar();
         var selEmp = document.getElementById('mvAlqEmpresa');
         if (selEmp) {
             selEmp.innerHTML = '';
@@ -18527,6 +18543,15 @@
         document.getElementById('modalMoverAlq').classList.add('active');
     }
     function cerrarMoverAlquileres() { document.getElementById('modalMoverAlq').classList.remove('active'); }
+    function _mvAlqMarcarTodos(v) {
+        Array.prototype.forEach.call(document.querySelectorAll('#mvAlqLista .mvAlqChk'), function(chk){ chk.checked = !!v; });
+        _mvAlqContar();
+    }
+    function _mvAlqContar() {
+        var n = document.querySelectorAll('#mvAlqLista .mvAlqChk:checked').length;
+        var el = document.getElementById('mvAlqCant2');
+        if (el) el.textContent = n + ' seleccionado' + (n !== 1 ? 's' : '') + ' para mover';
+    }
     function _mvAlqPoblarProyectos() {
         var selEmp = document.getElementById('mvAlqEmpresa');
         var selProy = document.getElementById('mvAlqProyecto');
@@ -18540,28 +18565,34 @@
         var empId  = (document.getElementById('mvAlqEmpresa')||{}).value || '';
         var proyId = (document.getElementById('mvAlqProyecto')||{}).value || '';
         var st = document.getElementById('mvAlqEstado');
+        // Alquileres tildados
+        var seleccionados = [];
+        Array.prototype.forEach.call(document.querySelectorAll('#mvAlqLista .mvAlqChk:checked'), function(chk){
+            var a = alquileres[parseInt(chk.getAttribute('data-idx'), 10)];
+            if (a) seleccionados.push(a);
+        });
+        if (!seleccionados.length) { if (st) st.textContent = '⚠️ No marcaste ningún contrato para mover.'; return; }
         if (!empId || !proyId) { if (st) st.textContent = '⚠️ Elegí empresa y proyecto destino.'; return; }
         if (empresaActual && proyectoActual && empId === empresaActual.id && proyId === proyectoActual.id) {
             if (st) st.textContent = '⚠️ El destino es el mismo proyecto actual. Elegí otro.'; return;
         }
-        var lista = (alquileres||[]).filter(Boolean);
-        if (!lista.length) { if (st) st.textContent = 'No hay alquileres para mover.'; return; }
         var emp  = (empresas||[]).find(function(e){ return e.id === empId; });
         var proy = emp && (emp.proyectos||[]).find(function(p){ return p.id === proyId; });
-        if (!confirm('Vas a MOVER ' + lista.length + ' alquiler(es) (con sus cobros e historial) a:\n\n' + (emp?emp.nombre:'?') + ' · ' + (proy?proy.nombre:'?') + '\n\nSe quitan del proyecto actual y aparecen allá. ¿Confirmás?')) return;
+        if (!confirm('Vas a MOVER ' + seleccionados.length + ' alquiler(es) (con sus cobros e historial) a:\n\n' + (emp?emp.nombre:'?') + ' · ' + (proy?proy.nombre:'?') + '\n\nSe quitan del proyecto actual y aparecen allá. ¿Confirmás?')) return;
         if (st) st.textContent = '⏳ Moviendo…';
         var updates = {};
         var baseDest = 'empresas/' + empId + '/proyectos/' + proyId + '/alquileres/';
-        lista.forEach(function(a, i) {
+        var baseOrig = getBasePath() + '/alquileres/';
+        seleccionados.forEach(function(a, i) {
             var id = a.id || ('alq_mv_' + Date.now() + '_' + i);
             a.id = id;
-            updates[baseDest + id] = a;
+            updates[baseDest + id] = a;   // escribir en destino
+            updates[baseOrig + id] = null; // y quitar del origen (mismo update atómico)
         });
         try {
-            await db.ref().update(updates);                 // 1) escribir en destino
-            await db.ref(getBasePath() + '/alquileres').remove(); // 2) limpiar origen (todos)
+            await db.ref().update(updates);
             cerrarMoverAlquileres();
-            alert('✓ ' + lista.length + ' alquiler(es) movido(s) a ' + (emp?emp.nombre:'') + ' · ' + (proy?proy.nombre:'') + '.\n\nCambiá a ese proyecto (arriba, selector de empresa/proyecto) para verlos.');
+            alert('✓ ' + seleccionados.length + ' alquiler(es) movido(s) a ' + (emp?emp.nombre:'') + ' · ' + (proy?proy.nombre:'') + '.\n\nCambiá a ese proyecto (arriba, selector de empresa/proyecto) para verlos.');
         } catch(e) {
             if (st) st.textContent = '❌ No se pudo mover: ' + (e.message || e);
         }
@@ -26780,9 +26811,20 @@
       <button class="modal-close" onclick="cerrarMoverAlquileres()">✕</button>
     </div>
     <div style="padding:18px 20px;">
-      <p style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:14px;">
-        Mueve <strong id="mvAlqCant">todos</strong> los alquileres del proyecto actual (con sus cobros e historial) a la empresa y proyecto que elijas. Se quitan de acá y aparecen allá.
+      <p style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:12px;">
+        Elegí <strong>cuáles</strong> alquileres mover (con sus cobros e historial) y la empresa/proyecto destino. Se quitan de acá y aparecen allá.
       </p>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Contratos a mover</span>
+          <span style="font-weight:400;font-size:11px;">
+            <a href="javascript:void(0)" onclick="_mvAlqMarcarTodos(true)" style="color:var(--gold);">Todos</a> ·
+            <a href="javascript:void(0)" onclick="_mvAlqMarcarTodos(false)" style="color:var(--gold);">Ninguno</a>
+          </span>
+        </label>
+        <div id="mvAlqLista" style="max-height:210px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 8px;"></div>
+        <div id="mvAlqCant2" style="font-size:11px;color:var(--text-3);margin-top:4px;"></div>
+      </div>
       <div class="form-group">
         <label>Empresa destino</label>
         <select id="mvAlqEmpresa" onchange="_mvAlqPoblarProyectos()"></select>
@@ -26794,7 +26836,7 @@
       <div id="mvAlqEstado" style="font-size:12px;color:var(--text-3);margin-top:6px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
         <button class="btn btn-outline btn-sm" onclick="cerrarMoverAlquileres()">Cancelar</button>
-        <button class="btn btn-gold btn-sm" onclick="confirmarMoverAlquileres()">🔀 Mover todos</button>
+        <button class="btn btn-gold btn-sm" onclick="confirmarMoverAlquileres()">🔀 Mover seleccionados</button>
       </div>
     </div>
   </div>
