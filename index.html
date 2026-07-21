@@ -7012,29 +7012,53 @@
         }
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         var url = URL.createObjectURL(file);
-        try {
-            var pdf = await pdfjsLib.getDocument({ url: url }).promise;
-            var jsPDF = window.jspdf.jsPDF;
-            var outDoc = null;
-            var MMPORPX = 25.4 / 96; // pdf.js renderiza a 96dpi por defecto
-            for (var i = 1; i <= pdf.numPages; i++) {
-                var page = await pdf.getPage(i);
-                var viewport = page.getViewport({ scale: escala });
-                var canvas = document.createElement('canvas');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
-                var imgData = canvas.toDataURL('image/jpeg', calidad);
-                var wMM = viewport.width * MMPORPX, hMM = viewport.height * MMPORPX;
-                var orient = wMM > hMM ? 'l' : 'p';
-                if (!outDoc) outDoc = new jsPDF({ orientation: orient, unit: 'mm', format: [wMM, hMM] });
-                else outDoc.addPage([wMM, hMM], orient);
-                outDoc.addImage(imgData, 'JPEG', 0, 0, wMM, hMM);
+        var _nucleo = (async function() {
+            try {
+                var pdf = await pdfjsLib.getDocument({ url: url }).promise;
+                var jsPDF = window.jspdf.jsPDF;
+                var outDoc = null;
+                var MMPORPX = 25.4 / 96; // pdf.js renderiza a 96dpi por defecto
+                for (var i = 1; i <= pdf.numPages; i++) {
+                    var page = await pdf.getPage(i);
+                    var viewport = page.getViewport({ scale: escala });
+                    var canvas = document.createElement('canvas');
+                    canvas.width = viewport.width; canvas.height = viewport.height;
+                    await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+                    var imgData = canvas.toDataURL('image/jpeg', calidad);
+                    var wMM = viewport.width * MMPORPX, hMM = viewport.height * MMPORPX;
+                    var orient = wMM > hMM ? 'l' : 'p';
+                    if (!outDoc) outDoc = new jsPDF({ orientation: orient, unit: 'mm', format: [wMM, hMM] });
+                    else outDoc.addPage([wMM, hMM], orient);
+                    outDoc.addImage(imgData, 'JPEG', 0, 0, wMM, hMM);
+                }
+                if (!outDoc) throw new Error('El PDF no tiene páginas.');
+                return outDoc.output('datauristring');
+            } finally {
+                URL.revokeObjectURL(url);
             }
-            if (!outDoc) throw new Error('El PDF no tiene páginas.');
-            return outDoc.output('datauristring');
-        } finally {
-            URL.revokeObjectURL(url);
+        })();
+        // Nunca dejar que se cuelgue sin avisar: si tarda demasiado (worker de PDF trabado,
+        // conexión lenta), corta con un error claro en vez de quedar "sin hacer nada".
+        var _timeout = new Promise(function(_, reject) {
+            setTimeout(function() { reject(new Error('La compresión del PDF tardó demasiado. Probá con un archivo más liviano o con menos páginas.')); }, 45000);
+        });
+        return Promise.race([_nucleo, _timeout]);
+    }
+
+    // Comprime un PDF pesado ajustando escala/calidad según cuánto pesa el original (cuanto
+    // más pesa, más se achica), y verifica que el resultado entre en un límite razonable.
+    // Si sigue siendo muy pesado, avisa con un error claro en vez de subirlo igual.
+    var PDF_LIMITE_FINAL_MB = 15;
+    async function _comprimirPDFConLimite(file) {
+        var mb = file.size / (1024 * 1024);
+        var escala  = mb > 25 ? 1.0  : (mb > 15 ? 1.25 : 1.5);
+        var calidad = mb > 25 ? 0.45 : (mb > 15 ? 0.55 : 0.6);
+        var resultado = await _comprimirPDF(file, escala, calidad);
+        var pesoAproxMB = (resultado.length * 0.75) / (1024 * 1024); // base64 → bytes aprox.
+        if (pesoAproxMB > PDF_LIMITE_FINAL_MB) {
+            throw new Error('El PDF sigue pesando ~' + Math.round(pesoAproxMB) + ' MB incluso comprimido. Probá reducirlo con otra herramienta (o sacarle páginas) antes de subirlo.');
         }
+        return resultado;
     }
 
     // ¿Es un archivo que podemos comprimir? (así no aplica el tope de tamaño: se achica solo
@@ -7050,7 +7074,9 @@
     const MAX_DOC_MB = 8;
 
     // Lee un archivo como dataURL. Si es una imagen grande (>1 MB) o un PDF que supera el
-    // límite, lo comprime primero para que entre y ocupe poco en la base.
+    // límite, lo comprime primero para que entre y ocupe poco en la base. Para PDF, si la
+    // compresión falla o sigue pesando demasiado, se propaga el error (no se sube el original
+    // gigante en silencio) para que el formulario que llama lo muestre con un alert.
     function leerArchivoBase64(file) {
         if (_imgComprimible(file) && file.size > 1024 * 1024) {
             var lado = file.size > 6 * 1024 * 1024 ? 1600 : 2200;
@@ -7058,7 +7084,7 @@
             return _comprimirImagen(file, lado, cal).catch(function(){ return _leerArchivoTalCual(file); });
         }
         if (_pdfComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) {
-            return _comprimirPDF(file).catch(function(){ return _leerArchivoTalCual(file); });
+            return _comprimirPDFConLimite(file);
         }
         return _leerArchivoTalCual(file);
     }
@@ -19438,14 +19464,25 @@
             cobrosHistorial: (existente && existente.cobrosHistorial) || []
         };
         var archivoContrato = document.getElementById('alqArchivo').files[0];
+        var btnAlq = document.getElementById('alqGuardarBtn');
+        var estAlq = document.getElementById('alqArchivoEstado');
         if (archivoContrato) {
             if (!_archivoComprimible(archivoContrato) && archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (btnAlq) { btnAlq.disabled = true; btnAlq.textContent = archivoContrato.size > MAX_DOC_MB*1024*1024 ? 'Comprimiendo y subiendo…' : 'Subiendo…'; }
+            if (estAlq) estAlq.textContent = 'Subiendo el contrato, un momento…';
             try {
                 var base64Contrato = await leerArchivoBase64(archivoContrato);
                 var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(adjIdContrato).set({ nombre: archivoContrato.name, tipo: archivoContrato.type, contenido: base64Contrato });
                 nuevo.adjuntoId = adjIdContrato; nuevo.adjuntoNombre = archivoContrato.name; nuevo.adjuntoTipo = archivoContrato.type;
-            } catch (err) { alert('No se pudo subir el contrato: ' + (err.message || err)); return; }
+            } catch (err) {
+                alert('No se pudo subir el contrato: ' + (err.message || err));
+                if (btnAlq) { btnAlq.disabled = false; btnAlq.textContent = 'Guardar Contrato'; }
+                if (estAlq) estAlq.textContent = '';
+                return;
+            }
+            if (btnAlq) { btnAlq.disabled = false; btnAlq.textContent = 'Guardar Contrato'; }
+            if (estAlq) estAlq.textContent = '';
         }
         if (editandoAlqIdx >= 0) alquileres[editandoAlqIdx] = nuevo;
         else alquileres.push(nuevo);
@@ -27166,7 +27203,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalAlquiler()">Cancelar</button>
-        <button type="button" class="btn btn-gold" onclick="guardarAlquiler()">Guardar Contrato</button>
+        <button type="button" class="btn btn-gold" id="alqGuardarBtn" onclick="guardarAlquiler()">Guardar Contrato</button>
       </div>
     </div>
   </div>
