@@ -7001,10 +7001,17 @@
     }
     // Lee un archivo como dataURL. Si es una imagen grande (>1 MB), la comprime primero para
     // que entre en el límite y ocupe poco en la base (fotos de comprobantes sacadas con el celu).
+    // ¿Es una imagen que podemos comprimir/redimensionar? (así no aplica el tope de tamaño:
+    // una foto pesada se achica sola en vez de rechazarse).
+    function _imgComprimible(file) {
+        return !!(file && { 'image/jpeg':1, 'image/jpg':1, 'image/png':1, 'image/webp':1 }[file.type]);
+    }
     function leerArchivoBase64(file) {
-        var COMPRIMIBLES = { 'image/jpeg':1, 'image/jpg':1, 'image/png':1, 'image/webp':1 };
-        if (file && COMPRIMIBLES[file.type] && file.size > 1024 * 1024) {
-            return _comprimirImagen(file).catch(function(){ return _leerArchivoTalCual(file); });
+        // Las imágenes >1 MB se comprimen; si es muy grande, se achica más para que entre.
+        if (_imgComprimible(file) && file.size > 1024 * 1024) {
+            var lado = file.size > 6 * 1024 * 1024 ? 1600 : 2200;
+            var cal  = file.size > 6 * 1024 * 1024 ? 0.68 : 0.72;
+            return _comprimirImagen(file, lado, cal).catch(function(){ return _leerArchivoTalCual(file); });
         }
         return _leerArchivoTalCual(file);
     }
@@ -7017,7 +7024,7 @@
         var fi = document.getElementById(fileInputId);
         var file = fi && fi.files && fi.files[0];
         if (!file) return null;
-        if (file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
+        if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
         var base64 = await leerArchivoBase64(file);
         var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
         await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
@@ -7057,7 +7064,7 @@
         const fileInput = document.getElementById('docArchivo');
         const file = fileInput.files && fileInput.files[0];
         if (file) {
-            if (file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El documento supera los ${MAX_DOC_MB} MB.`); return; }
+            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El documento supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('docEstado').textContent = 'Subiendo documento…';
                 const base64 = await leerArchivoBase64(file);
@@ -11063,7 +11070,7 @@
         if (archivosCert && archivosCert.length) {
             for (let i = 0; i < archivosCert.length; i++) {
                 const archivoCert = archivosCert[i];
-                if (archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
+                if (!_imgComprimible(archivoCert) && archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
                 try {
                     document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado ' + (i+1) + ' de ' + archivosCert.length + '…';
                     const base64Cert = await leerArchivoBase64(archivoCert);
@@ -13304,7 +13311,7 @@
         const fileInput = document.getElementById('factArchivo');
         const file = fileInput.files && fileInput.files[0];
         if (file) {
-            if (file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El archivo supera los ${MAX_DOC_MB} MB.`); return; }
+            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El archivo supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('factArchivoEstado').textContent = 'Subiendo archivo…';
                 const base64 = await leerArchivoBase64(file);
@@ -15036,7 +15043,7 @@
         };
         var archivoEmit = document.getElementById('emitArchivo').files[0];
         if (archivoEmit) {
-            if (archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_imgComprimible(archivoEmit) && archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 var base64Emit = await leerArchivoBase64(archivoEmit);
                 var adjIdEmit = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -15489,7 +15496,7 @@
         if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
         const archivoDoc = document.getElementById('docCompArchivo').files[0];
         if (archivoDoc) {
-            if (archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_imgComprimible(archivoDoc) && archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 const base64Doc = await leerArchivoBase64(archivoDoc);
                 const adjIdDoc = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -17053,7 +17060,7 @@
         var cont = document.getElementById(tipo==='boleto' ? 'ventaBoletoActual' : 'ventaPlanoActual');
         var f = inp && inp.files && inp.files[0];
         if(!f){ ventaRenderAdjunto(tipo); return; }
-        if(f.size > MAX_DOC_MB*1024*1024){
+        if(!_imgComprimible(f) && f.size > MAX_DOC_MB*1024*1024){
             alert('El archivo supera los '+MAX_DOC_MB+' MB. Elegí uno más liviano.');
             inp.value=''; ventaRenderAdjunto(tipo); return;
         }
@@ -17187,7 +17194,7 @@
                 const inp = document.getElementById(tipo==='boleto' ? 'ventaBoletoFile' : 'ventaPlanoFile');
                 const file = inp && inp.files && inp.files[0];
                 if (file) {
-                    if (file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
+                    if (!_imgComprimible(file) && file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
                     if (btn) { btn.disabled = true; btn.textContent = 'Subiendo '+tipo+'…'; }
                     const base64 = await leerArchivoBase64(file);
                     const docId = 'VENTA-'+tipo.toUpperCase()+'-'+Date.now()+'-'+Math.floor(Math.random()*1000);
@@ -18950,7 +18957,7 @@
         var errores = [];
         for (var f = 0; f < files.length; f++) {
             var file = files[f];
-            if (file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
+            if (!_imgComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
             try {
                 var base64 = await leerArchivoBase64(file);
                 var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + f;
@@ -19384,7 +19391,7 @@
         };
         var archivoContrato = document.getElementById('alqArchivo').files[0];
         if (archivoContrato) {
-            if (archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            if (!_imgComprimible(archivoContrato) && archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
                 var base64Contrato = await leerArchivoBase64(archivoContrato);
                 var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
