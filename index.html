@@ -4028,6 +4028,7 @@
                                 </select>
                                 <button class="btn btn-gold btn-sm" onclick="abrirModalAlquiler()" id="btnAgregarAlquiler">➕ Nuevo Contrato</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirResumenAlquileres()">📊 Resumen</button>
+                                <button class="btn btn-outline btn-sm" onclick="abrirMoverAlquileres()" title="Mover todos los alquileres de este proyecto a otra empresa/proyecto">🔀 Mover a otro proyecto</button>
                             </div>
                         </div>
                         <div class="table-wrap">
@@ -18508,6 +18509,63 @@
     let editandoEmpleadoIdx = -1;
 
     function persistirAlquileres()  { return _colPersist('alquileres', REF_ALQUILERES, alquileres).catch(function(e){ console.error(e); }); }
+
+    // ── Mover todos los alquileres del proyecto actual a otra empresa/proyecto ──
+    function abrirMoverAlquileres() {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para mover alquileres.'); return; }
+        var cant = (alquileres||[]).filter(Boolean).length;
+        if (!cant) { alert('Este proyecto no tiene alquileres para mover.'); return; }
+        var c = document.getElementById('mvAlqCant'); if (c) c.textContent = cant;
+        var st = document.getElementById('mvAlqEstado'); if (st) st.textContent = '';
+        var selEmp = document.getElementById('mvAlqEmpresa');
+        if (selEmp) {
+            selEmp.innerHTML = '';
+            (empresas||[]).forEach(function(e){ var o=document.createElement('option'); o.value=e.id; o.textContent=e.nombre; selEmp.appendChild(o); });
+            selEmp.value = (empresaActual && empresaActual.id) || '';
+        }
+        _mvAlqPoblarProyectos();
+        document.getElementById('modalMoverAlq').classList.add('active');
+    }
+    function cerrarMoverAlquileres() { document.getElementById('modalMoverAlq').classList.remove('active'); }
+    function _mvAlqPoblarProyectos() {
+        var selEmp = document.getElementById('mvAlqEmpresa');
+        var selProy = document.getElementById('mvAlqProyecto');
+        if (!selEmp || !selProy) return;
+        var emp = (empresas||[]).find(function(e){ return e.id === selEmp.value; });
+        selProy.innerHTML = '';
+        (emp && emp.proyectos || []).forEach(function(p){ var o=document.createElement('option'); o.value=p.id; o.textContent=p.nombre; selProy.appendChild(o); });
+    }
+    async function confirmarMoverAlquileres() {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos.'); return; }
+        var empId  = (document.getElementById('mvAlqEmpresa')||{}).value || '';
+        var proyId = (document.getElementById('mvAlqProyecto')||{}).value || '';
+        var st = document.getElementById('mvAlqEstado');
+        if (!empId || !proyId) { if (st) st.textContent = '⚠️ Elegí empresa y proyecto destino.'; return; }
+        if (empresaActual && proyectoActual && empId === empresaActual.id && proyId === proyectoActual.id) {
+            if (st) st.textContent = '⚠️ El destino es el mismo proyecto actual. Elegí otro.'; return;
+        }
+        var lista = (alquileres||[]).filter(Boolean);
+        if (!lista.length) { if (st) st.textContent = 'No hay alquileres para mover.'; return; }
+        var emp  = (empresas||[]).find(function(e){ return e.id === empId; });
+        var proy = emp && (emp.proyectos||[]).find(function(p){ return p.id === proyId; });
+        if (!confirm('Vas a MOVER ' + lista.length + ' alquiler(es) (con sus cobros e historial) a:\n\n' + (emp?emp.nombre:'?') + ' · ' + (proy?proy.nombre:'?') + '\n\nSe quitan del proyecto actual y aparecen allá. ¿Confirmás?')) return;
+        if (st) st.textContent = '⏳ Moviendo…';
+        var updates = {};
+        var baseDest = 'empresas/' + empId + '/proyectos/' + proyId + '/alquileres/';
+        lista.forEach(function(a, i) {
+            var id = a.id || ('alq_mv_' + Date.now() + '_' + i);
+            a.id = id;
+            updates[baseDest + id] = a;
+        });
+        try {
+            await db.ref().update(updates);                 // 1) escribir en destino
+            await db.ref(getBasePath() + '/alquileres').remove(); // 2) limpiar origen (todos)
+            cerrarMoverAlquileres();
+            alert('✓ ' + lista.length + ' alquiler(es) movido(s) a ' + (emp?emp.nombre:'') + ' · ' + (proy?proy.nombre:'') + '.\n\nCambiá a ese proyecto (arriba, selector de empresa/proyecto) para verlos.');
+        } catch(e) {
+            if (st) st.textContent = '❌ No se pudo mover: ' + (e.message || e);
+        }
+    }
     function persistirServicios()   { return _colPersist('servicios', REF_SERVICIOS, servicios).catch(function(e){ console.error(e); }); }
     function persistirIngGeneral()  { return _colPersist('ingGeneral', REF_ING_GENERAL, ingGeneral).catch(function(e){ console.error(e); alert('Error al guardar el movimiento de caja/banco. Revisá la conexión e intentá de nuevo.'); }); }
     function persistirDesarrollos() { return _colPersist('desarrollos', REF_DESARROLLOS, desarrollos).catch(function(e){ console.error(e); }); }
@@ -26709,6 +26767,34 @@
             <tfoot id="raTablaFoot" style="font-weight:600;background:var(--surface);"></tfoot>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL: MOVER ALQUILERES A OTRO PROYECTO ═══════════════ -->
+<div class="modal" id="modalMoverAlq">
+  <div class="modal-box" style="max-width:460px;">
+    <div class="modal-head">
+      <h2>🔀 Mover alquileres a otro proyecto</h2>
+      <button class="modal-close" onclick="cerrarMoverAlquileres()">✕</button>
+    </div>
+    <div style="padding:18px 20px;">
+      <p style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:14px;">
+        Mueve <strong id="mvAlqCant">todos</strong> los alquileres del proyecto actual (con sus cobros e historial) a la empresa y proyecto que elijas. Se quitan de acá y aparecen allá.
+      </p>
+      <div class="form-group">
+        <label>Empresa destino</label>
+        <select id="mvAlqEmpresa" onchange="_mvAlqPoblarProyectos()"></select>
+      </div>
+      <div class="form-group">
+        <label>Proyecto destino</label>
+        <select id="mvAlqProyecto"></select>
+      </div>
+      <div id="mvAlqEstado" style="font-size:12px;color:var(--text-3);margin-top:6px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+        <button class="btn btn-outline btn-sm" onclick="cerrarMoverAlquileres()">Cancelar</button>
+        <button class="btn btn-gold btn-sm" onclick="confirmarMoverAlquileres()">🔀 Mover todos</button>
       </div>
     </div>
   </div>
