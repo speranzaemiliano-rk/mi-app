@@ -7100,6 +7100,21 @@
         return _leerArchivoTalCual(file);
     }
 
+    // Devuelve un callback onProgress para leerArchivoBase64 que va mostrando
+    // "Comprimiendo página X de Y…" en un elemento de estado o en un botón, así los
+    // PDF pesados no parecen colgados. setTexto recibe el texto a mostrar.
+    function _progresoCompresion(setTexto) {
+        return function(pag, total) {
+            if (typeof setTexto === 'function') {
+                setTexto(total ? ('Comprimiendo página ' + pag + ' de ' + total + '…') : 'Comprimiendo…');
+            }
+        };
+    }
+    // Helper corto para apuntar el progreso a un elemento por id (textContent).
+    function _progresoEnElemento(elId) {
+        return _progresoCompresion(function(t) { var el = document.getElementById(elId); if (el) el.textContent = t; });
+    }
+
     // Sube (si hay uno elegido) el comprobante de transferencia/pago de un input file y lo
     // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
     async function _subirComprobantePago(fileInputId) {
@@ -7149,7 +7164,7 @@
             if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El documento supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('docEstado').textContent = 'Subiendo documento…';
-                const base64 = await leerArchivoBase64(file);
+                const base64 = await leerArchivoBase64(file, _progresoEnElemento('docEstado'));
                 const docId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(docId).set({ nombre: file.name, tipo: file.type, contenido: base64 });
                 nuevoDato.docId = docId; nuevoDato.docNombre = file.name; nuevoDato.docTipo = file.type;
@@ -11158,8 +11173,9 @@
                 const archivoCert = archivosCert[i];
                 if (!_archivoComprimible(archivoCert) && archivoCert.size > MAX_DOC_MB * 1024 * 1024) { alert('"' + archivoCert.name + '" supera los ' + MAX_DOC_MB + ' MB.'); return; }
                 try {
-                    document.getElementById('provCertExentoEstado').textContent = 'Subiendo certificado ' + (i+1) + ' de ' + archivosCert.length + '…';
-                    const base64Cert = await leerArchivoBase64(archivoCert);
+                    const _certBase = 'Certificado ' + (i+1) + ' de ' + archivosCert.length + ' — ';
+                    document.getElementById('provCertExentoEstado').textContent = _certBase + 'subiendo…';
+                    const base64Cert = await leerArchivoBase64(archivoCert, _progresoCompresion(function(t){ var el = document.getElementById('provCertExentoEstado'); if (el) el.textContent = _certBase + t; }));
                     const certId = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + i;
                     await REF_DOCS.child(certId).set({ nombre: archivoCert.name, tipo: archivoCert.type, contenido: base64Cert });
                     nuevo.certificadosExento.push({ id: certId, nombre: archivoCert.name, tipo: archivoCert.type });
@@ -13454,7 +13470,7 @@
             if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(`El archivo supera los ${MAX_DOC_MB} MB.`); return; }
             try {
                 document.getElementById('factArchivoEstado').textContent = 'Subiendo archivo…';
-                const base64 = await leerArchivoBase64(file);
+                const base64 = await leerArchivoBase64(file, _progresoEnElemento('factArchivoEstado'));
                 const docId = 'FACT-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(docId).set({ nombre: file.name, tipo: file.type, contenido: base64 });
                 nuevo.docId     = docId;
@@ -15197,7 +15213,8 @@
         if (archivoEmit) {
             if (!_archivoComprimible(archivoEmit) && archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
-                var base64Emit = await leerArchivoBase64(archivoEmit);
+                document.getElementById('emitArchivoEstado').textContent = 'Subiendo archivo…';
+                var base64Emit = await leerArchivoBase64(archivoEmit, _progresoEnElemento('emitArchivoEstado'));
                 var adjIdEmit = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(adjIdEmit).set({ nombre: archivoEmit.name, tipo: archivoEmit.type, contenido: base64Emit });
                 reg.adjuntoId = adjIdEmit; reg.adjuntoNombre = archivoEmit.name; reg.adjuntoTipo = archivoEmit.type;
@@ -15650,7 +15667,8 @@
         if (archivoDoc) {
             if (!_archivoComprimible(archivoDoc) && archivoDoc.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
             try {
-                const base64Doc = await leerArchivoBase64(archivoDoc);
+                document.getElementById('docCompArchivoEstado').textContent = 'Subiendo archivo…';
+                const base64Doc = await leerArchivoBase64(archivoDoc, _progresoEnElemento('docCompArchivoEstado'));
                 const adjIdDoc = 'DOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(adjIdDoc).set({ nombre: archivoDoc.name, tipo: archivoDoc.type, contenido: base64Doc });
                 doc.adjuntoId = adjIdDoc; doc.adjuntoNombre = archivoDoc.name; doc.adjuntoTipo = archivoDoc.type;
@@ -16070,16 +16088,15 @@
         var fileInput = document.getElementById('vencArchivo');
         var file = fileInput.files && fileInput.files[0];
 
+        var _vencBtn = document.getElementById('vencGuardarBtn');
+        var _vencBtnTxt = _vencBtn ? _vencBtn.textContent : '';
         try {
             if (file) {
-                var MAX_MB = 20;
-                if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_MB + ' MB.'); return; }
-                var b64 = await new Promise(function(res, rej) {
-                    var r = new FileReader();
-                    r.onload = function(){ res(r.result.split(',')[1]); };
-                    r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
-                    r.readAsDataURL(file);
-                });
+                // Los archivos comprimibles (PDF/imagen) se achican solos, así que no aplica el
+                // tope duro; los demás formatos sí lo respetan.
+                if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_DOC_MB + ' MB.'); return; }
+                if (_vencBtn) { _vencBtn.disabled = true; _vencBtn.textContent = 'Subiendo…'; }
+                var b64 = await leerArchivoBase64(file, _progresoCompresion(function(t){ if (_vencBtn) _vencBtn.textContent = t; }));
                 var esImg = (file.type||'').startsWith('image/');
                 var ext = esImg ? ('.' + (file.type||'image/jpeg').split('/')[1]) : '.pdf';
                 nuevo.adjunto = {
@@ -16089,8 +16106,10 @@
                 };
             }
             await REF_VENCIMIENTOS.child(nuevo.id).set(nuevo);
+            if (_vencBtn) { _vencBtn.disabled = false; _vencBtn.textContent = _vencBtnTxt; }
             cerrarModalVencimiento();
         } catch (err) {
+            if (_vencBtn) { _vencBtn.disabled = false; _vencBtn.textContent = _vencBtnTxt; }
             alert('No se pudo guardar: ' + (err.message || err));
         }
     }
@@ -17348,7 +17367,8 @@
                 if (file) {
                     if (!_archivoComprimible(file) && file.size > MAX_DOC_MB*1024*1024) { alert('El '+tipo+' supera los '+MAX_DOC_MB+' MB.'); return; }
                     if (btn) { btn.disabled = true; btn.textContent = 'Subiendo '+tipo+'…'; }
-                    const base64 = await leerArchivoBase64(file);
+                    const _vtaBase = 'Subiendo '+tipo+' — ';
+                    const base64 = await leerArchivoBase64(file, _progresoCompresion(function(t){ if (btn) btn.textContent = _vtaBase + t; }));
                     const docId = 'VENTA-'+tipo.toUpperCase()+'-'+Date.now()+'-'+Math.floor(Math.random()*1000);
                     await REF_DOCS.child(docId).set({ nombre: file.name, tipo: file.type, contenido: base64 });
                     _ventaDocs[tipo] = { docId: docId, nombre: file.name, tipo: file.type };
@@ -19107,11 +19127,15 @@
         if (!files.length) return;
         var categoria = (document.getElementById('empAdjuntoTipo') || {}).value || 'Otro';
         var errores = [];
+        var _empLista = document.getElementById('empAdjuntosLista');
+        var _empSetEstado = function(txt) { if (_empLista) _empLista.innerHTML = '<div style="color:var(--gold);font-size:13px;padding:6px 0;">' + txt + '</div>'; };
         for (var f = 0; f < files.length; f++) {
             var file = files[f];
             if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { errores.push(file.name + ' supera los ' + MAX_DOC_MB + ' MB.'); continue; }
             try {
-                var base64 = await leerArchivoBase64(file);
+                var _empBase = 'Archivo ' + (f+1) + ' de ' + files.length + ' — ';
+                _empSetEstado(_empBase + 'subiendo…');
+                var base64 = await leerArchivoBase64(file, _progresoCompresion(function(t){ _empSetEstado(_empBase + t); }));
                 var id = 'LEGAJO-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + f;
                 await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
                 _empAdjuntosWorking.push({ id: id, nombre: file.name, tipo: file.type, categoria: categoria });
@@ -25829,7 +25853,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-outline" onclick="cerrarModalVencimiento()">Cancelar</button>
-                    <button class="btn btn-primary" onclick="guardarVencimiento()">Guardar</button>
+                    <button class="btn btn-primary" id="vencGuardarBtn" onclick="guardarVencimiento()">Guardar</button>
                 </div>
             </div>
         </div>
