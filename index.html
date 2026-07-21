@@ -8442,7 +8442,9 @@
         document.getElementById('pagoFDRetTotal').textContent='$0';
         document.getElementById('pagoFDRetNeto').textContent='$0';
         document.getElementById('pagoFDInfo').style.display='none';
+        _pagoFDModo='una';
         pagoFDSelTab(tipo||'fact', true);
+        pagoFDSelModo('una');
         _pagoFDPoblarItems(itemId);
         pagoFDSelMod('A');
         var nroCbteEl=document.getElementById('pagoFDNroComprobante'); if(nroCbteEl) nroCbteEl.value='';
@@ -8458,6 +8460,9 @@
         _pagoFDTab=tab;
         ['fact','doc'].forEach(function(t){var b=document.getElementById('pagoFDTab'+(t==='fact'?'Fact':'Doc'));if(b)b.className='modalidad-btn'+(t===tab?' selected-A':'');});
         var lbl=document.getElementById('pagoFDItemLabel');if(lbl)lbl.textContent=tab==='fact'?'Factura a pagar *':'Comprobante / Documento *';
+        // El pago múltiple solo aplica a facturas
+        var mg=document.getElementById('pagoFDModoGrupo'); if(mg) mg.style.display = tab==='fact' ? '' : 'none';
+        if(tab!=='fact' && _pagoFDModo==='varias') pagoFDSelModo('una');
         if(!silent) _pagoFDPoblarItems();
     }
     function _pagoFDPoblarItems(preselId) {
@@ -8521,8 +8526,10 @@
         if(mod!=='A') return;
         var monto=parseFloat(document.getElementById('pagoFDMonto').value)||0;
         var base=parseFloat(document.getElementById('pagoFDBase').value)||monto;
-        var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'',provNombre='';
-        if(val){if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(f)provNombre=f.proveedor||'';}else{var d=documentos.find(function(x){return x.id===val;});if(d)provNombre=d.proveedor||'';}}
+        var provNombre='';
+        if(_pagoFDModo==='varias'){ provNombre=_pagoFDMulti.prov||''; }
+        else { var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
+            if(val){if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(f)provNombre=f.proveedor||'';}else{var d=documentos.find(function(x){return x.id===val;});if(d)provNombre=d.proveedor||'';}} }
         var prov=buscarProveedorPorNombre(provNombre);
         var fecha=document.getElementById('pagoFDFecha').value||'',mesAno=fecha.substring(0,7);
         var desgEl=document.getElementById('pagoFDRetDesglose'),totalEl=document.getElementById('pagoFDRetTotal'),netoEl=document.getElementById('pagoFDRetNeto');
@@ -8586,13 +8593,149 @@
         pagoFDRecalcRet();
     };
     window.pagoFDQuitarRetManual = function(i) { _pagoFDRetsManuales.splice(i,1); pagoFDRecalcRet(); };
+
+    // ── Pago de VARIAS facturas del mismo proveedor en un solo pago ──
+    var _pagoFDModo = 'una';                    // 'una' | 'varias'
+    var _pagoFDMulti = { prov:'', items:[] };   // items: {idx, f, pend, neto, checked}
+    function pagoFDSelModo(modo) {
+        if (_pagoFDTab !== 'fact') modo = 'una'; // el pago múltiple es solo para facturas
+        _pagoFDModo = modo;
+        var una = document.getElementById('pagoFDBloqueUna');
+        var varias = document.getElementById('pagoFDBloqueVarias');
+        var bU = document.getElementById('pagoFDModoUnaBtn'), bV = document.getElementById('pagoFDModoVariasBtn');
+        if (una) una.style.display = modo === 'una' ? '' : 'none';
+        if (varias) varias.style.display = modo === 'varias' ? '' : 'none';
+        if (bU) bU.className = 'modalidad-btn' + (modo === 'una' ? ' selected-A' : '');
+        if (bV) bV.className = 'modalidad-btn' + (modo === 'varias' ? ' selected-A' : '');
+        var mi = document.getElementById('pagoFDMonto'); if (mi) mi.readOnly = (modo === 'varias');
+        if (modo === 'varias') _pagoFDPoblarProveedores();
+        else pagoFDActualizarItem();
+    }
+    function _pagoFDProveedoresConPendiente() {
+        var provs = {};
+        facturas.forEach(function(f){
+            if ((f.estado||'pendiente') === 'pagada') return;
+            if (((f.importe||0) - (f.pagado||0)) <= 0) return;
+            provs[f.proveedor || '?'] = true;
+        });
+        return Object.keys(provs).sort(function(a,b){ return a.localeCompare(b); });
+    }
+    function _pagoFDPoblarProveedores() {
+        var sel = document.getElementById('pagoFDProv'); if (!sel) return;
+        var provs = _pagoFDProveedoresConPendiente();
+        sel.innerHTML = '<option value="">— Seleccioná proveedor —</option>';
+        provs.forEach(function(p){ var o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); });
+        var listaEl = document.getElementById('pagoFDLista'); if (listaEl) listaEl.innerHTML = '';
+        var res = document.getElementById('pagoFDMultiResumen'); if (res) res.style.display = 'none';
+        _pagoFDMulti = { prov:'', items:[] };
+    }
+    function pagoFDProvChange() {
+        var prov = (document.getElementById('pagoFDProv')||{}).value || '';
+        _pagoFDMulti = { prov: prov, items: [] };
+        var cont = document.getElementById('pagoFDLista'); if (!cont) return;
+        if (!prov) { cont.innerHTML = ''; _pagoFDMultiRecalc(); return; }
+        var rows = '';
+        facturas.forEach(function(f,i){
+            if ((f.proveedor||'') !== prov) return;
+            if ((f.estado||'pendiente') === 'pagada') return;
+            var pend = (f.importe||0) - (f.pagado||0);
+            if (pend <= 0) return;
+            var neto = (f.netoGravado > 0 && f.importe > 0) ? Math.round(pend * (f.netoGravado / f.importe)) : Math.round(pend / 1.21);
+            _pagoFDMulti.items.push({ idx:i, f:f, pend:pend, neto:neto, checked:true });
+            rows += '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft);cursor:pointer;font-size:13px;">'
+                + '<input type="checkbox" checked onchange="pagoFDMultiToggle('+i+',this.checked)" style="cursor:pointer;">'
+                + '<span style="flex:1;">'+(f.numero?'N°'+escHtml(f.numero)+' — ':'')+escHtml(f.descripcion||'—')+'</span>'
+                + '<strong style="white-space:nowrap;">$'+Math.round(pend).toLocaleString('es-AR')+'</strong>'
+                + '</label>';
+        });
+        cont.innerHTML = rows || '<div style="color:var(--text-3);font-size:12px;padding:6px 0;">Este proveedor no tiene facturas pendientes.</div>';
+        _pagoFDMultiRecalc();
+    }
+    function pagoFDMultiToggle(idx, checked) {
+        var it = _pagoFDMulti.items.find(function(x){ return x.idx === idx; });
+        if (it) it.checked = checked;
+        _pagoFDMultiRecalc();
+    }
+    function _pagoFDMultiRecalc() {
+        var sel = _pagoFDMulti.items.filter(function(x){ return x.checked; });
+        var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
+        var baseTotal  = sel.reduce(function(s,x){ return s + x.neto; }, 0);
+        var mi = document.getElementById('pagoFDMonto'); if (mi) mi.value = montoTotal ? Math.round(montoTotal) : '';
+        var bi = document.getElementById('pagoFDBase'); if (bi) bi.value = baseTotal ? Math.round(baseTotal) : '';
+        var res = document.getElementById('pagoFDMultiResumen');
+        if (res) {
+            if (sel.length) { res.style.display = ''; res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>$' + Math.round(montoTotal).toLocaleString('es-AR') + '</strong>'; }
+            else res.style.display = 'none';
+        }
+        pagoFDRecalcRet();
+    }
+    // Guarda un pago que cubre varias facturas del mismo proveedor: un solo número correlativo,
+    // una sola retención sobre el total (repartida en proporción a cada factura), y un recibo
+    // que lista todas las facturas incluidas.
+    async function _guardarPagoFDMultiple(mod, fecha, cuentaId, medio) {
+        var sel = _pagoFDMulti.items.filter(function(x){ return x.checked; });
+        if (!sel.length) { alert('Seleccioná al menos una factura.'); return; }
+        if (!fecha) { alert('Ingresá la fecha del pago.'); return; }
+        var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
+        if (montoTotal <= 0) { alert('El total a pagar debe ser mayor a cero.'); return; }
+        var baseTotal = 0, rets = [], totalRet = 0;
+        if (mod === 'A') {
+            baseTotal = parseFloat(document.getElementById('pagoFDBase').value) || sel.reduce(function(s,x){ return s + x.neto; }, 0);
+            rets = _pagoFDRetsCalculadas.filter(function(r){ return r.activa; }).concat(_pagoFDRetsManuales.filter(function(r){ return r.activa; }));
+            totalRet = rets.reduce(function(s,r){ return s + r.monto; }, 0);
+        }
+        var nroCbteFD = (document.getElementById('pagoFDNroComprobante')||{}).value || '';
+        var _comp = null;
+        try { _comp = await _subirComprobantePago('pagoFDComprobante'); } catch(e){ return; }
+        var nroCorr = await obtenerProximoComprobante(mod);   // un solo correlativo para todo el pago
+        var grupoId = 'GP-' + Date.now();
+        var provNombre = _pagoFDMulti.prov, facturasPagadas = [], acumRet = 0, tsBase = Date.now();
+        sel.forEach(function(x, k){
+            var f = x.f;
+            // Retención total repartida en proporción al monto de cada factura (la última ajusta el redondeo)
+            var share = (k === sel.length - 1) ? (totalRet - acumRet) : Math.round(totalRet * (x.pend / montoTotal));
+            acumRet += share;
+            var retsF = rets.map(function(r){ return { codigo:r.codigo, desc:r.desc, monto: Math.round(r.monto * (x.pend / montoTotal)) }; });
+            var entry = {
+                pagoId: 'FD-' + tsBase + '-' + k, fecha: fecha, modalidad: mod, monto: x.pend,
+                baseImponible: x.neto, retenciones: retsF, totalRet: share,
+                nroCorrelativo: nroCorr, tipoAB: mod, grupoPagoId: grupoId
+            };
+            if (mod === 'A' && cuentaId) entry.cuentaId = cuentaId;
+            if (mod === 'A' && medio) entry.medioBancario = medio;
+            if (mod === 'A' && nroCbteFD.trim()) entry.nroComprobante = nroCbteFD.trim();
+            if (_comp) { entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo; }
+            if (!f.pagosHistorial) f.pagosHistorial = [];
+            f.pagosHistorial.push(entry);
+            f.pagado = (f.pagado||0) + x.pend;
+            f.estado = (f.pagado >= (f.importe||0) && (f.importe||0) > 0) ? 'pagada' : 'parcial';
+            REF_FACTURAS.child(f.id || (f.id = _colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
+            sincronizarPagoPlan('factura', x.idx);
+            facturasPagadas.push(f);
+        });
+        cerrarPagoFD(); renderFacturas(); renderDocumentos();
+        var listaNums = facturasPagadas.map(function(f){ return f.numero ? ('N°' + f.numero) : (f.descripcion || 's/n'); }).join(', ');
+        if (confirm('Pago registrado (' + nroCorr + ') — ' + facturasPagadas.length + ' facturas de ' + provNombre + ', total $' + Math.round(montoTotal).toLocaleString('es-AR') + (totalRet > 0 ? '\nRetenciones: $' + Math.round(totalRet).toLocaleString('es-AR') + '\nNeto al proveedor: $' + Math.round(montoTotal - totalRet).toLocaleString('es-AR') : '') + '.\n\n¿Imprimir comprobante de pago?')) {
+            var itemSint = { proveedor: provNombre, descripcion: 'Pago de ' + facturasPagadas.length + ' facturas: ' + listaNums, numero: nroCorr };
+            imprimirReciboFactura(itemSint, montoTotal, fecha, mod, rets.map(function(r){ return { codigo:r.codigo, monto:r.monto, desc:r.desc }; }), totalRet, nroCorr);
+        }
+        if (totalRet > 0) {
+            var pagoSint = { fecha: fecha, nroCorrelativo: nroCorr, monto: montoTotal, baseImponible: baseTotal, retenciones: rets.map(function(r){ return { codigo:r.codigo, monto:r.monto, desc:r.desc }; }), totalRet: totalRet, modalidad: mod };
+            var _tp = _tiposRetPago(pagoSint.retenciones);
+            if (_tp.ganancias && confirm('¿Imprimir el comprobante de retención de Ganancias?')) imprimirComprobanteRetencion(provNombre, pagoSint, listaNums, 'ganancias');
+            if (_tp.suss && confirm('¿Imprimir el comprobante de retención SUSS?')) imprimirComprobanteRetencion(provNombre, pagoSint, listaNums, 'suss');
+        }
+    }
+
     async function guardarPagoFD() {
-        var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
         var mod=document.getElementById('pagoFDMod').value;
-        var monto=parseFloat(document.getElementById('pagoFDMonto').value);
         var fecha=document.getElementById('pagoFDFecha').value;
         var cuentaId=(document.getElementById('pagoFDCuenta')||{}).value||'';
         var medio=(document.getElementById('pagoFDMedio')||{}).value||'';
+        // Modo "varias facturas del mismo proveedor": lo maneja un flujo aparte
+        if(_pagoFDModo==='varias' && _pagoFDTab==='fact'){ return _guardarPagoFDMultiple(mod, fecha, cuentaId, medio); }
+        var sel=document.getElementById('pagoFDItem'),val=sel?sel.value:'';
+        var monto=parseFloat(document.getElementById('pagoFDMonto').value);
         if(!val){alert('Seleccioná una factura o documento.');return;}
         if(!fecha){alert('Ingresá la fecha del pago.');return;}
         if(isNaN(monto)||monto<=0){alert('Ingresá un monto válido.');return;}
@@ -28136,7 +28279,14 @@
           <button type="button" id="pagoFDTabDoc"  class="modalidad-btn"            onclick="pagoFDSelTab('doc')">📄 Comprobante / Doc.</button>
         </div>
       </div>
-      <div class="form-group">
+      <div class="form-group" id="pagoFDModoGrupo" style="display:none;">
+        <label>¿Cuántas facturas?</label>
+        <div class="modalidad-toggle">
+          <button type="button" id="pagoFDModoUnaBtn" class="modalidad-btn selected-A" onclick="pagoFDSelModo('una')">Una</button>
+          <button type="button" id="pagoFDModoVariasBtn" class="modalidad-btn" onclick="pagoFDSelModo('varias')">Varias del mismo proveedor</button>
+        </div>
+      </div>
+      <div class="form-group" id="pagoFDBloqueUna">
         <label id="pagoFDItemLabel">Factura a pagar *</label>
         <select id="pagoFDItem" onchange="pagoFDActualizarItem()" style="width:100%;"></select>
         <div id="pagoFDInfo" style="display:none;margin-top:8px;padding:10px 14px;background:var(--surface-2);border-radius:6px;font-size:12px;">
@@ -28146,6 +28296,12 @@
             <div><span style="color:var(--text-3);">Pendiente:</span> <strong id="pagoFDPendiente" style="color:var(--danger);">$0</strong></div>
           </div>
         </div>
+      </div>
+      <div class="form-group" id="pagoFDBloqueVarias" style="display:none;">
+        <label>Proveedor *</label>
+        <select id="pagoFDProv" onchange="pagoFDProvChange()" style="width:100%;"></select>
+        <div id="pagoFDLista" style="margin-top:10px;"></div>
+        <div id="pagoFDMultiResumen" style="display:none;margin-top:8px;padding:10px 14px;background:var(--gold-pale);border-radius:6px;font-size:12px;"></div>
       </div>
       <div class="form-group">
         <label>Modalidad</label>
