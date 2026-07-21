@@ -6970,11 +6970,46 @@
 
     function cerrarModal() { document.getElementById('modal').classList.remove('active'); }
 
-    function leerArchivoBase64(file) {
+    function _leerArchivoTalCual(file) {
         return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('No se pudo leer el archivo.')); r.readAsDataURL(file); });
     }
+    // Redimensiona/comprime una imagen a un lado máximo y la exporta como JPEG (dataURL liviano).
+    function _comprimirImagen(file, maxLado, calidad) {
+        maxLado = maxLado || 2200;
+        calidad = calidad || 0.72;
+        return new Promise(function(resolve, reject) {
+            var url = URL.createObjectURL(file);
+            var img = new Image();
+            img.onload = function() {
+                try {
+                    var w = img.width, h = img.height;
+                    var escala = Math.min(1, maxLado / Math.max(w, h));
+                    var nw = Math.max(1, Math.round(w * escala)), nh = Math.max(1, Math.round(h * escala));
+                    var canvas = document.createElement('canvas');
+                    canvas.width = nw; canvas.height = nh;
+                    var ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, nw, nh); // fondo blanco (por si trae transparencia)
+                    ctx.drawImage(img, 0, 0, nw, nh);
+                    var dataUrl = canvas.toDataURL('image/jpeg', calidad);
+                    URL.revokeObjectURL(url);
+                    resolve(dataUrl);
+                } catch(e) { URL.revokeObjectURL(url); reject(e); }
+            };
+            img.onerror = function() { URL.revokeObjectURL(url); reject(new Error('No se pudo procesar la imagen.')); };
+            img.src = url;
+        });
+    }
+    // Lee un archivo como dataURL. Si es una imagen grande (>1 MB), la comprime primero para
+    // que entre en el límite y ocupe poco en la base (fotos de comprobantes sacadas con el celu).
+    function leerArchivoBase64(file) {
+        var COMPRIMIBLES = { 'image/jpeg':1, 'image/jpg':1, 'image/png':1, 'image/webp':1 };
+        if (file && COMPRIMIBLES[file.type] && file.size > 1024 * 1024) {
+            return _comprimirImagen(file).catch(function(){ return _leerArchivoTalCual(file); });
+        }
+        return _leerArchivoTalCual(file);
+    }
 
-    const MAX_DOC_MB = 4;
+    const MAX_DOC_MB = 8;
 
     // Sube (si hay uno elegido) el comprobante de transferencia/pago de un input file y lo
     // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
