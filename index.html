@@ -4424,6 +4424,15 @@
                   </div>
 
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔢 Numerar comprobantes sin número</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Asigna un <strong>número correlativo propio</strong> a los pagos y comprobantes de <strong>esta empresa y proyecto</strong> que quedaron sin numerar (recibos de pago de facturas, documentos y presupuestos, y comprobantes emitidos viejos). Se numeran por orden de fecha, usando la serie A (banco) o B (efectivo) según cada pago. Los que ya tienen número no se tocan.
+                    </p>
+                    <button class="btn btn-outline btn-sm" onclick="numerarComprobantesSinNumero()">🔢 Numerar los que falten</button>
+                    <div id="numerarStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📥 Lectura automática de Gmail</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       Permite leer las facturas que te llegan por mail. Pegá el <strong>ID de cliente de OAuth</strong> de Google Cloud
@@ -7372,6 +7381,69 @@
         } catch(e) { /* silencioso: no bloquea el borrado */ }
     }
 
+    // Numera retroactivamente los pagos/comprobantes de esta empresa+proyecto que quedaron
+    // sin número correlativo propio: recibos de pago de facturas, documentos y presupuestos,
+    // y comprobantes emitidos viejos. Ordena por fecha y usa la serie A/B de cada pago.
+    // Es idempotente: los que ya tienen número no se tocan. Solo Super Usuario.
+    async function numerarComprobantesSinNumero() {
+        if (typeof esSuperAdmin !== 'undefined' && !esSuperAdmin) { alert('Solo el Super Usuario puede numerar comprobantes.'); return; }
+        var st = document.getElementById('numerarStatus');
+        var setSt = function(t){ if (st) st.textContent = t; };
+        var cands = [];
+        (facturas || []).forEach(function(f){
+            (f.pagosHistorial || []).forEach(function(p){
+                if (!p.nroCorrelativo && (p.monto || 0) > 0) cands.push({ tipo:'fact', obj:f, p:p, fecha:p.fecha || f.fecha || '' });
+            });
+        });
+        (documentos || []).forEach(function(d){
+            (d.pagosHistorial || []).forEach(function(p){
+                if (!p.nroCorrelativo && (p.monto || 0) > 0) cands.push({ tipo:'doc', obj:d, p:p, fecha:p.fecha || d.fecha || '' });
+            });
+        });
+        (datos || []).forEach(function(d){
+            (d.pagosHistorial || []).forEach(function(p){
+                if (p.origenFacturaId) return; // pago-espejo de una factura: no es comprobante propio
+                if (!p.nroCorrelativo && ((p.capital || 0) + (p.mayores || 0) + (p.monto || 0)) > 0) cands.push({ tipo:'presup', obj:d, p:p, fecha:p.fecha || '' });
+            });
+        });
+        (comprobantesEmitidos || []).forEach(function(e){
+            if (!e.nro) cands.push({ tipo:'emit', obj:e, fecha:e.fecha || '' });
+        });
+        if (!cands.length) { setSt('✓ No hay comprobantes sin número. Está todo numerado.'); return; }
+        if (!confirm('Se van a numerar ' + cands.length + ' comprobante(s) sin número de esta empresa/proyecto.\nLos que ya tienen número no se tocan.\n\n¿Continuar?')) return;
+        cands.sort(function(a,b){ return String(a.fecha).localeCompare(String(b.fecha)); });
+        var _tipoDe = function(c){
+            if (c.tipo === 'emit') return (c.obj.tipoAB === 'A') ? 'A' : 'B';
+            var p = c.p;
+            if (p.tipoAB === 'A' || p.tipoAB === 'B') return p.tipoAB;
+            if (p.modalidad === 'A' || p.modalidad === 'B') return p.modalidad;
+            return tipoABdesdeMedio(p.medioBancario || '');
+        };
+        var facTocadas = {}, docTocados = {}, tocaPresup = false, tocaEmit = false, hechos = 0;
+        for (var i = 0; i < cands.length; i++) {
+            var c = cands[i];
+            setSt('Numerando… ' + (i+1) + ' de ' + cands.length);
+            var nro = await obtenerProximoComprobante(_tipoDe(c));
+            if (c.tipo === 'emit') { c.obj.nro = nro; if (!c.obj.tipoAB) c.obj.tipoAB = _tipoDe(c); tocaEmit = true; }
+            else {
+                c.p.nroCorrelativo = nro; c.p.tipoAB = _tipoDe(c);
+                if (c.tipo === 'fact') facTocadas[c.obj.id || (c.obj.id = _colUidItem())] = c.obj;
+                else if (c.tipo === 'doc') { if (c.obj.id) docTocados[c.obj.id] = c.obj; }
+                else tocaPresup = true;
+            }
+            hechos++;
+        }
+        try {
+            Object.keys(facTocadas).forEach(function(id){ REF_FACTURAS.child(id).update({ pagosHistorial: facTocadas[id].pagosHistorial }); });
+            Object.keys(docTocados).forEach(function(id){ REF_DOCS.child(id).update({ pagosHistorial: docTocados[id].pagosHistorial }); });
+            if (tocaPresup) persistir();
+            if (tocaEmit) persistirEmitidos();
+        } catch(e) { console.error(e); setSt('❌ Se numeró en pantalla pero hubo un error al guardar: ' + (e.message || e)); return; }
+        setSt('✓ Listo: ' + hechos + ' comprobante(s) numerado(s).');
+        if (typeof renderPagos === 'function') renderPagos();
+        if (typeof renderEmitidos === 'function') renderEmitidos();
+    }
+
     // ── Sort de columnas ──────────────────────────────────────────
     const _sortState = {};
     function sortTable(tbodyId, colIdx, thEl) {
@@ -8256,8 +8328,8 @@
         });
     }
     function imprimirPagoPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;var desglose={capital:p.capital||p.montoPagado||0,mayores:p.mayores||0};imprimirReciboDato(d,(p.capital||p.montoPagado||0)+(p.mayores||0),p.fecha,desglose,p.modalidad,p.retenciones||[],p.totalRet||0);}
-    function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0);}
-    function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0);}
+    function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo);}
+    function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo);}
 
     function _esRetSUSS(codigo) { return (codigo||'').indexOf('SUSS') === 0; }
     function _tiposRetPago(retenciones) {
@@ -13093,12 +13165,14 @@
                 var nroComprobante = mod === 'A' ? (document.getElementById('lfNroComprobante') ? document.getElementById('lfNroComprobante').value.trim() : '') : '';
                 nueva.pagado = montoPago;
                 nueva.estado = montoPago >= importe ? 'pagada' : 'parcial';
+                var nroCorr = await obtenerProximoComprobante(mod);
                 var nuevoPago = {
                     pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                     monto: montoPago, baseImponible: baseRet,
                     retenciones: retenciones.map(function(r){ return { codigo: r.codigo, desc: r.desc, monto: r.monto }; }),
                     totalRet: totalRet,
-                    cuentaId: cuentaId, medioBancario: medioBancario, nroComprobante: nroComprobante
+                    cuentaId: cuentaId, medioBancario: medioBancario, nroComprobante: nroComprobante,
+                    nroCorrelativo: nroCorr, tipoAB: mod
                 };
                 nueva.pagosHistorial = [nuevoPago];
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
@@ -13106,8 +13180,8 @@
                 var msgPago = 'Pago: $' + Math.round(montoPago).toLocaleString('es-AR') +
                     (totalRet > 0 ? '\nRetenciones: $' + Math.round(totalRet).toLocaleString('es-AR') +
                     '\nNeto al proveedor: $' + Math.round(montoPago-totalRet).toLocaleString('es-AR') : '');
-                if (confirm('✅ Factura y pago registrados.\n' + msgPago + '\n\n¿Imprimir recibo?')) {
-                    imprimirReciboFactura(nueva, montoPago, fechaPago, mod, retenciones, totalRet, nroComprobante);
+                if (confirm('✅ Factura y pago registrados (' + nroCorr + ').\n' + msgPago + '\n\n¿Imprimir recibo?')) {
+                    imprimirReciboFactura(nueva, montoPago, fechaPago, mod, retenciones, totalRet, nroCorr);
                 }
                 if (totalRet > 0) {
                     var _tp = _tiposRetPago(nuevoPago.retenciones);
@@ -13495,15 +13569,18 @@
             const medioBancario = mod === 'A' ? (document.getElementById('factMedioPago')?.value || '') : '';
             const nroComprobante = mod === 'A' ? (document.getElementById('factNroComprobante')?.value.trim() || '') : '';
             nuevo.pagosHistorial = nuevo.pagosHistorial || [];
+            // Número correlativo propio del recibo de pago (independiente del nº de factura del proveedor)
+            const nroCorr = await obtenerProximoComprobante(mod);
             const nuevoPago = {
                 pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                 monto: montoPago, baseImponible: baseRet,
                 retenciones: retenciones.map(r => ({codigo:r.codigo, desc:r.desc, monto:r.monto})), totalRet,
-                cuentaId, medioBancario, nroComprobante
+                cuentaId, medioBancario, nroComprobante,
+                nroCorrelativo: nroCorr, tipoAB: mod
             };
             nuevo.pagosHistorial.push(nuevoPago);
-            if (confirm(`Pago registrado: $${Math.round(montoPago).toLocaleString('es-AR')}${totalRet > 0 ? `\nRetenciones: $${Math.round(totalRet).toLocaleString('es-AR')}\nNeto al proveedor: $${Math.round(montoPago-totalRet).toLocaleString('es-AR')}` : ''}.\n\n¿Imprimir recibo?`)) {
-                imprimirReciboFactura(nuevo, montoPago, fechaPago, mod, retenciones, totalRet, nroComprobante);
+            if (confirm(`Pago registrado (${nroCorr}): $${Math.round(montoPago).toLocaleString('es-AR')}${totalRet > 0 ? `\nRetenciones: $${Math.round(totalRet).toLocaleString('es-AR')}\nNeto al proveedor: $${Math.round(montoPago-totalRet).toLocaleString('es-AR')}` : ''}.\n\n¿Imprimir recibo?`)) {
+                imprimirReciboFactura(nuevo, montoPago, fechaPago, mod, retenciones, totalRet, nroCorr);
             }
             if (totalRet > 0) {
                 const _tp = _tiposRetPago(nuevoPago.retenciones);
@@ -13626,7 +13703,7 @@
         _imprimirComprobanteItem(facturas[idx], 'Factura');
     }
 
-    function pagarFactura(index) {
+    async function pagarFactura(index) {
         const f = facturas[index];
         const pendiente = f.importe - (f.pagado || 0);
         const monto = parseFloat(prompt(`Factura: ${f.numero || f.descripcion}\nPendiente: $${Math.round(pendiente).toLocaleString('es-AR')}\n\nMonto a pagar:`, Math.round(pendiente)));
@@ -13635,7 +13712,9 @@
         if (f.pagado >= f.importe) f.estado = 'pagada';
         else f.estado = 'parcial';
         if (!f.pagosHistorial) f.pagosHistorial = [];
-        f.pagosHistorial.push({ pagoId: 'FP-'+Date.now(), fecha: new Date().toISOString().substring(0,10), monto, modalidad: 'B' });
+        // Número correlativo propio del recibo (efectivo → tipo B)
+        const nroCorr = await obtenerProximoComprobante('B');
+        f.pagosHistorial.push({ pagoId: 'FP-'+Date.now(), fecha: new Date().toISOString().substring(0,10), monto, modalidad: 'B', nroCorrelativo: nroCorr, tipoAB: 'B' });
         // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
         REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         sincronizarPagoPlan('factura', index);
@@ -21352,7 +21431,7 @@
         var i = parseInt(sel) - 1;
         if (isNaN(i) || i < 0 || i >= hist.length) { alert('Número inválido.'); return; }
         var p = hist[i];
-        imprimirReciboFactura(f, p.monto, p.fecha, p.modalidad, (p.retenciones||[]).map(function(r){ return {codigo:r.codigo, monto:r.monto, desc:r.codigo}; }), p.totalRet||0);
+        imprimirReciboFactura(f, p.monto, p.fecha, p.modalidad, (p.retenciones||[]).map(function(r){ return {codigo:r.codigo, monto:r.monto, desc:r.codigo}; }), p.totalRet||0, p.nroCorrelativo);
     }
 
     // ══════════════════════════════════════════════════════════
