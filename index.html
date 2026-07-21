@@ -7096,8 +7096,14 @@
             const datoCopia = editandoIndex >= 0 ? datos[editandoIndex] : datos[datos.length - 1];
             compartirEnProyectos(datoCopia, 'datos', selPres);
         }
-        // Ofrecer agregar al Plan de Trabajo (solo en nuevo presupuesto)
-        if (editandoIndex < 0) {
+        // Hook: si el alta se disparó desde "Leer factura", volver a la factura con este presupuesto elegido
+        var _presupCb = window._presupAltaCallback;
+        if (typeof _presupCb === 'function') {
+            window._presupAltaCallback = null;
+            _presupCb(editandoIndex >= 0 ? editandoIndex : datos.length - 1);
+        }
+        // Ofrecer agregar al Plan de Trabajo (solo en nuevo presupuesto, y no si vino desde la factura)
+        if (editandoIndex < 0 && !_presupCb) {
             const newIdx = datos.length - 1;
             const d = datos[newIdx];
             setTimeout(function() {
@@ -12565,6 +12571,27 @@
             opt.textContent = (d.proveedor||'') + (d.concepto ? ' — ' + d.concepto : '') + ' ($' + Math.round(d.presupuesto||0).toLocaleString('es-AR') + ')';
             sel.appendChild(opt);
         });
+    }
+
+    // Abre el formulario de presupuesto (con opción de cargar manual o subir PDF con IA),
+    // precargado con el proveedor y los datos de la factura, ENCIMA del modal de la factura.
+    // Al guardarlo, vuelve a la factura y lo deja seleccionado como presupuesto asociado.
+    function lfCargarPresupuesto() {
+        var prov = document.getElementById('leerFactProv').value.trim();
+        if (typeof agregarFila === 'function') agregarFila();
+        if (prov && typeof poblarSelectProveedores === 'function') poblarSelectProveedores(prov);
+        var setVal = function(id, v){ var el = document.getElementById(id); if (el && v) el.value = v; };
+        setVal('concepto', (document.getElementById('leerFactDesc')||{}).value);
+        setVal('presupuesto', (document.getElementById('leerFactImporte')||{}).value);
+        if (typeof presupChequearProvNuevo === 'function') presupChequearProvNuevo();
+        var mpr = document.getElementById('modal'); if (mpr) mpr.style.zIndex = 700;
+        window._presupAltaCallback = function(idx) {
+            if (mpr) mpr.style.zIndex = '';
+            var provAhora = document.getElementById('leerFactProv').value.trim();
+            lfPoblarPresupuestos(provAhora);
+            var sel = document.getElementById('lfPresupuesto');
+            if (sel && idx != null && idx >= 0) { sel.value = String(idx); if (typeof lfOnPresupChange === 'function') lfOnPresupChange(); }
+        };
     }
 
     function lfSelPagarAhora(si) {
@@ -28097,9 +28124,12 @@
         </div>
         <div class="form-group" id="lfPresupGrupo">
           <label>Presupuesto asociado</label>
-          <select id="lfPresupuesto" style="width:100%;" onchange="lfOnPresupChange()">
-            <option value="">— Sin presupuesto vinculado —</option>
-          </select>
+          <div style="display:flex;gap:8px;align-items:flex-start;">
+            <select id="lfPresupuesto" style="flex:1;" onchange="lfOnPresupChange()">
+              <option value="">— Sin presupuesto vinculado —</option>
+            </select>
+            <button type="button" class="btn btn-outline btn-sm" onclick="lfCargarPresupuesto()" title="Crear/subir un presupuesto para este proveedor sin salir de la factura" style="white-space:nowrap;">➕ Cargar presupuesto</button>
+          </div>
           <div class="form-hint" id="lfPresupInfo"></div>
         </div>
 
