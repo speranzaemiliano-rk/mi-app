@@ -7003,8 +7003,10 @@
     }
     // Re-arma un PDF liviano: renderiza cada página con pdf.js y las vuelve a meter como
     // imagen JPEG comprimida en un PDF nuevo con jsPDF. Pierde algo de nitidez de texto
-    // (queda como imagen), pero entra en el límite y ocupa mucho menos.
-    async function _comprimirPDF(file, escala, calidad) {
+    // (queda como imagen), pero entra en el límite y ocupa mucho menos. Esto corre en el
+    // navegador del usuario (no en un servidor): con muchas páginas puede tardar, así que
+    // avisa el progreso (onProgress) en vez de dar la sensación de estar colgado.
+    async function _comprimirPDF(file, escala, calidad, onProgress) {
         escala  = escala  || 1.5;
         calidad = calidad || 0.6;
         if (typeof pdfjsLib === 'undefined' || typeof window.jspdf === 'undefined') {
@@ -7018,6 +7020,10 @@
                 var jsPDF = window.jspdf.jsPDF;
                 var outDoc = null;
                 var MMPORPX = 25.4 / 96; // pdf.js renderiza a 96dpi por defecto
+                // Con muchos documentos/páginas, achicar más para que no tarde una eternidad
+                // ni el resultado quede pesado igual (además de lo que ya vino ajustado por tamaño).
+                if (pdf.numPages > 40)      { escala = Math.min(escala, 0.8); calidad = Math.min(calidad, 0.4); }
+                else if (pdf.numPages > 20) { escala = Math.min(escala, 1.0); calidad = Math.min(calidad, 0.5); }
                 for (var i = 1; i <= pdf.numPages; i++) {
                     var page = await pdf.getPage(i);
                     var viewport = page.getViewport({ scale: escala });
@@ -7030,6 +7036,7 @@
                     if (!outDoc) outDoc = new jsPDF({ orientation: orient, unit: 'mm', format: [wMM, hMM] });
                     else outDoc.addPage([wMM, hMM], orient);
                     outDoc.addImage(imgData, 'JPEG', 0, 0, wMM, hMM);
+                    if (typeof onProgress === 'function') { try { onProgress(i, pdf.numPages); } catch(e){} }
                 }
                 if (!outDoc) throw new Error('El PDF no tiene páginas.');
                 return outDoc.output('datauristring');
@@ -7037,10 +7044,11 @@
                 URL.revokeObjectURL(url);
             }
         })();
-        // Nunca dejar que se cuelgue sin avisar: si tarda demasiado (worker de PDF trabado,
-        // conexión lenta), corta con un error claro en vez de quedar "sin hacer nada".
+        // Nunca dejar que se cuelgue sin avisar: si de verdad se traba (worker de PDF roto,
+        // navegador congelado), corta con un error claro. El tope es generoso porque comprimir
+        // muchas páginas en el propio navegador lleva su tiempo — no es un cuelgue, es trabajo real.
         var _timeout = new Promise(function(_, reject) {
-            setTimeout(function() { reject(new Error('La compresión del PDF tardó demasiado. Probá con un archivo más liviano o con menos páginas.')); }, 45000);
+            setTimeout(function() { reject(new Error('La compresión del PDF está tardando demasiado (más de 3 minutos). Probá con un archivo más liviano, con menos páginas, o dividilo en partes.')); }, 180000);
         });
         return Promise.race([_nucleo, _timeout]);
     }
@@ -7049,11 +7057,11 @@
     // más pesa, más se achica), y verifica que el resultado entre en un límite razonable.
     // Si sigue siendo muy pesado, avisa con un error claro en vez de subirlo igual.
     var PDF_LIMITE_FINAL_MB = 15;
-    async function _comprimirPDFConLimite(file) {
+    async function _comprimirPDFConLimite(file, onProgress) {
         var mb = file.size / (1024 * 1024);
         var escala  = mb > 25 ? 1.0  : (mb > 15 ? 1.25 : 1.5);
         var calidad = mb > 25 ? 0.45 : (mb > 15 ? 0.55 : 0.6);
-        var resultado = await _comprimirPDF(file, escala, calidad);
+        var resultado = await _comprimirPDF(file, escala, calidad, onProgress);
         var pesoAproxMB = (resultado.length * 0.75) / (1024 * 1024); // base64 → bytes aprox.
         if (pesoAproxMB > PDF_LIMITE_FINAL_MB) {
             throw new Error('El PDF sigue pesando ~' + Math.round(pesoAproxMB) + ' MB incluso comprimido. Probá reducirlo con otra herramienta (o sacarle páginas) antes de subirlo.');
@@ -7077,14 +7085,14 @@
     // límite, lo comprime primero para que entre y ocupe poco en la base. Para PDF, si la
     // compresión falla o sigue pesando demasiado, se propaga el error (no se sube el original
     // gigante en silencio) para que el formulario que llama lo muestre con un alert.
-    function leerArchivoBase64(file) {
+    function leerArchivoBase64(file, onProgress) {
         if (_imgComprimible(file) && file.size > 1024 * 1024) {
             var lado = file.size > 6 * 1024 * 1024 ? 1600 : 2200;
             var cal  = file.size > 6 * 1024 * 1024 ? 0.68 : 0.72;
             return _comprimirImagen(file, lado, cal).catch(function(){ return _leerArchivoTalCual(file); });
         }
         if (_pdfComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) {
-            return _comprimirPDFConLimite(file);
+            return _comprimirPDFConLimite(file, onProgress);
         }
         return _leerArchivoTalCual(file);
     }
@@ -19471,7 +19479,9 @@
             if (btnAlq) { btnAlq.disabled = true; btnAlq.textContent = archivoContrato.size > MAX_DOC_MB*1024*1024 ? 'Comprimiendo y subiendo…' : 'Subiendo…'; }
             if (estAlq) estAlq.textContent = 'Subiendo el contrato, un momento…';
             try {
-                var base64Contrato = await leerArchivoBase64(archivoContrato);
+                var base64Contrato = await leerArchivoBase64(archivoContrato, function(pag, total) {
+                    if (estAlq) estAlq.textContent = 'Comprimiendo página ' + pag + ' de ' + total + '…';
+                });
                 var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 await REF_DOCS.child(adjIdContrato).set({ nombre: archivoContrato.name, tipo: archivoContrato.type, contenido: base64Contrato });
                 nuevo.adjuntoId = adjIdContrato; nuevo.adjuntoNombre = archivoContrato.name; nuevo.adjuntoTipo = archivoContrato.type;
