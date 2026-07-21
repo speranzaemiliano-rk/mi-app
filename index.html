@@ -5768,9 +5768,12 @@
                 <!-- Selector de presupuesto (solo si tipo=presup) -->
                 <div class="form-group" id="factPresupGrupo">
                     <label>Presupuesto asociado</label>
-                    <select id="factPresupuesto" onchange="onFactPresupChange()">
-                        <option value="">— Sin presupuesto vinculado —</option>
-                    </select>
+                    <div style="display:flex; gap:8px; align-items:flex-start;">
+                        <select id="factPresupuesto" onchange="onFactPresupChange()" style="flex:1;">
+                            <option value="">— Sin presupuesto vinculado —</option>
+                        </select>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="factCargarPresupuesto()" title="Crear/subir un presupuesto para este proveedor sin salir de la factura" style="white-space:nowrap;">➕ Nuevo presupuesto</button>
+                    </div>
                     <div class="form-hint" id="factPresupInfo"></div>
                 </div>
 
@@ -7174,6 +7177,10 @@
             if (!isNaN(vincFactIdx) && facturas[vincFactIdx]) {
                 facturas[vincFactIdx].presupuestoIdx = datos.length - 1;
                 persistirFacturas();
+                // Si la factura ya estaba pagada, reflejar ese pago en el presupuesto recién creado
+                if (typeof _reconciliarFacturaEnPresupuesto === 'function') {
+                    _reconciliarFacturaEnPresupuesto(datos.length - 1, facturas[vincFactIdx]);
+                }
             }
         }
         // Compartir con proyectos seleccionados
@@ -13275,6 +13282,57 @@
         }
     }
 
+    // Abre el alta de presupuesto (con proveedor/concepto/importe precargados desde la
+    // factura en edición), ENCIMA del modal de factura. Al guardarlo vuelve acá y lo deja
+    // seleccionado — así se puede crear un presupuesto y aplicarle una factura que ya está
+    // cargada (y hasta ya pagada) sin tener que ir a buscarlo a la pestaña Presupuestos.
+    function factCargarPresupuesto() {
+        const prov = document.getElementById('factProveedor').value.trim();
+        if (typeof agregarFila === 'function') agregarFila();
+        if (prov && typeof poblarSelectProveedores === 'function') poblarSelectProveedores(prov);
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+        setVal('concepto', document.getElementById('factDescripcion').value);
+        setVal('presupuesto', document.getElementById('factImporte').value);
+        if (typeof presupChequearProvNuevo === 'function') presupChequearProvNuevo();
+        const mf = document.getElementById('modalFact'); if (mf) mf.style.zIndex = 700;
+        window._presupAltaCallback = function(idx) {
+            if (mf) mf.style.zIndex = '';
+            const sel = document.getElementById('factPresupuesto');
+            poblarPresupuestosFactura();
+            if (sel && idx != null && idx >= 0) { sel.value = String(idx); onFactPresupChange(); }
+        };
+    }
+
+    // Refleja el pago ya registrado de una factura sobre el presupuesto al que quedó
+    // vinculada: agrega/actualiza una única entrada de pagosHistorial identificada por
+    // origenFacturaId (re-ejecutar esto al reeditar la factura nunca duplica el monto,
+    // solo lo actualiza) y recalcula pagado/pagadoPresupuesto/pagadoMayores del presupuesto.
+    // Si la factura no tiene pago (o se desvinculó), quita esa entrada.
+    function _reconciliarFacturaEnPresupuesto(presupIdx, factura) {
+        const pres = datos[presupIdx];
+        if (!pres || !factura) return;
+        pres.pagosHistorial = pres.pagosHistorial || [];
+        const idx = pres.pagosHistorial.findIndex(x => x.origenFacturaId === factura.id);
+        const monto = factura.pagado || 0;
+        if (monto <= 0) {
+            if (idx < 0) return;
+            pres.pagosHistorial.splice(idx, 1);
+        } else {
+            const entry = {
+                pagoId: 'FACT-' + factura.id, origenFacturaId: factura.id,
+                fecha: factura.fecha || new Date().toISOString().substring(0,10),
+                modalidad: 'A', capital: monto, mayores: 0, baseImponible: 0,
+                retenciones: [], totalRet: 0, cuentaId: '', medioBancario: '',
+                nroComprobante: factura.numero || '', nroCorrelativo: '', tipoAB: ''
+            };
+            if (idx >= 0) pres.pagosHistorial[idx] = entry; else pres.pagosHistorial.push(entry);
+        }
+        pres.pagado = pres.pagosHistorial.reduce((s,x) => s + ((x.capital||0)+(x.mayores||0) || (x.montoPagado||0)), 0);
+        pres.pagadoPresupuesto = pres.pagosHistorial.reduce((s,x) => s + (x.capital||0), 0);
+        pres.pagadoMayores     = pres.pagosHistorial.reduce((s,x) => s + (x.mayores||0), 0);
+        REF_DATOS.child(pres.id || (pres.id = _colUidItem())).update({ pagosHistorial: pres.pagosHistorial, pagado: pres.pagado, pagadoPresupuesto: pres.pagadoPresupuesto, pagadoMayores: pres.pagadoMayores });
+    }
+
     function onFactImporteChange() {
         const imp = parseFloat(document.getElementById('factImporte').value) || 0;
         const monto = document.getElementById('factMontoPago');
@@ -13374,6 +13432,7 @@
         }
 
         // Vincular a presupuesto si corresponde
+        const _prevPresupIdx = editandoFactIndex >= 0 ? facturas[editandoFactIndex].presupuestoIdx : undefined;
         if (nuevo.tipo === 'presup') {
             const presupIdx = document.getElementById('factPresupuesto').value;
             if (presupIdx !== '') nuevo.presupuestoIdx = parseInt(presupIdx);
@@ -13454,6 +13513,14 @@
 
         cerrarFactura();
         persistirFacturas();
+        // Reflejar el pago de esta factura en el presupuesto vinculado (si tiene uno y ya
+        // está pagada). Si cambió de presupuesto o se desvinculó, limpiar el registro del anterior.
+        if (_prevPresupIdx !== undefined && _prevPresupIdx !== nuevo.presupuestoIdx) {
+            _reconciliarFacturaEnPresupuesto(_prevPresupIdx, Object.assign({}, nuevo, { pagado: 0 }));
+        }
+        if (nuevo.presupuestoIdx !== undefined) {
+            _reconciliarFacturaEnPresupuesto(nuevo.presupuestoIdx, nuevo);
+        }
         // Compartir con proyectos seleccionados
         const selFact = leerSeleccionCompartir('checkboxesCompartirFact');
         if (selFact.length > 0) {
