@@ -11603,6 +11603,9 @@
         const viejo = grupos[idx];
         const nuevo = (prompt(`Nuevo nombre para el grupo "${viejo}":`, viejo) || '').trim();
         if (!nuevo || nuevo === viejo) return;
+        // Reencontrar por valor: si otra persona agregó/borró un grupo, el índice pudo correrse.
+        idx = grupos.indexOf(viejo);
+        if (idx < 0) { alert('Ese grupo ya no existe (lo modificó otra persona). Recargá la página.'); return; }
         if (grupos.some((g,i) => i !== idx && g.toLowerCase() === nuevo.toLowerCase())) {
             alert('Ya existe un grupo con ese nombre.'); return;
         }
@@ -11748,6 +11751,7 @@
 
     function editarProveedor(index) {
         editandoProvIndex = index;
+        _marcarEdicion('proveedor', proveedores[index]);
         const p = proveedores[index];
         document.getElementById('modalProvTitle').textContent = '🏢 Editar Proveedor';
         poblarSelectGrupos(p.grupo || '');
@@ -11830,7 +11834,11 @@
                 } catch (err) { alert('No se pudo subir "' + archivoCert.name + '": ' + (err.message || err)); return; }
             }
         }
-        if (editandoProvIndex >= 0) { nuevo.id = proveedores[editandoProvIndex].id || ('P-' + Date.now()); proveedores[editandoProvIndex] = nuevo; }
+        if (editandoProvIndex >= 0) {
+            var _ip = _resolverEdicion(proveedores, _edicionEnCurso.proveedor && _edicionEnCurso.proveedor.id, _edicionEnCurso.proveedor && _edicionEnCurso.proveedor.snap, 'proveedor');
+            if (_ip < 0) return;
+            nuevo.id = proveedores[_ip].id || ('P-' + Date.now()); proveedores[_ip] = nuevo;
+        }
         else { nuevo.id = 'P-' + Date.now(); proveedores.push(nuevo); }
         cerrarProveedor(); persistirProveedores();
         // Hook genérico: si el alta se disparó desde otro flujo (ej. emitir comprobante), avisarle
@@ -14187,6 +14195,21 @@
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
+        // Aviso de posible factura DUPLICADA: mismo proveedor + mismo número (típicamente cuando dos
+        // personas cargan la misma factura, o al subir dos veces la misma). No bloquea: solo avisa.
+        if (editandoFactIndex < 0 && (nuevo.numero||'').trim()) {
+            var _numDup = (nuevo.numero||'').trim().toLowerCase();
+            var _provDup = (nuevo.proveedor||'').trim().toLowerCase();
+            var _dup = (facturas||[]).find(function(f){
+                return f && (f.numero||'').trim().toLowerCase() === _numDup && (f.proveedor||'').trim().toLowerCase() === _provDup;
+            });
+            if (_dup) {
+                var _mon = (nuevo.moneda === 'USD' ? 'USD ' : '$');
+                if (!confirm('⚠️ Ya hay una factura de "' + nuevo.proveedor + '" con el número ' + nuevo.numero +
+                    ' (importe ' + _mon + Math.round(_dup.importe||0).toLocaleString('es-AR') + ', fecha ' + (_dup.fecha||'—') + ').\n\n' +
+                    'Puede ser un duplicado (quizás otra persona ya la cargó).\n\n¿Cargarla igual?')) return;
+            }
+        }
         if (editandoFactIndex >= 0 && document.getElementById('factPagarAhora').value === 'true' && _saldoFactDoc(nuevo) <= 0 && (nuevo.pagado||0) > 0) {
             alert('Esta factura ya está pagada en su totalidad. No se puede registrar otro pago.\nSi el pago está mal cargado, editalo o eliminalo desde la pestaña Pagos (✏️).');
             return;
@@ -19928,6 +19951,7 @@
     function abrirMetroModal(id) {
         editandoMetroId = id || null;
         var m = id ? metrosCanje.find(function(x){ return x.id === id; }) : null;
+        _marcarEdicion('metro', m);
         // Poblar select de desarrollos
         var selDes = document.getElementById('metroDesarrollo');
         if (selDes) {
@@ -20024,7 +20048,11 @@
             origen:      (editandoMetroId && (metrosCanje.find(function(x){return x.id===editandoMetroId;})||{}).origen) || 'manual'
         };
         var idx = metrosCanje.findIndex(function(x){ return x.id === reg.id; });
-        if (idx >= 0) metrosCanje[idx] = reg; else metrosCanje.push(reg);
+        if (idx >= 0) {
+            var _im = _resolverEdicion(metrosCanje, reg.id, _edicionEnCurso.metro && _edicionEnCurso.metro.snap, 'movimiento de metros');
+            if (_im < 0) return;
+            metrosCanje[_im] = reg;
+        } else metrosCanje.push(reg);
         persistirMetros();
         cerrarMetroModal();
         renderMetros();
