@@ -17286,9 +17286,16 @@
         }
         // Migración one-time: si venía como array, reescribir como objeto por id (determinístico
         // por índice → dos clientes que migran a la vez producen el mismo resultado).
+        // IMPORTANTE: se hace con transaction y SOLO si en el servidor sigue siendo un array. Antes
+        // se usaba ref.set(map), que reemplaza TODO el nodo: si otro usuario ya había escrito por-nodo
+        // (ej. un pago) mientras este cliente migraba con datos viejos, ese set le pisaba el pago.
+        // La transaction aborta si el nodo ya es objeto (ya migrado), evitando ese lost-update.
         if (eraArray && arr.length && ref) {
             var map = {}; arr.forEach(function(it) { if (it) map[it.id] = it; });
-            ref.set(map).catch(function() {});
+            ref.transaction(function(current) {
+                if (Array.isArray(current)) return map; // sigue siendo array viejo → convertir
+                return; // ya es objeto (u otra forma) → no tocar, respetar lo que haya en el servidor
+            }).catch(function() {});
         }
         var snap = {}; arr.forEach(function(it) { if (it) { try { snap[it.id] = JSON.stringify(it); } catch (e) {} } });
         _colSnap[coll] = snap;
