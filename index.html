@@ -8467,6 +8467,20 @@
     function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
     function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
 
+    // Total retenido en el historial de pagos de una factura/documento. La retención es dinero
+    // que se le retuvo al proveedor y se deposita a AFIP por su cuenta: cancela esa parte de la
+    // factura igual que el neto transferido. Por eso cuenta como pago que salda la deuda.
+    function _totalRetenidoHist(hist) { return (hist||[]).reduce(function(s,p){ return s + (p.totalRet||0); }, 0); }
+    // Saldo pendiente REAL de una factura/documento: importe - pagado(neto) - retenido. Nunca negativo.
+    function _saldoFactDoc(item) { return Math.max(0, (item.importe||0) - (item.pagado||0) - _totalRetenidoHist(item.pagosHistorial)); }
+    // ¿Está totalmente saldada? (importe > 0 y saldo 0)
+    function _estaSaldada(item) { return (item.importe||0) > 0 && _saldoFactDoc(item) <= 0; }
+    // Estado a guardar teniendo en cuenta la retención como parte del pago.
+    function _estadoFactDoc(item) {
+        if (_estaSaldada(item)) return 'pagada';
+        return ((item.pagado||0) > 0 || _totalRetenidoHist(item.pagosHistorial) > 0) ? 'parcial' : 'pendiente';
+    }
+
     function _esRetSUSS(codigo) { return (codigo||'').indexOf('SUSS') === 0; }
     function _tiposRetPago(retenciones) {
         var r = retenciones || [];
@@ -8607,7 +8621,8 @@
         if(_pagoFDTab==='fact'){
             facturas.forEach(function(f,i){
                 if((f.estado||'pendiente')==='pagada') return;
-                var pend=(f.importe||0)-(f.pagado||0);
+                var pend=_saldoFactDoc(f);
+                if(pend<=0) return;
                 var o=document.createElement('option');o.value=i;
                 o.textContent=(f.proveedor||'?')+' — '+(f.numero?'N°'+f.numero+' — ':'')+(f.descripcion||'—')+' (pend. $'+Math.round(pend).toLocaleString('es-AR')+')';
                 if(preselId!==undefined&&String(i)===String(preselId)) o.selected=true;
@@ -8615,10 +8630,10 @@
             });
         } else {
             documentos.forEach(function(d){
-                var pag=d.pagado||0,imp=d.importe||0;
-                if(pag>=imp&&imp>0) return;
+                var pend=_saldoFactDoc(d),imp=d.importe||0;
+                if(pend<=0&&imp>0) return;
                 var o=document.createElement('option');o.value=d.id;
-                o.textContent=(d.proveedor||'?')+' — '+(d.numero||'')+(d.descripcion?' — '+d.descripcion:'')+' (pend. $'+Math.round(imp-pag).toLocaleString('es-AR')+')';
+                o.textContent=(d.proveedor||'?')+' — '+(d.numero||'')+(d.descripcion?' — '+d.descripcion:'')+' (pend. $'+Math.round(pend).toLocaleString('es-AR')+')';
                 if(preselId!==undefined&&d.id===preselId) o.selected=true;
                 sel.appendChild(o);
             });
@@ -8629,10 +8644,11 @@
         var sel=document.getElementById('pagoFDItem'),info=document.getElementById('pagoFDInfo');
         var val=sel?sel.value:'';
         if(!val){if(info)info.style.display='none';return;}
-        var imp=0,pag=0;
-        if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(!f){info.style.display='none';return;}imp=f.importe||0;pag=f.pagado||0;}
-        else{var d=documentos.find(function(x){return x.id===val;});if(!d){info.style.display='none';return;}imp=d.importe||0;pag=d.pagado||0;}
-        var pend=imp-pag,fmt=function(n){return '$'+Math.round(n).toLocaleString('es-AR');};
+        var imp=0,pag=0,_itFD=null;
+        if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(!f){info.style.display='none';return;}_itFD=f;imp=f.importe||0;pag=f.pagado||0;}
+        else{var d=documentos.find(function(x){return x.id===val;});if(!d){info.style.display='none';return;}_itFD=d;imp=d.importe||0;pag=d.pagado||0;}
+        // Pendiente REAL: descuenta lo pagado (neto) y lo retenido (la retención también cancela deuda)
+        var pend=_itFD?_saldoFactDoc(_itFD):(imp-pag),fmt=function(n){return '$'+Math.round(n).toLocaleString('es-AR');};
         document.getElementById('pagoFDImpTotal').textContent=fmt(imp);
         document.getElementById('pagoFDYaPagado').textContent=fmt(pag);
         document.getElementById('pagoFDPendiente').textContent=fmt(pend);
@@ -8751,7 +8767,7 @@
         var provs = {};
         facturas.forEach(function(f){
             if ((f.estado||'pendiente') === 'pagada') return;
-            if (((f.importe||0) - (f.pagado||0)) <= 0) return;
+            if (_saldoFactDoc(f) <= 0) return;
             provs[f.proveedor || '?'] = true;
         });
         return Object.keys(provs).sort(function(a,b){ return a.localeCompare(b); });
@@ -8774,7 +8790,7 @@
         facturas.forEach(function(f,i){
             if ((f.proveedor||'') !== prov) return;
             if ((f.estado||'pendiente') === 'pagada') return;
-            var pend = (f.importe||0) - (f.pagado||0);
+            var pend = _saldoFactDoc(f);
             if (pend <= 0) return;
             var neto = (f.netoGravado > 0 && f.importe > 0) ? Math.round(pend * (f.netoGravado / f.importe)) : Math.round(pend / 1.21);
             _pagoFDMulti.items.push({ idx:i, f:f, pend:pend, neto:neto, checked:true });
@@ -8844,7 +8860,7 @@
             if (!f.pagosHistorial) f.pagosHistorial = [];
             f.pagosHistorial.push(entry);
             f.pagado = (f.pagado||0) + x.pend;
-            f.estado = (f.pagado >= (f.importe||0) && (f.importe||0) > 0) ? 'pagada' : 'parcial';
+            f.estado = _estadoFactDoc(f);
             REF_FACTURAS.child(f.id || (f.id = _colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
             sincronizarPagoPlan('factura', x.idx);
             facturasPagadas.push(f);
@@ -8902,7 +8918,7 @@
             if(!f.pagosHistorial) f.pagosHistorial=[];
             f.pagosHistorial.push(entry);
             f.pagado=(f.pagado||0)+monto;
-            f.estado=(f.pagado>=(f.importe||0)&&(f.importe||0)>0)?'pagada':'parcial';
+            f.estado=_estadoFactDoc(f);
             // Escribir SOLO el nodo de esta factura (no todo el array) para no pisar cambios
             // de otro usuario trabajando en paralelo. El array de RTDB es denso (borrado por
             // splice), así que el índice en memoria coincide con la clave numérica en Firebase.
@@ -13692,7 +13708,8 @@
                 var medioBancario = mod === 'A' ? (document.getElementById('lfMedioPago') ? document.getElementById('lfMedioPago').value : '') : '';
                 var nroComprobante = mod === 'A' ? (document.getElementById('lfNroComprobante') ? document.getElementById('lfNroComprobante').value.trim() : '') : '';
                 nueva.pagado = montoPago;
-                nueva.estado = montoPago >= importe ? 'pagada' : 'parcial';
+                // La retención también cancela deuda: se cuenta junto con el neto pagado.
+                nueva.estado = (montoPago + (totalRet||0)) >= importe ? 'pagada' : 'parcial';
                 var nroCorr = await obtenerProximoComprobante(mod);
                 var nuevoPago = {
                     pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
@@ -13779,7 +13796,7 @@
         selFactTipo(f.presupuestoIdx === undefined ? 'presup' : (f.tipo || 'presup'));
         selFactPagoInmediato(false); // en edición no re-pagamos
         selFactModalidad('A');
-        var _pendienteEdit = (f.importe||0) - (f.pagado||0);
+        var _pendienteEdit = _saldoFactDoc(f);
         var _avisoPagada = document.getElementById('factYaPagadaAviso');
         var _panelInmediato = document.getElementById('factPagoInmediatoPanel');
         if (_pendienteEdit <= 0 && (f.pagado||0) > 0) {
@@ -14054,7 +14071,7 @@
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
-        if (editandoFactIndex >= 0 && document.getElementById('factPagarAhora').value === 'true' && nuevo.pagado >= nuevo.importe) {
+        if (editandoFactIndex >= 0 && document.getElementById('factPagarAhora').value === 'true' && _saldoFactDoc(nuevo) <= 0 && (nuevo.pagado||0) > 0) {
             alert('Esta factura ya está pagada en su totalidad. No se puede registrar otro pago.\nSi el pago está mal cargado, editalo o eliminalo desde la pestaña Pagos (✏️).');
             return;
         }
@@ -14104,7 +14121,7 @@
             const mod = document.getElementById('factModalidadPago').value;
             const fechaPago = document.getElementById('factFechaPago').value || nuevo.fecha;
             nuevo.pagado = (nuevo.pagado || 0) + montoPago;
-            nuevo.estado = nuevo.pagado >= nuevo.importe ? 'pagada' : 'parcial';
+            // el estado final se calcula más abajo, ya con la retención (que también cancela deuda)
             // Guardar historial de pago
             const baseRet = parseFloat(document.getElementById('factRetBase').value) || montoPago;
             const mesAno  = (fechaPago || '').substring(0,7);
@@ -14128,6 +14145,7 @@
                 nroCorrelativo: nroCorr, tipoAB: mod
             };
             nuevo.pagosHistorial.push(nuevoPago);
+            nuevo.estado = _estadoFactDoc(nuevo);
             if (confirm(`Pago registrado (${nroCorr}): $${Math.round(montoPago).toLocaleString('es-AR')}${totalRet > 0 ? `\nRetenciones: $${Math.round(totalRet).toLocaleString('es-AR')}\nNeto al proveedor: $${Math.round(montoPago-totalRet).toLocaleString('es-AR')}` : ''}.\n\n¿Imprimir la Orden de Pago?`)) {
                 imprimirReciboFactura(nuevo, montoPago, fechaPago, mod, retenciones, totalRet, nroCorr, nroComprobante);
             }
@@ -14255,12 +14273,11 @@
 
     async function pagarFactura(index) {
         const f = facturas[index];
-        const pendiente = f.importe - (f.pagado || 0);
+        const pendiente = _saldoFactDoc(f);
         const monto = parseFloat(prompt(`Factura: ${f.numero || f.descripcion}\nPendiente: $${Math.round(pendiente).toLocaleString('es-AR')}\n\nMonto a pagar:`, Math.round(pendiente)));
         if (isNaN(monto) || monto <= 0) return;
         f.pagado = (f.pagado || 0) + monto;
-        if (f.pagado >= f.importe) f.estado = 'pagada';
-        else f.estado = 'parcial';
+        f.estado = _estadoFactDoc(f);
         if (!f.pagosHistorial) f.pagosHistorial = [];
         // Número correlativo propio del recibo (efectivo → tipo B)
         const nroCorr = await obtenerProximoComprobante('B');
@@ -14288,7 +14305,7 @@
         } else {
             visibles.forEach(f => {
                 const idx = facturas.indexOf(f);
-                const pendiente = f.importe - (f.pagado || 0);
+                const pendiente = _saldoFactDoc(f);
                 const estado = f.estado || 'pendiente';
                 const estadoBadge = estado === 'pagada'
                     ? '<span class="badge-rol badge-ok">✓ Pagada</span>'
@@ -14330,7 +14347,7 @@
         if (el1) el1.textContent = facturas.length;
         if (el2) el2.textContent = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').length;
         if (el3) {
-            const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + (f.importe - (f.pagado||0)), 0);
+            const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + _saldoFactDoc(f), 0);
             el3.textContent = '$' + Math.round(total).toLocaleString('es-AR');
         }
     }
@@ -14345,7 +14362,7 @@
         const pagadoActual = f.pagado||0;
         if (!confirm(`Monto pagado actual: $${Math.round(pagadoActual).toLocaleString('es-AR')}\nSegún el historial de pagos registrados: $${Math.round(sumHist).toLocaleString('es-AR')}\n\n¿Corregir el monto pagado de esta factura para que coincida con su historial?`)) return;
         f.pagado = sumHist;
-        f.estado = (sumHist >= (f.importe||0) && (f.importe||0) > 0) ? 'pagada' : (sumHist > 0 ? 'parcial' : 'pendiente');
+        f.estado = _estadoFactDoc(f);
         persistirFacturas();
         renderFacturas();
         alert('✓ Monto pagado corregido.');
@@ -16351,7 +16368,7 @@
             if (est) {
                 const pag = d.pagado || 0;
                 const imp = d.importe || 0;
-                const estado = pag <= 0 ? 'pendiente' : (pag >= imp ? 'pagado' : 'parcial');
+                const estado = (pag <= 0 && _totalRetenidoHist(d.pagosHistorial) <= 0) ? 'pendiente' : (_saldoFactDoc(d) <= 0 ? 'pagado' : 'parcial');
                 if (estado !== est) return false;
             }
             return true;
@@ -16362,7 +16379,7 @@
         // Stats
         const total = documentos.length;
         const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0);
-        const pendientes = documentos.filter(d => (d.pagado||0) < (d.importe||0)).length;
+        const pendientes = documentos.filter(d => _saldoFactDoc(d) > 0).length;
         const el = id => document.getElementById(id);
         if (el('totalDocs')) el('totalDocs').textContent = total;
         if (el('docsTotal')) el('docsTotal').textContent = '$' + Math.round(totalAmt).toLocaleString('es-AR');
@@ -16394,7 +16411,7 @@
                 <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
                 <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
                 <td><div class="action-btns">
-                    ${(d.pagado||0)<(d.importe||0)?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
+                    ${_saldoFactDoc(d)>0?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
                     <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
                     ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
                     ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
@@ -23306,7 +23323,7 @@
             _aplicarComp(pf);
             // Recalcular pagado total de la factura
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
-            f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
+            f.estado = _estadoFactDoc(f);
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
             REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         }
@@ -23348,7 +23365,7 @@
             if (!f || !f.pagosHistorial) { cerrarModalEditarPago(); return; }
             f.pagosHistorial.splice(pi, 1);
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
-            f.estado = f.pagado >= f.importe ? 'pagada' : (f.pagado > 0 ? 'parcial' : 'pendiente');
+            f.estado = _estadoFactDoc(f);
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
             REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
         }
@@ -23398,7 +23415,7 @@
         if (!omitirFacturas) {
             var factsDelProv = facturas.filter(function(f){ return f.proveedor === nombre; });
             var filasFact = factsDelProv.slice().sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); }).map(function(f) {
-                var saldo = (f.importe||0) - (f.pagado||0);
+                var saldo = _saldoFactDoc(f);
                 var estadoBadge = f.estado === 'pagada'
                     ? '<span class="pill" style="font-size:10px;color:var(--success);border-color:var(--success);">Pagada</span>'
                     : f.estado === 'parcial'
@@ -23649,7 +23666,7 @@
         factsDelProv.forEach(function(f) {
             totalFacturado += (f.importe||0);
             totalPagadoFact += (f.pagado||0);
-            if (f.estado !== 'pagada') totalPendienteFact += ((f.importe||0) - (f.pagado||0));
+            if (f.estado !== 'pagada') totalPendienteFact += _saldoFactDoc(f);
         });
         var factsPagadas = factsDelProv.filter(function(f){ return f.estado === 'pagada'; });
         var factsPendientes = factsDelProv.filter(function(f){ return f.estado !== 'pagada'; });
@@ -23730,7 +23747,7 @@
                 + '<th style="padding:8px 12px;text-align:center;">Estado</th>'
                 + '</tr></thead><tbody>';
             factsPendientes.forEach(function(f) {
-                var saldo = (f.importe||0) - (f.pagado||0);
+                var saldo = _saldoFactDoc(f);
                 var hoy = new Date(); hoy.setHours(0,0,0,0);
                 var venc = f.vencimiento ? new Date(f.vencimiento+'T00:00:00') : null;
                 var vencida = venc && venc < hoy;
@@ -26729,7 +26746,7 @@
         // 3) Por pagar (facturas pendientes)
         var pagarArs=0, pagarUsd=0, nPend=0;
         _fa.forEach(function(f){
-            var pend = (f.importe||0)-(f.pagado||0);
+            var pend = _saldoFactDoc(f);
             if (pend > 0.5) { nPend++; if (f.moneda==='USD') pagarUsd+=pend; else pagarArs+=pend; }
         });
         var pP = par(pagarArs, pagarUsd, nPend ? (nPend + ' factura' + (nPend!==1?'s':'') + ' pend.') : 'Sin pendientes');
@@ -31144,7 +31161,7 @@
       var factPend = facturas.filter(function(f){ return (f.estado||'pendiente') !== 'pagada'; });
       if (factPend.length) {
         var linsFact = factPend.map(function(f) {
-          var pend = (f.importe||0) - (f.pagado||0);
+          var pend = _saldoFactDoc(f);
           return '- ' + (f.proveedor||'—') + (f.numero?' (Nº '+f.numero+')':'') + ': pendiente ' + monFmt(pend, f.moneda) +
             (f.vencimiento ? (', vence ' + f.vencimiento) : '');
         });
