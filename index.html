@@ -4007,6 +4007,7 @@
                         <div class="stat-card"><div class="stat-label">Cobrado USD</div><div class="stat-value" id="alqCobradoUSD" style="font-size:18px;">USD 0</div></div>
                         <div class="stat-card"><div class="stat-label">Próxima actualización</div><div class="stat-value" id="alqProxActualizacion" style="font-size:16px;">—</div></div>
                     </div>
+                    <div id="alqAvisoCuotas" style="display:none; margin-bottom:16px; border-radius:12px; padding:14px 18px; font-size:13.5px;"></div>
                     <div class="table-card">
                         <div class="table-card-head">
                             <h3>🔑 Contratos de Alquiler</h3>
@@ -20378,6 +20379,7 @@
             document.getElementById('alqMoneda').value       = a.moneda || 'ARS';
             document.getElementById('alqCanon').value        = a.canon || '';
             document.getElementById('alqCanonActual').value  = a.canonActual || '';
+            document.getElementById('alqDiaPago').value      = a.diaPago || '';
             document.getElementById('alqIndice').value       = a.indice || 'IPC';
             document.getElementById('alqFrecuencia').value   = a.frecuencia || '3';
             document.getElementById('alqCACBase').value      = a.cacBase || '';
@@ -20554,6 +20556,7 @@
             moneda:      document.getElementById('alqMoneda').value,
             canon:       parseFloat(document.getElementById('alqCanon').value) || 0,
             canonActual: parseFloat(document.getElementById('alqCanonActual').value) || 0,
+            diaPago:     Math.min(31, Math.max(1, parseInt(document.getElementById('alqDiaPago').value) || 0)) || null,
             indice:      document.getElementById('alqIndice').value,
             frecuencia:  parseInt(document.getElementById('alqFrecuencia').value) || 3,
             cacBase:     parseFloat(document.getElementById('alqCACBase').value) || 0,
@@ -20775,6 +20778,27 @@
         tbody.innerHTML = filas.join('');
     }
 
+    // Estado de pago de la cuota del MES EN CURSO de un alquiler.
+    // Devuelve null si está disponible/sin inquilino, si no tiene día de pago, o si está al día sin urgencia.
+    function _alqEstadoPago(a) {
+        if (!a || a.disponible || !(a.inquilino||'').trim()) return null;
+        var hoy = new Date(); hoy.setHours(0,0,0,0);
+        // Si el contrato terminó, no avisamos
+        if (a.fin) { var _f = new Date(a.fin+'T00:00:00'); if (_f < hoy) return null; }
+        var periodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
+        var cobrada = (a.cobrosHistorial||[]).some(function(c){ return (c.concepto==='alquiler'||!c.concepto) && c.periodo === periodo; });
+        if (cobrada) return { estado:'cobrada', label:'Cuota del mes cobrada', cls:'badge-ok', icon:'✓' };
+        if (!a.diaPago) return null;
+        var diasMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
+        var dia = Math.min(parseInt(a.diaPago)||1, diasMes);
+        var vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0,0,0,0);
+        var dias = Math.round((vence - hoy) / 86400000);
+        if (dias < 0)  return { estado:'vencida',  label:'Cuota vencida hace ' + Math.abs(dias) + ' día' + (Math.abs(dias)===1?'':'s'), cls:'badge-err',  icon:'⚠️', dias:dias };
+        if (dias === 0) return { estado:'vencehoy', label:'La cuota vence hoy', cls:'badge-warn', icon:'⏰', dias:0 };
+        if (dias <= 7)  return { estado:'porvencer',label:'Cuota vence en ' + dias + ' día' + (dias===1?'':'s'), cls:'badge-warn', icon:'⏳', dias:dias };
+        return null;
+    }
+
     function renderAlquileres() {
         var tbody = document.getElementById('alquileresBody');
         if (!tbody) return;
@@ -20816,6 +20840,8 @@
                 var estadoBadge = a.disponible
                     ? '<span class="badge-rol badge-err">🔴 Disponible</span>'
                     : (activo ? '<span class="badge-rol badge-ok">✓ Activo</span>' : '<span class="badge-rol badge-err">⏹ Vencido</span>');
+                var _pe = _alqEstadoPago(a);
+                if (_pe) estadoBadge += '<br><span class="badge-rol ' + _pe.cls + '" style="margin-top:4px;" title="Cuota del mes en curso">' + _pe.icon + ' ' + _pe.label + '</span>';
                 if (a.inicio && a.frecuencia && activo) {
                     var baseDate = new Date(a.inicio+'T00:00:00');
                     while (baseDate <= hoy) baseDate.setMonth(baseDate.getMonth() + parseInt(a.frecuencia));
@@ -20852,6 +20878,24 @@
         sEl('alqCobradoARS', '$' + Math.round(totalCobARS).toLocaleString('es-AR'));
         sEl('alqCobradoUSD', 'USD ' + totalCobUSD.toLocaleString(undefined, {maximumFractionDigits:2}));
         sEl('alqProxActualizacion', proxFecha ? proxFecha.toLocaleDateString('es-AR') : '—');
+        // Banner de avisos de cuotas (vencidas / por vencer este mes)
+        var _avEl = document.getElementById('alqAvisoCuotas');
+        if (_avEl) {
+            var _venc = 0, _porv = 0;
+            alquileres.forEach(function(a){ var e = _alqEstadoPago(a); if (!e) return; if (e.estado==='vencida') _venc++; else if (e.estado==='porvencer'||e.estado==='vencehoy') _porv++; });
+            if (!_venc && !_porv) { _avEl.style.display = 'none'; }
+            else {
+                var partes = [];
+                if (_venc) partes.push('<strong>' + _venc + '</strong> cuota' + (_venc===1?'':'s') + ' vencida' + (_venc===1?'':'s'));
+                if (_porv) partes.push('<strong>' + _porv + '</strong> por vencer esta semana');
+                var hayVenc = _venc > 0;
+                _avEl.style.background = hayVenc ? 'var(--danger-bg)' : 'var(--warn-bg)';
+                _avEl.style.color = hayVenc ? 'var(--danger)' : 'var(--warn)';
+                _avEl.style.border = '1px solid ' + (hayVenc ? 'rgba(215,0,21,.18)' : 'rgba(150,84,10,.18)');
+                _avEl.innerHTML = (hayVenc ? '⚠️ ' : '⏳ ') + 'Alquileres: ' + partes.join(' · ') + '. Revisá la columna Estado y cobrá las cuotas pendientes.';
+                _avEl.style.display = '';
+            }
+        }
     }
 
     function imprimirComprobanteAlquiler(a, monto, fecha, periodo, concepto, ref, nroRecibo) {
@@ -28268,6 +28312,11 @@
           <div class="form-group" style="margin:0;">
             <label>Canon actual</label>
             <input type="number" id="alqCanonActual" step="0.01" min="0" placeholder="0">
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>Día de pago del mes</label>
+            <input type="number" id="alqDiaPago" step="1" min="1" max="31" placeholder="Ej: 10">
+            <div class="form-hint">Se usa para avisar cuando la cuota está por vencer o vencida.</div>
           </div>
         </div>
       </div>
