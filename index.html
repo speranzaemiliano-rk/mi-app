@@ -8408,7 +8408,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
+                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||''});
             });
         });
         documentos.forEach(function(d){
@@ -8439,6 +8439,23 @@
             tP+=m;tN+=m; if(e.tipoAB==='A') tB+=m; else tE+=m;
             rows.push({fecha:e.fecha,prov:provNomE||'—',concepto:(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—'),tipo:'Comprobante emitido',mod:e.tipoAB,capital:m,mayores:0,total:m,ret:0,neto:m,di:e.id,pi:0,esEmit:true,retenciones:[]});
         });
+        // Agrupar los pagos de varias facturas hechos en un mismo pago (mismo grupoPagoId) en un
+        // solo renglón, con una sola Orden de Pago combinada (antes salía un renglón por factura).
+        var _grpMap = {}, rowsAgr = [];
+        rows.forEach(function(r){
+            if (r.esFact && r.grupoPagoId) {
+                var g = _grpMap[r.grupoPagoId];
+                if (!g) {
+                    g = Object.assign({}, r, { _facturas:[r.concepto.replace(/^Fact\./,'')], _nGrupo:1 });
+                    _grpMap[r.grupoPagoId] = g; rowsAgr.push(g);
+                } else {
+                    g.capital += r.capital; g.total += r.total; g.ret += r.ret; g.neto += r.neto;
+                    g._facturas.push(r.concepto.replace(/^Fact\./,'')); g._nGrupo++;
+                }
+            } else { rowsAgr.push(r); }
+        });
+        rowsAgr.forEach(function(r){ if (r._nGrupo > 1) r.concepto = r._nGrupo + ' facturas: ' + r._facturas.join(', '); });
+        rows = rowsAgr;
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
         sel('pagTotalPagado',fmt(tP));sel('pagTotalBanco',fmt(tB));sel('pagTotalEfectivo',fmt(tE));
         sel('pagTotalRet',fmt(tR));sel('pagTotalNeto',fmt(tN));
@@ -8451,6 +8468,11 @@
             var btnI='', btnR='', btnE='';
             if (r.esEmit) {
                 btnE = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEmitir(\''+r.di+'\')" title="Editar comprobante">✏</button>' : '';
+            } else if (r.esFact && r._nGrupo > 1) {
+                // Pago de varias facturas juntas: UNA sola Orden de Pago combinada (y retención combinada).
+                btnI='<button class="btn btn-outline btn-sm" onclick="imprimirPagoGrupoFact(\''+r.grupoPagoId+'\')" title="Imprimir Orden de Pago (todas las facturas del pago)">🖨️ OP</button>';
+                btnR=r.ret>0?_retBtnsHTML('imprimirRetGrupoFact',"'"+r.grupoPagoId+"'",0,r.retenciones):'';
+                btnE='';
             } else {
                 var srcTipo=r.esDoc?'doc':(r.esFact?'factura':'presup');
                 var diArg=r.esDoc?("'"+r.di+"'"):r.di;
@@ -8470,6 +8492,35 @@
     function imprimirPagoPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;var desglose={capital:p.capital||p.montoPagado||0,mayores:p.mayores||0};imprimirReciboDato(d,(p.capital||p.montoPagado||0)+(p.mayores||0),p.fecha,desglose,p.modalidad,p.retenciones||[],p.totalRet||0,p.nroComprobante);}
     function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
     function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
+    // Reimprime UNA sola Orden de Pago para varias facturas pagadas juntas (mismo grupoPagoId).
+    function imprimirPagoGrupoFact(grupoId){
+        var incl=[],montoTotal=0,totalRet=0,fecha='',mod='A',nroCorr='',nroTransf='',prov='',retMap={};
+        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){
+            if((p.grupoPagoId||'')!==grupoId) return;
+            incl.push(f.numero?('N°'+f.numero):(f.descripcion||'s/n'));
+            montoTotal+=p.monto||0; totalRet+=p.totalRet||0;
+            fecha=p.fecha; mod=p.modalidad; nroCorr=p.nroCorrelativo||''; nroTransf=p.nroComprobante||''; prov=f.proveedor||prov;
+            (p.retenciones||[]).forEach(function(r){ retMap[r.codigo]=(retMap[r.codigo]||0)+(r.monto||0); });
+        });});
+        if(!incl.length) return;
+        var rets=Object.keys(retMap).map(function(c){return{codigo:c,monto:retMap[c],desc:c};});
+        var itemSint={proveedor:prov,descripcion:incl.length+' facturas: '+incl.join(', '),numero:nroCorr};
+        imprimirReciboFactura(itemSint,montoTotal,fecha,mod,rets,totalRet,nroCorr,nroTransf);
+    }
+    // Reimprime el comprobante de retención combinado de un pago de varias facturas (mismo grupoPagoId).
+    function imprimirRetGrupoFact(grupoId,_pi,tipo){
+        var montoTotal=0,baseTotal=0,fecha='',mod='A',nroCorr='',prov='',incl=[],retMap={};
+        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){
+            if((p.grupoPagoId||'')!==grupoId) return;
+            montoTotal+=p.monto||0; baseTotal+=p.baseImponible||0; fecha=p.fecha; mod=p.modalidad; nroCorr=p.nroCorrelativo||''; prov=f.proveedor||prov;
+            incl.push(f.numero?('N°'+f.numero):(f.descripcion||'s/n'));
+            (p.retenciones||[]).forEach(function(r){ retMap[r.codigo]=(retMap[r.codigo]||0)+(r.monto||0); });
+        });});
+        if(!incl.length) return;
+        var retCons=Object.keys(retMap).map(function(c){return{codigo:c,monto:retMap[c],desc:c};});
+        var pagoSint={fecha:fecha,nroCorrelativo:nroCorr,monto:montoTotal,baseImponible:baseTotal,retenciones:retCons,modalidad:mod};
+        imprimirComprobanteRetencion(prov,pagoSint,incl.join(', '),tipo);
+    }
 
     // Total retenido en el historial de pagos de una factura/documento. La retención es dinero
     // que se le retuvo al proveedor y se deposita a AFIP por su cuenta: cancela esa parte de la
