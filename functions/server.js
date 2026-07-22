@@ -1174,6 +1174,123 @@ if (mailBotConfigurado()) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// RECORDATORIO DE CUOTAS DE ALQUILER
+//  Recorre empresas/<eid>/proyectos/<pid>/alquileres y, por cada
+//  alquiler activo con día de pago, si la cuota del mes en curso no
+//  está cobrada y faltan los días indicados, avisa por mail al inquilino
+//  (a.emailInquilino) Y al dueño (empresas/<eid>/datos/email o
+//  ALERTAS_EMAIL_DEFAULT). No re-envía: marca recordatoriosPago/<periodo>/<dia>.
+// ═══════════════════════════════════════════════════════════════════
+let _alquileresCorriendo = false;
+const ALQ_DIAS_AVISO = [5, 1, 0]; // días antes del vencimiento en que se avisa
+
+async function revisarAlquileres() {
+    if (!admin.apps.length) { const e = new Error('Firebase Admin no está inicializado.'); e.faltanCreds = true; throw e; }
+    if (!mailBotConfigurado()) { const e = new Error('Faltan MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD en Railway.'); e.faltanCreds = true; throw e; }
+    if (_alquileresCorriendo) return { yaCorriendo: true, avisados: 0 };
+    _alquileresCorriendo = true;
+
+    const nodemailer = require('nodemailer');
+    const user = process.env.MAIL_BOT_USER;
+    const pass = process.env.MAIL_BOT_APP_PASSWORD;
+    const emailDefault = process.env.ALERTAS_EMAIL_DEFAULT || user;
+    const transporter = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user, pass } });
+
+    let revisados = 0, avisados = 0;
+    try {
+        const empSnap = await admin.database().ref('empresas').once('value');
+        const empresasVal = empSnap.val() || {};
+        const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+        const periodo = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');
+        const diasMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+
+        for (const eid of Object.keys(empresasVal)) {
+            const emp = empresasVal[eid] || {};
+            const emailEmpresa = (emp.datos && emp.datos.email) || '';
+            const proys = emp.proyectos || {};
+            for (const pid of Object.keys(proys)) {
+                const alqs = (proys[pid] && proys[pid].alquileres) || {};
+                const keys = Array.isArray(alqs)
+                    ? alqs.map((_, i) => i).filter((i) => alqs[i])
+                    : Object.keys(alqs);
+                for (const k of keys) {
+                    const a = alqs[k];
+                    if (!a || a.disponible || !String(a.inquilino || '').trim() || !a.diaPago) continue;
+                    if (a.fin) { const f = new Date(a.fin + 'T00:00:00'); if (!isNaN(f.getTime()) && f < hoy) continue; }
+                    revisados++;
+                    // ¿La cuota del mes ya está cobrada?
+                    const cobrosRaw = a.cobrosHistorial || [];
+                    const cobros = Array.isArray(cobrosRaw) ? cobrosRaw : Object.values(cobrosRaw);
+                    const cobrada = cobros.some((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
+                    if (cobrada) continue;
+
+                    const dia = Math.min(parseInt(a.diaPago) || 1, diasMes);
+                    const vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
+                    const diasRestantes = Math.round((vence - hoy) / 86400000);
+                    if (diasRestantes < 0) continue; // ya vencida (el aviso in-app lo cubre)
+                    const rec = (a.recordatoriosPago && a.recordatoriosPago[periodo]) || {};
+
+                    for (const d of ALQ_DIAS_AVISO) {
+                        if (diasRestantes > d || rec[String(d)]) continue;
+                        const destinos = [a.emailInquilino, emailEmpresa || emailDefault]
+                            .map((x) => String(x || '').trim()).filter(Boolean);
+                        const to = Array.from(new Set(destinos)).join(', ');
+                        if (!to) continue;
+
+                        const monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
+                        const monto = a.canonActual || a.canon || 0;
+                        const cuando = diasRestantes === 0 ? 'hoy' : ('en ' + diasRestantes + ' día(s)');
+                        const asunto = '⏰ Alquiler ' + (a.unidad || '') + ': la cuota vence ' + cuando;
+                        const cuerpo = 'Hola,\n\n' +
+                            'Te recordamos que la cuota de alquiler de la unidad "' + (a.unidad || '') + '"' +
+                            (a.inquilino ? ' (' + a.inquilino + ')' : '') + '\n' +
+                            'vence el día ' + dia + ' de este mes (' + cuando + ').\n' +
+                            (monto ? 'Monto: ' + monSym + Math.round(monto) + '\n' : '') +
+                            (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
+                            '\nEmpresa: ' + (emp.nombre || eid) +
+                            '\n\n— RK Gestión Multiempresa';
+
+                        await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to, subject: asunto, text: cuerpo });
+                        await admin.database()
+                            .ref('empresas/' + eid + '/proyectos/' + pid + '/alquileres/' + k + '/recordatoriosPago/' + periodo + '/' + d)
+                            .set(true);
+                        avisados++;
+                    }
+                }
+            }
+        }
+    } finally {
+        _alquileresCorriendo = false;
+    }
+    return { revisados, avisados };
+}
+
+// Disparo manual (además del automático diario).
+app.get('/alquileres/revisar', async (req, res) => {
+    try {
+        const r = await revisarAlquileres();
+        res.json({ ok: true, ...r });
+    } catch (e) {
+        res.status(e.faltanCreds ? 400 : 500).json({ error: e.message, detalle: detalleErrorMail(e) });
+    }
+});
+
+// Revisión automática una vez por día.
+if (mailBotConfigurado()) {
+    setInterval(function () {
+        revisarAlquileres().then(function (r) {
+            if (r && r.avisados) console.log('[Alquileres] avisó ' + r.avisados + ' cuota(s) por vencer.');
+        }).catch(function (e) {
+            console.error('[Alquileres] error:', e.message);
+        });
+    }, 24 * 60 * 60 * 1000);
+    setTimeout(function () {
+        revisarAlquileres().catch(function (e) { console.error('[Alquileres] error:', e.message); });
+    }, 180000); // a los 3 min del boot (después de vencimientos)
+    console.log('[Alquileres] activo: recordatorio de cuotas de alquiler una vez por día.');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  USUARIOS — Gestión de usuarios de Firebase Auth desde la app
 //  Requiere Firebase Admin SDK (FIREBASE_SERVICE_ACCOUNT_BASE64 en Railway).
 // ═══════════════════════════════════════════════════════════════════
