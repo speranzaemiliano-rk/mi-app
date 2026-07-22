@@ -5517,9 +5517,18 @@
                         <button type="button" class="modalidad-btn selected-A" id="pagoBtnA" onclick="selModalidadPago('A')">🏦 A — Bancarizado</button>
                         <button type="button" class="modalidad-btn" id="pagoBtnB" onclick="selModalidadPago('B')">💵 B — Efectivo</button>
                         <button type="button" class="modalidad-btn" id="pagoBtnC" onclick="selModalidadPago('C')">🔄 Canje m²</button>
+                        <button type="button" class="modalidad-btn" id="pagoBtnCR" onclick="selModalidadPago('CR')">💳 Crédito a favor</button>
                     </div>
                     <input type="hidden" id="modalidadPago" value="A">
-                    <div class="form-hint">Pago A: bancarizado, permite retenciones AFIP. Pago B: efectivo. Canje m²: pagás entregando metros (no mueve caja).</div>
+                    <div class="form-hint">A: bancarizado (retenciones AFIP). B: efectivo. Canje m²: pagás con metros. Crédito a favor: usás el haber que tenés con el proveedor (por canje de una venta). Ninguna de las dos últimas mueve caja.</div>
+                </div>
+
+                <!-- Panel de crédito a favor (solo modalidad CR) -->
+                <div class="form-group" id="pagoCreditoPanel" style="display:none;border:1px solid #E5CC88;background:var(--gold-pale);border-radius:8px;padding:12px;">
+                    <div id="pagoCreditoInfo" style="font-size:12px;margin-bottom:8px;"></div>
+                    <label>Monto a usar del crédito (ARS)</label>
+                    <input type="number" id="pagoCreditoMonto" step="0.01" min="0" placeholder="0" oninput="_pagoCreditoRecalc()">
+                    <div class="form-hint" id="pagoCreditoHint"></div>
                 </div>
 
                 <!-- Panel de canje de m² (solo modalidad C) -->
@@ -9056,30 +9065,71 @@
 
     function selModalidadPago(m) {
         document.getElementById('modalidadPago').value = m;
-        ['A','B','C'].forEach(k => {
+        ['A','B','C','CR'].forEach(k => {
             const btn = document.getElementById('pagoBtn'+k);
-            if (btn) btn.className = 'modalidad-btn' + (k === m ? ' selected-'+(k==='C'?'A':k) : '');
+            if (btn) btn.className = 'modalidad-btn' + (k === m ? ' selected-'+((k==='C'||k==='CR')?'A':k) : '');
         });
         const esCanje = m === 'C';
+        const esCredito = m === 'CR';
+        const esSinCaja = esCanje || esCredito;
         const panelRet = document.getElementById('panelRetenciones');
         if (panelRet) panelRet.style.display = m === 'A' ? 'block' : 'none';
         const grupoCuenta = document.getElementById('grupoCuentaBancaria');
         if (grupoCuenta) grupoCuenta.style.display = m === 'A' ? '' : 'none';
-        // En canje se ocultan CAC / mayores / desglose y se muestra el panel de m²
-        ['pagoGrupoCAC','pagoGrupoMayores','pagoDesglose'].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.display = esCanje ? 'none' : ''; });
+        // En canje/crédito se ocultan CAC / mayores / desglose
+        ['pagoGrupoCAC','pagoGrupoMayores','pagoDesglose'].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.display = esSinCaja ? 'none' : ''; });
         var canjePanel = document.getElementById('pagoCanjePanel'); if (canjePanel) canjePanel.style.display = esCanje ? '' : 'none';
-        var capEl = document.getElementById('pagoCapital'); if (capEl) capEl.readOnly = esCanje;
-        var mayEl = document.getElementById('pagoMayores'); if (mayEl && esCanje) mayEl.value = 0;
+        var credPanel = document.getElementById('pagoCreditoPanel'); if (credPanel) credPanel.style.display = esCredito ? '' : 'none';
+        var capEl = document.getElementById('pagoCapital'); if (capEl) capEl.readOnly = esSinCaja;
+        var mayEl = document.getElementById('pagoMayores'); if (mayEl && esSinCaja) mayEl.value = 0;
         if (esCanje) {
             var sel = document.getElementById('pagoCanjeDes');
-            var i = parseInt(document.getElementById('pagoPresupuesto').value);
             if (sel) {
                 sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>';
                 desarrollos.forEach(function(d){ var o = document.createElement('option'); o.value = d.id; o.textContent = d.nombre || d.id; sel.appendChild(o); });
             }
             _pagoCanjeRecalc(true);
         }
+        if (esCredito) _pagoCreditoInit();
         if (m === 'A') { poblarSelectCuentasPago(); recalcularRetenciones(); }
+    }
+    function _pagoCreditoInit() {
+        var i = parseInt(document.getElementById('pagoPresupuesto').value);
+        var prov = (!isNaN(i) && datos[i]) ? (datos[i].proveedor || '') : '';
+        var saldo = prov ? saldoCreditoProveedor(prov, 'ARS') : 0;
+        var info = document.getElementById('pagoCreditoInfo');
+        var c = (!isNaN(i) && datos[i]) ? calcPresupuesto(datos[i], indicePagoActual(datos[i])) : { capitalPend: 0 };
+        if (info) info.innerHTML = 'Proveedor: <strong>' + (escHtml(prov)||'—') + '</strong><br>Crédito disponible (ARS): <strong style="color:' + (saldo>0?'var(--success)':'var(--danger)') + ';">$' + Math.round(saldo).toLocaleString('es-AR') + '</strong>';
+        var mEl = document.getElementById('pagoCreditoMonto');
+        if (mEl && (!mEl.value || parseFloat(mEl.value)===0)) mEl.value = Math.round(Math.min(saldo, c.capitalPend || saldo)) || '';
+        _pagoCreditoRecalc();
+    }
+    function _pagoCreditoRecalc() {
+        var i = parseInt(document.getElementById('pagoPresupuesto').value);
+        var prov = (!isNaN(i) && datos[i]) ? (datos[i].proveedor || '') : '';
+        var saldo = prov ? saldoCreditoProveedor(prov, 'ARS') : 0;
+        var monto = parseFloat((document.getElementById('pagoCreditoMonto')||{}).value) || 0;
+        var capEl = document.getElementById('pagoCapital'); if (capEl) capEl.value = monto ? Math.round(monto) : 0;
+        var hint = document.getElementById('pagoCreditoHint');
+        if (hint) hint.innerHTML = monto > saldo
+            ? '<span style="color:var(--danger);">El monto supera el crédito disponible ($' + Math.round(saldo).toLocaleString('es-AR') + ').</span>'
+            : 'Se descuenta del crédito con el proveedor. Saldo tras el pago: $' + Math.round(saldo - monto).toLocaleString('es-AR') + '.';
+    }
+    // Consume `monto` del crédito a favor de un proveedor (FIFO, marcando `usado`). Devuelve lo efectivamente consumido.
+    function _consumirCreditoProveedor(nombre, moneda, monto) {
+        var n = (nombre||'').trim().toLowerCase();
+        var rest = monto, consumido = 0;
+        (creditosProveedor||[]).slice().sort(function(a,b){ return String(a.fecha).localeCompare(String(b.fecha)); }).forEach(function(c){
+            if (rest <= 0) return;
+            if ((c.proveedor||'').trim().toLowerCase() !== n) return;
+            if ((c.moneda||'ARS') !== (moneda||'ARS')) return;
+            var disp = (c.monto||0) - (c.usado||0);
+            if (disp <= 0) return;
+            var toma = Math.min(disp, rest);
+            c.usado = (c.usado||0) + toma; rest -= toma; consumido += toma;
+        });
+        if (consumido > 0) persistirCreditos();
+        return consumido;
     }
     function _pagoCanjeRecalc(desdeDesarrollo) {
         var desId = (document.getElementById('pagoCanjeDes')||{}).value || '';
@@ -9305,7 +9355,9 @@
     // Actualiza el desglose del pago basándose en el CAPITAL que el usuario va a abonar
     function actualizarPendientePago(alEscribirIndice) {
         // En modalidad canje el capital lo fija el valor de los m², no el CAC
-        if ((document.getElementById('modalidadPago')||{}).value === 'C') { _pagoCanjeRecalc(); return; }
+        var _modPagoAct = (document.getElementById('modalidadPago')||{}).value;
+        if (_modPagoAct === 'C')  { _pagoCanjeRecalc(); return; }
+        if (_modPagoAct === 'CR') { _pagoCreditoInit(); return; }
         const i = parseInt(document.getElementById('pagoPresupuesto').value);
         const dCap  = document.getElementById('dCapital');
         const dMay  = document.getElementById('dMayores');
@@ -9389,6 +9441,8 @@
         const fechaPago = document.getElementById('pagoFecha').value;
         const modalidadPago = document.getElementById('modalidadPago').value;
         const esCanje = modalidadPago === 'C';
+        const esCredito = modalidadPago === 'CR';
+        const esSinCaja = esCanje || esCredito;
         const _canjeDes  = (document.getElementById('pagoCanjeDes')||{}).value || '';
         const _canjeCant = parseFloat((document.getElementById('pagoCanjeCant')||{}).value) || 0;
         const _canjeVal  = parseFloat((document.getElementById('pagoCanjeValor')||{}).value) || 0;
@@ -9399,6 +9453,10 @@
             if (capital <= 0) { alert('El valor del canje debe ser mayor a cero.'); return; }
             var _saldoCanje = saldoMetrosDesarrollo(_canjeDes);
             if (_canjeCant > _saldoCanje && !confirm('⚠️ El desarrollo "' + _metroDesNombre(_canjeDes) + '" tiene ' + Math.round(_saldoCanje).toLocaleString('es-AR') + ' m² y estás entregando ' + Math.round(_canjeCant).toLocaleString('es-AR') + ' m². El saldo va a quedar en negativo.\n\n¿Continuar igual?')) return;
+        } else if (esCredito) {
+            if (capital <= 0) { alert('Ingresá el monto a usar del crédito.'); return; }
+            var _saldoCred = saldoCreditoProveedor(datos[i].proveedor || '', 'ARS');
+            if (capital > _saldoCred + 0.5) { alert('El monto ($' + Math.round(capital).toLocaleString('es-AR') + ') supera el crédito disponible con ' + (datos[i].proveedor||'el proveedor') + ' ($' + Math.round(_saldoCred).toLocaleString('es-AR') + ').'); return; }
         } else if (capital <= 0 && mayores <= 0) { alert('Ingresá al menos un monto a pagar.'); return; }
 
         const idxPago = indicePagoActual(datos[i]);
@@ -9431,12 +9489,12 @@
         const _entryPago = {
             pagoId,
             fecha:         fechaPago,
-            modalidad:     esCanje ? 'B' : modalidadPago,
-            capital:       esCanje ? 0 : capital,
-            mayores:       esCanje ? 0 : mayores,
-            baseImponible: esCanje ? 0 : baseEste,
-            retenciones:   esCanje ? [] : retenciones.map(r => ({ codigo: r.codigo, monto: r.monto })),
-            totalRet:      esCanje ? 0 : totalRet
+            modalidad:     esSinCaja ? 'B' : modalidadPago,
+            capital:       esSinCaja ? 0 : capital,
+            mayores:       esSinCaja ? 0 : mayores,
+            baseImponible: esSinCaja ? 0 : baseEste,
+            retenciones:   esSinCaja ? [] : retenciones.map(r => ({ codigo: r.codigo, monto: r.monto })),
+            totalRet:      esSinCaja ? 0 : totalRet
         };
         if (esCanje) {
             _entryPago.formaPago = 'canje';
@@ -9444,6 +9502,10 @@
             _entryPago.canjeDesarrolloId = _canjeDes;
             _entryPago.canjeCantidadM2 = _canjeCant;
             _entryPago.canjeValorM2 = _canjeVal;
+        } else if (esCredito) {
+            _entryPago.formaPago = 'credito';
+            _entryPago.canjeCapital = capital; // usa el mismo mecanismo (no impacta caja)
+            _entryPago.creditoProveedor = datos[i].proveedor || '';
         }
         datos[i].pagosHistorial.push(_entryPago);
 
@@ -9458,9 +9520,9 @@
             if (nroCbte)      lastPago.nroComprobante = nroCbte;
         }
         // Numeración correlativa A/B por empresa+proyecto
-        const nroCorr = await obtenerProximoComprobante(esCanje ? 'B' : modalidadPago);
+        const nroCorr = await obtenerProximoComprobante(esSinCaja ? 'B' : modalidadPago);
         lastPago.nroCorrelativo = nroCorr;
-        lastPago.tipoAB = esCanje ? 'B' : modalidadPago;
+        lastPago.tipoAB = esSinCaja ? 'B' : modalidadPago;
         datos[i].reciboCorrelativo = nroCorr;
         // Canje: registrar la SALIDA de m² del desarrollo elegido
         if (esCanje) {
@@ -9474,6 +9536,8 @@
             persistirMetros();
             if (typeof renderMetros === 'function') renderMetros();
         }
+        // Crédito a favor: descontar el monto del haber con el proveedor
+        if (esCredito) { _consumirCreditoProveedor(datos[i].proveedor || '', 'ARS', capital); }
         const datoPagado = datos[i];
         cerrarPago();
         // Escribir SOLO el nodo de este presupuesto (no todo el array `datos`) para no pisar
