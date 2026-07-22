@@ -9261,9 +9261,23 @@
             var disp = (c.monto||0) - (c.usado||0);
             if (disp <= 0) return;
             var toma = Math.min(disp, rest);
+            if (toma <= 0) return;
+            // Optimista en memoria (para la UI inmediata; el listener luego re-sincroniza)
             c.usado = (c.usado||0) + toma; rest -= toma; consumido += toma;
+            // ATÓMICO en el servidor: el crédito es global y compartido; sin transaction, dos
+            // usuarios que descuentan a la vez se pisan y el haber se gasta doble. La transaction
+            // recalcula el disponible REAL al momento de commitear y nunca deja usado > monto.
+            if (c.id && REF_CREDITOS) {
+                var _montoCredito = c.monto || 0, _toma = toma;
+                REF_CREDITOS.child(c.id).child('usado').transaction(function(usadoServer) {
+                    var u = usadoServer || 0;
+                    var dispServer = _montoCredito - u;
+                    var tomaServer = Math.min(dispServer, _toma);
+                    if (tomaServer <= 0) return;          // sin disponible real → aborta (no toca)
+                    return u + tomaServer;                // incremento atómico
+                });
+            }
         });
-        if (consumido > 0) persistirCreditos();
         return consumido;
     }
     function _pagoCanjeRecalc(desdeDesarrollo) {
@@ -13866,6 +13880,7 @@
 
     function editarFactura(index) {
         editandoFactIndex = index;
+        _marcarEdicion('factura', editandoFactIndex >= 0 ? facturas[editandoFactIndex] : null);
         const f = facturas[index];
         window._factNetoGravado = f.netoGravado || 0;
         document.getElementById('modalFactTitle').textContent = '🧾 Editar Factura';
@@ -14152,6 +14167,11 @@
 
     document.getElementById('formFact').addEventListener('submit', async function(e) {
         e.preventDefault();
+        // Reapuntar por id (por si otro usuario reordenó la lista de facturas mientras editabas)
+        if (editandoFactIndex >= 0 && _edicionEnCurso.factura && _edicionEnCurso.factura.id) {
+            var _rzf = facturas.findIndex(function(x){ return x && x.id === _edicionEnCurso.factura.id; });
+            if (_rzf >= 0) editandoFactIndex = _rzf;
+        }
         const nuevo = {
             proveedor:   document.getElementById('factProveedor').value,
             numero:      document.getElementById('factNumero').value.trim(),
@@ -14203,8 +14223,10 @@
         }
 
         if (editandoFactIndex >= 0) {
-            nuevo.id = facturas[editandoFactIndex].id || ('F-' + Date.now());
-            facturas[editandoFactIndex] = nuevo;
+            var _if = _resolverEdicion(facturas, _edicionEnCurso.factura && _edicionEnCurso.factura.id, _edicionEnCurso.factura && _edicionEnCurso.factura.snap, 'factura');
+            if (_if < 0) return;
+            nuevo.id = facturas[_if].id || ('F-' + Date.now());
+            facturas[_if] = nuevo;
         } else {
             nuevo.id = 'F-' + Date.now();
             facturas.push(nuevo);
@@ -17025,9 +17047,17 @@
         if (!v) return;
         if (!confirm('¿Marcar "' + (v.alias||'este vencimiento') + '" como pagado?')) return;
         var hoy = new Date().toISOString().slice(0,10);
-        REF_VENCIMIENTOS.child(id).update({ pagado: true, fechaPago: hoy }).then(function() {
-            if (v.recurrente) _crearProximoVencimiento(v);
-        });
+        // Transaction: solo commitea si estaba SIN pagar. Así, si dos personas lo marcan pagado a
+        // la vez, solo la que realmente lo transiciona (committed) genera el próximo vencimiento
+        // recurrente — antes ambas lo creaban y quedaba duplicado.
+        REF_VENCIMIENTOS.child(id).transaction(function(cur) {
+            if (!cur) return cur;      // ya no existe
+            if (cur.pagado) return;    // ya estaba pagado por otro usuario → aborta (no re-escribe)
+            cur.pagado = true; cur.fechaPago = hoy;
+            return cur;
+        }).then(function(res) {
+            if (res && res.committed && v.recurrente) _crearProximoVencimiento(v);
+        }).catch(function(){});
     }
 
     function eliminarVencimiento(id) {
@@ -17454,6 +17484,32 @@
         _colSnap[coll] = nowSnap;
         if (!Object.keys(batch).length) return Promise.resolve();
         return ref.update(batch);
+    }
+
+    // ── Edición segura entre usuarios ────────────────────────────────
+    // Al guardar una edición, reencuentra el ítem por su ID ESTABLE (no por el índice, que otro
+    // usuario pudo correr agregando/borrando en la misma lista) y avisa si otro usuario lo modificó
+    // mientras tanto. Devuelve el índice a escribir, o -1 para ABORTAR (ítem borrado por otro, o el
+    // usuario canceló ante el conflicto). Evita pisar el registro equivocado o borrar uno inocente.
+    function _resolverEdicion(arr, id, snapAlAbrir, nombre) {
+        var i = id ? arr.findIndex(function(x){ return x && x.id === id; }) : -1;
+        if (i < 0) {
+            alert('Este registro (' + nombre + ') fue eliminado por otra persona mientras lo editabas.\nRecargá la página y volvé a hacer el cambio.');
+            return -1;
+        }
+        if (snapAlAbrir != null) {
+            var actual = ''; try { actual = JSON.stringify(arr[i]); } catch (e) {}
+            if (actual && actual !== snapAlAbrir &&
+                !confirm('Otra persona modificó este registro (' + nombre + ') mientras lo tenías abierto.\nSi guardás, se pisan sus cambios.\n\n¿Guardar igual?')) {
+                return -1;
+            }
+        }
+        return i;
+    }
+    // Guarda id + "foto" del ítem al abrir un modal de edición (para _resolverEdicion al guardar).
+    var _edicionEnCurso = {};
+    function _marcarEdicion(clave, item) {
+        _edicionEnCurso[clave] = item ? { id: item.id || null, snap: (function(){ try { return JSON.stringify(item); } catch(e){ return null; } })() } : { id: null, snap: null };
     }
 
     function _cargarConListener(ref, cb, coll) {
@@ -17890,6 +17946,7 @@
 
     function abrirModalVenta(idx) {
         editandoVentaIdx = (idx !== undefined) ? idx : -1;
+        _marcarEdicion('venta', editandoVentaIdx >= 0 ? ventas[editandoVentaIdx] : null);
         const v = editandoVentaIdx >= 0 ? ventas[editandoVentaIdx] : null;
         document.getElementById('modalVentaTitle').textContent = v ? '🏠 Editar UF — Venta' : '🏠 Nueva UF — Venta';
         document.getElementById('formVenta').reset();
@@ -18150,6 +18207,11 @@
     async function guardarVenta() {
         const uf = document.getElementById('ventaUF').value.trim().toUpperCase();
         if (!uf) { alert('El código de UF es obligatorio.'); return; }
+        // Reapuntar por id (por si otro usuario reordenó la lista mientras editabas)
+        if (editandoVentaIdx >= 0 && _edicionEnCurso.venta && _edicionEnCurso.venta.id) {
+            var _rzv = ventas.findIndex(function(x){ return x && x.id === _edicionEnCurso.venta.id; });
+            if (_rzv >= 0) editandoVentaIdx = _rzv;
+        }
         const mod = document.getElementById('ventaModalidad').value;
         const nuevo = {
             uf,
@@ -18320,7 +18382,11 @@
             await _registrarCanjeVenta(nuevo, _cvk);
         }
 
-        if (editandoVentaIdx >= 0) { ventas[editandoVentaIdx] = nuevo; }
+        if (editandoVentaIdx >= 0) {
+            var _iv = _resolverEdicion(ventas, _edicionEnCurso.venta && _edicionEnCurso.venta.id, _edicionEnCurso.venta && _edicionEnCurso.venta.snap, 'venta UF');
+            if (_iv < 0) return;
+            nuevo.id = ventas[_iv].id; ventas[_iv] = nuevo;
+        }
         else { ventas.push(nuevo); }
         cerrarModalVenta();
         persistirVentas();
@@ -20662,6 +20728,7 @@
     // ══════════════════════════════════════════════════════════
     function abrirModalAlquiler(idx) {
         editandoAlqIdx = (idx !== undefined) ? idx : -1;
+        _marcarEdicion('alquiler', editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null);
         const a = editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null;
         document.getElementById('modalAlquilerTitle').textContent = a ? '🔑 Editar Contrato' : '🔑 Nuevo Contrato de Alquiler';
         ['alqUnidad','alqDireccion','alqInquilino','alqEmailInquilino','alqDiaPago','alqInicio','alqFin',
@@ -20852,6 +20919,10 @@
     async function guardarAlquiler() {
         var unidad = document.getElementById('alqUnidad').value.trim();
         if (!unidad) { alert('El código/nombre de la unidad es obligatorio.'); return; }
+        if (editandoAlqIdx >= 0 && _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.id) {
+            var _rza = alquileres.findIndex(function(x){ return x && x.id === _edicionEnCurso.alquiler.id; });
+            if (_rza >= 0) editandoAlqIdx = _rza;
+        }
         var existente = editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null;
         var nuevo = {
             unidad,
@@ -20910,7 +20981,11 @@
             if (btnAlq) { btnAlq.disabled = false; btnAlq.textContent = 'Guardar Contrato'; }
             if (estAlq) estAlq.textContent = '';
         }
-        if (editandoAlqIdx >= 0) alquileres[editandoAlqIdx] = nuevo;
+        if (editandoAlqIdx >= 0) {
+            var _ia = _resolverEdicion(alquileres, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.id, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.snap, 'contrato de alquiler');
+            if (_ia < 0) { var _bA=document.getElementById('alqGuardarBtn'); if(_bA){_bA.disabled=false;_bA.textContent='Guardar Contrato';} return; }
+            nuevo.id = alquileres[_ia].id; alquileres[_ia] = nuevo;
+        }
         else alquileres.push(nuevo);
         cerrarModalAlquiler();
         persistirAlquileres();
@@ -21302,6 +21377,7 @@
 
     function abrirModalServicio(idx) {
         editandoSrvIdx = (idx !== undefined) ? idx : -1;
+        _marcarEdicion('servicio', editandoSrvIdx >= 0 ? servicios[editandoSrvIdx] : null);
         var s = editandoSrvIdx >= 0 ? servicios[editandoSrvIdx] : null;
         document.getElementById('modalServicioTitle').textContent = s ? '📐 Editar Servicio' : '📐 Nuevo Servicio del Estudio';
         ['srvFecha','srvCliente','srvDescripcion','srvBase','srvCACBase','srvCACActual','srvObs'].forEach(function(id) {
@@ -21334,6 +21410,10 @@
     function guardarServicio() {
         var desc = document.getElementById('srvDescripcion').value.trim();
         if (!desc) { alert('La descripción del servicio es obligatoria.'); return; }
+        if (editandoSrvIdx >= 0 && _edicionEnCurso.servicio && _edicionEnCurso.servicio.id) {
+            var _rzs = servicios.findIndex(function(x){ return x && x.id === _edicionEnCurso.servicio.id; });
+            if (_rzs >= 0) editandoSrvIdx = _rzs;
+        }
         var base    = parseFloat(document.getElementById('srvBase').value) || 0;
         var cacBase = parseFloat(document.getElementById('srvCACBase').value) || 0;
         var cacAct  = parseFloat(document.getElementById('srvCACActual').value) || 0;
@@ -21352,7 +21432,11 @@
             obs:         document.getElementById('srvObs').value.trim(),
             cobrosHistorial: (editandoSrvIdx >= 0 && servicios[editandoSrvIdx] && servicios[editandoSrvIdx].cobrosHistorial) || []
         };
-        if (editandoSrvIdx >= 0) servicios[editandoSrvIdx] = nuevo;
+        if (editandoSrvIdx >= 0) {
+            var _is = _resolverEdicion(servicios, _edicionEnCurso.servicio && _edicionEnCurso.servicio.id, _edicionEnCurso.servicio && _edicionEnCurso.servicio.snap, 'servicio');
+            if (_is < 0) return;
+            nuevo.id = servicios[_is].id; servicios[_is] = nuevo;
+        }
         else servicios.push(nuevo);
         cerrarModalServicio();
         persistirServicios();
@@ -21521,6 +21605,7 @@
 
     function abrirModalIngGeneral(idx) {
         editandoIgIdx = (idx !== undefined) ? idx : -1;
+        _marcarEdicion('movCaja', editandoIgIdx >= 0 ? ingGeneral[editandoIgIdx] : null);
         var ig = editandoIgIdx >= 0 ? ingGeneral[editandoIgIdx] : null;
         document.getElementById('modalIngGeneralTitle').textContent = ig ? '💼 Editar Ingreso General' : '💼 Nuevo Ingreso General';
         ['igFecha','igOrigen','igReferencia','igMonto','igObs'].forEach(function(id) {
@@ -21592,6 +21677,10 @@
         var origen = document.getElementById('igOrigen').value.trim();
         var montoI = parseFloat(document.getElementById('igMonto').value) || 0;
         if (!origen) { alert('El origen/descripción es obligatorio.'); return; }
+        if (editandoIgIdx >= 0 && _edicionEnCurso.movCaja && _edicionEnCurso.movCaja.id) {
+            var _rzi = ingGeneral.findIndex(function(x){ return x && x.id === _edicionEnCurso.movCaja.id; });
+            if (_rzi >= 0) editandoIgIdx = _rzi;
+        }
         if (!montoI || montoI <= 0) { alert('Ingresá un monto válido.'); return; }
         var tipoAB = ((document.getElementById('igModalidad')||{}).value) === 'A' ? 'A' : 'B';
         var nuevo = {
@@ -21605,7 +21694,11 @@
             obs:        document.getElementById('igObs').value.trim()
         };
         if(editandoIgIdx>=0){
+            var _ig = _resolverEdicion(ingGeneral, _edicionEnCurso.movCaja && _edicionEnCurso.movCaja.id, _edicionEnCurso.movCaja && _edicionEnCurso.movCaja.snap, 'movimiento de caja');
+            if (_ig < 0) return;
+            editandoIgIdx = _ig;
             var orig=ingGeneral[editandoIgIdx]||{};
+            nuevo.id = orig.id;
             if(orig.esEgreso!==undefined)nuevo.esEgreso=orig.esEgreso;
             // Conservar el número correlativo ya emitido al editar
             if(orig.nroCorrelativo){ nuevo.nroCorrelativo=orig.nroCorrelativo; if(orig.tipoAB) nuevo.tipoAB=orig.tipoAB; }
