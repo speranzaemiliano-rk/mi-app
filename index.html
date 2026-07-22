@@ -9014,9 +9014,20 @@
     function abrirHistorialPagosDoc(docId) {
         var d=documentos.find(function(x){return x.id===docId;}); if(!d) return;
         var hist=d.pagosHistorial||[];
-        if(!hist.length){alert('Este documento no tiene pagos registrados.');return;}
-        var items=hist.map(function(p){return{label:(p.fecha?formatearFecha(p.fecha):'—')+' — $'+Number(p.monto||0).toLocaleString('es-AR'),sub:(p.modalidad==='A'?'Bancarizado':'Efectivo')+(p.totalRet?' · Ret: $'+Math.round(p.totalRet).toLocaleString('es-AR'):'')};});
-        _abrirModalHistorial('Pagos — '+(d.proveedor||'')+(d.numero?' N°'+d.numero:''),items,function(i){var p=hist[i];if(p)alert('Comprobante N°'+(d.numero||'—')+' — $'+Number(p.monto||0).toLocaleString('es-AR'));});
+        var _impDoc=function(p){ imprimirReciboFactura(d, p.monto, p.fecha, p.modalidad, (p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.codigo};}), p.totalRet||0, p.nroCorrelativo, p.nroComprobante); };
+        if(!hist.length){
+            // Pago viejo sin historial detallado: reconstruir la Orden de Pago desde el monto pagado.
+            if((d.pagado||0)>0){ imprimirReciboFactura(d, d.pagado, d.fecha, d.modalidad||'B', [], 0, d.numero||d.id, ''); }
+            else { alert('Este documento no tiene pagos registrados.'); }
+            return;
+        }
+        if(hist.length===1){ _impDoc(hist[0]); return; }
+        var lista=hist.map(function(p,i){return (i+1)+') '+(p.fecha?formatearFecha(p.fecha):'—')+' — $'+Number(p.monto||0).toLocaleString('es-AR')+' ('+(p.modalidad==='A'?'Banc.':'Ef.')+')';}).join('\n');
+        var sel=prompt('Pagos de '+(d.proveedor||'')+(d.numero?' N°'+d.numero:'')+':\n\n'+lista+'\n\nNúmero a reimprimir (1-'+hist.length+'):');
+        if(!sel) return;
+        var i=parseInt(sel)-1;
+        if(isNaN(i)||i<0||i>=hist.length){alert('Número inválido.');return;}
+        _impDoc(hist[i]);
     }
 
     // ── Modal historial visual (para reimprimir pagos anteriores) ──
@@ -14459,7 +14470,7 @@
                 const acciones = puedeEditar ? `
                     ${estado !== 'pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="imprimirComprobanteFacturaItem(${idx})" title="Imprimir esta factura como comprobante">📄</button>
-                    ${(f.pagosHistorial && f.pagosHistorial.length) ? `<button class="btn btn-outline btn-sm" title="Imprimir Orden de Pago" onclick="abrirHistorialPagosFactura(${idx})">🖨️ OP</button>` : ''}
+                    ${((f.pagosHistorial && f.pagosHistorial.length) || (f.pagado||0) > 0) ? `<button class="btn btn-outline btn-sm" title="Imprimir Orden de Pago" onclick="abrirHistorialPagosFactura(${idx})">🖨️ OP</button>` : ''}
                     ${pagadoInconsistente ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(f.pagado||0).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
                     ${f.docId ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>
@@ -16575,7 +16586,7 @@
                 <td><div class="action-btns">
                     ${_saldoFactDoc(d)>0?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
                     <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
-                    ${((d.pagosHistorial||[]).length>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
+                    ${(((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
                     ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
                     ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
@@ -22854,7 +22865,15 @@
     function abrirHistorialPagosFactura(fIdx) {
         var f = facturas[fIdx]; if (!f) return;
         var hist = f.pagosHistorial || [];
-        if (!hist.length) { alert('Esta factura no tiene pagos registrados aún.'); return; }
+        if (!hist.length) {
+            // Pago viejo sin historial detallado: reconstruir la Orden de Pago desde el monto pagado.
+            if ((f.pagado||0) > 0) {
+                imprimirReciboFactura(f, f.pagado, f.fecha, f.modalidad || 'B', [], 0, f.numero || f.id, '');
+            } else {
+                alert('Esta factura no tiene pagos registrados aún.');
+            }
+            return;
+        }
         var lista = hist.map(function(p, i) {
             return (i+1) + ') ' + (p.fecha ? formatearFecha(p.fecha) : '—') + ' — $ ' + Number(p.monto||0).toLocaleString('es-AR') + ' (' + (p.modalidad==='A'?'Banc.':'Ef.') + ')';
         }).join('\n');
