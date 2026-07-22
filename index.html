@@ -39,7 +39,7 @@
         };
         const ADMIN_EMAIL = "speranzaemiliano@gmail.com";
 
-        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES, REF_VENCIMIENTOS;
+        let auth, db, REF_DATOS, REF_TC, REF_ROLES, REF_USUARIOS, REF_PROV, REF_GRUPOS, REF_CAC, REF_DOCS, REF_EMPRESAS, REF_FACTURAS, REF_CAJA, REF_INGRESOS, REF_BANCO, REF_SOLICITUDES, REF_VENCIMIENTOS, REF_CREDITOS;
         let FIREBASE_OK = false;
         let FIREBASE_ERROR = '';
 
@@ -53,6 +53,7 @@
             // Proveedores, grupos y vencimientos son GLOBALES (compartidos entre todas las empresas/proyectos)
             REF_PROV     = db.ref('global/proveedores');
             REF_GRUPOS   = db.ref('global/grupos');
+            REF_CREDITOS = db.ref('global/creditosProveedor'); // haberes/créditos a favor por proveedor (global)
             REF_VENCIMIENTOS = db.ref('global/vencimientosServicios');
             REF_CAC      = null;
             REF_DOCS     = null;
@@ -6011,6 +6012,7 @@
     let esAdmin       = false;  // admin o superadmin
     let esSuperAdmin  = false;
     let proveedores = [];
+    let creditosProveedor = []; // haberes a favor por proveedor (global): {id, proveedor, monto, usado, moneda, fecha, origen, ref}
     let editandoProvIndex = -1;
     let grupos = [];
     let docExistente = null;
@@ -6431,6 +6433,13 @@
             renderProveedores();
             renderizar();
         }); activeListeners.push({ref:l4, event:'value'});
+
+        if (REF_CREDITOS) {
+            const l4b = REF_CREDITOS; l4b.on('value', (snap) => {
+                creditosProveedor = _colProcesarCarga('creditosProveedor', REF_CREDITOS, snap.val());
+                if (typeof renderProveedores === 'function') renderProveedores();
+            }); activeListeners.push({ref:l4b, event:'value'});
+        }
 
         const l5 = REF_FACTURAS;
         const refPathFact = l5.toString();
@@ -11357,6 +11366,16 @@
 
     // ===================== PROVEEDORES =====================
     function persistirProveedores() { return _colPersist('proveedores', REF_PROV, proveedores); }
+    function persistirCreditos() { return _colPersist('creditosProveedor', REF_CREDITOS, creditosProveedor).catch(function(e){ console.error(e); }); }
+    // Saldo disponible del crédito/haber a favor de un proveedor (suma de créditos − usado).
+    function saldoCreditoProveedor(nombre, moneda) {
+        var n = (nombre||'').trim().toLowerCase();
+        return (creditosProveedor||[]).reduce(function(s, c){
+            if ((c.proveedor||'').trim().toLowerCase() !== n) return s;
+            if (moneda && (c.moneda||'ARS') !== moneda) return s;
+            return s + ((c.monto||0) - (c.usado||0));
+        }, 0);
+    }
 
     // Busca un proveedor por coincidencia EXACTA de razón social o nombre de fantasía
     // (para saber si "ya existe" antes de dar de alta uno nuevo).
@@ -11575,6 +11594,11 @@
                 ].filter(Boolean).join(' ') || '<span style="color:var(--text-3); font-size:12px;">—</span>';
                 const nombre = p.razonSocial||'';
                 const idSafe = cssId(nombre);
+                const _crARS = saldoCreditoProveedor(nombre, 'ARS');
+                const _crUSD = saldoCreditoProveedor(nombre, 'USD');
+                const _crBadge = (_crARS>0.5||_crUSD>0.5)
+                    ? `<br><span class="pill" style="font-size:10px;background:var(--gold-pale);color:var(--warn);border:1px solid #E5CC88;" title="Crédito/haber a favor con este proveedor (por canje de venta)">💳 Crédito: ${_crARS>0.5?('$'+Math.round(_crARS).toLocaleString('es-AR')):''}${(_crARS>0.5&&_crUSD>0.5)?' · ':''}${_crUSD>0.5?('USD '+Math.round(_crUSD).toLocaleString('es-AR')):''}</span>`
+                    : '';
                 const tienePagos = datos.some(d => d.proveedor===nombre && ((d.pagosHistorial||[]).length>0||(d.pagado||0)>0)) ||
                                    facturas.some(f => f.proveedor===nombre && (f.pagosHistorial||[]).length>0) ||
                                    documentos.some(d => d.proveedor===nombre && ((d.pagosHistorial||[]).length>0||(d.pagado||0)>0));
@@ -11587,7 +11611,7 @@
                 (function(n){ tr.addEventListener('click', function(ev){ if(ev.target&&ev.target.closest&&ev.target.closest('button,a,input,select,textarea'))return; verFichaProveedor(n); }); })(nombre);
                 tr.innerHTML = `
                     <td>${p.grupo ? '<span class="pill pill-gold">'+p.grupo+'</span>' : '—'}</td>
-                    <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a>${p.nombreFantasia ? '<br><small style="color:var(--text-3);font-size:10px;">'+escHtml(p.nombreFantasia)+'</small>' : ''}</td>
+                    <td><a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;cursor:pointer;" title="Ver ficha completa">${nombre}</a>${p.nombreFantasia ? '<br><small style="color:var(--text-3);font-size:10px;">'+escHtml(p.nombreFantasia)+'</small>' : ''}${_crBadge}</td>
                     <td>${p.cuit||'—'}</td>
                     <td><span class="badge-rol badge-blue">${p.condicionIVA||'—'}</span></td>
                     <td>${p.rubro||'—'}</td>
@@ -17282,12 +17306,7 @@
         var chkRow = document.getElementById('ventaCanje'); if (chkRow) chkRow.closest('.form-group').style.display = esCanje ? 'none' : '';
         var canjePanel = document.getElementById('ventaCanjePanel');
         if (canjePanel) canjePanel.style.display = esCanje ? '' : (document.getElementById('ventaCanje') && document.getElementById('ventaCanje').checked ? '' : 'none');
-        if (esCanje) {
-            var sel = document.getElementById('ventaCanjeDes');
-            var desVenta = (document.getElementById('ventaDesarrolloId')||{}).value || '';
-            if (sel) { sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>'; desarrollos.forEach(function(d){ var o=document.createElement('option'); o.value=d.id; o.textContent=d.nombre||d.id; if (d.id===desVenta) o.selected=true; sel.appendChild(o); }); }
-            ventaCanjeRecalc(true);
-        }
+        if (esCanje) { _ventaCanjePoblar(); ventaCanjeSelTipo((document.getElementById('ventaCanjeTipo')||{}).value || 'm2'); }
     }
 
     function ventaToggleCochera() {
@@ -17593,10 +17612,11 @@
         ['ventaBoletoFile','ventaPlanoFile'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
         ventaRenderAdjunto('boleto');
         ventaRenderAdjunto('plano');
-        // Reset del canje de m² (solo se aplica al cargar una UF nueva)
+        // Reset del canje (solo se aplica al cargar una UF nueva)
         var _vc = document.getElementById('ventaCanje');
         if (_vc) { _vc.checked = false; ventaToggleCanje(false); }
-        ['ventaCanjeCant','ventaCanjeValor'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+        if (typeof ventaCanjeSelTipo === 'function') ventaCanjeSelTipo('m2');
+        ['ventaCanjeCant','ventaCanjeValor','ventaCanjeCredMonto'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
         var _vcRow = document.getElementById('ventaCanje'); if (_vcRow) _vcRow.closest('.form-group').style.display = (idx>=0? 'none':'');
         document.getElementById('modalVenta').classList.add('active');
     }
@@ -17658,21 +17678,48 @@
         valor.style.color = restantes < 0 ? 'var(--danger)' : 'var(--gold)';
     }
 
-    // ── Canje de m² al cargar la UF ──
+    // ── Canje al cargar la UF (metros recibidos o crédito con proveedor) ──
+    function _ventaCanjePoblar() {
+        var sel = document.getElementById('ventaCanjeDes');
+        var desVenta = (document.getElementById('ventaDesarrolloId')||{}).value || '';
+        if (sel) {
+            sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>';
+            desarrollos.forEach(function(d){ var o = document.createElement('option'); o.value = d.id; o.textContent = d.nombre || d.id; if (d.id === desVenta) o.selected = true; sel.appendChild(o); });
+        }
+        var selP = document.getElementById('ventaCanjeProv');
+        if (selP) {
+            selP.innerHTML = '<option value="">— Elegí un proveedor —</option>';
+            (proveedores||[]).map(function(p){ return p.razonSocial; }).filter(Boolean).sort(function(a,b){ return a.localeCompare(b); }).forEach(function(n){ var o=document.createElement('option'); o.value=n; o.textContent=n; selP.appendChild(o); });
+        }
+    }
     function ventaToggleCanje(on) {
         var panel = document.getElementById('ventaCanjePanel');
         if (panel) panel.style.display = on ? '' : 'none';
-        if (on) {
-            var sel = document.getElementById('ventaCanjeDes');
-            var desVenta = (document.getElementById('ventaDesarrolloId')||{}).value || '';
-            if (sel) {
-                sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>';
-                desarrollos.forEach(function(d){ var o = document.createElement('option'); o.value = d.id; o.textContent = d.nombre || d.id; if (d.id === desVenta) o.selected = true; sel.appendChild(o); });
-            }
-            ventaCanjeRecalc(true);
-        }
+        if (on) { _ventaCanjePoblar(); ventaCanjeRecalc(true); }
+    }
+    function ventaCanjeSelTipo(tipo) {
+        document.getElementById('ventaCanjeTipo').value = tipo;
+        var bM = document.getElementById('ventaCanjeTipoM2Btn'), bC = document.getElementById('ventaCanjeTipoCredBtn');
+        if (bM) bM.className = 'modalidad-btn' + (tipo === 'm2' ? ' selected-A' : '');
+        if (bC) bC.className = 'modalidad-btn' + (tipo === 'credito' ? ' selected-A' : '');
+        var m2b = document.getElementById('ventaCanjeM2Bloque'), cb = document.getElementById('ventaCanjeCredBloque');
+        if (m2b) m2b.style.display = tipo === 'm2' ? '' : 'none';
+        if (cb) cb.style.display = tipo === 'credito' ? '' : 'none';
+        ventaCanjeRecalc(true);
     }
     function ventaCanjeRecalc(desdeDesarrollo) {
+        var tipo = (document.getElementById('ventaCanjeTipo')||{}).value || 'm2';
+        var info = document.getElementById('ventaCanjeInfo');
+        if (tipo === 'credito') {
+            var prov = (document.getElementById('ventaCanjeProv')||{}).value || '';
+            var monto = parseFloat((document.getElementById('ventaCanjeCredMonto')||{}).value) || 0;
+            var monC = (document.getElementById('ventaCanjeCredMoneda')||{}).value || 'ARS';
+            if (info) {
+                var saldoPrev = prov ? saldoCreditoProveedor(prov, monC) : 0;
+                info.innerHTML = 'Crédito a favor con <strong>' + (escHtml(prov) || '—') + '</strong>: <strong>' + (monC==='USD'?'USD ':'$ ') + Math.round(monto).toLocaleString('es-AR') + '</strong>. Este importe se toma como cobrado de la venta. Saldo del proveedor → ' + (monC==='USD'?'USD ':'$ ') + Math.round(saldoPrev + monto).toLocaleString('es-AR') + '.';
+            }
+            return;
+        }
         var desId = (document.getElementById('ventaCanjeDes')||{}).value || '';
         var valEl = document.getElementById('ventaCanjeValor');
         if (desdeDesarrollo && valEl && (!valEl.value || parseFloat(valEl.value) === 0)) {
@@ -17682,10 +17729,47 @@
         var valor = parseFloat((valEl||{}).value) || 0;
         var total = cant * valor;
         var mon = _monedaDesarrollo(desId);
-        var info = document.getElementById('ventaCanjeInfo');
         if (info) {
             var saldo = desId ? saldoMetrosDesarrollo(desId) : 0;
             info.innerHTML = 'Valor del canje: <strong>' + (mon==='USD'?'USD ':'$ ') + Math.round(total).toLocaleString('es-AR') + '</strong> · Este importe se toma como cobrado de la venta y suma <strong>' + Math.round(cant).toLocaleString('es-AR') + ' m²</strong> al desarrollo (saldo → ' + Math.round(saldo + cant).toLocaleString('es-AR') + ' m²).';
+        }
+    }
+
+    // Lee los campos del canje de la venta según el tipo elegido (m2 / credito).
+    // Devuelve {tipo, total, moneda, comp, ...} o null (con alert) si falta algo.
+    function _leerCanjeVenta(tipo) {
+        if (tipo === 'credito') {
+            var prov = (document.getElementById('ventaCanjeProv')||{}).value || '';
+            var monto = parseFloat((document.getElementById('ventaCanjeCredMonto')||{}).value) || 0;
+            var mon = (document.getElementById('ventaCanjeCredMoneda')||{}).value || 'ARS';
+            if (!prov) { alert('Elegí el proveedor del crédito.'); return null; }
+            if (monto <= 0) { alert('Ingresá el monto del crédito.'); return null; }
+            return { tipo: 'credito', total: monto, moneda: mon, comp: (mon === 'USD' ? 'usd' : 'ars_general'), proveedor: prov };
+        }
+        var desId = (document.getElementById('ventaCanjeDes')||{}).value || '';
+        var cant = parseFloat((document.getElementById('ventaCanjeCant')||{}).value) || 0;
+        var valor = parseFloat((document.getElementById('ventaCanjeValor')||{}).value) || 0;
+        var total = cant * valor;
+        if (!desId || cant <= 0 || total <= 0) { alert('Completá el desarrollo, la cantidad de m² y el valor del canje.'); return null; }
+        var mon = _monedaDesarrollo(desId);
+        return { tipo: 'm2', total: total, moneda: mon, comp: (mon === 'USD' ? 'usd' : 'ars_general'), desId: desId, cant: cant, valor: valor };
+    }
+    // Registra el efecto del canje de una venta: cobro (monto=0 + valorCanje) + entrada de m² o crédito con proveedor.
+    async function _registrarCanjeVenta(nuevo, cv) {
+        var nro = await obtenerProximoComprobante('B');
+        nuevo.cobrosHistorial.push({
+            fecha: nuevo.fecha, comp: cv.comp, monto: 0, valorCanje: cv.total, formaPago: 'canje', canjeTipo: cv.tipo,
+            canjeDesarrolloId: cv.desId || '', canjeCantidadM2: cv.cant || 0, canjeValorM2: cv.valor || 0, canjeProveedor: cv.proveedor || '',
+            ref: 'Canje de ' + (cv.tipo === 'credito' ? ('crédito con ' + cv.proveedor) : 'm²') + ' (carga de UF)',
+            nroRecibo: nro, tipoAB: 'B', inicial: true
+        });
+        if (cv.tipo === 'credito') {
+            creditosProveedor.push({ id: 'CR-' + Date.now(), proveedor: cv.proveedor, monto: cv.total, usado: 0, moneda: cv.moneda, fecha: nuevo.fecha, origen: 'venta', ref: 'Venta ' + (nuevo.uf || '') });
+            persistirCreditos();
+        } else {
+            metrosCanje.push({ id: 'MC-' + Date.now(), fecha: nuevo.fecha, tipo: 'entrada', desarrolloId: cv.desId, cantidadM2: cv.cant, valorM2: cv.valor, moneda: cv.moneda, valorTotal: cv.total, contraparte: (nuevo.comprador || ''), referencia: 'Venta ' + (nuevo.uf || ''), origen: 'venta', ventaId: nuevo.id || '' });
+            persistirMetros();
+            if (typeof renderMetros === 'function') renderMetros();
         }
     }
 
@@ -17760,17 +17844,13 @@
                 if (fechas.some(function(f){ return f; })) nuevo.cuotaFechas = fechas;
             }
         } else if (mod === 'canje') {
-            // Venta pagada 100% por canje de m²: se guarda como venta total en la moneda del
-            // desarrollo, con el precio = valor del canje y cobrada por completo con metros.
-            var _cjDes  = document.getElementById('ventaCanjeDes').value || '';
-            var _cjCant = parseFloat(document.getElementById('ventaCanjeCant').value) || 0;
-            var _cjVal  = parseFloat(document.getElementById('ventaCanjeValor').value) || 0;
-            var _cjTotal = _cjCant * _cjVal;
-            if (!_cjDes || _cjCant <= 0 || _cjTotal <= 0) { alert('Completá el desarrollo, la cantidad de m² y el valor del canje.'); return; }
-            var _cjMon = _monedaDesarrollo(_cjDes);
-            if (_cjMon === 'USD') { nuevo.modalidad = 'total_usd'; nuevo.precioUSD = _cjTotal; nuevo.cobradoUSD = _cjTotal; }
-            else { nuevo.modalidad = 'total_ars'; nuevo.precioARS = _cjTotal; nuevo.cobradoARS = _cjTotal; }
-            nuevo._canjeVentaData = { desId: _cjDes, cant: _cjCant, valor: _cjVal, total: _cjTotal, moneda: _cjMon, comp: (_cjMon === 'USD' ? 'usd' : 'ars_general') };
+            // Venta pagada 100% por canje: se guarda como venta total en la moneda del canje.
+            var _cjTipo = (document.getElementById('ventaCanjeTipo')||{}).value || 'm2';
+            var _cjd = _leerCanjeVenta(_cjTipo);
+            if (!_cjd) return; // _leerCanjeVenta ya avisó el error
+            if (_cjd.moneda === 'USD') { nuevo.modalidad = 'total_usd'; nuevo.precioUSD = _cjd.total; nuevo.cobradoUSD = _cjd.total; }
+            else { nuevo.modalidad = 'total_ars'; nuevo.precioARS = _cjd.total; nuevo.cobradoARS = _cjd.total; }
+            nuevo._canjeVentaData = _cjd;
         }
         // ── Plan de pagos en cuotas simples (sin ajuste), para total_ars / total_usd / mixto ──
         if (mod === 'total_ars' || mod === 'total_usd' || mod === 'mixto') {
@@ -17848,52 +17928,22 @@
             nuevo.cobrosHistorial.push(_reg);
         }
 
-        // Modalidad "Canje": registrar el cobro por metros (100% de la venta) y la entrada de m²
+        // Modalidad "Canje": la venta ya quedó como total pagada; registrar el cobro por canje
+        // (metros recibidos o crédito con proveedor).
         if (nuevo._canjeVentaData) {
-            var _cv = nuevo._canjeVentaData;
-            var _cvNro = await obtenerProximoComprobante('B');
-            nuevo.cobrosHistorial.push({
-                fecha: nuevo.fecha, comp: _cv.comp, monto: 0, valorCanje: _cv.total, formaPago: 'canje',
-                canjeDesarrolloId: _cv.desId, canjeCantidadM2: _cv.cant, canjeValorM2: _cv.valor,
-                ref: 'Venta por canje de m² (carga de UF)', nroRecibo: _cvNro, tipoAB: 'B', inicial: true
-            });
-            metrosCanje.push({
-                id: 'MC-' + Date.now(), fecha: nuevo.fecha, tipo: 'entrada', desarrolloId: _cv.desId,
-                cantidadM2: _cv.cant, valorM2: _cv.valor, moneda: _cv.moneda, valorTotal: _cv.total,
-                contraparte: (nuevo.comprador || ''), referencia: 'Venta ' + (nuevo.uf || ''),
-                origen: 'venta', ventaId: nuevo.id || ''
-            });
-            persistirMetros();
-            if (typeof renderMetros === 'function') renderMetros();
+            await _registrarCanjeVenta(nuevo, nuevo._canjeVentaData);
             delete nuevo._canjeVentaData;
         }
 
-        // Canje de m² al cargar la UF vía checkbox (venta con OTRA modalidad + parte en canje)
+        // Canje al cargar la UF vía checkbox (venta con OTRA modalidad + parte en canje)
         if (editandoVentaIdx < 0 && mod !== 'canje' && (document.getElementById('ventaCanje')||{}).checked) {
-            var _vcDes  = (document.getElementById('ventaCanjeDes')||{}).value || '';
-            var _vcCant = parseFloat((document.getElementById('ventaCanjeCant')||{}).value) || 0;
-            var _vcVal  = parseFloat((document.getElementById('ventaCanjeValor')||{}).value) || 0;
-            var _vcTotal = _vcCant * _vcVal;
-            if (!_vcDes || _vcCant <= 0 || _vcTotal <= 0) { alert('Completá el desarrollo, la cantidad de m² y el valor del canje (o destildá la opción de canje).'); return; }
-            // Imputar el canje al rubro correcto según la moneda del desarrollo y la modalidad
-            var _vcMon = _monedaDesarrollo(_vcDes), _vcComp;
-            if (_vcMon === 'USD') { _vcComp = 'usd'; if (mod === 'cuotas_cac') nuevo.terrenoCobrado = (nuevo.terrenoCobrado||0) + _vcTotal; else nuevo.cobradoUSD = (nuevo.cobradoUSD||0) + _vcTotal; }
-            else if (mod === 'cuotas_cac') { _vcComp = 'ars_construccion'; nuevo.construccionCobrado = (nuevo.construccionCobrado||0) + _vcTotal; }
-            else { _vcComp = 'ars_general'; nuevo.cobradoARS = (nuevo.cobradoARS||0) + _vcTotal; }
-            var _vcNro = await obtenerProximoComprobante('B');
-            nuevo.cobrosHistorial.push({
-                fecha: nuevo.fecha, comp: _vcComp, monto: 0, valorCanje: _vcTotal, formaPago: 'canje',
-                canjeDesarrolloId: _vcDes, canjeCantidadM2: _vcCant, canjeValorM2: _vcVal,
-                ref: 'Canje de m² (carga de UF)', nroRecibo: _vcNro, tipoAB: 'B', inicial: true
-            });
-            metrosCanje.push({
-                id: 'MC-' + Date.now(), fecha: nuevo.fecha, tipo: 'entrada', desarrolloId: _vcDes,
-                cantidadM2: _vcCant, valorM2: _vcVal, moneda: _vcMon, valorTotal: _vcTotal,
-                contraparte: (nuevo.comprador || ''), referencia: 'Venta ' + (nuevo.uf || ''),
-                origen: 'venta', ventaId: nuevo.id || ''
-            });
-            persistirMetros();
-            if (typeof renderMetros === 'function') renderMetros();
+            var _cvk = _leerCanjeVenta((document.getElementById('ventaCanjeTipo')||{}).value || 'm2');
+            if (!_cvk) return;
+            // Imputar el canje al rubro correcto según la moneda del canje y la modalidad de la venta
+            if (_cvk.moneda === 'USD') { _cvk.comp = 'usd'; if (mod === 'cuotas_cac') nuevo.terrenoCobrado = (nuevo.terrenoCobrado||0) + _cvk.total; else nuevo.cobradoUSD = (nuevo.cobradoUSD||0) + _cvk.total; }
+            else if (mod === 'cuotas_cac') { _cvk.comp = 'ars_construccion'; nuevo.construccionCobrado = (nuevo.construccionCobrado||0) + _cvk.total; }
+            else { _cvk.comp = 'ars_general'; nuevo.cobradoARS = (nuevo.cobradoARS||0) + _cvk.total; }
+            await _registrarCanjeVenta(nuevo, _cvk);
         }
 
         if (editandoVentaIdx >= 0) { ventas[editandoVentaIdx] = nuevo; }
@@ -27280,14 +27330,37 @@
             </label>
           </div>
           <div id="ventaCanjePanel" style="display:none;border:1px solid #E5CC88;background:var(--gold-pale);border-radius:8px;padding:12px;">
-            <div class="form-group" style="margin-bottom:8px;">
-              <label>Desarrollo de los m² que recibís</label>
-              <select id="ventaCanjeDes" onchange="ventaCanjeRecalc(true)" style="width:100%;"></select>
-              <div class="form-hint">Por defecto, el desarrollo vinculado arriba. Los m² se suman a su cuenta corriente.</div>
+            <div class="form-group" style="margin-bottom:10px;">
+              <label>¿En qué consiste el canje?</label>
+              <div class="modalidad-toggle">
+                <button type="button" class="modalidad-btn selected-A" id="ventaCanjeTipoM2Btn" onclick="ventaCanjeSelTipo('m2')">📐 Metros que recibo</button>
+                <button type="button" class="modalidad-btn" id="ventaCanjeTipoCredBtn" onclick="ventaCanjeSelTipo('credito')">💳 Crédito con proveedor</button>
+              </div>
+              <input type="hidden" id="ventaCanjeTipo" value="m2">
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div><label style="font-size:11px;">Cantidad de m²</label><input type="number" id="ventaCanjeCant" step="0.01" min="0" placeholder="0" oninput="ventaCanjeRecalc()"></div>
-              <div><label style="font-size:11px;">Valor por m²</label><input type="number" id="ventaCanjeValor" step="0.01" min="0" placeholder="0" oninput="ventaCanjeRecalc()"></div>
+            <!-- Tipo m²: recibo metros -->
+            <div id="ventaCanjeM2Bloque">
+              <div class="form-group" style="margin-bottom:8px;">
+                <label>Desarrollo de los m² que recibís</label>
+                <select id="ventaCanjeDes" onchange="ventaCanjeRecalc(true)" style="width:100%;"></select>
+                <div class="form-hint">Por defecto, el desarrollo vinculado arriba. Los m² se suman a su cuenta corriente.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><label style="font-size:11px;">Cantidad de m²</label><input type="number" id="ventaCanjeCant" step="0.01" min="0" placeholder="0" oninput="ventaCanjeRecalc()"></div>
+                <div><label style="font-size:11px;">Valor por m²</label><input type="number" id="ventaCanjeValor" step="0.01" min="0" placeholder="0" oninput="ventaCanjeRecalc()"></div>
+              </div>
+            </div>
+            <!-- Tipo crédito: haber a favor con un proveedor -->
+            <div id="ventaCanjeCredBloque" style="display:none;">
+              <div class="form-group" style="margin-bottom:8px;">
+                <label>Proveedor (queda un crédito a favor tuyo)</label>
+                <select id="ventaCanjeProv" style="width:100%;" onchange="ventaCanjeRecalc()"></select>
+                <div class="form-hint">El crédito es global: se puede usar para pagar presupuestos de ese proveedor en cualquier empresa/proyecto.</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><label style="font-size:11px;">Monto del crédito</label><input type="number" id="ventaCanjeCredMonto" step="0.01" min="0" placeholder="0" oninput="ventaCanjeRecalc()"></div>
+                <div><label style="font-size:11px;">Moneda</label><select id="ventaCanjeCredMoneda" onchange="ventaCanjeRecalc()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+              </div>
             </div>
             <div class="form-hint" id="ventaCanjeInfo" style="margin-top:6px;"></div>
           </div>
