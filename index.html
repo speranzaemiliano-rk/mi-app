@@ -3473,7 +3473,11 @@
               <!-- Cuerpo -->
               <div style="padding:28px 32px 40px;">
                 <!-- Resumen global -->
-                <div id="dbResumenGlobal" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:28px;"></div>
+                <div id="dbResumenGlobal" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:14px;"></div>
+                <!-- Caja consolidada (todas las empresas y proyectos) -->
+                <div style="margin-bottom:28px;">
+                  <button onclick="abrirCajaConsolidada()" style="display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#1a237e,#3949AB);color:#fff;border:none;border-radius:12px;padding:11px 18px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(57,73,171,.25);">🌐 Ver caja consolidada — todas las empresas y proyectos</button>
+                </div>
                 <!-- Titulo empresas -->
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
                   <div style="font-weight:700;font-size:15px;color:var(--text-1,#202124);">Empresas registradas</div>
@@ -26081,6 +26085,175 @@
                     + '<div style="font-size:11px;color:var(--text-2,#888);margin-top:2px;">' + t.label + '</div>'
                     + '</div>';
             }).join('');
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  CAJA CONSOLIDADA — suma efectivo/bancos de TODAS las empresas
+    //  y proyectos. Read-only. Replica la misma lógica de derivación
+    //  que las pantallas Efectivo Pesos / Efectivo USD / Cuentas
+    //  Bancarias, pero corriéndola sobre los datos de cada proyecto
+    //  leídos de una sola vez desde Firebase (REF_EMPRESAS).
+    // ══════════════════════════════════════════════════════════
+    // Normaliza un nodo de Firebase (objeto keyed-by-id o array legacy) a array.
+    function _consNorm(val) {
+        if (!val) return [];
+        if (Array.isArray(val)) return val.filter(Boolean);
+        return Object.keys(val).map(function(k){ return val[k]; }).filter(Boolean);
+    }
+    // Efectivo ARS (saldo) — mismo criterio que renderEfectivoPesos().
+    function _consEfectivoARS(col) {
+        var ing = 0, egr = 0;
+        col.ingGeneral.forEach(function(ig){
+            if ((ig.moneda||'ARS') !== 'ARS') return;
+            if (ig.esBancario) return;
+            var esEgr = ig.esEgreso || ig.tipo==='mov_egreso_caja' || ig.tipo==='mov_banco_salida';
+            if (esEgr) egr += ig.monto||0; else ing += ig.monto||0;
+        });
+        col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
+            if (c.formaPago==='canje') return; if (c.comp==='usd') return; if (c.tipoAB==='A') return;
+            ing += c.monto||0;
+        });});
+        col.alquileres.forEach(function(a){ if ((a.moneda||'ARS')!=='ARS') return; (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
+        col.servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
+        col.datos.forEach(function(d){
+            var hist = d.pagosHistorial||[];
+            if (hist.length) { hist.forEach(function(p){ if (p.modalidad!=='B') return; egr += (p.capital||0)+(p.mayores||0)||p.montoPagado||0; }); }
+            else if ((d.pagado||0) > 0 && (d.modalidad||'B')==='B') { egr += d.pagado; }
+        });
+        col.facturas.forEach(function(f){ if ((f.moneda||'ARS')!=='ARS') return; (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad!=='B') return; egr += p.monto||0; });});
+        col.documentos.forEach(function(d){ if ((d.moneda||'ARS')!=='ARS') return;
+            var hist = d.pagosHistorial||[];
+            if (hist.length) { hist.forEach(function(p){ if (p.modalidad!=='B') return; egr += p.monto||0; }); }
+            else if ((d.pagado||0) > 0 && (d.modalidad||'B')==='B') { egr += d.pagado; }
+        });
+        return ing - egr;
+    }
+    // Efectivo USD (saldo) — mismo criterio que renderEfectivoUSD().
+    function _consEfectivoUSD(col) {
+        var ing = 0, egr = 0;
+        col.ingGeneral.forEach(function(ig){
+            if (ig.moneda!=='USD') return;
+            if (ig.esBancario) return;
+            var esEgr = ig.esEgreso || ig.tipo==='mov_egreso_caja' || ig.tipo==='mov_banco_salida';
+            if (esEgr) egr += ig.monto||0; else ing += ig.monto||0;
+        });
+        col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
+            if (c.formaPago==='canje') return; if (c.comp!=='usd') return; if (c.tipoAB==='A') return;
+            ing += c.monto||0;
+        });});
+        col.alquileres.forEach(function(a){ if (a.moneda!=='USD') return; (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
+        col.facturas.forEach(function(f){ if (f.moneda!=='USD') return; (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad!=='B') return; egr += p.monto||0; });});
+        return ing - egr;
+    }
+    // Bancos (saldo neto por cuenta, separado por moneda) — mismo criterio que renderCuentasBancarias().
+    function _consBancos(col) {
+        var arsNeto = 0, usdNeto = 0;
+        col.banco.forEach(function(cb){
+            var ent = 0, sal = 0;
+            var cid = cb.id || cb.banco;
+            col.datos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.capital||0)+(p.mayores||0)||p.montoPagado||0; });});
+            col.facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += p.monto||0; });});
+            col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += p.monto||0; });});
+            col.ingGeneral.forEach(function(ig){ if (!ig.esBancario || ig.cuentaId!==cid) return; if (ig.esEgreso||ig.tipo==='mov_banco_salida') sal += ig.monto||0; else ent += ig.monto||0; });
+            col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
+            col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
+            col.servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
+            var saldoAct = (cb.saldo||0) + ent - sal;
+            if (cb.moneda==='USD') usdNeto += saldoAct; else arsNeto += saldoAct;
+        });
+        return { ars: arsNeto, usd: usdNeto };
+    }
+
+    async function abrirCajaConsolidada() {
+        abrirModalGenerico('🌐 Caja consolidada', '<div style="text-align:center;padding:34px 10px;color:var(--text-2,#888);font-size:13px;">⏳ Sumando la caja de todas las empresas y proyectos…</div>');
+        try {
+            if (!REF_EMPRESAS) throw new Error('No hay conexión con la base.');
+            var snap = await REF_EMPRESAS.once('value');
+            var val = snap.val() || {};
+            var totEfARS = 0, totEfUSD = 0, totBanARS = 0, totBanUSD = 0;
+            var porEmpresa = [];
+            Object.keys(val).forEach(function(eid){
+                var emp = val[eid] || {};
+                var empNombre = emp.nombre || eid;
+                var proys = emp.proyectos || {};
+                var filasProy = [];
+                var subEfARS = 0, subEfUSD = 0, subBanARS = 0, subBanUSD = 0;
+                Object.keys(proys).forEach(function(pid){
+                    var pr = proys[pid] || {};
+                    var col = {
+                        datos:      _consNorm(pr.datos),
+                        facturas:   _consNorm(pr.facturas),
+                        documentos: _consNorm(pr.documentos),
+                        banco:      _consNorm(pr.banco),
+                        ingGeneral: _consNorm(pr.ingGeneral),
+                        ventas:     _consNorm(pr.ventas),
+                        alquileres: _consNorm(pr.alquileres),
+                        servicios:  _consNorm(pr.servicios)
+                    };
+                    var efARS = _consEfectivoARS(col);
+                    var efUSD = _consEfectivoUSD(col);
+                    var ban   = _consBancos(col);
+                    subEfARS += efARS; subEfUSD += efUSD; subBanARS += ban.ars; subBanUSD += ban.usd;
+                    filasProy.push({ nombre: pr.nombre || pid, efARS: efARS, efUSD: efUSD, banARS: ban.ars, banUSD: ban.usd });
+                });
+                totEfARS += subEfARS; totEfUSD += subEfUSD; totBanARS += subBanARS; totBanUSD += subBanUSD;
+                porEmpresa.push({ nombre: empNombre, proyectos: filasProy, subEfARS: subEfARS, subEfUSD: subEfUSD, subBanARS: subBanARS, subBanUSD: subBanUSD });
+            });
+
+            var fmtA = function(n){ return '$' + Math.round(n||0).toLocaleString('es-AR'); };
+            var fmtU = function(n){ return 'USD ' + Number(n||0).toLocaleString('es-AR', { maximumFractionDigits: 2 }); };
+            var card = function(icono, label, valor, color){
+                return '<div style="background:var(--surface-2,#f8f8f8);border-radius:12px;padding:12px 14px;border-left:4px solid '+color+';">'
+                    + '<div style="font-size:18px;margin-bottom:3px;">'+icono+'</div>'
+                    + '<div style="font-size:16px;font-weight:800;color:'+color+';">'+valor+'</div>'
+                    + '<div style="font-size:10.5px;color:var(--text-2,#888);margin-top:2px;">'+label+'</div>'
+                    + '</div>';
+            };
+
+            var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
+                + card('💵','Efectivo ARS', fmtA(totEfARS), '#2E7D32')
+                + card('💲','Efectivo USD', fmtU(totEfUSD), '#E65100')
+                + card('🏦','Bancos ARS', fmtA(totBanARS), '#1565C0')
+                + card('🏦','Bancos USD', fmtU(totBanUSD), '#6A1B9A')
+                + '</div>';
+
+            if (!porEmpresa.length) {
+                html += '<div style="color:var(--text-2,#888);font-size:13px;padding:8px 0;">No hay empresas cargadas.</div>';
+            } else {
+                html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:420px;">'
+                    + '<thead><tr style="color:var(--text-2,#888);text-align:right;">'
+                    + '<th style="text-align:left;padding:6px 4px;font-weight:600;">Empresa / Proyecto</th>'
+                    + '<th style="padding:6px 4px;font-weight:600;">Efec. $</th>'
+                    + '<th style="padding:6px 4px;font-weight:600;">Efec. U$</th>'
+                    + '<th style="padding:6px 4px;font-weight:600;">Banco $</th>'
+                    + '<th style="padding:6px 4px;font-weight:600;">Banco U$</th>'
+                    + '</tr></thead><tbody>';
+                porEmpresa.forEach(function(e){
+                    html += '<tr style="border-top:1px solid var(--border-soft,#e5e5e5);background:rgba(57,73,171,.05);">'
+                        + '<td style="padding:6px 4px;font-weight:700;">🏢 '+escHtml(e.nombre)+'</td>'
+                        + '<td style="padding:6px 4px;text-align:right;font-weight:700;">'+fmtA(e.subEfARS)+'</td>'
+                        + '<td style="padding:6px 4px;text-align:right;font-weight:700;">'+fmtU(e.subEfUSD)+'</td>'
+                        + '<td style="padding:6px 4px;text-align:right;font-weight:700;">'+fmtA(e.subBanARS)+'</td>'
+                        + '<td style="padding:6px 4px;text-align:right;font-weight:700;">'+fmtU(e.subBanUSD)+'</td>'
+                        + '</tr>';
+                    e.proyectos.forEach(function(p){
+                        html += '<tr style="color:var(--text-2,#666);">'
+                            + '<td style="padding:4px 4px 4px 18px;">'+escHtml(p.nombre)+'</td>'
+                            + '<td style="padding:4px 4px;text-align:right;">'+fmtA(p.efARS)+'</td>'
+                            + '<td style="padding:4px 4px;text-align:right;">'+fmtU(p.efUSD)+'</td>'
+                            + '<td style="padding:4px 4px;text-align:right;">'+fmtA(p.banARS)+'</td>'
+                            + '<td style="padding:4px 4px;text-align:right;">'+fmtU(p.banUSD)+'</td>'
+                            + '</tr>';
+                    });
+                });
+                html += '</tbody></table></div>';
+            }
+            html += '<div style="font-size:10.5px;color:var(--text-3,#999);margin-top:12px;line-height:1.5;">Suma de todas las empresas y proyectos. El efectivo y los bancos se calculan con el mismo criterio que las pantallas de cada proyecto. Vista de solo lectura.</div>';
+
+            abrirModalGenerico('🌐 Caja consolidada — todas las empresas', html);
+        } catch (err) {
+            abrirModalGenerico('🌐 Caja consolidada', '<div style="color:var(--danger,#c00);padding:14px 4px;font-size:13px;">No se pudo cargar la caja consolidada.<br><span style="color:var(--text-2,#888);font-size:12px;">'+escHtml(err && err.message ? err.message : String(err))+'</span></div>');
         }
     }
 
