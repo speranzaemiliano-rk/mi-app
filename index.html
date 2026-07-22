@@ -9723,6 +9723,37 @@
       + '.pie{margin-top:24px;padding-top:14px;text-align:center;font-size:10px;color:#aaa;letter-spacing:.03em;border-top:1px solid var(--line);}'
       + '@media print{body{background:#fff;}.pg{margin:0;max-width:100%;box-shadow:none;}}'
       + '</style>';}
+    // Imprime un documento HTML SIN depender de ventanas emergentes. Cuando la impresión se
+    // dispara después de una operación async (ej. al guardar un pago y ofrecer la Orden de Pago),
+    // el navegador bloquea window.open porque "pierde" el clic del usuario. Este helper usa un
+    // iframe oculto (no requiere permiso de pop-ups); si algo falla, cae a window.open de respaldo.
+    function _imprimirDocHTML(html) {
+        try {
+            // El auto-print embebido se controla desde acá (evita doble impresión / foco perdido).
+            var htmlLimpio = html.replace(/<script>[\s\S]*?window\.print\(\)[\s\S]*?<\/script>/i, '');
+            var ifr = document.createElement('iframe');
+            ifr.setAttribute('aria-hidden', 'true');
+            ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0;';
+            document.body.appendChild(ifr);
+            var doc = ifr.contentWindow.document;
+            doc.open(); doc.write(htmlLimpio); doc.close();
+            var impreso = false;
+            var lanzar = function() {
+                if (impreso) return; impreso = true;
+                try {
+                    ifr.contentWindow.focus();
+                    ifr.contentWindow.print();
+                } catch (e) {
+                    var wf = window.open('', '_blank'); if (wf) { wf.document.write(html); wf.document.close(); }
+                }
+                setTimeout(function() { if (ifr.parentNode) ifr.parentNode.removeChild(ifr); }, 3000);
+            };
+            ifr.onload = lanzar;
+            setTimeout(lanzar, 500); // respaldo por si onload no dispara
+        } catch (e) {
+            var w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); }
+        }
+    }
     function buildReciboHeader(tipo, nro, fecha, contraparte) {
         var emp = getEmpresaParaRecibo();
         var palabras = emp.nombre.split(' ').filter(function(w){return w.length>0;});
@@ -9816,9 +9847,7 @@
         '<div class="pie">Comprobante ' + recibo + ' · Generado el ' + emision + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
         '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
 
-        const win = window.open('', '_blank', 'width=780,height=950');
-        if (!win) { alert('Bloqueaste las ventanas emergentes. Permitilas para imprimir.'); return; }
-        win.document.open(); win.document.write(html); win.document.close();
+        _imprimirDocHTML(html);
     }
 
 
@@ -14231,9 +14260,7 @@
             '<div class="firmas"><div class="fi">Recibí conforme — ' + (f.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
             '<div class="pie">Comprobante ' + nroDoc + ' · Generado el ' + emision + '</div>' +
             '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
-        var w = window.open('','_blank','width=780,height=950');
-        if (!w) { alert('Bloqueaste las ventanas emergentes.'); return; }
-        w.document.write(html); w.document.close();
+        _imprimirDocHTML(html);
     }
 
     // Imprime el comprobante EN SÍ (recibo, ticket X, orden de pago, factura, etc.) — no el
