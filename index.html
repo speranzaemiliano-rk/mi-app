@@ -4759,8 +4759,10 @@
                             <th style="padding:6px 8px;">Proveedor</th>
                             <th style="padding:6px 8px;">Nro Factura</th>
                             <th style="padding:6px 8px;">Concepto</th>
-                            <th style="padding:6px 8px;text-align:right;">Importe</th>
-                            <th style="padding:6px 8px;text-align:right;">Pagado</th>
+                            <th style="padding:6px 8px;text-align:right;">Neto</th>
+                            <th style="padding:6px 8px;text-align:center;">IVA %</th>
+                            <th style="padding:6px 8px;text-align:right;">IVA $</th>
+                            <th style="padding:6px 8px;text-align:right;">Total</th>
                             <th style="padding:6px 8px;text-align:center;">Estado</th>
                           </tr>
                         </thead>
@@ -10351,26 +10353,44 @@
         var foot = document.getElementById('rptComprasFoot');
         if (!body) return;
         var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
-        if (!items.length) { body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
-        var totImporte=0, totPagado=0;
+        if (!items.length) { body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
+        var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false;
         body.innerHTML = items.map(function(v) {
-            totImporte += v.importe||0; totPagado += v.pagado||0;
+            var d = _rptIvaCompra(v);
+            if (d.estimado) hayEstimado = true;
+            totNeto += d.neto; totIVA += d.iva; totTotal += d.total;
             var estado = v.estado==='pagada' ? '<span style="color:var(--success);">✔ Pagada</span>' : v.estado==='parcial' ? '<span style="color:var(--gold);">◑ Parcial</span>' : '<span style="color:var(--danger);">○ Pendiente</span>';
             return '<tr style="border-bottom:1px solid var(--border);">' +
                 '<td style="padding:5px 8px;">'+(v.fecha||'—')+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.proveedor||'—')+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.numero||'—')+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.descripcion||'—')+'</td>' +
-                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(v.importe)+'</td>' +
-                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(v.pagado)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(d.neto)+'</td>' +
+                '<td style="padding:5px 8px;text-align:center;">'+(d.alicPct ? d.alicPct+'%' : '0%')+(d.estimado?'<span title="IVA estimado: la factura no tiene neto gravado cargado" style="color:var(--gold);">~</span>':'')+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(d.iva)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-weight:600;">'+_fmtM(d.total)+'</td>' +
                 '<td style="padding:5px 8px;text-align:center;">'+estado+'</td>' +
                 '</tr>';
         }).join('');
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--bg);">' +
-            '<td colspan="4" style="padding:6px 8px;">TOTAL ('+items.length+' facturas)</td>' +
-            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totImporte)+'</td>' +
-            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totPagado)+'</td>' +
+            '<td colspan="4" style="padding:6px 8px;">TOTAL ('+items.length+' facturas)'+(hayEstimado?' · <span style="font-weight:400;color:var(--text-3);font-size:10px;">~ IVA estimado al 21% en facturas sin neto cargado</span>':'')+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totNeto)+'</td>' +
+            '<td></td>' +
+            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totIVA)+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totTotal)+'</td>' +
             '<td></td></tr>';
+    }
+
+    // Discrimina el IVA de una factura de proveedor (compra). Usa el neto gravado
+    // cargado; si no está, lo estima al 21% (marca estimado=true). total = importe.
+    function _rptIvaCompra(v) {
+        var total = v.importe||0;
+        var neto, estimado = false;
+        if ((v.netoGravado||0) > 0) { neto = v.netoGravado; }
+        else { neto = total>0 ? total/1.21 : 0; estimado = total>0; }
+        var iva = total - neto;
+        var alicPct = neto>0 ? Math.round((iva/neto)*100) : 0;
+        return { neto: neto, iva: iva, total: total, alicPct: alicPct, estimado: estimado };
     }
 
     function rptRenderRetenciones(f) {
@@ -10426,6 +10446,8 @@
         var totVentas = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impTotal||0); },0);
         var totIVAV   = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impIVA||0); },0);
         var totCompras = compras.reduce(function(s,v){ return s+(v.importe||0); },0);
+        var totIVAC    = compras.reduce(function(s,v){ return s+_rptIvaCompra(v).iva; },0);
+        var posIVA     = totIVAV - totIVAC; // débito fiscal (ventas) − crédito fiscal (compras)
         // retenciones
         var totRet = 0;
         var collectRet = function(arr, keyFecha, getHist) {
@@ -10438,16 +10460,23 @@
         };
         collectRet(datos, 'fecha', function(d){ return d.pagosHistorial; });
         collectRet(facturas, 'fecha', function(fa){ return fa.pagosHistorial; });
+        var posLabel = posIVA >= 0 ? 'A pagar (débito > crédito)' : 'A favor (crédito > débito)';
+        var posColor = posIVA >= 0 ? 'var(--danger)' : 'var(--success)';
         el.innerHTML =
             '<div class="stat-card" style="border-left:4px solid var(--success);">' +
-              '<div class="stat-label">IVA Ventas</div>' +
+              '<div class="stat-label">IVA Ventas (débito fiscal)</div>' +
               '<div class="stat-value" style="font-size:18px;color:var(--success);">'+_fmtM(totIVAV)+'</div>' +
               '<div class="stat-sub">'+ventas.length+' comprobantes · Total '+_fmtM(totVentas)+'</div>' +
             '</div>' +
             '<div class="stat-card" style="border-left:4px solid var(--blue);">' +
-              '<div class="stat-label">Total Compras</div>' +
-              '<div class="stat-value" style="font-size:18px;color:var(--blue);">'+_fmtM(totCompras)+'</div>' +
-              '<div class="stat-sub">'+compras.length+' facturas</div>' +
+              '<div class="stat-label">IVA Compras (crédito fiscal)</div>' +
+              '<div class="stat-value" style="font-size:18px;color:var(--blue);">'+_fmtM(totIVAC)+'</div>' +
+              '<div class="stat-sub">'+compras.length+' facturas · Total '+_fmtM(totCompras)+'</div>' +
+            '</div>' +
+            '<div class="stat-card" style="border-left:4px solid '+posColor+';">' +
+              '<div class="stat-label">Posición IVA del período</div>' +
+              '<div class="stat-value" style="font-size:18px;color:'+posColor+';">'+_fmtM(Math.abs(posIVA))+'</div>' +
+              '<div class="stat-sub">'+posLabel+'</div>' +
             '</div>' +
             '<div class="stat-card" style="border-left:4px solid var(--danger);">' +
               '<div class="stat-label">Total Retenciones</div>' +
@@ -10480,14 +10509,16 @@
                 }).join('')+'</tbody><tfoot><tr><td colspan="5">TOTAL ('+items.length+' comprobantes)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totT)+'</td></tr></tfoot></table>';
         } else if (tipo === 'compras') {
             var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
-            var totI=0,totP=0;
+            var totN=0,totIV=0,totT=0,hayEst=false;
             content = '<h1>📥 Libro IVA Compras — Facturas de Proveedores</h1><h2>'+empresa+' — '+periodo+'</h2>' +
-                '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Importe</th><th class="r">Pagado</th><th class="c">Estado</th></tr></thead><tbody>' +
+                '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
                 items.map(function(v){
-                    totI+=v.importe||0;totP+=v.pagado||0;
+                    var d = _rptIvaCompra(v); if (d.estimado) hayEst=true;
+                    totN+=d.neto;totIV+=d.iva;totT+=d.total;
                     var est = v.estado==='pagada'?'<span class="ok">Pagada</span>':v.estado==='parcial'?'<span class="pend">Parcial</span>':'<span class="ret">Pendiente</span>';
-                    return '<tr><td>'+(v.fecha||'—')+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+_fmtM(v.importe)+'</td><td class="r">'+_fmtM(v.pagado)+'</td><td class="c">'+est+'</td></tr>';
-                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+items.length+' facturas)</td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totP)+'</td><td></td></tr></tfoot></table>';
+                    return '<tr><td>'+(v.fecha||'—')+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+_fmtM(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+_fmtM(d.iva)+'</td><td class="r">'+_fmtM(d.total)+'</td><td class="c">'+est+'</td></tr>';
+                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+items.length+' facturas)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
+                (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'');
         } else {
             var rows = [];
             (datos||[]).forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:d.proveedor||'—',cbte:d.recibo||'—',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:(p.capital||p.montoPagado||0)+(p.mayores||0),retencion:r.monto}); }); }); });
@@ -10529,9 +10560,11 @@
         function _sheetCompras() {
             var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
             return items.map(function(v) {
+                var d = _rptIvaCompra(v);
                 return { 'Fecha': v.fecha||'', 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
-                         'Concepto': v.descripcion||'', 'Importe': v.importe||0,
-                         'Pagado': v.pagado||0, 'Estado': v.estado||'' };
+                         'Concepto': v.descripcion||'', 'Neto Gravado': Math.round(d.neto),
+                         'IVA %': d.alicPct, 'IVA $': Math.round(d.iva), 'Total': Math.round(d.total),
+                         'IVA estimado': d.estimado ? 'Sí (21%)' : '', 'Pagado': v.pagado||0, 'Estado': v.estado||'' };
             });
         }
 
