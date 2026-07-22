@@ -4993,8 +4993,13 @@
             <div class="tab-panel" id="panelCompRecibidos">
                 <div class="table-card">
                     <div class="table-card-head" style="flex-wrap:wrap;gap:8px;">
-                        <h3>📥 Comprobantes Recibidos (ARCA)</h3>
+                        <h3>📥 Comprobantes Recibidos</h3>
                         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <select id="compRecFuente" onchange="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;" title="Origen del comprobante">
+                                <option value="ambos">Ambos</option>
+                                <option value="arca">ARCA (oficiales)</option>
+                                <option value="noofi">No oficiales</option>
+                            </select>
                             <input type="date" id="compRecDesde" onchange="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;" title="Desde">
                             <input type="date" id="compRecHasta" onchange="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;" title="Hasta">
                             <input type="text" id="compRecBuscador" placeholder="Buscar proveedor, tipo…" oninput="renderCompRecibidos()" style="padding:7px 10px;font-size:12px;width:200px;">
@@ -17586,7 +17591,7 @@
         _cargarConListener(REF_DESARROLLOS, function(v) { desarrollos = v; if (typeof renderDesarrollos==='function') renderDesarrollos(); if (typeof renderAportantes==='function') renderAportantes(); }, 'desarrollos');
         _cargarConListener(REF_APORTANTES,  function(v) { aportantes  = v; if (typeof renderAportantes==='function') renderAportantes(); }, 'aportantes');
         _cargarConListener(REF_METROS,      function(v) { metrosCanje = v; if (typeof renderMetros==='function') renderMetros(); }, 'metrosCanje');
-        _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; if (typeof renderEmitidos==='function') renderEmitidos(); }, 'emitidos');
+        _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; if (typeof renderEmitidos==='function') renderEmitidos(); if (_tabActivo==='CompRecibidos' && typeof renderCompRecibidos==='function') renderCompRecibidos(); var _mA=document.getElementById('modalFacturasARCA'); if (_mA && _mA.classList.contains('active') && typeof renderFacturasARCA==='function') renderFacturasARCA(); }, 'emitidos');
         _cargarConListener(REF_REMUN,       function(v) { remuneraciones = v; if (typeof renderRemuneraciones==='function') renderRemuneraciones(); }, 'remuneraciones');
         if (REF_PLAN) {
             REF_PLAN.on('value', function(snap) {
@@ -24718,34 +24723,83 @@
         XLSX.writeFile(wb, empresa + '_Comprobantes_Emitidos' + rango + '.xlsx');
     }
 
+    // Comprobantes no oficiales (colección comprobantesEmitidos), separados por dirección:
+    //  - 'ingreso' (o sin definir) → cuentan como EMITIDOS (Comprobantes Emitidos)
+    //  - 'egreso'                  → cuentan como RECIBIDOS/egresos (Comprobantes Recibidos)
+    function _emitidosNoOficiales(dir) {
+        var arr = (typeof comprobantesEmitidos !== 'undefined' && comprobantesEmitidos) ? comprobantesEmitidos : [];
+        return arr.filter(function(e){
+            if (!e) return false;
+            if (dir === 'egreso') return e.movTipo === 'egreso';
+            return e.movTipo !== 'egreso'; // ingreso o sin definir
+        });
+    }
+
     function renderFacturasARCA() {
         var body = document.getElementById('facturasARCABody');
-        if (!facturasARCA.length) {
-            body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#5F6368;padding:20px;">Todavía no emitiste facturas desde la app.</td></tr>';
+        if (!body) return;
+        var fuente = (document.getElementById('arcaFiltroFuente')||{}).value || 'todos'; // 'todos' | 'arca' | 'noofi'
+        var desdeIso = (document.getElementById('arcaFiltroDesde')||{}).value || '';
+        var hastaIso = (document.getElementById('arcaFiltroHasta')||{}).value || '';
+        var filas = [];
+
+        // ── ARCA (oficiales) ──
+        if (fuente !== 'noofi') {
+            _facturasARCAFiltradas().forEach(function(f){
+                var idx = facturasARCA.indexOf(f);
+                var tipo = _afipTiposNombre[f.tipoComp] || ('Tipo ' + f.tipoComp);
+                var total = (f.moneda === 'DOL' ? 'US$ ' : '$ ') + (Number(f.impTotal)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+                filas.push({ key: String(f.fecha||'').replace(/-/g,''), html:
+                    '<tr style="border-bottom:1px solid #EEE;">' +
+                    '<td style="padding:8px 6px;">' + _fmtFechaAfip(f.fecha) + '</td>' +
+                    '<td style="padding:8px 6px;">' + tipo + ' <span class="pill" style="background:#E3F2FD;color:#1565C0;font-size:10px;padding:1px 6px;border-radius:8px;">ARCA</span></td>' +
+                    '<td style="padding:8px 6px;">' + (f.ptoVta||'—') + '</td>' +
+                    '<td style="padding:8px 6px;font-weight:600;">' + (f.nro||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + (f.razon || '—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + (f.cuitRecep||'—') + '</td>' +
+                    '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + total + '</td>' +
+                    '<td style="padding:8px 6px;font-family:monospace;font-size:12px;">' + (f.cae||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + (f.caeVto||'—') + '</td>' +
+                    '<td style="padding:8px 6px;text-align:right;"><button class="btn btn-outline btn-sm" onclick="imprimirFacturaARCA(' + idx + ')" title="Ver / imprimir comprobante">🔍 Ver</button></td>' +
+                '</tr>'
+                });
+            });
+        }
+
+        // ── No oficiales (comprobantes emitidos, lado ingreso) ──
+        if (fuente !== 'arca') {
+            _emitidosNoOficiales('ingreso').filter(function(e){
+                var fd = String(e.fecha||'');
+                if (desdeIso && fd < desdeIso) return false;
+                if (hastaIso && fd > hastaIso) return false;
+                return true;
+            }).forEach(function(e){
+                var mon = e.moneda === 'USD' ? 'US$ ' : '$ ';
+                var total = mon + (Number(e.total)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+                var tipoLbl = (e.tipoDoc === 'factura' ? 'Comprobante X' : 'Recibo');
+                filas.push({ key: String(e.fecha||'').replace(/-/g,''), html:
+                    '<tr style="border-bottom:1px solid #EEE;background:#FFFDF5;">' +
+                    '<td style="padding:8px 6px;">' + (e.fecha ? formatearFecha(e.fecha) : '—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + tipoLbl + ' <span class="pill" style="background:#FFF3E0;color:#E65100;font-size:10px;padding:1px 6px;border-radius:8px;">No oficial</span></td>' +
+                    '<td style="padding:8px 6px;">—</td>' +
+                    '<td style="padding:8px 6px;font-weight:600;">' + escHtml(e.nro||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + escHtml(e.cliente||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">—</td>' +
+                    '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + total + '</td>' +
+                    '<td style="padding:8px 6px;">—</td>' +
+                    '<td style="padding:8px 6px;">—</td>' +
+                    '<td style="padding:8px 6px;text-align:right;"><button class="btn btn-outline btn-sm" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')" title="Ver / imprimir comprobante">🔍 Ver</button></td>' +
+                '</tr>'
+                });
+            });
+        }
+
+        if (!filas.length) {
+            body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#5F6368;padding:20px;">Sin comprobantes para el filtro seleccionado.</td></tr>';
             return;
         }
-        var lista = _facturasARCAFiltradas();
-        if (!lista.length) {
-            body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#5F6368;padding:20px;">Sin comprobantes en el rango de fechas seleccionado.</td></tr>';
-            return;
-        }
-        body.innerHTML = lista.map(function(f){
-            var idx = facturasARCA.indexOf(f);
-            var tipo = _afipTiposNombre[f.tipoComp] || ('Tipo ' + f.tipoComp);
-            var total = (f.moneda === 'DOL' ? 'US$ ' : '$ ') + (Number(f.impTotal)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
-            return '<tr style="border-bottom:1px solid #EEE;">' +
-                '<td style="padding:8px 6px;">' + _fmtFechaAfip(f.fecha) + '</td>' +
-                '<td style="padding:8px 6px;">' + tipo + '</td>' +
-                '<td style="padding:8px 6px;">' + (f.ptoVta||'—') + '</td>' +
-                '<td style="padding:8px 6px;font-weight:600;">' + (f.nro||'—') + '</td>' +
-                '<td style="padding:8px 6px;">' + (f.razon || '—') + '</td>' +
-                '<td style="padding:8px 6px;">' + (f.cuitRecep||'—') + '</td>' +
-                '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + total + '</td>' +
-                '<td style="padding:8px 6px;font-family:monospace;font-size:12px;">' + (f.cae||'—') + '</td>' +
-                '<td style="padding:8px 6px;">' + (f.caeVto||'—') + '</td>' +
-                '<td style="padding:8px 6px;text-align:right;"><button class="btn btn-outline btn-sm" onclick="imprimirFacturaARCA(' + idx + ')" title="Ver / imprimir comprobante">🔍 Ver</button></td>' +
-            '</tr>';
-        }).join('');
+        filas.sort(function(a,b){ return String(b.key||'').localeCompare(String(a.key||'')); });
+        body.innerHTML = filas.map(function(x){ return x.html; }).join('');
     }
 
     function imprimirFacturaARCA(idx) {
@@ -24904,39 +24958,82 @@
         var desde = (document.getElementById('compRecDesde')||{}).value||'';
         var hasta = (document.getElementById('compRecHasta')||{}).value||'';
         var busq  = ((document.getElementById('compRecBuscador')||{}).value||'').toLowerCase();
-        var lista = compRecibidos.slice().sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
-        if (desde) lista = lista.filter(function(c){ return (c.fecha||'') >= desde; });
-        if (hasta) lista = lista.filter(function(c){ return (c.fecha||'') <= hasta; });
-        if (busq)  lista = lista.filter(function(c){
-            return (c.proveedor||'').toLowerCase().indexOf(busq) !== -1 ||
-                   (c.tipo||'').toLowerCase().indexOf(busq) !== -1 ||
-                   (c.cuit||'').indexOf(busq) !== -1;
-        });
+        var fuente = (document.getElementById('compRecFuente')||{}).value || 'ambos'; // 'ambos' | 'arca' | 'noofi'
+        function fmtM(n) { return '$ ' + (Number(n)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+        var filas = [];
+
+        // ── ARCA (oficiales) ──
+        if (fuente !== 'noofi') {
+            var lista = compRecibidos.slice();
+            if (desde) lista = lista.filter(function(c){ return (c.fecha||'') >= desde; });
+            if (hasta) lista = lista.filter(function(c){ return (c.fecha||'') <= hasta; });
+            if (busq)  lista = lista.filter(function(c){
+                return (c.proveedor||'').toLowerCase().indexOf(busq) !== -1 ||
+                       (c.tipo||'').toLowerCase().indexOf(busq) !== -1 ||
+                       (c.cuit||'').indexOf(busq) !== -1;
+            });
+            lista.forEach(function(c) {
+                var realIdx = compRecibidos.indexOf(c);
+                filas.push({ key: String(c.fecha||''), html:
+                    '<tr style="border-bottom:1px solid #EEE;">' +
+                    '<td style="padding:8px 6px;white-space:nowrap;">' + (c.fecha||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + (c.tipo||'—') + ' <span class="pill" style="background:#E3F2FD;color:#1565C0;font-size:10px;padding:1px 6px;border-radius:8px;">ARCA</span></td>' +
+                    '<td style="padding:8px 6px;text-align:center;">' + (c.ptoVta||'—') + '</td>' +
+                    '<td style="padding:8px 6px;font-weight:600;">' + (c.numero||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + (c.proveedor||'—') + '</td>' +
+                    '<td style="padding:8px 6px;font-family:monospace;font-size:12px;">' + (c.cuit||'—') + '</td>' +
+                    '<td style="padding:8px 6px;text-align:right;">' + fmtM(c.netoGravado) + '</td>' +
+                    '<td style="padding:8px 6px;text-align:right;">' + fmtM(c.iva) + '</td>' +
+                    '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + fmtM(c.total) + '</td>' +
+                    '<td style="padding:8px 6px;text-align:center;">' +
+                        '<button class="btn btn-outline btn-sm" onclick="borrarCompRecibido(' + realIdx + ')" title="Eliminar" style="color:#EF4444;">🗑️</button>' +
+                    '</td></tr>'
+                });
+            });
+        }
+
+        // ── No oficiales (comprobantes emitidos, lado egreso) ──
+        if (fuente !== 'arca') {
+            _emitidosNoOficiales('egreso').filter(function(e){
+                var fd = String(e.fecha||'');
+                if (desde && fd < desde) return false;
+                if (hasta && fd > hasta) return false;
+                if (busq) {
+                    var txt = ((e.cliente||'') + (e.proveedorNombre||'') + (e.nro||'') + (e.concepto||'')).toLowerCase();
+                    if (txt.indexOf(busq) === -1) return false;
+                }
+                return true;
+            }).forEach(function(e){
+                var prov = e.proveedorNombre || e.cliente || '—';
+                var tipoLbl = (e.tipoDoc === 'factura' ? 'Comprobante X' : 'Recibo');
+                filas.push({ key: String(e.fecha||''), html:
+                    '<tr style="border-bottom:1px solid #EEE;background:#FFFDF5;">' +
+                    '<td style="padding:8px 6px;white-space:nowrap;">' + (e.fecha||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + tipoLbl + ' <span class="pill" style="background:#FFF3E0;color:#E65100;font-size:10px;padding:1px 6px;border-radius:8px;">No oficial</span></td>' +
+                    '<td style="padding:8px 6px;text-align:center;">—</td>' +
+                    '<td style="padding:8px 6px;font-weight:600;">' + escHtml(e.nro||'—') + '</td>' +
+                    '<td style="padding:8px 6px;">' + escHtml(prov) + '</td>' +
+                    '<td style="padding:8px 6px;">—</td>' +
+                    '<td style="padding:8px 6px;text-align:right;">—</td>' +
+                    '<td style="padding:8px 6px;text-align:right;">—</td>' +
+                    '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + fmtM(e.total) + '</td>' +
+                    '<td style="padding:8px 6px;text-align:center;">' +
+                        '<button class="btn btn-outline btn-sm" onclick="imprimirComprobanteEmitido(\'' + e.id + '\')" title="Ver / imprimir">🔍</button>' +
+                    '</td></tr>'
+                });
+            });
+        }
+
         var ct = document.getElementById('compRecContador');
-        if (ct) ct.textContent = lista.length + ' comprobante' + (lista.length !== 1 ? 's' : '');
-        if (!lista.length) {
+        if (ct) ct.textContent = filas.length + ' comprobante' + (filas.length !== 1 ? 's' : '');
+        if (!filas.length) {
             body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#5F6368;padding:24px;">' +
                 (compRecibidos.length ? 'Sin resultados para el filtro aplicado.' : 'Importá comprobantes usando "Importar desde ARCA".') +
                 '</td></tr>';
             return;
         }
-        function fmtM(n) { return '$ ' + (Number(n)||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-        body.innerHTML = lista.map(function(c) {
-            var realIdx = compRecibidos.indexOf(c);
-            return '<tr style="border-bottom:1px solid #EEE;">' +
-                '<td style="padding:8px 6px;white-space:nowrap;">' + (c.fecha||'—') + '</td>' +
-                '<td style="padding:8px 6px;">' + (c.tipo||'—') + '</td>' +
-                '<td style="padding:8px 6px;text-align:center;">' + (c.ptoVta||'—') + '</td>' +
-                '<td style="padding:8px 6px;font-weight:600;">' + (c.numero||'—') + '</td>' +
-                '<td style="padding:8px 6px;">' + (c.proveedor||'—') + '</td>' +
-                '<td style="padding:8px 6px;font-family:monospace;font-size:12px;">' + (c.cuit||'—') + '</td>' +
-                '<td style="padding:8px 6px;text-align:right;">' + fmtM(c.netoGravado) + '</td>' +
-                '<td style="padding:8px 6px;text-align:right;">' + fmtM(c.iva) + '</td>' +
-                '<td style="padding:8px 6px;text-align:right;font-weight:600;">' + fmtM(c.total) + '</td>' +
-                '<td style="padding:8px 6px;text-align:center;">' +
-                    '<button class="btn btn-outline btn-sm" onclick="borrarCompRecibido(' + realIdx + ')" title="Eliminar" style="color:#EF4444;">🗑️</button>' +
-                '</td></tr>';
-        }).join('');
+        filas.sort(function(a,b){ return String(b.key||'').localeCompare(String(a.key||'')); });
+        body.innerHTML = filas.map(function(x){ return x.html; }).join('');
     }
 
     function borrarCompRecibido(idx) {
@@ -30644,6 +30741,12 @@
           <strong>Comprobantes en línea / Mis Comprobantes</strong>.
         </p>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:12px;color:#5F6368;white-space:nowrap;">Ver:</label>
+          <select id="arcaFiltroFuente" onchange="renderFacturasARCA()" style="padding:5px 8px;font-size:12px;border:1px solid #DDD;border-radius:6px;">
+            <option value="todos">Todos</option>
+            <option value="arca">ARCA (oficiales)</option>
+            <option value="noofi">No oficiales</option>
+          </select>
           <label style="font-size:12px;color:#5F6368;white-space:nowrap;">Desde:</label>
           <input type="date" id="arcaFiltroDesde" onchange="renderFacturasARCA()" style="padding:5px 8px;font-size:12px;border:1px solid #DDD;border-radius:6px;">
           <label style="font-size:12px;color:#5F6368;white-space:nowrap;">Hasta:</label>
