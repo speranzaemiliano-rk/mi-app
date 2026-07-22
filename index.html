@@ -14783,6 +14783,7 @@
         // Cobros Ventas UF en ARS (los cobrados "A — Banco" no son efectivo: se ven en Cuentas Bancarias)
         ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
+                if (c.formaPago === 'canje') return; // canje de m²: no es efectivo
                 if (c.comp === 'usd') return;
                 if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
@@ -14921,6 +14922,7 @@
         });
         ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
+                if (c.formaPago === 'canje') return; // canje de m²: no es efectivo
                 if (c.comp !== 'usd') return;
                 if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
@@ -17735,6 +17737,10 @@
     function abrirCobroVenta(idx) {
         const v = ventas[idx];
         _cvPoblarCuentas();
+        // Reset del canje de m² (por si quedó tildado de un cobro anterior)
+        var _cvC = document.getElementById('cobroVentaCanje');
+        if (_cvC) { _cvC.checked = false; cvToggleCanje(false); }
+        ['cobroVentaCanjeCant','cobroVentaCanjeValor'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
         // Si tiene un plan de cuotas simples activo, abrimos el selector de cuotas (sin ajuste CAC)
         if (v && v.cuotasSimple && v.cuotasSimple.activo) {
             _abrirCobroVentaCuotasSimple(idx);
@@ -18177,6 +18183,47 @@
         });
     }
 
+    // ── Canje de m² en el cobro de una venta ──
+    function cvToggleCanje(on) {
+        var panel = document.getElementById('cobroVentaCanjePanel');
+        if (panel) panel.style.display = on ? '' : 'none';
+        var montoEl = document.getElementById('cobroVentaMonto');
+        if (montoEl) montoEl.readOnly = !!on;
+        if (on) {
+            var idx = parseInt(document.getElementById('cobroVentaIdx').value);
+            var v = ventas[idx];
+            var sel = document.getElementById('cobroVentaCanjeDes');
+            if (sel) {
+                sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>';
+                desarrollos.forEach(function(d){
+                    var o = document.createElement('option'); o.value = d.id; o.textContent = d.nombre || d.id;
+                    if (v && v.desarrolloId === d.id) o.selected = true;
+                    sel.appendChild(o);
+                });
+            }
+            cvCanjeRecalc(true);
+        }
+    }
+    function cvCanjeRecalc(desdeDesarrollo) {
+        var desId = (document.getElementById('cobroVentaCanjeDes')||{}).value || '';
+        var valEl = document.getElementById('cobroVentaCanjeValor');
+        if (desdeDesarrollo && valEl && (!valEl.value || parseFloat(valEl.value) === 0)) {
+            var vd = _valorM2Desarrollo(desId);
+            if (vd > 0) valEl.value = Math.round(vd);
+        }
+        var cant  = parseFloat((document.getElementById('cobroVentaCanjeCant')||{}).value) || 0;
+        var valor = parseFloat((valEl||{}).value) || 0;
+        var total = cant * valor;
+        var montoEl = document.getElementById('cobroVentaMonto');
+        if (montoEl) montoEl.value = total ? Math.round(total) : '';
+        var mon = _monedaDesarrollo(desId);
+        var info = document.getElementById('cobroVentaCanjeInfo');
+        if (info) {
+            var saldo = desId ? saldoMetrosDesarrollo(desId) : 0;
+            info.innerHTML = 'Valor del canje: <strong>' + (mon === 'USD' ? 'USD ' : '$ ') + Math.round(total).toLocaleString('es-AR') + '</strong> · Saldo actual del desarrollo: <strong>' + Math.round(saldo).toLocaleString('es-AR') + ' m²</strong> → tras este canje: <strong>' + Math.round(saldo + cant).toLocaleString('es-AR') + ' m²</strong>';
+        }
+    }
+
     async function guardarCobroVenta() {
         const idx   = parseInt(document.getElementById('cobroVentaIdx').value);
         const comp  = document.getElementById('cobroVentaComponente').value;
@@ -18196,11 +18243,28 @@
             var selCuota = document.getElementById('cobroVentaNroCuota');
             if (selCuota && selCuota.value) nroCuota = parseInt(selCuota.value);
         }
-        var registro = { fecha: fecha, comp: comp, monto: monto, cac: cac, ref: ref, nroRecibo: nroRecibo, tipoAB: tipoAB };
+        // ¿Es un canje de m²? (se recibe en metros, no en plata → no impacta caja)
+        var esCanje    = (document.getElementById('cobroVentaCanje')||{}).checked;
+        var _canjeDes  = (document.getElementById('cobroVentaCanjeDes')||{}).value || '';
+        var _canjeCant = parseFloat((document.getElementById('cobroVentaCanjeCant')||{}).value) || 0;
+        var _canjeVal  = parseFloat((document.getElementById('cobroVentaCanjeValor')||{}).value) || 0;
+        if (esCanje) {
+            if (!_canjeDes) { alert('Elegí el desarrollo de los m² del canje.'); return; }
+            if (_canjeCant <= 0) { alert('Ingresá la cantidad de m² del canje.'); return; }
+        }
+        // En canje: monto=0 (para que NINGUNA suma de caja lo cuente) y el valor real va en valorCanje.
+        var registro = { fecha: fecha, comp: comp, monto: esCanje ? 0 : monto, cac: cac, ref: ref, nroRecibo: nroRecibo, tipoAB: esCanje ? 'B' : tipoAB };
+        if (esCanje) {
+            registro.valorCanje = monto;   // valor de los m² recibidos (imputa al saldo de la venta, no a caja)
+            registro.formaPago = 'canje';
+            registro.canjeDesarrolloId = _canjeDes;
+            registro.canjeCantidadM2 = _canjeCant;
+            registro.canjeValorM2 = _canjeVal;
+        }
         var _tcCobro = parseFloat((document.getElementById('cobroVentaTC')||{}).value) || exchangeRate || 0;
         if (_tcCobro > 0) registro.tc = _tcCobro; // dólar del día del cobro (para mostrar la cuota en USD)
         if (nroCuota) registro.nroCuota = nroCuota;
-        if (tipoAB === 'A') {
+        if (!esCanje && tipoAB === 'A') {
             var cuentaCobro = (document.getElementById('cobroVentaCuenta')||{}).value || '';
             if (cuentaCobro) registro.cuentaId = cuentaCobro;
         }
@@ -18213,6 +18277,17 @@
         if (comp === 'ars_general')     { v.cobradoARS          = (v.cobradoARS           || 0) + monto; }
         if (comp === 'cuota_ars_simple'){ v.cobradoARS          = (v.cobradoARS           || 0) + monto; }
         if (comp === 'cuota_usd_simple'){ v.cobradoUSD          = (v.cobradoUSD           || 0) + monto; }
+        // Canje: sumar los m² recibidos a la cuenta corriente del desarrollo
+        if (esCanje) {
+            metrosCanje.push({
+                id: 'MC-' + Date.now(), fecha: fecha, tipo: 'entrada', desarrolloId: _canjeDes,
+                cantidadM2: _canjeCant, valorM2: _canjeVal, moneda: _monedaDesarrollo(_canjeDes),
+                valorTotal: monto, contraparte: (v.comprador || ''), referencia: 'Venta ' + (v.uf || ''),
+                origen: 'venta', ventaId: v.id || ('V-' + idx)
+            });
+            persistirMetros();
+            if (typeof renderMetros === 'function') renderMetros();
+        }
         const ventaSnap = JSON.parse(JSON.stringify(v));
         cerrarModalCobroVenta();
         persistirVentas();
@@ -18226,7 +18301,7 @@
     function _recalcCobrosVenta(v) {
         var terreno=0, construccion=0, cobUSD=0, cobARS=0, cochera=0, cacUlt=0;
         (v.cobrosHistorial||[]).forEach(function(c) {
-            var m = c.monto||0;
+            var m = (c.monto||0) + (c.valorCanje||0); // canje: el valor va en valorCanje (monto=0)
             switch (c.comp) {
                 case 'usd': if (v.modalidad==='cuotas_cac') terreno+=m; else cobUSD+=m; break;
                 case 'ars_construccion': construccion+=m; if (c.cac>0) cacUlt=c.cac; break;
@@ -21754,7 +21829,9 @@
         if (!hist.length) { alert('Esta UF no tiene cobros registrados aún.'); return; }
         var lista = hist.map(function(c, i) {
             var monSym = (c.comp === 'usd' || c.comp === 'cuota_usd_simple' || c.comp === 'cochera_usd') ? 'USD ' : '$ ';
-            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota', cochera_ars:'Cochera ARS', cochera_usd:'Cochera USD'}[c.comp]||c.comp) + (c.nroCuota?' Cuota '+c.nroCuota:'') + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
+            var _valMostrar = Number(c.monto || c.valorCanje || 0);
+            var _canjeTxt = c.formaPago === 'canje' ? (' 🔄 Canje ' + (c.canjeCantidadM2||0) + ' m²') : '';
+            return (i+1) + ') ' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + _valMostrar.toLocaleString('es-AR') + _canjeTxt + ' (' + ({usd:'USD/Terreno', ars_construccion:'ARS Construcción', cuota:'ARS Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS Cuota', cuota_usd_simple:'USD Cuota', cochera_ars:'Cochera ARS', cochera_usd:'Cochera USD'}[c.comp]||c.comp) + (c.nroCuota?' Cuota '+c.nroCuota:'') + ')' + (c.ref ? ' Ref: '+c.ref : '') + (c.nroRecibo ? ' ['+c.nroRecibo+']' : '');
         }).join('\n');
         var sel = prompt('Cobros de ' + (v.uf||'UF') + ':\n\n' + lista + '\n\nElegí el número del cobro (1-' + hist.length + '):');
         if (!sel) return;
@@ -21901,6 +21978,7 @@
         // 2. Cobros de Ventas UF
         ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
+                if (c.formaPago === 'canje') return; // canje de m²: no mueve caja
                 var mon = c.comp === 'usd' ? 'USD' : 'ARS';
                 movs.push({
                     fecha: c.fecha, moneda: mon,
@@ -22146,6 +22224,7 @@
         // Ventas UF
         ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
+                if (c.formaPago === 'canje') return; // canje de m²: no es ingreso de dinero
                 var mon = c.comp === 'usd' ? 'USD' : 'ARS';
                 movs.push({ fecha: c.fecha, moneda: mon, tipo: 'Venta UF',
                     desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''), cliente: v.comprador || '—', monto: c.monto || 0,
@@ -27003,6 +27082,24 @@
               <label>Fecha del cobro *</label>
               <input type="date" id="cobroVentaFecha" required onchange="_cvActualizarTCPorFecha()">
             </div>
+          </div>
+
+          <!-- Canje de m²: el cobro se recibe en metros, no en plata -->
+          <div class="form-group" style="margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text-1);font-weight:500;">
+              <input type="checkbox" id="cobroVentaCanje" onchange="cvToggleCanje(this.checked)" style="width:auto;margin:0;"> 🔄 Este cobro es un canje de m² (recibís metros en vez de plata)
+            </label>
+          </div>
+          <div id="cobroVentaCanjePanel" style="display:none;border:1px solid #E5CC88;background:var(--gold-pale);border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div class="form-group" style="margin-bottom:8px;">
+              <label>Desarrollo de los m² que recibís</label>
+              <select id="cobroVentaCanjeDes" onchange="cvCanjeRecalc(true)" style="width:100%;"></select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div class="form-group" style="margin-bottom:0;"><label>Cantidad de m²</label><input type="number" id="cobroVentaCanjeCant" step="0.01" min="0" placeholder="0" oninput="cvCanjeRecalc()"></div>
+              <div class="form-group" style="margin-bottom:0;"><label>Valor por m²</label><input type="number" id="cobroVentaCanjeValor" step="0.01" min="0" placeholder="0" oninput="cvCanjeRecalc()"></div>
+            </div>
+            <div class="form-hint" id="cobroVentaCanjeInfo" style="margin-top:6px;"></div>
           </div>
 
           <div class="form-group">
