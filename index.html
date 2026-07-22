@@ -17260,11 +17260,12 @@
 
     function selModalidadVenta(m) {
         document.getElementById('ventaModalidad').value = m;
-        const btns = { total_usd: 'ventaMod1Btn', mixto: 'ventaMod2Btn', cuotas_cac: 'ventaMod3Btn', total_ars: 'ventaMod4Btn' };
-        const cls  = { total_usd: 'selected-A',   mixto: 'selected-AB',  cuotas_cac: 'selected-B',   total_ars: 'selected-B' };
+        const btns = { total_usd: 'ventaMod1Btn', mixto: 'ventaMod2Btn', cuotas_cac: 'ventaMod3Btn', total_ars: 'ventaMod4Btn', canje: 'ventaMod5Btn' };
+        const cls  = { total_usd: 'selected-A',   mixto: 'selected-AB',  cuotas_cac: 'selected-B',   total_ars: 'selected-B',   canje: 'selected-A' };
         Object.keys(btns).forEach(function(k) {
             document.getElementById(btns[k]).className = 'modalidad-btn' + (k === m ? ' ' + cls[k] : '');
         });
+        var esCanje = m === 'canje';
         document.getElementById('ventaBloqueUSD').style.display   = m === 'total_usd'  ? '' : 'none';
         document.getElementById('ventaBloqueMixto').style.display  = m === 'mixto'      ? '' : 'none';
         document.getElementById('ventaBloqueCAC').style.display    = m === 'cuotas_cac' ? '' : 'none';
@@ -17277,6 +17278,16 @@
         if (m === 'total_usd') document.getElementById('ventaCuotasSimpleMoneda').value = 'usd';
         if (m === 'cuotas_cac') ventaActualizarCampos();
         if (esConCuotasSimples) ventaGenerarPlanSimple();
+        // Modalidad Canje: usar el panel de canje como forma de pago principal y ocultar el checkbox suelto
+        var chkRow = document.getElementById('ventaCanje'); if (chkRow) chkRow.closest('.form-group').style.display = esCanje ? 'none' : '';
+        var canjePanel = document.getElementById('ventaCanjePanel');
+        if (canjePanel) canjePanel.style.display = esCanje ? '' : (document.getElementById('ventaCanje') && document.getElementById('ventaCanje').checked ? '' : 'none');
+        if (esCanje) {
+            var sel = document.getElementById('ventaCanjeDes');
+            var desVenta = (document.getElementById('ventaDesarrolloId')||{}).value || '';
+            if (sel) { sel.innerHTML = '<option value="">— Elegí un desarrollo —</option>'; desarrollos.forEach(function(d){ var o=document.createElement('option'); o.value=d.id; o.textContent=d.nombre||d.id; if (d.id===desVenta) o.selected=true; sel.appendChild(o); }); }
+            ventaCanjeRecalc(true);
+        }
     }
 
     function ventaToggleCochera() {
@@ -17748,6 +17759,18 @@
                 var fechas = ventaLeerFechasPlan();
                 if (fechas.some(function(f){ return f; })) nuevo.cuotaFechas = fechas;
             }
+        } else if (mod === 'canje') {
+            // Venta pagada 100% por canje de m²: se guarda como venta total en la moneda del
+            // desarrollo, con el precio = valor del canje y cobrada por completo con metros.
+            var _cjDes  = document.getElementById('ventaCanjeDes').value || '';
+            var _cjCant = parseFloat(document.getElementById('ventaCanjeCant').value) || 0;
+            var _cjVal  = parseFloat(document.getElementById('ventaCanjeValor').value) || 0;
+            var _cjTotal = _cjCant * _cjVal;
+            if (!_cjDes || _cjCant <= 0 || _cjTotal <= 0) { alert('Completá el desarrollo, la cantidad de m² y el valor del canje.'); return; }
+            var _cjMon = _monedaDesarrollo(_cjDes);
+            if (_cjMon === 'USD') { nuevo.modalidad = 'total_usd'; nuevo.precioUSD = _cjTotal; nuevo.cobradoUSD = _cjTotal; }
+            else { nuevo.modalidad = 'total_ars'; nuevo.precioARS = _cjTotal; nuevo.cobradoARS = _cjTotal; }
+            nuevo._canjeVentaData = { desId: _cjDes, cant: _cjCant, valor: _cjVal, total: _cjTotal, moneda: _cjMon, comp: (_cjMon === 'USD' ? 'usd' : 'ars_general') };
         }
         // ── Plan de pagos en cuotas simples (sin ajuste), para total_ars / total_usd / mixto ──
         if (mod === 'total_ars' || mod === 'total_usd' || mod === 'mixto') {
@@ -17804,7 +17827,7 @@
         // resumen sigue usando el campo suelto y la caja usa el historial), y luego ofrecemos
         // emitir el comprobante/recibo en el momento.
         var _cobrosIniciales = [];
-        if (editandoVentaIdx < 0) {
+        if (editandoVentaIdx < 0 && !nuevo._canjeVentaData) {
             if (mod === 'total_ars' && nuevo.cobradoARS > 0) {
                 _cobrosIniciales.push({ comp: 'ars_general', monto: nuevo.cobradoARS });
             } else if (mod === 'total_usd' && nuevo.cobradoUSD > 0) {
@@ -17825,8 +17848,28 @@
             nuevo.cobrosHistorial.push(_reg);
         }
 
-        // Canje de m² al cargar la UF (solo venta nueva; en edición usar el cobro por canje)
-        if (editandoVentaIdx < 0 && (document.getElementById('ventaCanje')||{}).checked) {
+        // Modalidad "Canje": registrar el cobro por metros (100% de la venta) y la entrada de m²
+        if (nuevo._canjeVentaData) {
+            var _cv = nuevo._canjeVentaData;
+            var _cvNro = await obtenerProximoComprobante('B');
+            nuevo.cobrosHistorial.push({
+                fecha: nuevo.fecha, comp: _cv.comp, monto: 0, valorCanje: _cv.total, formaPago: 'canje',
+                canjeDesarrolloId: _cv.desId, canjeCantidadM2: _cv.cant, canjeValorM2: _cv.valor,
+                ref: 'Venta por canje de m² (carga de UF)', nroRecibo: _cvNro, tipoAB: 'B', inicial: true
+            });
+            metrosCanje.push({
+                id: 'MC-' + Date.now(), fecha: nuevo.fecha, tipo: 'entrada', desarrolloId: _cv.desId,
+                cantidadM2: _cv.cant, valorM2: _cv.valor, moneda: _cv.moneda, valorTotal: _cv.total,
+                contraparte: (nuevo.comprador || ''), referencia: 'Venta ' + (nuevo.uf || ''),
+                origen: 'venta', ventaId: nuevo.id || ''
+            });
+            persistirMetros();
+            if (typeof renderMetros === 'function') renderMetros();
+            delete nuevo._canjeVentaData;
+        }
+
+        // Canje de m² al cargar la UF vía checkbox (venta con OTRA modalidad + parte en canje)
+        if (editandoVentaIdx < 0 && mod !== 'canje' && (document.getElementById('ventaCanje')||{}).checked) {
             var _vcDes  = (document.getElementById('ventaCanjeDes')||{}).value || '';
             var _vcCant = parseFloat((document.getElementById('ventaCanjeCant')||{}).value) || 0;
             var _vcVal  = parseFloat((document.getElementById('ventaCanjeValor')||{}).value) || 0;
@@ -27032,6 +27075,7 @@
             <button type="button" class="modalidad-btn" id="ventaMod4Btn" onclick="selModalidadVenta('total_ars')">🪙 $ ARS Total</button>
             <button type="button" class="modalidad-btn" id="ventaMod2Btn" onclick="selModalidadVenta('mixto')">🔀 USD + ARS</button>
             <button type="button" class="modalidad-btn" id="ventaMod3Btn" onclick="selModalidadVenta('cuotas_cac')">📊 Terreno + Cuotas CAC</button>
+            <button type="button" class="modalidad-btn" id="ventaMod5Btn" onclick="selModalidadVenta('canje')">🔄 Canje de m²</button>
           </div>
           <input type="hidden" id="ventaModalidad" value="total_usd">
         </div>
