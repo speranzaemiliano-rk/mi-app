@@ -9250,21 +9250,28 @@
         // mesAno: string 'YYYY-MM'
         let baseAcum = 0;
         let retAcum  = 0;
-        datos.forEach(d => {
-            if (d.proveedor !== nombreProv) return;
-            const historial = d.pagosHistorial || [];
-            historial.forEach(p => {
-                if (!p.fecha) return;
-                const pm = p.fecha.substring(0, 7); // 'YYYY-MM'
-                if (pm !== mesAno) return;
-                if (p.modalidad !== 'A') return;
-                if (excluirPagoId && p.pagoId === excluirPagoId) return;
-                baseAcum += (p.baseImponible || 0);
-                (p.retenciones || []).forEach(r => {
-                    if (r.codigo === codigoReg) retAcum += (r.monto || 0);
+        // Recorre los pagos del proveedor en el mes SOBRE LAS TRES colecciones (presupuestos,
+        // facturas y documentos): cada pago vive en una sola, así que no se duplica. Antes solo
+        // miraba presupuestos → si al proveedor se le pagaba por factura, el acumulado quedaba en
+        // cero y la retención se recalculaba mal (no descontaba lo ya retenido).
+        const _sumar = function(col) {
+            (col || []).forEach(item => {
+                if (!item || item.proveedor !== nombreProv) return;
+                (item.pagosHistorial || []).forEach(p => {
+                    if (!p.fecha) return;
+                    if (p.fecha.substring(0, 7) !== mesAno) return;
+                    if (p.modalidad !== 'A') return;
+                    if (excluirPagoId && p.pagoId === excluirPagoId) return;
+                    baseAcum += (p.baseImponible || 0);
+                    (p.retenciones || []).forEach(r => {
+                        if (r.codigo === codigoReg) retAcum += (r.monto || 0);
+                    });
                 });
             });
-        });
+        };
+        _sumar(datos);
+        _sumar(facturas);
+        _sumar(typeof documentos !== 'undefined' ? documentos : []);
         return { baseAcum, retAcum };
     }
 
