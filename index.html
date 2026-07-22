@@ -15115,7 +15115,7 @@
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'factura', srcRef:fIdx });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
         }); });
         (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
             if (hist.length) {
@@ -15157,6 +15157,19 @@
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'servicio', srcRef:sIdx });
         }); });
+
+        // Un pago de varias facturas del mismo proveedor (mismo grupoPagoId) es UN solo movimiento
+        // bancario: se agrupan en un renglón con la salida sumada (antes salía uno por factura).
+        var _bgrp = {}, movsAgr = [];
+        movs.forEach(function(m){
+            if (m.srcTipo === 'factura' && m.grupoPagoId) {
+                var g = _bgrp[m.grupoPagoId];
+                if (!g) { g = Object.assign({}, m, { _n:1, _descs:[m.desc] }); _bgrp[m.grupoPagoId] = g; movsAgr.push(g); }
+                else { g.salida += m.salida; g.entrada += m.entrada; g._descs.push(m.desc); g._n++; }
+            } else { movsAgr.push(m); }
+        });
+        movsAgr.forEach(function(m){ if (m._n > 1) { m.tipo = 'Pago Facturas'; m.desc = m._n + ' facturas: ' + m._descs.join(', '); } });
+        movs = movsAgr;
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
 
@@ -22850,7 +22863,7 @@
                     origen: f.proveedor||'—',
                     medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
                     monto: p.monto||0, esIngreso: false,
-                    srcTipo: 'factura', srcRef: fIdx
+                    srcTipo: 'factura', srcRef: fIdx, grupoPagoId: p.grupoPagoId||''
                 });
             });
         });
@@ -22882,6 +22895,18 @@
                 });
             }
         });
+
+        // Un pago de varias facturas del mismo proveedor (mismo grupoPagoId) es UN solo movimiento.
+        var _cgGrp = {}, movsCG = [];
+        movs.forEach(function(m){
+            if (m.srcTipo === 'factura' && m.grupoPagoId) {
+                var g = _cgGrp[m.grupoPagoId];
+                if (!g) { g = Object.assign({}, m, { _n:1, _descs:[m.desc] }); _cgGrp[m.grupoPagoId] = g; movsCG.push(g); }
+                else { g.monto += m.monto; g._descs.push(m.desc); g._n++; }
+            } else { movsCG.push(m); }
+        });
+        movsCG.forEach(function(m){ if (m._n > 1) { m.tipo = 'Pago Facturas'; m.desc = m._n + ' facturas: ' + m._descs.join(', '); } });
+        movs = movsCG;
 
         // ── Totales globales (siempre sobre todos los movimientos) ──
         var totIngARS=0, totEgrARS=0, totIngUSD=0, totEgrUSD=0;
