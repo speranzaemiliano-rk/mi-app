@@ -4538,6 +4538,22 @@
                       <button class="btn btn-outline btn-sm" onclick="borrarGoogleClientId()">🗑️ Borrar</button>
                     </div>
                     <div id="cfgGoogleClientIdStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+
+                    <div style="border-top:1px dashed var(--border);padding-top:16px;margin-top:16px;">
+                      <label style="font-size:13px;font-weight:700;color:var(--text-1);">📧 Cuenta de Gmail para las facturas</label>
+                      <p style="font-size:12px;color:var(--text-3);margin:4px 0 10px;line-height:1.6;">
+                        Casilla desde la que se leen las facturas. Guardala acá y al importar Google va <strong>directo a esa cuenta</strong>, sin pedirte elegir cada vez.
+                      </p>
+                      <div class="form-group" style="margin-bottom:12px;">
+                        <label>Email de la cuenta de facturas</label>
+                        <input type="email" id="cfgGmailFacturas" placeholder="facturas@tuempresa.com" autocomplete="off" style="font-size:13px;">
+                      </div>
+                      <div style="display:flex;gap:8px;">
+                        <button class="btn btn-gold btn-sm" onclick="guardarGmailFacturas()">💾 Guardar</button>
+                        <button class="btn btn-outline btn-sm" onclick="borrarGmailFacturas()">🗑️ Borrar</button>
+                      </div>
+                      <div id="cfgGmailFacturasStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    </div>
                   </div>
 
                 </div>
@@ -12349,6 +12365,7 @@
                 // Cargar API key de Gemini desde Firebase al iniciar sesión
                 cargarGeminiKeyDesdeFirebase();
                 cargarGoogleClientIdDesdeFirebase();
+                cargarGmailFacturasDesdeFirebase();
                 cargarEmailJsConfigDesdeFirebase();
                 cargarAppTokenDesdeFirebase();
                 cargarVisibilidadMenu();
@@ -12526,6 +12543,14 @@
         }).catch(function(){});
     }
 
+    function cargarGmailFacturasDesdeFirebase() {
+        if (localStorage.getItem('rk_gmail_facturas')) return;
+        db.ref('global/config/gmailFacturasCuenta').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val) localStorage.setItem('rk_gmail_facturas', val);
+        }).catch(function(){});
+    }
+
     function cargarApiKeyUI() {
         var key = getApiKey();
         var el = document.getElementById('cfgApiKey');
@@ -12535,6 +12560,7 @@
         cargarGeminiKeyUI();
         cargarEmailJsConfigUI();
         cargarGoogleClientIdUI();
+        cargarGmailFacturasUI();
         cargarAppTokenUI();
     }
 
@@ -13130,6 +13156,56 @@
         db.ref('global/config/googleClientId').remove();
         var el = document.getElementById('cfgGoogleClientId'); if (el) el.value = '';
         document.getElementById('cfgGoogleClientIdStatus').textContent = '⚠️ ID de cliente eliminado.';
+    }
+
+    // ── Cuenta de Gmail fija para leer facturas ──────────────────────
+    // Se guarda el email en localStorage + global/config para que al importar
+    // Google vaya directo a esa cuenta (login_hint) sin pedir elegir cada vez.
+    var GMAIL_FACTURAS_LS = 'rk_gmail_facturas';
+    function getGmailFacturas() {
+        return localStorage.getItem(GMAIL_FACTURAS_LS) || '';
+    }
+    function cargarGmailFacturasUI() {
+        var val = getGmailFacturas();
+        var el  = document.getElementById('cfgGmailFacturas');
+        var st  = document.getElementById('cfgGmailFacturasStatus');
+        if (el) el.value = val || '';
+        if (!st) return;
+        if (val) {
+            st.textContent = '✅ Cuenta de facturas: ' + val;
+        } else {
+            st.textContent = '🔄 Buscando en la nube…';
+            db.ref('global/config/gmailFacturasCuenta').once('value').then(function(snap) {
+                var v = snap.val();
+                if (v) {
+                    localStorage.setItem(GMAIL_FACTURAS_LS, v);
+                    if (el) el.value = v;
+                    st.textContent = '✅ Cuenta de facturas: ' + v;
+                } else {
+                    st.textContent = 'ℹ️ Sin cuenta fija: al importar te pedirá elegir la cuenta.';
+                }
+            }).catch(function() {
+                st.textContent = 'ℹ️ Sin cuenta fija configurada.';
+            });
+        }
+    }
+    function guardarGmailFacturas() {
+        var val = (document.getElementById('cfgGmailFacturas').value || '').trim().toLowerCase();
+        if (!val) { alert('Escribí el email de la cuenta de facturas.'); return; }
+        if (val.indexOf('@') === -1) { alert('No parece un email válido.'); return; }
+        localStorage.setItem(GMAIL_FACTURAS_LS, val);
+        db.ref('global/config/gmailFacturasCuenta').set(val).then(function() {
+            document.getElementById('cfgGmailFacturasStatus').textContent = '✅ Guardada en este dispositivo y en la nube: ' + val;
+        }).catch(function() {
+            document.getElementById('cfgGmailFacturasStatus').textContent = '✅ Guardada en este dispositivo: ' + val;
+        });
+    }
+    function borrarGmailFacturas() {
+        if (!confirm('¿Borrar la cuenta de Gmail para facturas? Al importar te va a volver a pedir elegir la cuenta.')) return;
+        localStorage.removeItem(GMAIL_FACTURAS_LS);
+        db.ref('global/config/gmailFacturasCuenta').remove();
+        var el = document.getElementById('cfgGmailFacturas'); if (el) el.value = '';
+        document.getElementById('cfgGmailFacturasStatus').textContent = '⚠️ Cuenta eliminada.';
     }
 
     // ══════════════════════════════════════════════════════════
@@ -14346,9 +14422,10 @@
             return;
         }
 
-        estado.textContent = 'Esperando autorización de Google…';
+        var cuentaFija = getGmailFacturas();
+        estado.textContent = cuentaFija ? ('Autorizando ' + cuentaFija + '…') : 'Esperando autorización de Google…';
         try {
-            var tokenClient = google.accounts.oauth2.initTokenClient({
+            var opcionesToken = {
                 client_id: clientId,
                 scope: 'https://www.googleapis.com/auth/gmail.readonly',
                 callback: function(resp) {
@@ -14362,11 +14439,14 @@
                         estado.textContent = '❌ Error al leer Gmail: ' + (e.message || e);
                     });
                 }
-            });
-            // Dispara el popup de Google. 'select_account' fuerza el selector de
-            // cuenta SIEMPRE, para que el usuario pueda elegir la cuenta correcta
-            // (sin esto, Google reutiliza en silencio la primera cuenta autorizada).
-            tokenClient.requestAccessToken({ prompt: 'select_account' });
+            };
+            // Si hay una cuenta de facturas guardada, la usamos como login_hint:
+            // Google va directo a esa cuenta sin mostrar el selector.
+            if (cuentaFija) opcionesToken.hint = cuentaFija;
+            var tokenClient = google.accounts.oauth2.initTokenClient(opcionesToken);
+            // Con cuenta fija: no forzamos el selector (va derecho a esa cuenta).
+            // Sin cuenta fija: 'select_account' fuerza el selector para elegir la correcta.
+            tokenClient.requestAccessToken(cuentaFija ? {} : { prompt: 'select_account' });
         } catch(e) {
             estado.textContent = '❌ No se pudo iniciar la autorización: ' + (e.message || e);
         }
