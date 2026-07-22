@@ -4192,7 +4192,10 @@
                             <div class="page-title">Canje de Metros²</div>
                             <div class="page-desc">Cuenta corriente de m² por desarrollo. Los m² entran al cobrar una venta con canje y salen al pagarle a un proveedor con metros.</div>
                         </div>
-                        <button class="btn btn-gold btn-sm" onclick="abrirMetroModal()">➕ Nuevo movimiento</button>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-outline btn-sm" onclick="abrirPagoPresupCanje()" title="Pagar un presupuesto de proveedor con m², incluso de otro proyecto">🔄 Pagar presupuesto con m²</button>
+                            <button class="btn btn-gold btn-sm" onclick="abrirMetroModal()">➕ Nuevo movimiento</button>
+                        </div>
                     </div>
                     <div id="metrosSaldos" class="stats-grid" style="margin-bottom:18px;"></div>
                     <div class="table-card">
@@ -19492,6 +19495,139 @@
                 + '</tr>';
         }).join('');
     }
+
+    // ── Pagar un presupuesto con m² (puede ser de OTRO proyecto de la empresa) ──
+    var _ppcPresupsCache = [];
+    function _ppcProyectosEmpresa() {
+        var emp = (typeof empresas !== 'undefined') ? empresas.find(function(e){ return empresaActual && e.id === empresaActual.id; }) : null;
+        return emp ? (emp.proyectos || []) : [];
+    }
+    function _ppcProyNombre(pid) {
+        var p = _ppcProyectosEmpresa().find(function(x){ return x.id === pid; });
+        return p ? p.nombre : pid;
+    }
+    function _ppcPendiente(it) {
+        var base = (it.presupuesto || it.base || 0);
+        var pag = (typeof it.pagadoPresupuesto === 'number') ? it.pagadoPresupuesto : (it.pagado || 0);
+        return Math.max(base - pag, 0);
+    }
+    function abrirPagoPresupCanje() {
+        if (!empresaActual) { alert('Elegí una empresa/proyecto primero.'); return; }
+        if (!desarrollos.length) { alert('Este proyecto no tiene desarrollos para tomar m².'); return; }
+        var selP = document.getElementById('ppcProyecto');
+        selP.innerHTML = '';
+        _ppcProyectosEmpresa().forEach(function(p){
+            var o = document.createElement('option'); o.value = p.id;
+            o.textContent = p.nombre + (proyectoActual && p.id === proyectoActual.id ? ' (actual)' : '');
+            if (proyectoActual && p.id === proyectoActual.id) o.selected = true;
+            selP.appendChild(o);
+        });
+        var selD = document.getElementById('ppcDesarrollo');
+        selD.innerHTML = '<option value="">— Elegí un desarrollo —</option>';
+        desarrollos.forEach(function(d){ var o=document.createElement('option'); o.value=d.id; o.textContent=d.nombre||d.id; selD.appendChild(o); });
+        document.getElementById('ppcFecha').value = new Date().toISOString().substring(0,10);
+        document.getElementById('ppcCant').value = '';
+        document.getElementById('ppcValor').value = '';
+        document.getElementById('ppcInfo').innerHTML = '';
+        document.getElementById('ppcPresupInfo').textContent = '';
+        ppcOnProyecto();
+        document.getElementById('modalPagoPresupCanje').classList.add('active');
+    }
+    function cerrarPagoPresupCanje() { document.getElementById('modalPagoPresupCanje').classList.remove('active'); }
+    function ppcOnProyecto() {
+        var pid = (document.getElementById('ppcProyecto')||{}).value;
+        var sel = document.getElementById('ppcPresupuesto');
+        sel.innerHTML = '<option value="">Cargando…</option>';
+        _ppcPresupsCache = [];
+        if (!pid || !empresaActual || !db) { sel.innerHTML = '<option value="">—</option>'; return; }
+        db.ref('empresas/' + empresaActual.id + '/proyectos/' + pid + '/datos').once('value').then(function(snap){
+            var val = snap.val();
+            // Preservar la CLAVE real de Firebase (índice si es array, id si es objeto) para escribir al nodo correcto.
+            var arr = [];
+            if (Array.isArray(val)) { val.forEach(function(o,i){ if (o) { o._fbKey = String(i); if (!o.id) o.id = String(i); arr.push(o); } }); }
+            else if (val && typeof val === 'object') { Object.keys(val).forEach(function(k){ var o = val[k]; if (o && typeof o === 'object') { o._fbKey = k; if (!o.id) o.id = k; arr.push(o); } }); }
+            _ppcPresupsCache = arr;
+            sel.innerHTML = '<option value="">— Elegí un presupuesto —</option>';
+            arr.forEach(function(it){
+                var pend = _ppcPendiente(it);
+                var o = document.createElement('option'); o.value = it._fbKey;
+                o.textContent = (it.proveedor || '?') + ' — ' + (it.concepto || '—') + ' (pend. $' + Math.round(pend).toLocaleString('es-AR') + ')';
+                sel.appendChild(o);
+            });
+            if (!arr.length) sel.innerHTML = '<option value="">Este proyecto no tiene presupuestos</option>';
+            ppcRecalc();
+        }).catch(function(){ sel.innerHTML = '<option value="">No se pudieron leer los presupuestos</option>'; });
+    }
+    function ppcRecalc(desdeDesarrollo) {
+        var desId = (document.getElementById('ppcDesarrollo')||{}).value;
+        var valEl = document.getElementById('ppcValor');
+        if (desdeDesarrollo && valEl && (!valEl.value || parseFloat(valEl.value) === 0)) {
+            var vd = _valorM2Desarrollo(desId); if (vd > 0) valEl.value = Math.round(vd);
+        }
+        var cant = parseFloat((document.getElementById('ppcCant')||{}).value) || 0;
+        var valor = parseFloat((valEl||{}).value) || 0;
+        var total = cant * valor;
+        var mon = _monedaDesarrollo(desId);
+        var it = _ppcPresupsCache.find(function(x){ return x._fbKey === (document.getElementById('ppcPresupuesto')||{}).value; });
+        var pinfo = document.getElementById('ppcPresupInfo');
+        if (pinfo) pinfo.textContent = it ? ('Pendiente: $' + Math.round(_ppcPendiente(it)).toLocaleString('es-AR')) : '';
+        var info = document.getElementById('ppcInfo');
+        if (info) {
+            var saldo = desId ? saldoMetrosDesarrollo(desId) : 0;
+            info.innerHTML = 'Valor entregado: <strong>' + (mon==='USD'?'USD ':'$ ') + Math.round(total).toLocaleString('es-AR') + '</strong> · Saldo del desarrollo: <strong>' + Math.round(saldo).toLocaleString('es-AR') + ' m²</strong> → tras el pago: <strong style="color:' + ((saldo-cant)<0?'var(--danger)':'var(--success)') + ';">' + Math.round(saldo-cant).toLocaleString('es-AR') + ' m²</strong>';
+        }
+    }
+    async function guardarPagoPresupCanje() {
+        var pid = (document.getElementById('ppcProyecto')||{}).value;
+        var presupId = (document.getElementById('ppcPresupuesto')||{}).value;
+        var desId = (document.getElementById('ppcDesarrollo')||{}).value;
+        var fecha = document.getElementById('ppcFecha').value;
+        var cant = parseFloat(document.getElementById('ppcCant').value) || 0;
+        var valor = parseFloat(document.getElementById('ppcValor').value) || 0;
+        if (!pid) { alert('Elegí el proyecto.'); return; }
+        if (!presupId) { alert('Elegí el presupuesto a pagar.'); return; }
+        if (!desId) { alert('Elegí el desarrollo de los m².'); return; }
+        if (!fecha) { alert('Ingresá la fecha.'); return; }
+        if (cant <= 0) { alert('Ingresá la cantidad de m².'); return; }
+        var total = cant * valor;
+        if (total <= 0) { alert('El valor del canje debe ser mayor a cero.'); return; }
+        var saldo = saldoMetrosDesarrollo(desId);
+        if (cant > saldo && !confirm('⚠️ El desarrollo "' + _metroDesNombre(desId) + '" tiene ' + Math.round(saldo).toLocaleString('es-AR') + ' m² y entregás ' + Math.round(cant).toLocaleString('es-AR') + '. El saldo queda negativo.\n\n¿Continuar?')) return;
+        var it = _ppcPresupsCache.find(function(x){ return x._fbKey === presupId; }) || {};
+        var btn = document.getElementById('ppcGuardarBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Registrando…'; }
+        var nroCorr = await obtenerProximoComprobante('B');
+        var entry = {
+            pagoId: 'PG-' + Date.now(), fecha: fecha, modalidad: 'B', capital: 0, mayores: 0,
+            baseImponible: 0, retenciones: [], totalRet: 0, formaPago: 'canje', canjeCapital: total,
+            canjeDesarrolloId: desId, canjeCantidadM2: cant, canjeValorM2: valor,
+            nroCorrelativo: nroCorr, tipoAB: 'B'
+        };
+        var path = 'empresas/' + empresaActual.id + '/proyectos/' + pid + '/datos/' + presupId;
+        try {
+            await db.ref(path).transaction(function(pres){
+                if (!pres) return pres; // no existe → aborta sin crear
+                pres.pagosHistorial = pres.pagosHistorial || [];
+                pres.pagosHistorial.push(entry);
+                pres.pagadoPresupuesto = pres.pagosHistorial.reduce(function(s,x){ return s + (x.capital||0) + (x.canjeCapital||0); }, 0);
+                pres.pagadoMayores = pres.pagosHistorial.reduce(function(s,x){ return s + (x.mayores||0); }, 0);
+                pres.pagado = pres.pagadoPresupuesto + pres.pagadoMayores;
+                return pres;
+            });
+        } catch(e) { if (btn){btn.disabled=false;btn.textContent='💾 Registrar pago con m²';} alert('No se pudo registrar el pago: ' + (e.message||e)); return; }
+        // Salida de m² del desarrollo (proyecto activo, donde está el stock)
+        metrosCanje.push({
+            id: 'MC-' + Date.now(), fecha: fecha, tipo: 'salida', desarrolloId: desId,
+            cantidadM2: cant, valorM2: valor, moneda: _monedaDesarrollo(desId), valorTotal: total,
+            contraparte: (it.proveedor || ''), referencia: 'Presupuesto ' + (it.concepto || '') + ' · ' + _ppcProyNombre(pid),
+            origen: 'proveedor', presupuestoId: presupId, proyectoDestino: pid
+        });
+        persistirMetros();
+        if (btn){btn.disabled=false;btn.textContent='💾 Registrar pago con m²';}
+        cerrarPagoPresupCanje();
+        renderMetros();
+        alert('✓ Pago con m² registrado (' + nroCorr + '). Se entregaron ' + Math.round(cant).toLocaleString('es-AR') + ' m² a ' + (it.proveedor||'proveedor') + ' — presupuesto en ' + _ppcProyNombre(pid) + '.');
+    }
+
     function persistirRemuneraciones() { return _colPersist('remuneraciones', REF_REMUN, remuneraciones).catch(function(e){ console.error(e); }); }
 
     // ══════════════════════════════════════════════════════════
@@ -28900,6 +29036,48 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarMetroModal()">Cancelar</button>
         <button type="button" class="btn btn-success" onclick="guardarMetro()">💾 Guardar movimiento</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Pagar un presupuesto con m² (puede ser de otro proyecto) -->
+<div class="modal" id="modalPagoPresupCanje">
+  <div class="modal-box" style="max-width:540px;">
+    <div class="modal-head">
+      <h2>🔄 Pagar presupuesto con m²</h2>
+      <button class="modal-close" onclick="cerrarPagoPresupCanje()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Proyecto del presupuesto *</label>
+        <select id="ppcProyecto" onchange="ppcOnProyecto()" style="width:100%;"></select>
+        <div class="form-hint">Podés pagar un presupuesto del proyecto activo o de otro proyecto de la empresa.</div>
+      </div>
+      <div class="form-group">
+        <label>Presupuesto a pagar *</label>
+        <select id="ppcPresupuesto" onchange="ppcRecalc()" style="width:100%;"><option value="">— Elegí un proyecto primero —</option></select>
+        <div class="form-hint" id="ppcPresupInfo"></div>
+      </div>
+      <div class="form-group">
+        <label>Fecha *</label>
+        <input type="date" id="ppcFecha">
+      </div>
+      <div style="border:1px solid #E5CC88;background:var(--gold-pale);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div class="form-group" style="margin-bottom:8px;">
+          <label>Desarrollo de los m² que entregás *</label>
+          <select id="ppcDesarrollo" onchange="ppcRecalc(true)" style="width:100%;"></select>
+          <div class="form-hint">Los m² salen del saldo de este desarrollo (del proyecto activo).</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div><label style="font-size:11px;">Cantidad de m²</label><input type="number" id="ppcCant" step="0.01" min="0" placeholder="0" oninput="ppcRecalc()"></div>
+          <div><label style="font-size:11px;">Valor por m²</label><input type="number" id="ppcValor" step="0.01" min="0" placeholder="0" oninput="ppcRecalc()"></div>
+        </div>
+        <div class="form-hint" id="ppcInfo" style="margin-top:6px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cerrarPagoPresupCanje()">Cancelar</button>
+        <button type="button" id="ppcGuardarBtn" class="btn btn-success" onclick="guardarPagoPresupCanje()">💾 Registrar pago con m²</button>
       </div>
     </div>
   </div>
