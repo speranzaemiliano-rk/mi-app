@@ -5898,6 +5898,15 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(factura a nombre de la empresa — Factura A o B)</span></label>
+                    <div class="modalidad-toggle" style="margin-bottom:0;">
+                        <button type="button" class="modalidad-btn selected-A" id="factComputaSiBtn" onclick="selFactComputaARCA(true)">✓ Sí, computa ARCA</button>
+                        <button type="button" class="modalidad-btn" id="factComputaNoBtn" onclick="selFactComputaARCA(false)">No — va a Comprobantes X</button>
+                    </div>
+                    <input type="hidden" id="factComputaARCA" value="true">
+                    <div class="form-hint" id="factComputaHint">Si el cliente/receptor es la empresa, computa ARCA. Si es otro o consumidor final, va a Comprobantes X (no oficiales).</div>
+                </div>
+                <div class="form-group">
                     <label>Adjuntar PDF de la factura</label>
                     <input type="file" id="factArchivo" accept=".pdf,image/*" style="font-size:13px;">
                     <div class="form-hint" id="factArchivoEstado">Subí el PDF o imagen de la factura. Si es pesado se comprime automáticamente.</div>
@@ -13604,6 +13613,8 @@
                 '  "condicionIva": "condición frente al IVA del emisor (ej: Responsable Inscripto, Monotributista, Exento), o null",\n' +
                 '  "direccion": "dirección del emisor, o null",\n' +
                 '  "tipoComprobante": "tipo de comprobante: A, B o C, o null",\n' +
+                '  "receptor": "razón social del RECEPTOR/cliente a nombre de quién se emitió la factura (NO el emisor), o null",\n' +
+                '  "receptorConsumidorFinal": true si el receptor figura como \"Consumidor Final\", si no false,\n' +
                 '  "numero": "número de factura completo (ej: 0001-00012345)",\n' +
                 '  "fecha": "fecha de emisión en formato YYYY-MM-DD",\n' +
                 '  "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD, o null si no hay",\n' +
@@ -13728,6 +13739,16 @@
         if (datos.condicionIva)  document.getElementById('leerFactCondIva').value = datos.condicionIva;
         if (datos.direccion)     document.getElementById('leerFactDir').value     = datos.direccion;
         if (datos.tipoComprobante) document.getElementById('leerFactTipo').value  = datos.tipoComprobante || '';
+        // ¿Computa ARCA? Auto según el receptor extraído vs la empresa activa.
+        var _compAuto = _computaARCAAuto(datos.receptor, datos.receptorConsumidorFinal);
+        var _selComp = document.getElementById('leerFactComputaARCA');
+        if (_selComp) _selComp.value = _compAuto ? 'true' : 'false';
+        var _compHint = document.getElementById('leerFactComputaHint');
+        if (_compHint) {
+            _compHint.textContent = datos.receptor
+                ? ('Receptor detectado: ' + datos.receptor + (_compAuto ? ' → computa ARCA.' : ' → va a Comprobantes X (no oficiales).'))
+                : 'No se detectó el receptor — revisá si corresponde ARCA o Comprobantes X.';
+        }
         if (datos.cae)           document.getElementById('leerFactCae').value     = datos.cae;
         if (datos.vencimientoCae) document.getElementById('leerFactVencCae').value = datos.vencimientoCae;
 
@@ -13786,7 +13807,8 @@
             tipoComprobante:  tipoComp || '',
             cae:              cae || '',
             vencimientoCae:   vencCae || '',
-            netoGravado:      window._lfNetoGravado || 0
+            netoGravado:      window._lfNetoGravado || 0,
+            computaARCA:      (document.getElementById('leerFactComputaARCA')||{}).value !== 'false'
         };
 
         if (tipoCarga === 'presup') {
@@ -13886,6 +13908,7 @@
         selFactTipo('presup');
         selFactPagoInmediato(true);
         selFactModalidad('A');
+        selFactComputaARCA(true);
         renderCheckboxesCompartir('checkboxesCompartirFact', 'panelCompartirFact');
         document.getElementById('modalFact').classList.add('active');
     }
@@ -13919,6 +13942,7 @@
         selFactTipo(f.presupuestoIdx === undefined ? 'presup' : (f.tipo || 'presup'));
         selFactPagoInmediato(false); // en edición no re-pagamos
         selFactModalidad('A');
+        selFactComputaARCA(f.computaARCA !== false); // legado sin el campo → computa ARCA
         var _pendienteEdit = _saldoFactDoc(f);
         var _avisoPagada = document.getElementById('factYaPagadaAviso');
         var _panelInmediato = document.getElementById('factPagoInmediatoPanel');
@@ -14004,6 +14028,31 @@
         }
         pagoPanel.style.display = '';
         recalcularRetencionesFactura();
+    }
+
+    // Toggle "¿Computa ARCA?": SÍ = factura a nombre de la empresa (va a Facturas ARCA),
+    // NO = otro receptor / consumidor final (va a Comprobantes X no oficiales).
+    function selFactComputaARCA(si) {
+        var h = document.getElementById('factComputaARCA');
+        if (h) h.value = si ? 'true' : 'false';
+        var b1 = document.getElementById('factComputaSiBtn'), b2 = document.getElementById('factComputaNoBtn');
+        if (b1) b1.className = 'modalidad-btn' + (si ? ' selected-A' : '');
+        if (b2) b2.className = 'modalidad-btn' + (!si ? ' selected-B' : '');
+    }
+
+    // Determina automáticamente si una factura computa ARCA comparando el receptor
+    // extraído con el nombre de la empresa activa. Consumidor final u otro receptor → no computa.
+    function _computaARCAAuto(receptor, esConsumidorFinal) {
+        if (esConsumidorFinal === true) return false;
+        function norm(s){ return (s||'').toString().toLowerCase().replace(/consumidor\s*final/g,'cf').replace(/s\.?a\.?s?\.?|s\.?r\.?l\.?/g,'').replace(/[^a-z0-9]/g,''); }
+        var r = norm(receptor);
+        if (!r) return true;                 // sin receptor detectado → asumir que computa (editable a mano)
+        if (r === 'cf' || r.indexOf('cf') === 0) return false;
+        var emp = (typeof empresaActual !== 'undefined' && empresaActual)
+            ? (empresaActual.nombre || (empresaActual.datos && (empresaActual.datos.razonSocial || empresaActual.datos.nombre)) || '') : '';
+        var e = norm(emp);
+        if (!e) return true;                 // no hay nombre de empresa para comparar → asumir que sí
+        return r.indexOf(e) !== -1 || e.indexOf(r) !== -1;
     }
 
     function selFactPagoInmediato(si) {
@@ -14195,7 +14244,8 @@
             pagado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].pagado || 0) : 0,
             estado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].estado || 'pendiente') : 'pendiente',
             tipo:        document.getElementById('factTipo').value || 'presup',
-            netoGravado: window._factNetoGravado || 0
+            netoGravado: window._factNetoGravado || 0,
+            computaARCA: (document.getElementById('factComputaARCA')||{}).value !== 'false'
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
@@ -14754,6 +14804,8 @@
             '  "condicionIva": "condición frente al IVA del emisor, o null",\n' +
             '  "direccion": "dirección del emisor, o null",\n' +
             '  "tipoComprobante": "tipo de comprobante: A, B o C, o null",\n' +
+            '  "receptor": "razón social del RECEPTOR/cliente a nombre de quién se emitió la factura (NO el emisor), o null",\n' +
+            '  "receptorConsumidorFinal": true si el receptor figura como \"Consumidor Final\", si no false,\n' +
             '  "numero": "número de factura completo (ej: 0001-00012345)",\n' +
             '  "fecha": "fecha de emisión en formato YYYY-MM-DD",\n' +
             '  "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD, o null si no hay",\n' +
@@ -16606,17 +16658,20 @@
             return true;
         }).map(d => ({ _o:'x', item:d, fecha:d.fecha||'' }));
 
-        // Facturas ARCA de proveedores
-        let facsA = (origen === 'x') ? [] : (facturas||[]).filter(f => {
+        // Facturas de proveedores — se separan según computen ARCA o no.
+        // computaARCA !== false → ARCA (a nombre de la empresa); === false → Comprobantes X.
+        function _factPasa(f) {
             const txt = ((f.proveedor||'') + (f.descripcion||'') + (f.numero||'')).toLowerCase();
             if (busq && !txt.includes(busq)) return false;
             if (est) {
-                const e = (f.estado||'pendiente');
-                const norm = e === 'pagada' ? 'pagado' : e;
+                const e2 = (f.estado||'pendiente');
+                const norm = e2 === 'pagada' ? 'pagado' : e2;
                 if (norm !== est) return false;
             }
             return true;
-        }).map(f => ({ _o:'arca', item:f, fecha:f.fecha||'' }));
+        }
+        let facsA  = (origen === 'x')    ? [] : (facturas||[]).filter(f => f.computaARCA !== false && _factPasa(f)).map(f => ({ _o:'arca',  item:f, fecha:f.fecha||'' }));
+        let facsXf = (origen === 'arca') ? [] : (facturas||[]).filter(f => f.computaARCA === false && _factPasa(f)).map(f => ({ _o:'factx', item:f, fecha:f.fecha||'' }));
 
         // Comprobantes ARCA importados del portal de ARCA (informativos, sin seguimiento de pago)
         let arcaImp = (origen === 'x' || est) ? [] : (compRecibidos||[]).filter(c => {
@@ -16633,7 +16688,7 @@
             return true;
         }).map(e => ({ _o:'emitx', item:e, fecha:String(e.fecha||'') }));
 
-        let list = docsX.concat(facsA, arcaImp, emitX);
+        let list = docsX.concat(facsA, facsXf, arcaImp, emitX);
         list.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')); // más nuevo primero
 
         const tbody = document.getElementById('documentosBody');
@@ -16738,11 +16793,12 @@
                 const mon = f.moneda === 'USD' ? 'USD ' : '$';
                 const sumHist = (f.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
                 const pagInc = Math.round(sumHist) !== Math.round(pag);
+                const pillFac = (row._o === 'factx') ? pillX : pillArca;
                 const tr = document.createElement('tr');
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${f.proveedor||'—'}</strong>${pillArca}</td>
+                    <td><strong>${f.proveedor||'—'}</strong>${pillFac}</td>
                     <td>${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : '—'}</td>
                     <td>${f.descripcion||'—'}</td>
                     <td><span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span></td>
@@ -30402,6 +30458,14 @@
               <option value="C">Factura C</option>
               <option value="X">Otro</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(a nombre de la empresa)</span></label>
+            <select id="leerFactComputaARCA" style="width:100%;">
+              <option value="true">Sí — computa ARCA (Facturas ARCA)</option>
+              <option value="false">No — Comprobantes X (no oficiales)</option>
+            </select>
+            <div class="form-hint" id="leerFactComputaHint"></div>
           </div>
           <div class="form-group">
             <label>N° Factura</label>
