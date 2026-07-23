@@ -3762,7 +3762,7 @@
             <div class="tab-panel" id="panelDocumentos">
                 <div class="stats-grid">
                     <div class="stat-card">
-                        <div class="stat-label">Documentos cargados</div>
+                        <div class="stat-label">Comprobantes cargados</div>
                         <div class="stat-value" id="totalDocs">0</div>
                     </div>
                     <div class="stat-card">
@@ -3776,11 +3776,16 @@
                 </div>
                 <div class="table-card" id="seccionDocRecibidos">
                     <div class="table-card-head">
-                        <h3>Documentos recibidos <span style="font-weight:400;color:var(--text-3);font-size:12px;">(comprobantes de pago sin factura, de proveedores)</span></h3>
+                        <h3>Documentos recibidos <span style="font-weight:400;color:var(--text-3);font-size:12px;">(facturas ARCA y comprobantes no oficiales de proveedores)</span></h3>
                         <button class="btn btn-primary btn-sm" id="btnAgregarDoc" onclick="abrirModalDoc()">＋ Agregar Comprobante</button>
                     </div>
                     <div class="search-row">
                         <input type="text" class="search-input" id="buscadorDoc" oninput="renderDocumentos()" placeholder="Buscar por proveedor, descripción, número…">
+                        <select id="filtroDocOrigen" onchange="renderDocumentos()" style="width:auto; min-width:150px;">
+                            <option value="">Todos los orígenes</option>
+                            <option value="arca">Facturas ARCA</option>
+                            <option value="x">Documentos X (no oficial)</option>
+                        </select>
                         <select id="filtroDocEstado" onchange="renderDocumentos()" style="width:auto; min-width:140px;">
                             <option value="">Todos los estados</option>
                             <option value="pendiente">Pendiente</option>
@@ -6540,6 +6545,7 @@
             // saldadas (importe = neto pagado + retenido). Así se corrigen solas al cargar.
             facturas.forEach(function(f){ if (typeof _estadoFactDoc === 'function') f.estado = _estadoFactDoc(f); });
             renderFacturas();
+            if (_tabActivo === 'Documentos' && typeof renderDocumentos === 'function') renderDocumentos();
         }); activeListeners.push({ref:l5, event:'value'});
 
         const l6 = REF_CAJA; l6.on('value', (snap) => {
@@ -16599,64 +16605,121 @@
         if (!documentos) return;
         const busq = (document.getElementById('buscadorDoc')?.value || '').toLowerCase();
         const est  = document.getElementById('filtroDocEstado')?.value || '';
-        let list = documentos.filter(d => {
+        const origen = document.getElementById('filtroDocOrigen')?.value || ''; // '' | 'x' | 'arca'
+        const editable = (typeof puedeEditar !== 'undefined') ? puedeEditar : true;
+
+        function estadoDoc(d) {
+            const pag = d.pagado || 0;
+            return (pag <= 0 && _totalRetenidoHist(d.pagosHistorial) <= 0) ? 'pendiente' : (_saldoFactDoc(d) <= 0 ? 'pagado' : 'parcial');
+        }
+
+        // Documentos no oficiales (X)
+        let docsX = (origen === 'arca') ? [] : documentos.filter(d => {
             const txt = ((d.proveedor||'') + (d.descripcion||'') + (d.numero||'')).toLowerCase();
             if (busq && !txt.includes(busq)) return false;
+            if (est && estadoDoc(d) !== est) return false;
+            return true;
+        }).map(d => ({ _o:'x', item:d, fecha:d.fecha||'' }));
+
+        // Facturas ARCA de proveedores
+        let facsA = (origen === 'x') ? [] : (facturas||[]).filter(f => {
+            const txt = ((f.proveedor||'') + (f.descripcion||'') + (f.numero||'')).toLowerCase();
+            if (busq && !txt.includes(busq)) return false;
             if (est) {
-                const pag = d.pagado || 0;
-                const imp = d.importe || 0;
-                const estado = (pag <= 0 && _totalRetenidoHist(d.pagosHistorial) <= 0) ? 'pendiente' : (_saldoFactDoc(d) <= 0 ? 'pagado' : 'parcial');
-                if (estado !== est) return false;
+                const e = (f.estado||'pendiente');
+                const norm = e === 'pagada' ? 'pagado' : e;
+                if (norm !== est) return false;
             }
             return true;
-        });
-        list.sort((a,b) => (a.fecha||'').localeCompare(b.fecha||''));
+        }).map(f => ({ _o:'arca', item:f, fecha:f.fecha||'' }));
+
+        let list = docsX.concat(facsA);
+        list.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')); // más nuevo primero
+
         const tbody = document.getElementById('documentosBody');
         if (!tbody) return;
-        // Stats
-        const total = documentos.length;
-        const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0);
-        const pendientes = documentos.filter(d => _saldoFactDoc(d) > 0).length;
+
+        // Stats (sobre ambas fuentes)
+        const nDocs = documentos.length, nFacs = (facturas||[]).length;
+        const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0) + (facturas||[]).reduce((s,f) => s + (f.importe||0), 0);
+        const pendientes = documentos.filter(d => _saldoFactDoc(d) > 0).length + (facturas||[]).filter(f => _saldoFactDoc(f) > 0).length;
         const el = id => document.getElementById(id);
-        if (el('totalDocs')) el('totalDocs').textContent = total;
+        if (el('totalDocs')) el('totalDocs').textContent = nDocs + nFacs;
         if (el('docsTotal')) el('docsTotal').textContent = '$' + Math.round(totalAmt).toLocaleString('es-AR');
         if (el('docsPendientes')) el('docsPendientes').textContent = pendientes;
+
         if (list.length === 0) {
             tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay comprobantes cargados.</td></tr>';
             return;
         }
         tbody.innerHTML = '';
-        list.forEach(d => {
-            const pag = d.pagado || 0;
-            const imp = d.importe || 0;
-            const estado = pag <= 0 ? 'pendiente' : (pag >= imp ? 'pagado' : 'parcial');
-            const estadoLabel = { pendiente:'Pendiente', pagado:'Pagado', parcial:'Parcial' }[estado];
-            const estadoClass = { pendiente:'badge-err', pagado:'badge-ok', parcial:'badge-warn' }[estado];
-            const tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comp. X', otro:'Otro' };
-            const mon = d.moneda === 'USD' ? 'USD ' : '$';
-            const sumHistDoc = (d.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
-            const pagadoIncons = Math.round(sumHistDoc) !== Math.round(pag);
-            const tr = document.createElement('tr');
-            _filaMovClickeable(tr, 'documento', d.id);
-            tr.innerHTML = `
-                <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
-                <td><strong>${d.proveedor||'—'}</strong></td>
-                <td>${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : (d.nro ? '' : '—')}</td>
-                <td>${d.descripcion||'—'}</td>
-                <td><span class="pill pill-${d.modalidad||'B'}">${d.modalidad||'B'}</span></td>
-                <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
-                <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
-                <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
-                <td><div class="action-btns">
-                    ${_saldoFactDoc(d)>0?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
-                    <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
-                    ${(((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
-                    ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
-                    ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
-                    <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
-                    <button class="btn btn-danger-sm" onclick="eliminarDoc('${d.id}')">✕</button>
-                </div></td>`;
-            tbody.appendChild(tr);
+        const pillArca = ' <span class="pill" style="background:#E3F2FD;color:#1565C0;font-size:10px;padding:1px 6px;border-radius:8px;">ARCA</span>';
+        const pillX    = ' <span class="pill" style="background:#FFF3E0;color:#E65100;font-size:10px;padding:1px 6px;border-radius:8px;">No oficial</span>';
+
+        list.forEach(row => {
+            if (row._o === 'x') {
+                const d = row.item;
+                const pag = d.pagado || 0;
+                const imp = d.importe || 0;
+                const estado = pag <= 0 ? 'pendiente' : (pag >= imp ? 'pagado' : 'parcial');
+                const estadoLabel = { pendiente:'Pendiente', pagado:'Pagado', parcial:'Parcial' }[estado];
+                const estadoClass = { pendiente:'badge-err', pagado:'badge-ok', parcial:'badge-warn' }[estado];
+                const mon = d.moneda === 'USD' ? 'USD ' : '$';
+                const sumHistDoc = (d.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
+                const pagadoIncons = Math.round(sumHistDoc) !== Math.round(pag);
+                const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'documento', d.id);
+                tr.innerHTML = `
+                    <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
+                    <td><strong>${d.proveedor||'—'}</strong>${pillX}</td>
+                    <td>${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : (d.nro ? '' : '—')}</td>
+                    <td>${d.descripcion||'—'}</td>
+                    <td><span class="pill pill-${d.modalidad||'B'}">${d.modalidad||'B'}</span></td>
+                    <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
+                    <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
+                    <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
+                    <td><div class="action-btns">
+                        ${_saldoFactDoc(d)>0?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
+                        <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
+                        ${(((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
+                        ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
+                        ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
+                        <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
+                        <button class="btn btn-danger-sm" onclick="eliminarDoc('${d.id}')">✕</button>
+                    </div></td>`;
+                tbody.appendChild(tr);
+            } else {
+                const f = row.item;
+                const idx = facturas.indexOf(f);
+                const imp = f.importe || 0;
+                const pag = f.pagado || 0;
+                const estado = f.estado || 'pendiente';
+                const estadoLabel = { pendiente:'Pendiente', pagada:'Pagado', parcial:'Parcial' }[estado] || 'Pendiente';
+                const estadoClass = { pendiente:'badge-err', pagada:'badge-ok', parcial:'badge-warn' }[estado] || 'badge-err';
+                const mon = f.moneda === 'USD' ? 'USD ' : '$';
+                const sumHist = (f.pagosHistorial||[]).reduce((s,p)=>s+(p.monto||0),0);
+                const pagInc = Math.round(sumHist) !== Math.round(pag);
+                const tr = document.createElement('tr');
+                _filaMovClickeable(tr, 'factura', idx);
+                tr.innerHTML = `
+                    <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
+                    <td><strong>${f.proveedor||'—'}</strong>${pillArca}</td>
+                    <td>${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : '—'}</td>
+                    <td>${f.descripcion||'—'}</td>
+                    <td><span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span></td>
+                    <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
+                    <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
+                    <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
+                    <td><div class="action-btns">
+                        ${editable && estado!=='pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
+                        <button class="btn btn-outline btn-sm" onclick="imprimirComprobanteFacturaItem(${idx})" title="Imprimir esta factura como comprobante">📄</button>
+                        ${((f.pagosHistorial&&f.pagosHistorial.length)||pag>0) ? `<button class="btn btn-outline btn-sm" title="Imprimir Orden de Pago" onclick="abrirHistorialPagosFactura(${idx})">🖨️ OP</button>` : ''}
+                        ${pagInc ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
+                        ${f.docId ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${f.docId}','${(f.docNombre||'factura').replace(/'/g,'')}')" title="Ver PDF adjunto">📎</button>` : ''}
+                        ${editable ? `<button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>` : ''}
+                    </div></td>`;
+                tbody.appendChild(tr);
+            }
         });
     }
 
