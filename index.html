@@ -12829,8 +12829,27 @@
     // Devuelve un texto de ayuda si el error es por el token del backend (para los importadores ARCA).
     function _hintTokenBackend(msg) {
         return /X-App-Token|No autorizado/i.test(String(msg||''))
-            ? ' — ⚠️ El backend pide un token que este dispositivo no tiene. Andá a Config → 🔒 Token del backend, pegá el MISMO valor que la variable APP_API_TOKEN de Railway y guardá (se sincroniza a todos los dispositivos).'
+            ? ' — ⚠️ No se pudo autenticar con el backend. Verificá que estés con la sesión iniciada, o cargá en Config → 🔒 Token del backend el MISMO valor que la variable APP_API_TOKEN de Railway y guardá.'
             : '';
+    }
+
+    // Llama al backend autenticando de las dos formas que el server acepta:
+    //  - X-App-Token (token compartido, si está configurado), y
+    //  - Authorization: Bearer <idToken de Firebase> (tu sesión iniciada).
+    // Con cualquiera de las dos alcanza, así no dependés de tener el token compartido cargado.
+    async function _fetchConAuth(url, opts) {
+        opts = opts || {};
+        var headers = opts.headers || {};
+        var t = getAppToken();
+        if (t) headers['X-App-Token'] = t;
+        try {
+            if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+                var idt = await auth.currentUser.getIdToken();
+                if (idt) headers['Authorization'] = 'Bearer ' + idt;
+            }
+        } catch (e) {}
+        opts.headers = headers;
+        return fetch(url, opts);
     }
 
     // ── Gestión de Usuarios (superadmin) ─────────────────────────────
@@ -24795,7 +24814,7 @@
         try {
             await _asegurarAppToken();
             // El backend detecta automáticamente todos los puntos de venta activos y tipos
-            var resp = await fetch(_conToken(baseUrl + '/afip/importar'));
+            var resp = await _fetchConAuth(baseUrl + '/afip/importar');
             if (!resp.ok) throw new Error('Error HTTP ' + resp.status);
             var lista = await resp.json();
             if (!Array.isArray(lista)) throw new Error(lista.error || 'Respuesta inesperada');
@@ -24870,7 +24889,7 @@
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
-            var resp = await fetch(_conToken(baseUrl + '/afip/emitidos' + (qs.length ? ('?' + qs.join('&')) : '')));
+            var resp = await _fetchConAuth(baseUrl + '/afip/emitidos' + (qs.length ? ('?' + qs.join('&')) : ''));
             var json = await resp.json();
             if (!resp.ok) {
                 if (json && json.faltanCreds) throw new Error('Falta configurar las credenciales en el servidor (Railway): AFIP_SDK_TOKEN, ARCA_USER y ARCA_PASS. ' + (json.detalle||''));
@@ -25269,7 +25288,7 @@
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
-            var resp = await fetch(_conToken(baseUrl + '/afip/recibidos' + (qs.length ? ('?' + qs.join('&')) : '')));
+            var resp = await _fetchConAuth(baseUrl + '/afip/recibidos' + (qs.length ? ('?' + qs.join('&')) : ''));
             var json = await resp.json();
             if (!resp.ok) {
                 if (json && json.faltanCreds) {
