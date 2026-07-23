@@ -12811,6 +12811,28 @@
         return url + (url.indexOf('?') !== -1 ? '&' : '?') + 'token=' + encodeURIComponent(t);
     }
 
+    // Asegura que el token del backend esté en este dispositivo antes de una llamada:
+    // si no está en localStorage (ej. recién abrís en el celu, o se guardó en otra compu),
+    // lo baja de Firebase (global/config/appToken). Evita el error "Falta X-App-Token".
+    async function _asegurarAppToken() {
+        if (getAppToken()) return getAppToken();
+        try {
+            if (typeof db !== 'undefined' && db) {
+                var snap = await db.ref('global/config/appToken').once('value');
+                var v = snap.val();
+                if (v) { localStorage.setItem(APP_TOKEN_LS, v); return v; }
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    // Devuelve un texto de ayuda si el error es por el token del backend (para los importadores ARCA).
+    function _hintTokenBackend(msg) {
+        return /X-App-Token|No autorizado/i.test(String(msg||''))
+            ? ' — ⚠️ El backend pide un token que este dispositivo no tiene. Andá a Config → 🔒 Token del backend, pegá el MISMO valor que la variable APP_API_TOKEN de Railway y guardá (se sincroniza a todos los dispositivos).'
+            : '';
+    }
+
     // ── Gestión de Usuarios (superadmin) ─────────────────────────────
     function _backendUrl() {
         var u = (localStorage.getItem('rk_afip_function_url') || '').replace(/\/afip\/?$/, '').replace(/\/+$/, '');
@@ -24771,6 +24793,7 @@
         st.style.background = '#EFF6FF'; st.style.color = '#1D4ED8'; st.style.border = '1px solid #BFDBFE';
         st.textContent = 'Consultando todos los puntos de venta en ARCA… puede tardar unos segundos.';
         try {
+            await _asegurarAppToken();
             // El backend detecta automáticamente todos los puntos de venta activos y tipos
             var resp = await fetch(_conToken(baseUrl + '/afip/importar'));
             if (!resp.ok) throw new Error('Error HTTP ' + resp.status);
@@ -24791,7 +24814,7 @@
             st.textContent = nuevos > 0 ? ('✅ Se importaron ' + nuevos + ' comprobante(s) nuevos desde ARCA.') : 'Ya tenés todos los comprobantes actualizados.';
         } catch(e) {
             st.style.background = '#FEE2E2'; st.style.color = '#991B1B'; st.style.border = '1px solid #FECACA';
-            st.textContent = '❌ Error al importar: ' + (e.message || String(e));
+            st.textContent = '❌ Error al importar: ' + (e.message || String(e)) + _hintTokenBackend(e.message);
         }
         btn.disabled = false; btn.textContent = '🔄 Importar (web service)';
     }
@@ -24843,6 +24866,7 @@
         st.style.display=''; st.style.background='#EFF6FF'; st.style.color='#1D4ED8'; st.style.border='1px solid #BFDBFE';
         st.textContent = 'Conectando con ARCA y descargando TODOS los emitidos (incluidos los del portal)… puede tardar 1-3 minutos.';
         try {
+            await _asegurarAppToken();
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
@@ -24868,7 +24892,7 @@
                 : 'No hay comprobantes emitidos nuevos en el rango seleccionado.';
         } catch(e) {
             st.style.background='#FEE2E2'; st.style.color='#991B1B'; st.style.border='1px solid #FECACA';
-            st.textContent = '❌ ' + (e.message || String(e));
+            st.textContent = '❌ ' + (e.message || String(e)) + _hintTokenBackend(e.message);
         }
         btn.disabled = false; btn.textContent = btnTxt;
     }
@@ -25241,6 +25265,7 @@
         st.style.display=''; st.style.background='#EFF6FF'; st.style.color='#1D4ED8'; st.style.border='1px solid #BFDBFE';
         st.textContent = 'Conectando con ARCA y descargando comprobantes recibidos… esto puede tardar hasta 2-3 minutos.';
         try {
+            await _asegurarAppToken();
             var qs = [];
             if (desde) qs.push('desde=' + encodeURIComponent(desde));
             if (hasta) qs.push('hasta=' + encodeURIComponent(hasta));
@@ -25268,7 +25293,7 @@
                 : 'No hay comprobantes recibidos nuevos en el rango seleccionado.';
         } catch(e) {
             st.style.background='#FEE2E2'; st.style.color='#991B1B'; st.style.border='1px solid #FECACA';
-            st.textContent = '❌ ' + (e.message || String(e));
+            st.textContent = '❌ ' + (e.message || String(e)) + _hintTokenBackend(e.message);
         }
         btn.disabled = false; btn.textContent = btnTxt;
     }
