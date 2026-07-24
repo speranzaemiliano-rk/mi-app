@@ -1746,6 +1746,34 @@ app.post('/gemini', async (req, res) => {
     }
 });
 
+// Asistente alternativo GRATIS con Groq (API compatible con OpenAI, modelos Llama).
+// Necesita la variable GROQ_API_KEY en Railway (se saca gratis en https://console.groq.com/keys).
+// El frontend manda { messages:[{role,content}], model } y devolvemos la respuesta cruda de Groq.
+app.post('/ia/groq', async (req, res) => {
+    var apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GROQ_API_KEY no está configurada en el servidor.' });
+    var messages = req.body && req.body.messages;
+    if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'Faltan mensajes para el asistente.' });
+    var model = (req.body && req.body.model) || 'llama-3.3-70b-versatile';
+    try {
+        var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+            body: JSON.stringify({
+                model: model,
+                messages: messages,
+                temperature: (typeof (req.body && req.body.temperature) === 'number') ? req.body.temperature : 0.7,
+                max_tokens: (req.body && req.body.max_tokens) || 4096
+            })
+        });
+        var data = await resp.json().catch(function() { return {}; });
+        if (!resp.ok) return res.status(resp.status).json({ error: (data && data.error && data.error.message) || ('Groq error ' + resp.status), detalle: data });
+        return res.json(data);
+    } catch (e) {
+        return res.status(502).json({ error: 'Error al conectar con Groq: ' + e.message });
+    }
+});
+
 app.get('/usuarios/listar', async (req, res) => {
     if (!(await requireSuperadmin(req, res))) return;
     try {
