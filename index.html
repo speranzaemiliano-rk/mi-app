@@ -3785,7 +3785,7 @@
                         <button class="btn btn-outline btn-sm" onclick="abrirImportarCompRecibidos()" title="Subir el Excel exportado de ARCA (Mis Comprobantes → Recibidos → Exportar)">📂 Importar Excel</button>
                         <button class="btn btn-outline btn-sm" onclick="exportarCompRecibidos()" title="Exportar a Excel los comprobantes importados de ARCA">⬇️ Exportar ARCA</button>
                         <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/login-test')" title="Diagnóstico: prueba si el robot propio puede entrar a AFIP (experimental)">🤖 Robot: login</button>
-                        <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/recibidos-test')" title="Diagnóstico: prueba llegar a Mis Comprobantes (experimental)">🤖 Robot: Mis Comprobantes</button>
+                        <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/recibidos-test?tipo=recibidos')" title="Robot: importar comprobantes RECIBIDOS de ARCA (experimental)">🤖 Robot: Recibidos</button>
                     </div>
                     <div id="compRecAutoStatus" style="display:none;margin:0 0 10px;padding:8px 12px;border-radius:6px;font-size:12px;"></div>
                     <div id="robotArcaDiag" style="display:none;margin:0 0 10px;"></div>
@@ -12866,9 +12866,9 @@
 
     // Diagnóstico del "robot propio" (experimental): pide al backend que intente entrar
     // a AFIP y muestra el resultado + la captura de pantalla. Paso 1 para ver si es viable.
-    async function probarRobotArca(path) {
+    async function probarRobotArca(path, boxId) {
         path = path || '/afip/robot/login-test';
-        var box = document.getElementById('robotArcaDiag');
+        var box = document.getElementById(boxId || 'robotArcaDiag');
         var url = (typeof _afipUrlEmpresaActual === 'function') ? _afipUrlEmpresaActual() : '';
         if (!url) { alert('Esta empresa no tiene backend ARCA configurado.'); return; }
         var baseUrl = url.replace(/\/afip$/, '');
@@ -12880,8 +12880,8 @@
         } catch (e) {}
         if (path.indexOf('recibidos-test') !== -1) {
             if (_cuitEmp) path += (path.indexOf('?') !== -1 ? '&' : '?') + 'cuit=' + encodeURIComponent(_cuitEmp);
-            var _rd = (document.getElementById('compRecDesde') || {}).value || '';
-            var _rh = (document.getElementById('compRecHasta') || {}).value || '';
+            var _rd = ((document.getElementById('compRecDesde') || {}).value) || ((document.getElementById('arcaFiltroDesde') || {}).value) || '';
+            var _rh = ((document.getElementById('compRecHasta') || {}).value) || ((document.getElementById('arcaFiltroHasta') || {}).value) || '';
             if (_rd) path += '&desde=' + encodeURIComponent(_rd);
             if (_rh) path += '&hasta=' + encodeURIComponent(_rh);
         }
@@ -12899,14 +12899,29 @@
                 + '</div>';
             if (json.screenshot) html += '<div style="margin-top:8px;"><img src="' + json.screenshot + '" alt="captura del robot" style="max-width:100%;border:1px solid var(--border,#ccc);border-radius:8px;"></div>';
             if (box) box.innerHTML = html;
-            // Si el robot leyó comprobantes, cargarlos en la parte ARCA (compRecibidos), sin duplicar.
-            if (json.comprobantes && json.comprobantes.length && typeof compRecibidos !== 'undefined') {
-                var _exist = new Set(compRecibidos.map(function(c){ return [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|'); }));
+            // Cargar los comprobantes leídos: EMITIDOS → facturasARCA; RECIBIDOS → compRecibidos.
+            if (json.comprobantes && json.comprobantes.length) {
                 var _nuevos = 0;
-                json.comprobantes.forEach(function(c){ var k = [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|'); if (!_exist.has(k)) { compRecibidos.push(c); _exist.add(k); _nuevos++; } });
-                if (_nuevos > 0 && typeof REF_COMP_RECIBIDOS !== 'undefined' && REF_COMP_RECIBIDOS) _colPersist('compRecibidos', REF_COMP_RECIBIDOS, compRecibidos);
-                if (typeof renderDocumentos === 'function') renderDocumentos();
-                if (box) box.innerHTML += '<div style="margin-top:8px;padding:8px 12px;border-radius:8px;background:#D1FAE5;color:#065F46;font-size:12px;">✅ El robot cargó ' + _nuevos + ' comprobante(s) nuevos en ARCA (de ' + json.comprobantes.length + ' leídos). Miralos en la lista de arriba.</div>';
+                if (json.tipo === 'emitidos' && typeof facturasARCA !== 'undefined') {
+                    var _claves = new Set(facturasARCA.map(function(f){ return f.cae ? ('cae:' + f.cae) : (f.tipoComp + '|' + f.ptoVta + '|' + f.nro); }));
+                    json.comprobantes.forEach(function(c){
+                        var tc = parseInt(((String(c.tipo || '').match(/\d+/) || ['0'])[0]), 10) || 0;
+                        var pv = parseInt(String(c.ptoVta || '').replace(/\D/g, '') || '0', 10) || 0;
+                        var nr = parseInt(String(c.numero || '').replace(/\D/g, '') || '0', 10) || 0;
+                        var fa = { fecha: String(c.fecha || '').replace(/-/g, ''), tipoComp: tc, ptoVta: pv, nro: nr, razon: c.proveedor || '', cuitRecep: c.cuit || '', impNeto: c.netoGravado || 0, impIVA: c.iva || 0, impTotal: c.total || 0, moneda: 'PES', cae: '', caeVto: '', emitidaEn: 0, importada: true };
+                        var k = fa.cae ? ('cae:' + fa.cae) : (fa.tipoComp + '|' + fa.ptoVta + '|' + fa.nro);
+                        if (!_claves.has(k)) { facturasARCA.push(fa); _claves.add(k); _nuevos++; }
+                    });
+                    if (_nuevos > 0 && typeof REF_FACTURAS_ARCA !== 'undefined' && REF_FACTURAS_ARCA) _colPersist('facturasARCA', REF_FACTURAS_ARCA, facturasARCA);
+                    if (typeof renderFacturasARCA === 'function') renderFacturasARCA();
+                    if (box) box.innerHTML += '<div style="margin-top:8px;padding:8px 12px;border-radius:8px;background:#D1FAE5;color:#065F46;font-size:12px;">✅ El robot cargó ' + _nuevos + ' comprobante(s) EMITIDOS nuevos en ARCA (de ' + json.comprobantes.length + ' leídos). Vélos en Comprobantes Emitidos → ARCA.</div>';
+                } else if (typeof compRecibidos !== 'undefined') {
+                    var _exist = new Set(compRecibidos.map(function(c){ return [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|'); }));
+                    json.comprobantes.forEach(function(c){ var k = [c.fecha, c.tipo, c.ptoVta, c.numero, c.cuit].join('|'); if (!_exist.has(k)) { compRecibidos.push(c); _exist.add(k); _nuevos++; } });
+                    if (_nuevos > 0 && typeof REF_COMP_RECIBIDOS !== 'undefined' && REF_COMP_RECIBIDOS) _colPersist('compRecibidos', REF_COMP_RECIBIDOS, compRecibidos);
+                    if (typeof renderDocumentos === 'function') renderDocumentos();
+                    if (box) box.innerHTML += '<div style="margin-top:8px;padding:8px 12px;border-radius:8px;background:#D1FAE5;color:#065F46;font-size:12px;">✅ El robot cargó ' + _nuevos + ' comprobante(s) RECIBIDOS nuevos en ARCA (de ' + json.comprobantes.length + ' leídos). Miralos arriba.</div>';
+                }
             }
         } catch (e) {
             if (box) box.innerHTML = '<div style="padding:10px 12px;border-radius:8px;background:#FEE2E2;color:#991B1B;font-size:12px;">❌ ' + (e.message || String(e)) + _hintTokenBackend(e.message) + '</div>';
@@ -31010,6 +31025,9 @@
           <button class="btn btn-outline btn-sm" id="btnImportarARCA" onclick="importarDesdeARCA()" title="Trae los emitidos por web service (certificado, gratis)">
             🔄 Importar (web service)
           </button>
+          <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/recibidos-test?tipo=emitidos', 'importarARCAStatus')" title="Robot: importar comprobantes EMITIDOS desde el portal de ARCA (gratis, experimental)">
+            🤖 Robot: Emitidos
+          </button>
           <button class="btn btn-outline btn-sm" onclick="exportarFacturasARCA()" title="Exporta a Excel los comprobantes según el filtro de fechas">
             ⬇️ Exportar Excel
           </button>
@@ -31670,10 +31688,40 @@
     if (!q.trim()) return;
     var box = document.getElementById('rk-sp-results');
     if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando…</div>';
-    var data = await _spApi('/search?type=track&limit=30&q=' + encodeURIComponent(q.trim()));
-    if (_spShowError(box, data)) return;
+    var data = await _spApi('/search?type=track&limit=20&q=' + encodeURIComponent(q.trim()));
+    // Spotify bloquea la búsqueda de su catálogo para apps en modo desarrollo (cambio nov-2024):
+    // devuelve un 400 con el mensaje engañoso "Invalid limit". En ese caso buscamos dentro de
+    // TUS canciones ("me gusta"), que sí funcionan en modo desarrollo, así el buscador sirve igual.
+    if (data && data._error) { return _spBuscarEnBiblioteca(q.trim(), box); }
     _spList = ((data && data.tracks && data.tracks.items) || []).filter(Boolean); _spIdx = -1;
     _spRenderTracks(_spList, false);
+  }
+  // Fallback: filtra la biblioteca del usuario (me gusta) cuando el catálogo está bloqueado.
+  async function _spBuscarEnBiblioteca(q, box) {
+    if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando en tus me gusta…</div>';
+    var todas = [], offset = 0, total = 1, primero = null;
+    while (offset < total && offset < 1000) {
+      var d = await _spApi('/me/tracks?limit=50&offset=' + offset);
+      if (d && d._error) { primero = primero || d; break; }
+      var items = ((d && d.items) || []).map(function(it){ return it.track; }).filter(Boolean);
+      todas = todas.concat(items);
+      total = (d && typeof d.total === 'number') ? d.total : todas.length;
+      offset += 50;
+      if (!items.length) break;
+    }
+    if (!todas.length && primero) { _spShowError(box, primero); return; }
+    var ql = q.toLowerCase();
+    var filt = todas.filter(function(t){
+      var art = (t.artists || []).map(function(a){ return a.name; }).join(' ').toLowerCase();
+      return (String(t.name || '').toLowerCase().indexOf(ql) !== -1) || (art.indexOf(ql) !== -1);
+    });
+    _spList = filt; _spIdx = -1;
+    if (!filt.length) {
+      if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;line-height:1.5;">Sin resultados en tus me gusta.<br><span style="color:#F59E9E;">La búsqueda en todo Spotify requiere que la app esté en modo producción; por ahora se busca solo en tu biblioteca.</span></div>';
+      return;
+    }
+    _spRenderTracks(filt, false);
+    if (box) box.insertAdjacentHTML('afterbegin', '<div style="font-size:10px;color:#9aa0aa;padding:4px 6px;line-height:1.4;">🔎 ' + filt.length + ' en tu biblioteca (la búsqueda global de Spotify requiere app en producción)</div>');
   }
   async function rkSpotifyLiked() {
     var box = document.getElementById('rk-sp-results');

@@ -455,6 +455,7 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
     catch (e) { return res.status(500).json({ ok:false, etapa:'sin-navegador', error:'Falta el navegador (Dockerfile). ' + (e && e.message || e) }); }
     const { cuit, pass } = _robotCreds();
     if (!cuit || !pass) return res.status(400).json({ ok:false, etapa:'sin-credenciales', error:'Faltan ARCA_USER/AFIP_CUIT o ARCA_PASS.' });
+    const tipoRobot = (req.query.tipo === 'emitidos') ? 'emitidos' : 'recibidos'; // qué solapa: Emitidos o Recibidos
     let browser;
     const pasos = [];
     try {
@@ -530,22 +531,24 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             }
         } catch (e) { pasos.push('representar-error: ' + (e.message || e)); }
 
-        // Entrar a "Recibidos" (la tarjeta del menú Emitidos/Recibidos).
+        // Entrar a "Recibidos" o "Emitidos" (la tarjeta del menú), según el tipo pedido.
         try {
+            var lblFull = tipoRobot === 'emitidos' ? 'Comprobantes Emitidos' : 'Comprobantes Recibidos';
+            var lblCard = tipoRobot === 'emitidos' ? 'Emitidos' : 'Recibidos';
             await target.waitForTimeout(1500);
-            let rec = target.getByText('Comprobantes Recibidos', { exact: false }).first();
-            if (!(await rec.count())) rec = target.getByText('Recibidos', { exact: true }).first();
+            let rec = target.getByText(lblFull, { exact: false }).first();
+            if (!(await rec.count())) rec = target.getByText(lblCard, { exact: true }).first();
             if (await rec.count()) {
                 await rec.click({ timeout: 6000 }).catch(async function(){
                     await rec.evaluate(function(el){ var c = el.closest('a,button,[role="button"],.card,li,div[onclick]'); (c || el).click(); }).catch(function(){});
                 });
                 await target.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(function(){});
                 await target.waitForTimeout(3000);
-                pasos.push('recibidos: ' + target.url());
+                pasos.push(tipoRobot + ': ' + target.url());
             } else {
-                pasos.push('no-encontre-recibidos');
+                pasos.push('no-encontre-' + tipoRobot);
             }
-        } catch (e) { pasos.push('recibidos-error: ' + (e.message || e)); }
+        } catch (e) { pasos.push(tipoRobot + '-error: ' + (e.message || e)); }
 
         // En la pantalla de Recibidos: setear el rango de fechas, consultar y leer la tabla.
         let filasResultado = [];
@@ -657,6 +660,7 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             urlFinal: target.url(),
             titulo: await target.title().catch(function(){ return ''; }),
             pasos: pasos,
+            tipo: tipoRobot,
             tablasEnPagina: info.tablas,
             textosVisibles: info.textos,
             filasResultado: filasResultado,
