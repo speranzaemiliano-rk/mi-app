@@ -278,6 +278,7 @@ async function importarComprobantes(afip, ptoVta, tipoComp) {
 }
 
 app.get('/afip/importar', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         const afip = crearAfip();
         const ptoVtaParam  = parseInt(req.query.ptoVta)  || 0;
@@ -405,6 +406,7 @@ async function misComprobantes(tipo, desde, hasta) {
 
 function handlerMisComprobantes(tipo) {
     return async (req, res) => {
+        if (!(await requireRol(req, res, ROL_OPERADOR))) return;
         try {
             const data = await misComprobantes(tipo, req.query.desde || '', req.query.hasta || '');
             return res.json(data);
@@ -450,6 +452,7 @@ async function _robotLogin(page, cuit, pass) {
 // captura + los textos/tablas visibles, para escribir los selectores de extracción.
 // GET /afip/robot/recibidos-test
 app.get('/afip/robot/recibidos-test', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     let chromium;
     try { chromium = require('playwright-core').chromium; }
     catch (e) { return res.status(500).json({ ok:false, etapa:'sin-navegador', error:'Falta el navegador (Dockerfile). ' + (e && e.message || e) }); }
@@ -675,6 +678,7 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
 });
 
 app.get('/afip/robot/login-test', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     let chromium;
     try {
         chromium = require('playwright-core').chromium;
@@ -775,6 +779,7 @@ app.get('/afip/ultimo', async (req, res) => {
 });
 
 app.post('/afip', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         const afip = crearAfip();
 
@@ -914,6 +919,7 @@ app.get('/belvo/diag', (req, res) => {
 // Token de acceso para abrir el Widget de conexión (Belvo Connect).
 // El endpoint /api/token/ recibe id+password en el cuerpo (no usa Basic).
 app.post('/belvo/widget-token', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var c = belvoCreds();
         var resp = await fetch(belvoBase() + '/api/token/', {
@@ -938,6 +944,7 @@ app.post('/belvo/widget-token', async (req, res) => {
 // Cuentas asociadas a un link (POST trae la info fresca del banco).
 // GET /belvo/accounts?link=<id>
 app.get('/belvo/accounts', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var link = req.query.link;
         if (!link) return res.status(400).json({ error: 'Falta el parámetro link.' });
@@ -951,6 +958,7 @@ app.get('/belvo/accounts', async (req, res) => {
 
 // Movimientos de un link. GET /belvo/transactions?link=<id>&date_from=&date_to=
 app.get('/belvo/transactions', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var link = req.query.link;
         if (!link) return res.status(400).json({ error: 'Falta el parámetro link.' });
@@ -1034,6 +1042,7 @@ app.get('/prometeo/providers', async (req, res) => {
 // Login al banco. body JSON { provider, username, password }
 // Devuelve { status, key }. status puede pedir interacción (OTP) en algunos bancos.
 app.post('/prometeo/login', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var b = req.body || {};
         if (!b.provider || !b.username || !b.password) {
@@ -1059,6 +1068,7 @@ app.post('/prometeo/login', async (req, res) => {
 
 // Cuentas de la sesión. GET /prometeo/accounts?key=<session>
 app.get('/prometeo/accounts', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var key = req.query.key;
         if (!key) return res.status(400).json({ error: 'Falta el parámetro key (sesión).' });
@@ -1073,6 +1083,7 @@ app.get('/prometeo/accounts', async (req, res) => {
 // Movimientos. GET /prometeo/movements?key=&account=&currency=&date_start=&date_end=
 // Fechas en formato DD/MM/YYYY (lo que pide Prometeo).
 app.get('/prometeo/movements', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         var key = req.query.key, account = req.query.account;
         if (!key || !account) return res.status(400).json({ error: 'Faltan key y/o account.' });
@@ -1217,6 +1228,7 @@ app.post('/whatsapp/webhook', (req, res) => {
 // Envío manual/disparado por la app (ej. futuros avisos de vencimientos).
 // POST /whatsapp/send  body: { "to": "5491122334455", "mensaje": "..." }
 app.post('/whatsapp/send', async (req, res) => {
+    if (!(await requireRol(req, res, ROL_OPERADOR))) return;
     try {
         const b = req.body || {};
         if (!b.to || !b.mensaje) return res.status(400).json({ error: 'Faltan to y/o mensaje.' });
@@ -1638,6 +1650,46 @@ async function requireSuperadmin(req, res) {
         res.status(401).json({ error: 'Token de identidad inválido o vencido. Iniciá sesión de nuevo.' });
         return null;
     }
+}
+
+// Roles que pueden OPERAR (acciones sensibles: emitir ARCA, bancos, WhatsApp).
+// El asistente (/gemini, /ia/groq) NO usa esto: lo pueden usar todos los roles.
+const ROL_OPERADOR = ['superadmin', 'admin', 'editor'];
+
+// Control de rol para endpoints sensibles. Devuelve un objeto (autorizado) o null (ya respondió el error).
+// - Camino de token compartido (X-App-Token válido): se confía y se permite.
+// - Camino de sesión Firebase (idToken): se verifica y se exige que el rol esté en rolesOk.
+// - Modo compatibilidad: si NO hay APP_API_TOKEN configurado ni forma de verificar idToken
+//   (falta service account), se permite igual que el middleware global —para no romper
+//   despliegues sin configurar— y se avisa en el log. Para ACTIVAR el control de rol de verdad,
+//   configurá FIREBASE_SERVICE_ACCOUNT_BASE64 (y opcionalmente APP_API_TOKEN) en Railway.
+async function requireRol(req, res, rolesOk) {
+    var esperado = process.env.APP_API_TOKEN;
+    var recibido = req.get('X-App-Token') || req.query.token;
+    if (esperado && recibido && _tokenIgual(recibido, esperado)) return { via: 'token' };
+    var authHeader = req.get('Authorization') || '';
+    var m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (admin.apps.length && m) {
+        try {
+            var decoded = await admin.auth().verifyIdToken(m[1].trim());
+            var rol = (await admin.database().ref('roles/' + decoded.uid).once('value')).val();
+            if (rolesOk.indexOf(rol) === -1) {
+                res.status(403).json({ error: 'Tu rol (' + (rol || 'sin rol') + ') no puede realizar esta acción (requiere: ' + rolesOk.join(' / ') + ').' });
+                return null;
+            }
+            return { via: 'firebase', uid: decoded.uid, rol: rol };
+        } catch (e) {
+            res.status(401).json({ error: 'Sesión inválida o vencida. Iniciá sesión de nuevo.' });
+            return null;
+        }
+    }
+    // Sin token válido y sin idToken verificable.
+    if (esperado) {
+        res.status(401).json({ error: 'No autorizado. Falta token del backend o sesión válida.' });
+        return null;
+    }
+    console.warn('[seguridad] requireRol en modo compatibilidad (sin APP_API_TOKEN ni idToken verificable) — ' + req.method + ' ' + req.path + '. Configurá FIREBASE_SERVICE_ACCOUNT_BASE64 para activar el control de rol.');
+    return { via: 'compat' };
 }
 
 // ═══════════════════════════════════════════════════════════════════

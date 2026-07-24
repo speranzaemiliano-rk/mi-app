@@ -92,7 +92,7 @@ Para que la empresa X no vea los datos de la empresa Y hay que cambiar el modelo
 2. Cambiar las **reglas de Firebase** para que `empresas/<id>` solo se lea/escriba si el `uid` está autorizado en esa empresa (en vez de `auth != null`).
 3. Mover los datos hoy **globales** que hoy cruzan empresas (proveedores, grupos, vencimientos) a **por empresa/tenant**, o dejarlos globales solo si es a propósito.
 4. Sacar los **secretos** de `global/config` legibles por todos (usar variables de servidor / reglas más cerradas).
-5. Agregar **control de rol en el backend** para los endpoints sensibles (`/afip`, `/gemini`, `/ia/groq`, `/belvo`, `/prometeo`).
+5. ✅ **Control de rol en el backend (hecho en código):** los endpoints sensibles (`/afip` emitir/importar, robot ARCA, `/belvo/*`, `/prometeo/*`, `/whatsapp/send`) ahora exigen rol `editor`+ (`requireRol`). El **asistente (`/gemini`, `/ia/groq`) queda abierto a todos**. Falta el redeploy en Railway + `FIREBASE_SERVICE_ACCOUNT_BASE64` para activarlo.
 
 > Estos cambios de reglas hay que **publicarlos en la consola de Firebase** y probarlos con cuidado, porque **cambian quién ve qué**. No se aplican solos con un push al repo. Conviene hacerlo en una etapa dedicada, con backup y con un usuario de prueba.
 
@@ -101,7 +101,7 @@ Para que la empresa X no vea los datos de la empresa Y hay que cambiar el modelo
 ## 7. Roadmap sugerido (en orden)
 
 1. **(Hecho)** Higiene multiusuario en el navegador + XSS en tablas principales.
-2. **Cerrar el backend:** setear `APP_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_BASE64` y `ALLOWED_ORIGINS` en Railway; agregar control de rol a los endpoints sensibles.
+2. **Cerrar el backend:** ✅ control de rol en endpoints sensibles agregado en código. **Falta (vos, en Railway):** setear `APP_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_BASE64` y `ALLOWED_ORIGINS`, y redeploy — sin esos pasos el control queda en modo compatibilidad (no bloquea).
 3. **Aislamiento por empresa** (multi-tenant real): lista de usuarios por empresa + reglas de Firebase por empresa.
 4. **Parametrizar la marca** (config `BRAND`) para poder instalar el producto para otra empresa sin tocar el código.
 5. **Abstraer región/fisco** (para países/regímenes distintos a Argentina/ARCA).
