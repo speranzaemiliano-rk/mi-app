@@ -71,7 +71,17 @@ Ver `SECURITY.md` para el detalle completo. Lo más importante para el uso multi
 
 El sistema ya es **multiempresa por dentro** (datos por `empresas/<id>/proyectos/<id>`). Lo que falta para convertirlo en un **producto que use cualquier empresa** son dos cosas: (A) sacar todo lo que dice "RK" y quede parametrizable, y (B) aislar de verdad los datos entre empresas-cliente.
 
-### A) Sacar el hardcoding de RK (marca) → parametrizar
+### ✅ Marca configurable (primera pasada, hecha)
+
+Ya existe un objeto central **`BRAND`** con los valores de RK por defecto, sobreescribible por instalación desde **Config → 🎨 Marca del sistema** (solo superadmin). Se guarda en `global/config/brand` (Firebase) + `localStorage rk_brand` y se aplica en runtime a: **título de la pestaña**, **siglas del anillo**, **tagline del login**, **nombre del asistente** (saludo + placeholders), **pie de los PDF** y **razón social por defecto del emisor**. Con eso, cambiar el nombre visible del sistema NO requiere tocar el código.
+
+**Todavía NO cubierto por `BRAND` (queda pendiente / requiere reemplazo de archivos):**
+- **Assets estáticos:** logo del splash (`logo ..._blanco.png`), logo base64 embebido en el login (`index.html` ~2600), íconos PWA (`icons/*`), `manifest.json` (name/short_name/scope) — son archivos; se reemplazan por instalación.
+- **Prompts del asistente en el backend** (`functions/server.js` WhatsApp/mail) y el `sistemaPrompt` del front — mencionan "RK" y el rubro; parametrizarlos es una segunda pasada.
+- **Textos sueltos** con "RK"/"Estudio de Arquitectura", prefijos de export `RK-*.xlsx`, `ADMIN_EMAIL`, `firebaseConfig`, URL de Railway, EmailJS y Spotify Client ID (identidades por instalación).
+- **Localización/fisco** (Argentina/ARCA/AFIP/CAC/es-AR) — es el punto 5 del roadmap, aparte.
+
+### A) Resto del hardcoding de RK (marca) → parametrizar
 
 Todo esto hoy está fijo en el código como "RK"/"FEKOMP"/Argentina y habría que moverlo a una **configuración de marca por instalación** (`BRAND`/tenant):
 
@@ -124,7 +134,7 @@ Igual criterio (retrocompatible): empresa sin `usuariosAutorizados` → la ven t
 1. **(Hecho)** Higiene multiusuario en el navegador + XSS en tablas principales.
 2. **Cerrar el backend:** ✅ control de rol en endpoints sensibles agregado en código. **Falta (vos, en Railway):** setear `APP_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_BASE64` y `ALLOWED_ORIGINS`, y redeploy — sin esos pasos el control queda en modo compatibilidad (no bloquea).
 3. **Aislamiento por empresa** (multi-tenant real): ✅ **Etapa 1 hecha** (asignar usuarios por empresa + filtro en la app, retrocompatible). ⏳ **Etapa 2 pendiente:** publicar las reglas de Firebase por empresa (ver arriba) con backup y usuario de prueba.
-4. **Parametrizar la marca** (config `BRAND`) para poder instalar el producto para otra empresa sin tocar el código.
+4. **Parametrizar la marca** (config `BRAND`): ✅ **primera pasada hecha** (nombre, siglas, tagline, asistente, razón social, pies de PDF, editables en Config → 🎨 Marca). Falta: assets (logo/íconos/manifest = reemplazo de archivos), prompts del asistente y textos sueltos.
 5. **Abstraer región/fisco** (para países/regímenes distintos a Argentina/ARCA).
 
 Los puntos 1 se hacen en código; el 2 y 3 requieren pasos tuyos en Railway y Firebase (ver `OPERACIONES.md` y `SECURITY.md`); el 4 y 5 son desarrollo grande que conviene planificar aparte.
