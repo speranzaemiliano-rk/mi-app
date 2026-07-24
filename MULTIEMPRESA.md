@@ -135,6 +135,7 @@ Igual criterio (retrocompatible): empresa sin `usuariosAutorizados` → la ven t
 2. **Cerrar el backend:** ✅ control de rol en endpoints sensibles agregado en código. **Falta (vos, en Railway):** setear `APP_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_BASE64` y `ALLOWED_ORIGINS`, y redeploy — sin esos pasos el control queda en modo compatibilidad (no bloquea).
 3. **Aislamiento por empresa** (multi-tenant real): ✅ **Etapa 1 hecha** (asignar usuarios por empresa + filtro en la app, retrocompatible). ⏳ **Etapa 2 pendiente:** publicar las reglas de Firebase por empresa (ver arriba) con backup y usuario de prueba.
 4. **Parametrizar la marca** (config `BRAND`): ✅ **primera pasada hecha** (nombre, siglas, tagline, asistente, razón social, pies de PDF, editables en Config → 🎨 Marca). Falta: assets (logo/íconos/manifest = reemplazo de archivos), prompts del asistente y textos sueltos.
+   - ✅ **Config por instalación externalizada a `config.js`** (Firebase, mail admin, backend, EmailJS, Spotify, marca inicial). Clonar para otra empresa = copiar repo + editar `config.js`. Guía completa en **`CLONAR.md`**. RK queda intacto (los valores de RK son los defaults + respaldo).
 5. **Abstraer región/fisco** (para países/regímenes distintos a Argentina/ARCA).
 
 Los puntos 1 se hacen en código; el 2 y 3 requieren pasos tuyos en Railway y Firebase (ver `OPERACIONES.md` y `SECURITY.md`); el 4 y 5 son desarrollo grande que conviene planificar aparte.
