@@ -47,7 +47,8 @@
 |---------|-----------|-----------|--------|---------------------|
 | **README.md** | Documentación de usuario + guía de uso | Usuarios finales, PMs | 363 | 2026-06-28 |
 | **CONSOLIDACION.md** ⭐ NUEVO | Arquitectura consolidada, modelo datos, flujos, matriz seguridad | Devs, architecure, security | 1100+ | 2026-07-02 |
-| **SECURITY.md** | Auditoría de seguridad (8 riesgos + mitigaciones) | Devs, security, admin | 206 | 2026-06-28 |
+| **SECURITY.md** | Auditoría de seguridad (riesgos + mitigaciones + auditoría 2026-07-24) | Devs, security, admin | 240+ | 2026-07-24 |
+| **MULTIEMPRESA.md** ⭐ NUEVO | Multiusuario, APIs compartidas vs propias, plan white-label / multi-tenant | Dueño, PMs, Devs | 150+ | 2026-07-24 |
 | **OPERACIONES.md** ⭐ NUEVO | Despliegue, configuración, monitoreo, troubleshooting | Admin, DevOps | 700+ | 2026-07-02 |
 | **CLAUDE.md** | Contexto técnico rápido para Claude Code | Devs (en sesiones de Claude) | 120 | 2026-07-02 |
 | **PENDIENTES.md** | Bitácora de tareas + hecho/próximo | PMs, Devs | 230 | 2026-07-02 |

@@ -6722,10 +6722,10 @@
             _filaMovClickeable(tr, 'presupuesto', index);
             tr.innerHTML = `
                 <td>${formatearFecha(item.fecha)}</td>
-                <td><strong>${item.proveedor}</strong> ${badgeCompartido(item)}</td>
-                <td>${item.concepto}</td>
-                <td>${item.rubro || '—'}</td>
-                <td>${item.subrubro || '—'}</td>
+                <td><strong>${escHtml(item.proveedor)}</strong> ${badgeCompartido(item)}</td>
+                <td>${escHtml(item.concepto)}</td>
+                <td>${escHtml(item.rubro || '—')}</td>
+                <td>${escHtml(item.subrubro || '—')}</td>
                 <td><span class="pill pill-${item.modalidad||'A'}">${item.modalidad||'A'}</span></td>
                 <td style="text-align:right;"><strong>$${item.presupuesto.toLocaleString('es-AR')}</strong></td>
                 <td style="text-align:right; color:var(--text-3);">USD ${presupuestoDolar.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
@@ -12058,7 +12058,7 @@
                     const doc = d.docId ? `<a class="doc-link" href="javascript:void(0)" onclick="descargarDoc('${d.docId}','${(d.docNombre||'documento').replace(/'/g,'')}')">📎 ${d.docNombre||'ver'}</a>` : '—';
                     const acc = puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarFila(${idx})">✏</button><button class="btn btn-gold btn-sm" onclick="abrirPagoDe(${idx})">💵</button>` : '—';
                     return `<tr>
-                        <td>${formatearFecha(d.fecha)}</td><td>${d.concepto||'—'}</td><td>${d.subrubro||'—'}</td>
+                        <td>${formatearFecha(d.fecha)}</td><td>${escHtml(d.concepto||'—')}</td><td>${escHtml(d.subrubro||'—')}</td>
                         <td style="text-align:right;">$${c.base.toLocaleString('es-AR')}</td>
                         <td style="text-align:right;">$${c.capitalPend.toLocaleString('es-AR')}</td>
                         <td style="text-align:right; color:var(--warn);">$${Math.round(c.mayores).toLocaleString('es-AR')}</td>
@@ -12546,7 +12546,22 @@
         } catch (err) { mostrarAuthError(traducirError(err.code)); }
     }
 
-    function cerrarSesion() { auth.signOut(); }
+    // Borra del navegador los datos sensibles que son POR-DISPOSITIVO (no por-usuario), para
+    // que no se filtren entre usuarios que comparten la misma PC: historial del asistente y la
+    // sesión de Spotify (token OAuth de la cuenta personal). Los datos contables viven en
+    // Firebase y se controlan por rol; acá solo limpiamos lo que queda en localStorage.
+    function _limpiarDatosSensiblesDispositivo() {
+        try {
+            ['rk_chat_memoria', 'rk_sp_token', 'rk_sp_exp', 'rk_sp_refresh', 'rk_sp_verifier']
+                .forEach(function(k){ localStorage.removeItem(k); });
+        } catch (e) {}
+        try { if (typeof _rkHistorial !== 'undefined') _rkHistorial = []; } catch (e) {}
+        try { if (typeof _spUpdateUI === 'function') _spUpdateUI(); } catch (e) {}
+    }
+    function cerrarSesion() {
+        _limpiarDatosSensiblesDispositivo();
+        auth.signOut();
+    }
 
     function traducirError(code) {
         const map = {
@@ -12580,6 +12595,14 @@
                 document.getElementById('userEmail').textContent = user.email;
                 const initials = (user.email||'?').substring(0,1).toUpperCase();
                 document.getElementById('userAvatar').textContent = initials;
+                // Multiusuario: si en este dispositivo se logueó ANTES otro usuario, limpiar los
+                // datos sensibles que quedan en el navegador (historial del asistente, sesión de
+                // Spotify) para que no se mezclen entre personas que comparten la misma PC.
+                try {
+                    var _lastUid = localStorage.getItem('rk_last_uid');
+                    if (_lastUid && _lastUid !== user.uid) _limpiarDatosSensiblesDispositivo();
+                    localStorage.setItem('rk_last_uid', user.uid);
+                } catch (e) {}
                 // Cargar API key de Gemini desde Firebase al iniciar sesión
                 cargarGeminiKeyDesdeFirebase();
                 try { db.ref('global/config/iaCerebro').once('value').then(function(s){ var v=s.val(); if (v) localStorage.setItem('rk_ia_cerebro', v); }).catch(function(){}); } catch(e){}
@@ -14856,9 +14879,9 @@
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${f.proveedor||'—'}</strong> ${badgeCompartido(f)}</td>
-                    <td>${f.numero||'—'}</td>
-                    <td>${f.descripcion||'—'}</td>
+                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}</td>
+                    <td>${escHtml(f.numero||'—')}</td>
+                    <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR')}</strong></td>
                     <td style="text-align:right;">$${(f.pagado||0).toLocaleString('es-AR')}</td>
                     <td>${estadoBadge}</td>
@@ -15363,7 +15386,7 @@
             const total = v.presup + v.fact + v.otros;
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td><strong>${nombre}</strong></td>
+                <td><strong>${escHtml(nombre)}</strong></td>
                 <td style="text-align:right;">$${Math.round(v.presup).toLocaleString('es-AR')}</td>
                 <td style="text-align:right;">$${Math.round(v.fact).toLocaleString('es-AR')}</td>
                 <td style="text-align:right;">$${Math.round(v.otros).toLocaleString('es-AR')}</td>
@@ -17074,9 +17097,9 @@
                 _filaMovClickeable(tr, 'documento', d.id);
                 tr.innerHTML = `
                     <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
-                    <td><strong>${d.proveedor||'—'}</strong>${pillX}</td>
+                    <td><strong>${escHtml(d.proveedor||'—')}</strong>${pillX}</td>
                     <td>${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : (d.nro ? '' : '—')}</td>
-                    <td>${d.descripcion||'—'}</td>
+                    <td>${escHtml(d.descripcion||'—')}</td>
                     <td><span class="pill pill-${d.modalidad||'B'}">${d.modalidad||'B'}</span></td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
                     <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
