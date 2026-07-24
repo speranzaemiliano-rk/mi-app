@@ -506,8 +506,31 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             }
         } catch (e) { pasos.push('portal-error: ' + (e.message || e)); }
 
-        // Mis Comprobantes suele pedir elegir Emitidos/Recibidos y un rango de fechas:
-        // en este paso solo diagnosticamos qué muestra, para afinar los selectores.
+        // Mis Comprobantes puede pedir "Elegí una persona para ingresar" (representado).
+        // Seleccionamos la empresa por su CUIT (query ?cuit= o AFIP_CUIT del entorno).
+        try {
+            const targetCuit = String(req.query.cuit || process.env.AFIP_CUIT || '').replace(/\D/g, '');
+            if (targetCuit && targetCuit.length === 11) {
+                const fmt = targetCuit.slice(0, 2) + '-' + targetCuit.slice(2, 10) + '-' + targetCuit.slice(10);
+                await target.waitForTimeout(1500);
+                let rep = target.getByText(fmt, { exact: false }).first();
+                if (!(await rep.count())) rep = target.getByText(targetCuit, { exact: false }).first();
+                if (await rep.count()) {
+                    await rep.click({ timeout: 6000 }).catch(async function(){
+                        await rep.evaluate(function(el){ var c = el.closest('a,button,[role="button"],.card,li,div[onclick]'); (c || el).click(); }).catch(function(){});
+                    });
+                    await target.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(function(){});
+                    await target.waitForTimeout(3000);
+                    pasos.push('represento: ' + fmt + ' → ' + target.url());
+                } else {
+                    pasos.push('no-encontre-representado: ' + fmt);
+                }
+            } else {
+                pasos.push('sin-cuit-para-representar');
+            }
+        } catch (e) { pasos.push('representar-error: ' + (e.message || e)); }
+
+        // Estado final (idealmente ya la pantalla de Emitidos/Recibidos + fechas).
         const shot = await target.screenshot({ fullPage: false }).catch(function(){ return null; });
         const info = await target.evaluate(function(){
             var txt = Array.prototype.slice.call(document.querySelectorAll('a,button,h1,h2,h3,label,th,option,input')).map(function(el){
