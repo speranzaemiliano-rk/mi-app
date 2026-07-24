@@ -419,6 +419,68 @@ app.get('/afip/recibidos', handlerMisComprobantes('R'));
 // GET /afip/emitidos?desde=YYYY-MM-DD&hasta=YYYY-MM-DD   (emitidos, incluye los del portal)
 app.get('/afip/emitidos', handlerMisComprobantes('E'));
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ROBOT PROPIO (experimental) — importar recibidos sin AFIP SDK.
+// PASO 1: solo diagnóstico de login. Intenta entrar a AFIP con clave fiscal
+// (ARCA_USER/AFIP_CUIT + ARCA_PASS, las mismas que ya usa la automatización) y
+// devuelve a dónde llegó + una captura, SIN exponer la contraseña. Sirve para
+// saber si el login headless es viable antes de construir el resto del scraping.
+// Requiere el navegador (Playwright): ver functions/Dockerfile.
+// GET /afip/robot/login-test
+// ═══════════════════════════════════════════════════════════════════════════
+app.get('/afip/robot/login-test', async (req, res) => {
+    let chromium;
+    try {
+        chromium = require('playwright-core').chromium;
+    } catch (e) {
+        return res.status(500).json({
+            ok: false, etapa: 'sin-navegador',
+            error: 'El navegador (playwright-core) no está disponible en este deploy. El backend tiene que construirse con functions/Dockerfile (imagen de Playwright). Detalle: ' + (e && e.message || e)
+        });
+    }
+    const cuit = String(process.env.ARCA_USER || process.env.AFIP_CUIT || '').replace(/\D/g, '');
+    const pass = process.env.ARCA_PASS || '';
+    if (!cuit || !pass) {
+        return res.status(400).json({ ok: false, etapa: 'sin-credenciales', error: 'Faltan ARCA_USER/AFIP_CUIT o ARCA_PASS en Railway.' });
+    }
+    let browser;
+    try {
+        browser = await chromium.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = await browser.newPage({ locale: 'es-AR' });
+        await page.goto('https://auth.afip.gob.ar/contribuyente_/login.xhtml', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        // Paso 1: CUIT
+        await page.fill('#F1\\:username', cuit);
+        await page.click('#F1\\:btnSiguiente');
+        // Paso 2: contraseña (el campo aparece tras el "Siguiente")
+        await page.waitForSelector('#F1\\:password', { timeout: 20000 });
+        await page.fill('#F1\\:password', pass);
+        await page.click('#F1\\:btnIngresar');
+        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(function(){});
+        const url = page.url();
+        const titulo = await page.title().catch(function(){ return ''; });
+        const sigueEnLogin = /login\.xhtml|auth\.afip/i.test(url);
+        let posibleError = null;
+        if (sigueEnLogin) {
+            posibleError = await page.locator('.ui-messages-error, .msg-error, text=/clave o usuario|incorrecta|inv[aá]lid|bloque/i')
+                .first().textContent({ timeout: 2000 }).catch(function(){ return null; });
+            if (!posibleError) posibleError = 'Sigue en la pantalla de login — puede ser clave incorrecta, captcha o bloqueo anti-bot.';
+        }
+        const shot = await page.screenshot({ fullPage: false }).catch(function(){ return null; });
+        res.json({
+            ok: !sigueEnLogin,
+            etapa: sigueEnLogin ? 'login-fallo' : 'login-ok',
+            urlFinal: url,
+            titulo: titulo,
+            posibleError: posibleError,
+            screenshot: shot ? ('data:image/png;base64,' + shot.toString('base64')) : null
+        });
+    } catch (e) {
+        res.status(500).json({ ok: false, etapa: 'excepcion', error: String(e && e.message || e) });
+    } finally {
+        if (browser) await browser.close().catch(function(){});
+    }
+});
+
 // Diagnóstico: abrí esta URL en el navegador para ver qué puntos de venta
 // tenés habilitados y si la conexión con ARCA funciona.
 app.get('/diag', async (req, res) => {
