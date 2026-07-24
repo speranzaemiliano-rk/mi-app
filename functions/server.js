@@ -475,20 +475,26 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
                 await buscador.click().catch(function(){});
                 await buscador.fill('Mis Comprobantes');
                 await page.waitForTimeout(2500);
+                await page.waitForTimeout(2500);
                 pasos.push('busco-servicio');
-                // El tile/link cuyo texto es exactamente "Mis Comprobantes"
-                let opt = page.locator(':text-is("Mis Comprobantes")').first();
-                if (!(await opt.count())) opt = page.locator('a:has-text("Mis Comprobantes"), h3:has-text("Mis Comprobantes")').first();
+                // El resultado del portal es una tarjeta con el subtítulo único de Mis Comprobantes.
+                // Clickeamos por ese subtítulo (o el título) para abrir el servicio.
+                let opt = page.getByText('Consulta de Comprobantes Electrónicos Emitidos y Recibidos', { exact: false }).first();
+                if (!(await opt.count())) opt = page.getByText('Mis Comprobantes', { exact: true }).first();
                 if (await opt.count()) {
-                    const popupPromise = ctx.waitForEvent('page', { timeout: 9000 }).catch(function(){ return null; });
-                    await opt.click({ timeout: 6000 }).catch(function(){});
+                    const popupPromise = ctx.waitForEvent('page', { timeout: 12000 }).catch(function(){ return null; });
+                    // Click en el ancestro clickeable de la tarjeta (sube hasta el <a>/tarjeta si hace falta).
+                    await opt.click({ timeout: 8000 }).catch(async function(){
+                        await opt.evaluate(function(el){ var c = el.closest('a,button,[role="button"],.card,li,div[onclick]'); (c || el).click(); }).catch(function(){});
+                    });
                     const popup = await popupPromise;
                     if (popup) {
                         target = popup;
                         await popup.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(function(){});
-                        await popup.waitForTimeout(3000);
+                        await popup.waitForTimeout(3500);
                         pasos.push('nueva-pestaña: ' + popup.url());
                     } else {
+                        await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(function(){});
                         await page.waitForTimeout(3500);
                         pasos.push('misma-pestaña: ' + page.url());
                     }
