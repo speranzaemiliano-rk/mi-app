@@ -3784,7 +3784,8 @@
                         <button class="btn btn-primary btn-sm" id="btnRecibidosAuto" onclick="importarRecibidosAuto()" title="Trae los comprobantes recibidos automáticamente desde ARCA (usa el rango de fechas). Requiere credenciales en el servidor.">⚡ Importar automático</button>
                         <button class="btn btn-outline btn-sm" onclick="abrirImportarCompRecibidos()" title="Subir el Excel exportado de ARCA (Mis Comprobantes → Recibidos → Exportar)">📂 Importar Excel</button>
                         <button class="btn btn-outline btn-sm" onclick="exportarCompRecibidos()" title="Exportar a Excel los comprobantes importados de ARCA">⬇️ Exportar ARCA</button>
-                        <button class="btn btn-outline btn-sm" onclick="probarRobotArca()" title="Diagnóstico: prueba si el robot propio puede entrar a AFIP (experimental)">🤖 Probar robot (diag)</button>
+                        <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/login-test')" title="Diagnóstico: prueba si el robot propio puede entrar a AFIP (experimental)">🤖 Robot: login</button>
+                        <button class="btn btn-outline btn-sm" onclick="probarRobotArca('/afip/robot/recibidos-test')" title="Diagnóstico: prueba llegar a Mis Comprobantes (experimental)">🤖 Robot: Mis Comprobantes</button>
                     </div>
                     <div id="compRecAutoStatus" style="display:none;margin:0 0 10px;padding:8px 12px;border-radius:6px;font-size:12px;"></div>
                     <div id="robotArcaDiag" style="display:none;margin:0 0 10px;"></div>
@@ -12865,19 +12866,23 @@
 
     // Diagnóstico del "robot propio" (experimental): pide al backend que intente entrar
     // a AFIP y muestra el resultado + la captura de pantalla. Paso 1 para ver si es viable.
-    async function probarRobotArca() {
+    async function probarRobotArca(path) {
+        path = path || '/afip/robot/login-test';
         var box = document.getElementById('robotArcaDiag');
         var url = (typeof _afipUrlEmpresaActual === 'function') ? _afipUrlEmpresaActual() : '';
         if (!url) { alert('Esta empresa no tiene backend ARCA configurado.'); return; }
         var baseUrl = url.replace(/\/afip$/, '');
-        if (box) { box.style.display = ''; box.innerHTML = '<div style="padding:8px 12px;border-radius:6px;background:#EFF6FF;color:#1D4ED8;font-size:12px;">🤖 Probando entrar a AFIP… puede tardar hasta 1 minuto.</div>'; }
+        if (box) { box.style.display = ''; box.innerHTML = '<div style="padding:8px 12px;border-radius:6px;background:#EFF6FF;color:#1D4ED8;font-size:12px;">🤖 Ejecutando el robot en AFIP… puede tardar hasta 1-2 minutos.</div>'; }
         try {
-            var resp = await _fetchConAuth(baseUrl + '/afip/robot/login-test');
+            var resp = await _fetchConAuth(baseUrl + path);
             var json = await resp.json();
             var col = json.ok ? ['#D1FAE5', '#065F46'] : ['#FEE2E2', '#991B1B'];
             var html = '<div style="padding:10px 12px;border-radius:8px;background:' + col[0] + ';color:' + col[1] + ';font-size:12px;line-height:1.5;">'
-                + (json.ok ? '✅ El robot logró entrar a AFIP.' : '❌ El robot no pudo entrar: ' + (json.posibleError || json.error || json.etapa || 'error'))
-                + '<br><small>Etapa: ' + (json.etapa || '—') + (json.urlFinal ? (' · ' + json.urlFinal) : '') + '</small></div>';
+                + (json.ok ? '✅ OK (' + (json.etapa || '') + ')' : '❌ Falló: ' + (json.posibleError || json.error || json.etapa || 'error'))
+                + '<br><small>' + (json.urlFinal ? ('URL: ' + json.urlFinal) : '') + (typeof json.tablasEnPagina !== 'undefined' ? (' · Tablas: ' + json.tablasEnPagina) : '') + '</small>'
+                + (json.pasos && json.pasos.length ? ('<br><small>Pasos: ' + json.pasos.join(' → ') + '</small>') : '')
+                + (json.textosVisibles && json.textosVisibles.length ? ('<br><small>Visible: ' + json.textosVisibles.slice(0, 40).join(' | ') + '</small>') : '')
+                + '</div>';
             if (json.screenshot) html += '<div style="margin-top:8px;"><img src="' + json.screenshot + '" alt="captura del robot" style="max-width:100%;border:1px solid var(--border,#ccc);border-radius:8px;"></div>';
             if (box) box.innerHTML = html;
         } catch (e) {
