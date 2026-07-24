@@ -530,7 +530,24 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             }
         } catch (e) { pasos.push('representar-error: ' + (e.message || e)); }
 
-        // Estado final (idealmente ya la pantalla de Emitidos/Recibidos + fechas).
+        // Entrar a "Recibidos" (la tarjeta del menú Emitidos/Recibidos).
+        try {
+            await target.waitForTimeout(1500);
+            let rec = target.getByText('Comprobantes Recibidos', { exact: false }).first();
+            if (!(await rec.count())) rec = target.getByText('Recibidos', { exact: true }).first();
+            if (await rec.count()) {
+                await rec.click({ timeout: 6000 }).catch(async function(){
+                    await rec.evaluate(function(el){ var c = el.closest('a,button,[role="button"],.card,li,div[onclick]'); (c || el).click(); }).catch(function(){});
+                });
+                await target.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(function(){});
+                await target.waitForTimeout(3000);
+                pasos.push('recibidos: ' + target.url());
+            } else {
+                pasos.push('no-encontre-recibidos');
+            }
+        } catch (e) { pasos.push('recibidos-error: ' + (e.message || e)); }
+
+        // Estado final (idealmente ya la pantalla de Recibidos con filtro de fechas + tabla).
         const shot = await target.screenshot({ fullPage: false }).catch(function(){ return null; });
         const info = await target.evaluate(function(){
             var txt = Array.prototype.slice.call(document.querySelectorAll('a,button,h1,h2,h3,label,th,option,input')).map(function(el){
