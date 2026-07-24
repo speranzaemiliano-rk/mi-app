@@ -31713,9 +31713,20 @@
   async function _spApi(path) {
     var t = await _spGetToken();
     if (!t) return { _error: 'No estás conectado a Spotify (falta el token). Tocá "Conectar con Spotify".' };
-    try {
-      var r = await fetch('https://api.spotify.com/v1' + path, { headers: { Authorization: 'Bearer ' + t } });
+    var _pedir = async function(p) {
+      var r = await fetch('https://api.spotify.com/v1' + p, { headers: { Authorization: 'Bearer ' + t } });
       var j = await r.json().catch(function(){ return null; });
+      return { r: r, j: j };
+    };
+    try {
+      var res = await _pedir(path);
+      // Febrero 2026: en modo desarrollo Spotify bajó el máximo del parámetro 'limit'
+      // (la búsqueda /search pasó de 50 a 10). Si pedís más, devuelve 400 "Invalid limit".
+      // Reintentamos automáticamente bajando el límite a 10, así la búsqueda funciona igual.
+      if (res.r.status === 400 && /limit=\d+/.test(path) && res.j && res.j.error && /limit/i.test(res.j.error.message || '')) {
+        res = await _pedir(path.replace(/limit=\d+/, 'limit=10'));
+      }
+      var r = res.r, j = res.j;
       if (r.status === 401) { rkSpotifyLogout(); return { _error: 'Sesión de Spotify vencida. Reconectá.' }; }
       if (r.status === 403) return { _error: 'Spotify 403: tu cuenta no está habilitada en la app de Spotify. En el dashboard → tu app → Settings → User Management, agregá tu email de Spotify (o pasá la app a modo producción).' };
       if (!r.ok) return { _error: 'Spotify ' + r.status + ': ' + ((j && j.error && j.error.message) || 'error') };
@@ -31742,10 +31753,10 @@
     if (!q.trim()) return;
     var box = document.getElementById('rk-sp-results');
     if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando…</div>';
-    var data = await _spApi('/search?type=track&limit=20&q=' + encodeURIComponent(q.trim()));
-    // Spotify bloquea la búsqueda de su catálogo para apps en modo desarrollo (cambio nov-2024):
-    // devuelve un 400 con el mensaje engañoso "Invalid limit". En ese caso buscamos dentro de
-    // TUS canciones ("me gusta"), que sí funcionan en modo desarrollo, así el buscador sirve igual.
+    // En modo desarrollo Spotify limita la búsqueda del catálogo a 10 resultados (cambio feb-2026).
+    var data = await _spApi('/search?type=track&limit=10&q=' + encodeURIComponent(q.trim()));
+    // Si aun así falla (cuenta no habilitada como test user, o sin acceso al catálogo),
+    // buscamos dentro de TUS canciones ("me gusta") como respaldo, así el buscador sirve igual.
     if (data && data._error) { return _spBuscarEnBiblioteca(q.trim(), box); }
     _spList = ((data && data.tracks && data.tracks.items) || []).filter(Boolean); _spIdx = -1;
     _spRenderTracks(_spList, false);
