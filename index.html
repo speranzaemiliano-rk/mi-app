@@ -3725,6 +3725,30 @@
 
                 <div class="table-card">
                     <div class="table-card-head">
+                        <h3>Comprobantes pendientes de pago</h3>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <button id="provPendArcaBtn" class="btn btn-gold btn-sm" onclick="setProvPendVista('arca')" title="Facturas oficiales (ARCA) con saldo pendiente">🧾 ARCA</button>
+                            <button id="provPendXBtn" class="btn btn-outline btn-sm" onclick="setProvPendVista('x')" title="Comprobantes no oficiales (X) con saldo pendiente">📄 Comprobantes X</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th><th>Proveedor</th><th>Número</th>
+                                    <th style="text-align:right;">Importe</th>
+                                    <th style="text-align:right;">Pagado</th>
+                                    <th style="text-align:right;">Saldo</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="provPendientesBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <div class="table-card-head">
                         <h3>Proveedores y sus Presupuestos</h3>
                     </div>
                     <div style="padding: 4px 0 0; color: var(--text-3); font-size: 12px; padding: 10px 22px 0;">Tocá un proveedor para expandir sus presupuestos.</div>
@@ -12102,6 +12126,58 @@
         document.getElementById('totalProveedores').textContent = proveedores.length;
         document.getElementById('totalRubros').textContent = new Set(proveedores.map(p=>p.rubro).filter(Boolean)).size;
         renderProveedoresConPresupuestos();
+        renderProvPendientes();
+    }
+
+    // ── Comprobantes pendientes de pago (en Proveedores): ARCA (facturas oficiales) o X (documentos) ──
+    var _provPendVista = 'arca';
+    function setProvPendVista(v) {
+        _provPendVista = (v === 'x') ? 'x' : 'arca';
+        var ba = document.getElementById('provPendArcaBtn'), bx = document.getElementById('provPendXBtn');
+        if (ba) ba.className = 'btn btn-sm ' + (_provPendVista === 'arca' ? 'btn-gold' : 'btn-outline');
+        if (bx) bx.className = 'btn btn-sm ' + (_provPendVista === 'x' ? 'btn-gold' : 'btn-outline');
+        renderProvPendientes();
+    }
+    function renderProvPendientes() {
+        var tbody = document.getElementById('provPendientesBody');
+        if (!tbody) return;
+        var rows = [];
+        if (_provPendVista === 'arca') {
+            (facturas || []).forEach(function(f, idx) {
+                var imp = f.importe || 0, pag = f.pagado || 0;
+                if (imp <= 0 || pag >= imp) return;
+                rows.push({ fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
+                    mon: f.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('fact'," + idx + ")" });
+            });
+        } else {
+            (documentos || []).forEach(function(d) {
+                var imp = d.importe || 0, pag = d.pagado || 0;
+                if (imp <= 0 || pag >= imp) return;
+                rows.push({ fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: imp - pag,
+                    mon: d.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('doc','" + d.id + "')" });
+            });
+        }
+        rows.sort(function(a, b) { return (a.fecha || '').localeCompare(b.fecha || ''); });
+        if (!rows.length) {
+            var vacio = _provPendVista === 'arca' ? 'No hay facturas ARCA pendientes de pago.' : 'No hay comprobantes X pendientes de pago.';
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">' + vacio + '</td></tr>';
+            return;
+        }
+        var totalSaldo = rows.reduce(function(s, r) { return s + (r.mon === '$' ? r.saldo : 0); }, 0);
+        var html = rows.map(function(r) {
+            return '<tr>'
+                + '<td>' + (r.fecha ? formatearFecha(r.fecha) : '—') + '</td>'
+                + '<td><strong>' + escHtml(r.prov || '—') + '</strong></td>'
+                + '<td>' + escHtml(r.num || '—') + '</td>'
+                + '<td style="text-align:right;">' + r.mon + r.imp.toLocaleString('es-AR') + '</td>'
+                + '<td style="text-align:right;color:var(--text-3);">' + r.mon + r.pag.toLocaleString('es-AR') + '</td>'
+                + '<td style="text-align:right;font-weight:700;color:var(--danger,#c0392b);">' + r.mon + r.saldo.toLocaleString('es-AR') + '</td>'
+                + '<td><button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Pagar</button></td>'
+                + '</tr>';
+        }).join('');
+        html += '<tr><td colspan="5" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
+             + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">$' + Math.round(totalSaldo).toLocaleString('es-AR') + '</td><td></td></tr>';
+        tbody.innerHTML = html;
     }
 
     const tarjetasAbiertas = {};
@@ -15033,6 +15109,7 @@
             const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + _saldoFactDoc(f), 0);
             el3.textContent = '$' + Math.round(total).toLocaleString('es-AR');
         }
+        if (typeof renderProvPendientes === 'function') renderProvPendientes();
     }
 
     // Corrige facturas cuyo campo "pagado" quedó desincronizado del historial real de
@@ -17388,6 +17465,7 @@
                 tbody.appendChild(tr);
             }
         });
+        if (typeof renderProvPendientes === 'function') renderProvPendientes();
     }
 
     // Corrige documentos cuyo campo "pagado" quedó desincronizado del historial real de
