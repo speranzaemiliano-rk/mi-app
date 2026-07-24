@@ -428,6 +428,84 @@ app.get('/afip/emitidos', handlerMisComprobantes('E'));
 // Requiere el navegador (Playwright): ver functions/Dockerfile.
 // GET /afip/robot/login-test
 // ═══════════════════════════════════════════════════════════════════════════
+function _robotCreds() {
+    const cuit = String(process.env.ARCA_USER || process.env.AFIP_CUIT || '').replace(/\D/g, '');
+    const pass = process.env.ARCA_PASS || '';
+    return { cuit, pass };
+}
+
+// Login de clave fiscal en AFIP. Lanza error si no logra pasar el login.
+async function _robotLogin(page, cuit, pass) {
+    await page.goto('https://auth.afip.gob.ar/contribuyente_/login.xhtml', { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.fill('#F1\\:username', cuit);
+    await page.click('#F1\\:btnSiguiente');
+    await page.waitForSelector('#F1\\:password', { timeout: 20000 });
+    await page.fill('#F1\\:password', pass);
+    await page.click('#F1\\:btnIngresar');
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(function(){});
+    if (/login\.xhtml|auth\.afip/i.test(page.url())) throw new Error('No se pudo pasar el login (clave, captcha o bloqueo).');
+}
+
+// PASO 2 (diag): tras el login, intenta llegar a Mis Comprobantes y devuelve una
+// captura + los textos/tablas visibles, para escribir los selectores de extracción.
+// GET /afip/robot/recibidos-test
+app.get('/afip/robot/recibidos-test', async (req, res) => {
+    let chromium;
+    try { chromium = require('playwright-core').chromium; }
+    catch (e) { return res.status(500).json({ ok:false, etapa:'sin-navegador', error:'Falta el navegador (Dockerfile). ' + (e && e.message || e) }); }
+    const { cuit, pass } = _robotCreds();
+    if (!cuit || !pass) return res.status(400).json({ ok:false, etapa:'sin-credenciales', error:'Faltan ARCA_USER/AFIP_CUIT o ARCA_PASS.' });
+    let browser;
+    const pasos = [];
+    try {
+        browser = await chromium.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const ctx = await browser.newContext({ locale: 'es-AR', acceptDownloads: true });
+        const page = await ctx.newPage();
+        await _robotLogin(page, cuit, pass);
+        pasos.push('login-ok: ' + page.url());
+
+        // Intento A: navegar directo al servicio Mis Comprobantes (SSO por cookies).
+        try {
+            await page.goto('https://serviciosweb.afip.gob.ar/genericos/comprobantes/', { waitUntil: 'domcontentloaded', timeout: 40000 });
+            pasos.push('directo: ' + page.url());
+        } catch (e) { pasos.push('directo-fallo: ' + (e.message || e)); }
+
+        // Intento B: si volvió al portal, buscar el servicio y abrirlo.
+        if (/login\.xhtml|portalcf|portal\/app/i.test(page.url())) {
+            try {
+                const buscador = page.locator('input[placeholder*="Busc"], input#buscadorInput, input[type="search"]').first();
+                if (await buscador.count()) {
+                    await buscador.fill('Mis Comprobantes');
+                    await page.waitForTimeout(1800);
+                    pasos.push('busco-servicio');
+                    const opt = page.locator('text=/mis comprobantes/i').first();
+                    if (await opt.count()) { await opt.click({ timeout: 5000 }).catch(function(){}); await page.waitForTimeout(2500); pasos.push('click-servicio: ' + page.url()); }
+                }
+            } catch (e) { pasos.push('portal-fallo: ' + (e.message || e)); }
+        }
+
+        const shot = await page.screenshot({ fullPage: false }).catch(function(){ return null; });
+        const info = await page.evaluate(function(){
+            var txt = Array.prototype.slice.call(document.querySelectorAll('a,button,h1,h2,label,th')).map(function(el){ return (el.innerText || '').trim(); }).filter(Boolean).slice(0, 60);
+            return { textos: txt, tablas: document.querySelectorAll('table').length };
+        }).catch(function(){ return { textos: [], tablas: 0 }; });
+
+        res.json({
+            ok: true, etapa: 'navegacion-diag',
+            urlFinal: page.url(),
+            titulo: await page.title().catch(function(){ return ''; }),
+            pasos: pasos,
+            tablasEnPagina: info.tablas,
+            textosVisibles: info.textos,
+            screenshot: shot ? ('data:image/png;base64,' + shot.toString('base64')) : null
+        });
+    } catch (e) {
+        res.status(500).json({ ok:false, etapa:'excepcion', error: String(e && e.message || e), pasos: pasos });
+    } finally {
+        if (browser) await browser.close().catch(function(){});
+    }
+});
+
 app.get('/afip/robot/login-test', async (req, res) => {
     let chromium;
     try {
