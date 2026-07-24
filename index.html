@@ -31640,10 +31640,19 @@
   }
   async function _spApi(path) {
     var t = await _spGetToken();
-    if (!t) return null;
-    var r = await fetch('https://api.spotify.com/v1' + path, { headers: { Authorization: 'Bearer ' + t } });
-    if (r.status === 401) { rkSpotifyLogout(); return null; }
-    return r.json().catch(function(){ return null; });
+    if (!t) return { _error: 'No estás conectado a Spotify (falta el token). Tocá "Conectar con Spotify".' };
+    try {
+      var r = await fetch('https://api.spotify.com/v1' + path, { headers: { Authorization: 'Bearer ' + t } });
+      var j = await r.json().catch(function(){ return null; });
+      if (r.status === 401) { rkSpotifyLogout(); return { _error: 'Sesión de Spotify vencida. Reconectá.' }; }
+      if (r.status === 403) return { _error: 'Spotify 403: tu cuenta no está habilitada en la app de Spotify. En el dashboard → tu app → Settings → User Management, agregá tu email de Spotify (o pasá la app a modo producción).' };
+      if (!r.ok) return { _error: 'Spotify ' + r.status + ': ' + ((j && j.error && j.error.message) || 'error') };
+      return j;
+    } catch (e) { return { _error: 'No pude contactar a Spotify (revisá tu conexión).' }; }
+  }
+  function _spShowError(box, data) {
+    if (box && data && data._error) { box.innerHTML = '<div style="font-size:11px;color:#F59E9E;padding:6px;line-height:1.4;">⚠️ ' + escHtml(data._error) + '</div>'; return true; }
+    return false;
   }
   function _spUpdateUI() {
     var conectado = !!localStorage.getItem('rk_sp_token');
@@ -31662,6 +31671,7 @@
     var box = document.getElementById('rk-sp-results');
     if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando…</div>';
     var data = await _spApi('/search?type=track&limit=30&q=' + encodeURIComponent(q.trim()));
+    if (_spShowError(box, data)) return;
     _spList = ((data && data.tracks && data.tracks.items) || []).filter(Boolean); _spIdx = -1;
     _spRenderTracks(_spList, false);
   }
@@ -31670,6 +31680,7 @@
     if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Cargando tus me gusta…</div>';
     _spLikedOffset = 0;
     var data = await _spApi('/me/tracks?limit=50&offset=0');
+    if (_spShowError(box, data)) return;
     _spList = ((data && data.items) || []).map(function(it){ return it.track; }).filter(Boolean); _spIdx = -1;
     _spRenderTracks(_spList, !!(data && data.total && data.total > _spList.length));
   }
