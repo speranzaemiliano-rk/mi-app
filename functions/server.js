@@ -464,36 +464,56 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
         await _robotLogin(page, cuit, pass);
         pasos.push('login-ok: ' + page.url());
 
-        // Intento A: navegar directo al servicio Mis Comprobantes (SSO por cookies).
+        // Tras el login estamos en el portal (portalcf). Buscar el servicio "Mis Comprobantes"
+        // (NO "Constatación de Comprobantes"), abrirlo y quedarnos en su pestaña.
+        let target = page;
         try {
-            await page.goto('https://serviciosweb.afip.gob.ar/genericos/comprobantes/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-            pasos.push('directo: ' + page.url());
-        } catch (e) { pasos.push('directo-fallo: ' + (e.message || e)); }
-
-        // Intento B: si volvió al portal, buscar el servicio y abrirlo.
-        if (/login\.xhtml|portalcf|portal\/app/i.test(page.url())) {
-            try {
-                const buscador = page.locator('input[placeholder*="Busc"], input#buscadorInput, input[type="search"]').first();
-                if (await buscador.count()) {
-                    await buscador.fill('Mis Comprobantes');
-                    await page.waitForTimeout(1800);
-                    pasos.push('busco-servicio');
-                    const opt = page.locator('text=/mis comprobantes/i').first();
-                    if (await opt.count()) { await opt.click({ timeout: 5000 }).catch(function(){}); await page.waitForTimeout(2500); pasos.push('click-servicio: ' + page.url()); }
+            await page.waitForTimeout(2500);
+            pasos.push('post-login: ' + page.url());
+            const buscador = page.locator('input[placeholder*="Busc"], input#buscadorInput, input[type="search"], input[type="text"]').first();
+            if (await buscador.count()) {
+                await buscador.click().catch(function(){});
+                await buscador.fill('Mis Comprobantes');
+                await page.waitForTimeout(2500);
+                pasos.push('busco-servicio');
+                // El tile/link cuyo texto es exactamente "Mis Comprobantes"
+                let opt = page.locator(':text-is("Mis Comprobantes")').first();
+                if (!(await opt.count())) opt = page.locator('a:has-text("Mis Comprobantes"), h3:has-text("Mis Comprobantes")').first();
+                if (await opt.count()) {
+                    const popupPromise = ctx.waitForEvent('page', { timeout: 9000 }).catch(function(){ return null; });
+                    await opt.click({ timeout: 6000 }).catch(function(){});
+                    const popup = await popupPromise;
+                    if (popup) {
+                        target = popup;
+                        await popup.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(function(){});
+                        await popup.waitForTimeout(3000);
+                        pasos.push('nueva-pestaña: ' + popup.url());
+                    } else {
+                        await page.waitForTimeout(3500);
+                        pasos.push('misma-pestaña: ' + page.url());
+                    }
+                } else {
+                    pasos.push('no-encontre-tile-mis-comprobantes');
                 }
-            } catch (e) { pasos.push('portal-fallo: ' + (e.message || e)); }
-        }
+            } else {
+                pasos.push('no-hay-buscador');
+            }
+        } catch (e) { pasos.push('portal-error: ' + (e.message || e)); }
 
-        const shot = await page.screenshot({ fullPage: false }).catch(function(){ return null; });
-        const info = await page.evaluate(function(){
-            var txt = Array.prototype.slice.call(document.querySelectorAll('a,button,h1,h2,label,th')).map(function(el){ return (el.innerText || '').trim(); }).filter(Boolean).slice(0, 60);
+        // Mis Comprobantes suele pedir elegir Emitidos/Recibidos y un rango de fechas:
+        // en este paso solo diagnosticamos qué muestra, para afinar los selectores.
+        const shot = await target.screenshot({ fullPage: false }).catch(function(){ return null; });
+        const info = await target.evaluate(function(){
+            var txt = Array.prototype.slice.call(document.querySelectorAll('a,button,h1,h2,h3,label,th,option,input')).map(function(el){
+                return ((el.innerText || el.textContent || el.value || el.placeholder || '') + (el.id ? (' #' + el.id) : '')).trim();
+            }).filter(Boolean).slice(0, 80);
             return { textos: txt, tablas: document.querySelectorAll('table').length };
         }).catch(function(){ return { textos: [], tablas: 0 }; });
 
         res.json({
             ok: true, etapa: 'navegacion-diag',
-            urlFinal: page.url(),
-            titulo: await page.title().catch(function(){ return ''; }),
+            urlFinal: target.url(),
+            titulo: await target.title().catch(function(){ return ''; }),
             pasos: pasos,
             tablasEnPagina: info.tablas,
             textosVisibles: info.textos,
