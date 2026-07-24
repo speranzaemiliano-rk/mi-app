@@ -12176,17 +12176,20 @@
         var addFact = function() {
             (facturas || []).forEach(function(f, idx) {
                 var imp = f.importe || 0, pag = f.pagado || 0;
-                if (imp <= 0 || pag >= imp) return;
+                // Saldo con la RETENCIÓN descontada: lo retenido no se le debe al proveedor.
+                var saldo = _saldoFactDoc(f);
+                if (imp <= 0 || saldo <= 0) return;
                 // Las facturas (incluidos los VEP de ARCA) son comprobantes ARCA registrables.
-                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
+                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: saldo,
                     mon: f.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('fact'," + idx + ")" });
             });
         };
         var addDocs = function() {
             (documentos || []).forEach(function(d) {
                 var imp = d.importe || 0, pag = d.pagado || 0;
-                if (imp <= 0 || pag >= imp) return;
-                rows.push({ tipo: 'X', fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: imp - pag,
+                var saldo = _saldoFactDoc(d);
+                if (imp <= 0 || saldo <= 0) return;
+                rows.push({ tipo: 'X', fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: saldo,
                     mon: d.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('doc','" + d.id + "')" });
             });
         };
@@ -12254,7 +12257,12 @@
         document.getElementById('totalPresupuestosProv').textContent = datos.length;
         if (proveedores.length === 0 && datos.length === 0) { cont.innerHTML = '<div class="empty-msg">Sin datos todavía.</div>'; return; }
         const nombres = new Set(proveedores.filter(coincideProv).map(p=>p.razonSocial).filter(Boolean));
-        if (!textoBuscador() && !grupoFiltro()) Object.keys(porProveedor).forEach(n => nombres.add(n));
+        if (!textoBuscador() && !grupoFiltro()) {
+            Object.keys(porProveedor).forEach(n => nombres.add(n));
+            // También los proveedores que tienen facturas/comprobantes (aunque no tengan presupuesto ni ficha).
+            (facturas||[]).forEach(f => { if (f && f.proveedor && String(f.proveedor).trim()) nombres.add(String(f.proveedor).trim()); });
+            (documentos||[]).forEach(d => { if (d && d.proveedor && String(d.proveedor).trim()) nombres.add(String(d.proveedor).trim()); });
+        }
         const porGrupo = {};
         [...nombres].forEach(nombre => {
             const p = proveedores.find(x => x.razonSocial === nombre);
@@ -12306,6 +12314,35 @@
                         <span>Base: <strong style="color:var(--text-1);">$${Math.round(totalPres).toLocaleString('es-AR')}</strong></span>
                     </div>
                 </div>`;
+                // Comprobantes (facturas + documentos) de este proveedor. Saldo con retención descontada.
+                const _nlc = nombre.trim().toLowerCase();
+                const compsProv = [];
+                (facturas||[]).forEach(function(f){ if (f && String(f.proveedor||'').trim().toLowerCase() === _nlc) compsProv.push({o:'fact', it:f, idx:facturas.indexOf(f)}); });
+                (documentos||[]).forEach(function(d){ if (d && String(d.proveedor||'').trim().toLowerCase() === _nlc) compsProv.push({o:'doc', it:d}); });
+                compsProv.sort(function(a,b){ return String(b.it.fecha||'').localeCompare(String(a.it.fecha||'')); });
+                const compFilas = compsProv.map(function(cp){
+                    const it = cp.it, imp = it.importe||0, pag = it.pagado||0, saldo = _saldoFactDoc(it);
+                    const estado = saldo<=0 ? 'Saldado' : ((pag>0||_totalRetenidoHist(it.pagosHistorial)>0) ? 'Parcial' : 'Pendiente');
+                    const estCls = saldo<=0 ? 'badge-ok' : (pag>0 ? 'badge-warn' : 'badge-err');
+                    const mon = it.moneda==='USD'?'USD ':'$';
+                    const pagarBtn = (saldo>0 && puedeEditar) ? (cp.o==='fact' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${cp.idx})">💵</button>` : `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${it.id}')">💵</button>`) : '';
+                    return `<tr>
+                        <td>${it.fecha?formatearFecha(it.fecha):'—'}</td>
+                        <td>${escHtml(it.numero||it.nro||'—')}</td>
+                        <td>${escHtml(it.descripcion||it.concepto||'—')}</td>
+                        <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
+                        <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
+                        <td style="text-align:right;">${mon}${Math.round(saldo).toLocaleString('es-AR')}</td>
+                        <td><span class="badge-rol ${estCls}">${estado}</span> ${pagarBtn}</td>
+                    </tr>`;
+                }).join('');
+                const compSeccion = compsProv.length ? `<div style="margin-top:14px;">
+                        <div style="font-size:12px;font-weight:700;color:var(--text-2,#888);margin-bottom:6px;">🧾 Comprobantes / Facturas (${compsProv.length})</div>
+                        <table>
+                            <thead><tr><th>Fecha</th><th>Número</th><th>Descripción</th><th style="text-align:right">Importe</th><th style="text-align:right">Pagado</th><th style="text-align:right">Saldo</th><th>Estado</th></tr></thead>
+                            <tbody>${compFilas}</tbody>
+                        </table>
+                    </div>` : '';
                 const card = document.createElement('div');
                 card.className = 'prov-card' + (abierta ? '' : ' collapsed');
                 card.id = 'card-' + cssId(nombre);
@@ -12317,7 +12354,7 @@
                             ${graficoBarra}
                         </div>
                         <div style="text-align:right; flex-shrink:0; margin-left:16px;">
-                            <span class="pill">${presus.length} presup.</span>
+                            <span class="pill">${presus.length} presup.</span>${compsProv.length ? ` <span class="pill">${compsProv.length} comp.</span>` : ''}
                             <div style="font-size:12px; color:var(--text-3); margin-top:5px;">
                                 Base: <strong style="color:var(--text-1)">$${totalPres.toLocaleString('es-AR')}</strong> ·
                                 Ajustado: <strong style="color:var(--blue)">$${Math.round(totalAjustado).toLocaleString('es-AR')}</strong>
@@ -12336,6 +12373,7 @@
                             </tr></thead>
                             <tbody>${filas}</tbody>
                         </table>
+                        ${compSeccion}
                     </div>`;
                 cont.appendChild(card);
             });
