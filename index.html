@@ -31348,6 +31348,24 @@
     </div>
     <div id="rk-music-frame" style="min-height:20px;"></div>
     <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
+      <div id="rk-sp-connect" style="display:none;">
+        <div style="font-size:11px; color:#9aa0aa; margin-bottom:5px;">🟢 Tu Spotify (buscar + tus me gusta)</div>
+        <button class="rkm-btn" style="width:100%; background:#1DB954;" onclick="rkSpotifyConnect()">Conectar con Spotify</button>
+        <div style="font-size:10px; color:#7a808a; margin-top:4px;">Necesita que el Redirect URI esté registrado en tu app de Spotify.</div>
+      </div>
+      <div id="rk-sp-panel" style="display:none;">
+        <div style="display:flex; gap:6px; margin-bottom:6px;">
+          <input id="rk-sp-q" placeholder="Buscar canción o artista…" onkeydown="if(event.key==='Enter')rkSpotifyBuscar()" style="flex:1; min-width:0; padding:8px 10px; border-radius:8px; font-size:12px; border:1px solid rgba(255,255,255,.15); background:#0e0f13; color:#e8eaed;">
+          <button class="rkm-btn" onclick="rkSpotifyBuscar()">🔍</button>
+        </div>
+        <div style="display:flex; gap:6px; margin-bottom:6px;">
+          <button class="rkm-preset" style="flex:1;" onclick="rkSpotifyLiked()">❤️ Mis me gusta</button>
+          <button class="rkm-preset" onclick="rkSpotifyLogout()" title="Desconectar Spotify">Salir</button>
+        </div>
+        <div id="rk-sp-results" style="max-height:180px; overflow-y:auto; margin-bottom:6px;"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
       <div style="font-size:11px; color:#9aa0aa; margin-bottom:5px;">📻 Radios de Argentina (AM / FM)</div>
       <select id="rk-radio-sel" onchange="rkRadioPlay(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; font-size:12px; border:1px solid rgba(255,255,255,.15); background:#0e0f13; color:#e8eaed;">
         <option value="">Elegí una radio…</option>
@@ -31546,6 +31564,110 @@
       if (pb) { var b = pb.split('|'); if (b[0] && b[1]) { btn.style.bottom = 'auto'; btn.style.left = b[0]; btn.style.top = b[1]; } }
     } catch (e) {}
   })();
+
+  // ── Integración Spotify (OAuth PKCE): buscar + tus me gusta ──
+  var RK_SP_CLIENT_ID = 'ea1f2e04bfdc4c8abe4a116023a5f887';
+  function _spRedirect() { return location.origin + location.pathname.replace(/index\.html?$/i, ''); }
+  function _spB64url(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function _spRandom(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); var c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'; var s = ''; for (var i = 0; i < n; i++) s += c[a[i] % c.length]; return s; }
+  async function _spChallenge(verifier) { var data = new TextEncoder().encode(verifier); var dig = await crypto.subtle.digest('SHA-256', data); return _spB64url(new Uint8Array(dig)); }
+
+  async function rkSpotifyConnect() {
+    try {
+      var verifier = _spRandom(64);
+      localStorage.setItem('rk_sp_verifier', verifier);
+      var challenge = await _spChallenge(verifier);
+      var params = new URLSearchParams({
+        client_id: RK_SP_CLIENT_ID, response_type: 'code', redirect_uri: _spRedirect(),
+        scope: 'user-library-read', code_challenge_method: 'S256', code_challenge: challenge
+      });
+      location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
+    } catch (e) { alert('No se pudo iniciar Spotify: ' + (e.message || e)); }
+  }
+  function rkSpotifyLogout() {
+    ['rk_sp_token', 'rk_sp_exp', 'rk_sp_refresh', 'rk_sp_verifier'].forEach(function(k){ try { localStorage.removeItem(k); } catch (e) {} });
+    _spUpdateUI();
+  }
+  async function _spHandleCallback() {
+    var p = new URLSearchParams(location.search);
+    var code = p.get('code'); var verifier = localStorage.getItem('rk_sp_verifier');
+    if (!code || !verifier) return;
+    try {
+      var body = new URLSearchParams({ client_id: RK_SP_CLIENT_ID, grant_type: 'authorization_code', code: code, redirect_uri: _spRedirect(), code_verifier: verifier });
+      var r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+      var j = await r.json();
+      if (j.access_token) {
+        localStorage.setItem('rk_sp_token', j.access_token);
+        localStorage.setItem('rk_sp_exp', String(Date.now() + ((j.expires_in || 3600) * 1000)));
+        if (j.refresh_token) localStorage.setItem('rk_sp_refresh', j.refresh_token);
+      }
+    } catch (e) { console.warn('spotify token', e); }
+    try { localStorage.removeItem('rk_sp_verifier'); history.replaceState({}, document.title, _spRedirect()); } catch (e) {}
+  }
+  async function _spGetToken() {
+    var tok = localStorage.getItem('rk_sp_token');
+    var exp = parseInt(localStorage.getItem('rk_sp_exp') || '0', 10);
+    if (tok && Date.now() < exp - 30000) return tok;
+    var refresh = localStorage.getItem('rk_sp_refresh');
+    if (!refresh) return tok || null;
+    try {
+      var body = new URLSearchParams({ client_id: RK_SP_CLIENT_ID, grant_type: 'refresh_token', refresh_token: refresh });
+      var r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+      var j = await r.json();
+      if (j.access_token) {
+        localStorage.setItem('rk_sp_token', j.access_token);
+        localStorage.setItem('rk_sp_exp', String(Date.now() + ((j.expires_in || 3600) * 1000)));
+        if (j.refresh_token) localStorage.setItem('rk_sp_refresh', j.refresh_token);
+        return j.access_token;
+      }
+    } catch (e) {}
+    return tok || null;
+  }
+  async function _spApi(path) {
+    var t = await _spGetToken();
+    if (!t) return null;
+    var r = await fetch('https://api.spotify.com/v1' + path, { headers: { Authorization: 'Bearer ' + t } });
+    if (r.status === 401) { rkSpotifyLogout(); return null; }
+    return r.json().catch(function(){ return null; });
+  }
+  function _spUpdateUI() {
+    var conectado = !!localStorage.getItem('rk_sp_token');
+    var c = document.getElementById('rk-sp-connect'), p = document.getElementById('rk-sp-panel');
+    if (c) c.style.display = conectado ? 'none' : '';
+    if (p) p.style.display = conectado ? '' : 'none';
+  }
+  async function rkSpotifyBuscar() {
+    var q = (document.getElementById('rk-sp-q') || {}).value || '';
+    if (!q.trim()) return;
+    var box = document.getElementById('rk-sp-results');
+    if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando…</div>';
+    var data = await _spApi('/search?type=track&limit=20&q=' + encodeURIComponent(q.trim()));
+    _spRenderTracks(data && data.tracks && data.tracks.items);
+  }
+  async function rkSpotifyLiked() {
+    var box = document.getElementById('rk-sp-results');
+    if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Cargando tus me gusta…</div>';
+    var data = await _spApi('/me/tracks?limit=40');
+    _spRenderTracks((data && data.items || []).map(function(it){ return it.track; }));
+  }
+  function _spRenderTracks(tracks) {
+    var box = document.getElementById('rk-sp-results');
+    if (!box) return;
+    if (!tracks || !tracks.length) { box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Sin resultados.</div>'; return; }
+    box.innerHTML = tracks.filter(Boolean).map(function(t){
+      var art = (t.artists || []).map(function(a){ return a.name; }).join(', ');
+      var img = (t.album && t.album.images && t.album.images.length) ? t.album.images[t.album.images.length - 1].url : '';
+      return '<div onclick="rkSpotifyPlay(\'' + t.id + '\')" style="padding:6px 8px;cursor:pointer;border-radius:6px;display:flex;gap:8px;align-items:center;font-size:12px;" onmouseover="this.style.background=\'rgba(255,255,255,.06)\'" onmouseout="this.style.background=\'none\'">'
+        + (img ? '<img src="' + img + '" width="34" height="34" style="border-radius:4px;flex:0 0 auto;">' : '')
+        + '<span style="min-width:0;"><strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(t.name || '') + '</strong><span style="opacity:.7;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(art) + '</span></span></div>';
+    }).join('');
+  }
+  function rkSpotifyPlay(id) {
+    _rkMusicRender({ src: 'https://open.spotify.com/embed/track/' + id + '?utm_source=rk', tipo: 'spotify' });
+  }
+  window.addEventListener('load', function() {
+    _spHandleCallback().then(function(){ _spUpdateUI(); });
+  });
 </script>
 
 <!-- ==================== AGENTE DE AYUDA RK ==================== -->
