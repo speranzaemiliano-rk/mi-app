@@ -4126,6 +4126,7 @@
                                     <option value="disponible">🔴 Disponible</option>
                                 </select>
                                 <button class="btn btn-gold btn-sm" onclick="abrirModalAlquiler()" id="btnAgregarAlquiler">➕ Nuevo Contrato</button>
+                                <button class="btn btn-outline btn-sm" onclick="abrirCalcIPC()" title="Calcular cuánto queda un monto actualizado por inflación (IPC INDEC) entre dos fechas">🧮 Calculadora IPC</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirResumenAlquileres()">📊 Resumen</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirMoverAlquileres()" title="Mover todos los alquileres de este proyecto a otra empresa/proyecto">🔀 Mover a otro proyecto</button>
                                 <button class="btn btn-outline btn-sm" onclick="revisarAlquileresMail(this)" title="Revisar ahora y mandar el aviso por mail al inquilino y a la empresa de las cuotas por vencer">📧 Avisar cuotas por mail</button>
@@ -21731,6 +21732,56 @@
             .catch(function() { resDiv.textContent = '⚠️ No se pudo conectar con el backend para consultar IPC.'; });
     }
 
+    // ── Calculadora general de inflación (IPC INDEC) — independiente de un contrato ──
+    function abrirCalcIPC() {
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        ['calcIPCMesDesde','calcIPCMesHasta'].forEach(function(id){
+            var sel = document.getElementById(id);
+            if (sel && !sel.options.length) meses.forEach(function(m,i){ var o=document.createElement('option'); o.value=i+1; o.textContent=m; sel.appendChild(o); });
+        });
+        var hoy = new Date();
+        // Por defecto: desde hace 12 meses hasta el mes pasado (último dato publicado por INDEC).
+        var mesHasta = hoy.getMonth();            // 0-based → mes pasado (getMonth()+1-1)
+        var anioHasta = hoy.getFullYear();
+        if (mesHasta === 0) { mesHasta = 12; anioHasta -= 1; }
+        var mesDesde = mesHasta, anioDesde = anioHasta - 1;
+        document.getElementById('calcIPCMesDesde').value = mesDesde;
+        document.getElementById('calcIPCAnioDesde').value = anioDesde;
+        document.getElementById('calcIPCMesHasta').value = mesHasta;
+        document.getElementById('calcIPCAnioHasta').value = anioHasta;
+        document.getElementById('calcIPCResultado').innerHTML = '';
+        document.getElementById('modalCalcIPC').classList.add('active');
+    }
+    function cerrarCalcIPC() { document.getElementById('modalCalcIPC').classList.remove('active'); }
+    function calcularCalcIPC() {
+        var monto  = parseFloat(document.getElementById('calcIPCMonto').value) || 0;
+        var mesIni = parseInt(document.getElementById('calcIPCMesDesde').value) || 0;
+        var anioIni= parseInt(document.getElementById('calcIPCAnioDesde').value) || 0;
+        var mesFin = parseInt(document.getElementById('calcIPCMesHasta').value) || 0;
+        var anioFin= parseInt(document.getElementById('calcIPCAnioHasta').value) || 0;
+        var resDiv = document.getElementById('calcIPCResultado');
+        if (!mesIni || !anioIni || !mesFin || !anioFin) { resDiv.innerHTML = '<span style="color:var(--danger,#c0392b);">Completá mes y año de ambos períodos.</span>'; return; }
+        resDiv.textContent = '⏳ Consultando IPC de INDEC…';
+        _fetchBackend('/ipc/variacion?anioIni='+anioIni+'&mesIni='+mesIni+'&anioFin='+anioFin+'&mesFin='+mesFin)
+            .then(function(r){
+                if (!r || r.ok === false) { resDiv.innerHTML = '⚠️ ' + escHtml((r && r.error) || 'No se pudo obtener el dato de INDEC.'); return; }
+                var pct = r.variacionPct;
+                var pctTexto = pct.toFixed(1).replace('.', ',') + '%';
+                var html = 'Variación IPC: <strong>' + pctTexto + '</strong>';
+                if (monto > 0) {
+                    var actualizado = monto * (1 + pct/100);
+                    var aumento = actualizado - monto;
+                    html += '<div style="margin-top:10px;padding:12px;background:var(--surface,#f7f7f8);border-radius:8px;">'
+                        + '<div style="font-size:12px;color:var(--text-3);">Monto actualizado</div>'
+                        + '<div style="font-size:22px;font-weight:800;color:var(--gold,#C9A84C);">$' + actualizado.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>'
+                        + '<div style="font-size:11px;color:var(--text-3);margin-top:2px;">Aumento: $' + aumento.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>'
+                        + '</div>';
+                }
+                resDiv.innerHTML = html;
+            })
+            .catch(function(){ resDiv.innerHTML = '⚠️ No se pudo conectar con el backend para consultar IPC.'; });
+    }
+
     function aplicarIPCAlCanon() {
         if (_alqIPCNuevoCanon == null) return;
         var mes = parseInt(document.getElementById('alqIPCVigDesdeMes').value) || 0;
@@ -29769,6 +29820,33 @@
 </div>
 
 <!-- ═══════════════ MODAL: ALQUILER ═══════════════ -->
+<div class="modal" id="modalCalcIPC">
+  <div class="modal-box" style="max-width:460px;">
+    <div class="modal-head">
+      <h2>🧮 Calculadora de inflación (IPC INDEC)</h2>
+      <button class="modal-close" onclick="cerrarCalcIPC()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--text-3);margin:0 0 12px;line-height:1.5;">
+        Actualizá un monto por inflación entre dos períodos (IPC Nacional Nivel General, INDEC). Útil para ajustar el canon de un alquiler.
+      </p>
+      <div class="form-group" style="margin:0 0 12px;">
+        <label>Monto a actualizar (ARS)</label>
+        <input type="number" id="calcIPCMonto" step="0.01" min="0" placeholder="Ej: 1000000">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
+        <div class="form-group" style="margin:0;"><label style="font-size:10px;">Mes desde</label><select id="calcIPCMesDesde"></select></div>
+        <div class="form-group" style="margin:0;"><label style="font-size:10px;">Año desde</label><input type="number" id="calcIPCAnioDesde" min="2016" step="1" placeholder="Ej: 2025"></div>
+        <div class="form-group" style="margin:0;"><label style="font-size:10px;">Mes hasta</label><select id="calcIPCMesHasta"></select></div>
+        <div class="form-group" style="margin:0;"><label style="font-size:10px;">Año hasta</label><input type="number" id="calcIPCAnioHasta" min="2016" step="1" placeholder="Ej: 2026"></div>
+      </div>
+      <button type="button" class="btn btn-gold btn-sm" style="width:100%;margin-top:6px;" onclick="calcularCalcIPC()">📊 Calcular</button>
+      <div id="calcIPCResultado" style="margin-top:14px;font-size:14px;line-height:1.6;"></div>
+      <div class="form-hint" style="margin-top:10px;">Fuente: INDEC (IPC Nacional Nivel General). El INDEC publica el dato de cada mes a mediados del mes siguiente.</div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="modalAlquiler">
   <div class="modal-box modal-box-wide" style="max-width:620px;">
     <div class="modal-head">
