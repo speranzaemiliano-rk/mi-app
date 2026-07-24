@@ -31309,8 +31309,8 @@
 
 <button id="rk-music-btn" onclick="rkMusicToggle()" title="Música mientras trabajás" aria-label="Música">🎵</button>
 <div id="rk-music-panel" aria-label="Reproductor de música">
-  <div id="rk-music-head">
-    <span>🎵 Música</span>
+  <div id="rk-music-head" style="cursor:move;">
+    <span>🎵 Música <small style="font-weight:400;opacity:.6;">· arrastrá para mover</small></span>
     <button onclick="rkMusicToggle()" title="Minimizar (la música sigue sonando)">–</button>
   </div>
   <div id="rk-music-body">
@@ -31324,6 +31324,26 @@
       <button class="rkm-preset" onclick="rkMusicPreset('jazz')">🎷 Jazz</button>
     </div>
     <div id="rk-music-frame" style="min-height:20px;"></div>
+    <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
+      <div style="font-size:11px; color:#9aa0aa; margin-bottom:5px;">📻 Radios de Argentina (AM / FM)</div>
+      <select id="rk-radio-sel" onchange="rkRadioPlay(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; font-size:12px; border:1px solid rgba(255,255,255,.15); background:#0e0f13; color:#e8eaed;">
+        <option value="">Elegí una radio…</option>
+        <option value="Mitre">Radio Mitre — AM 790</option>
+        <option value="La 100">La 100 — FM 99.9</option>
+        <option value="Radio Continental">Continental — AM 590</option>
+        <option value="Rock and Pop">Rock &amp; Pop — FM 95.9</option>
+        <option value="Metro 951">Metro — FM 95.1</option>
+        <option value="Aspen">Aspen — FM 102.3</option>
+        <option value="Vorterix">Vorterix — FM 92.1</option>
+        <option value="Radio Nacional">Radio Nacional — AM 870</option>
+        <option value="Radio 10">Radio 10 — AM 710</option>
+        <option value="La 990">La 990 — AM 990</option>
+        <option value="Radio Disney">Disney — FM 94.3</option>
+        <option value="Pop Radio">Pop — FM 101.5</option>
+      </select>
+      <audio id="rk-radio-audio" controls style="width:100%; margin-top:8px; display:none;"></audio>
+      <div id="rk-radio-status" style="font-size:11px; color:#9aa0aa; margin-top:5px;"></div>
+    </div>
   </div>
 </div>
 
@@ -31347,8 +31367,37 @@
   function _rkMusicRender(emb) {
     var box = document.getElementById('rk-music-frame');
     if (!box) return;
+    // Pausar la radio si estaba sonando (no se pisan)
+    var au = document.getElementById('rk-radio-audio');
+    if (au) { try { au.pause(); } catch (e) {} au.style.display = 'none'; }
+    var rs = document.getElementById('rk-radio-status'); if (rs) rs.textContent = '';
+    var rsel = document.getElementById('rk-radio-sel'); if (rsel) rsel.value = '';
     var h = emb.tipo === 'spotify' ? 152 : 180;
     box.innerHTML = '<iframe src="' + emb.src + '" height="' + h + '" allow="autoplay; encrypted-media; clipboard-write; picture-in-picture" allowfullscreen loading="lazy"></iframe>';
+  }
+
+  // Radios de Argentina: resuelve el stream con radio-browser (gratis, sin key) y reproduce.
+  async function rkRadioPlay(nombre) {
+    if (!nombre) return;
+    var au = document.getElementById('rk-radio-audio');
+    var st = document.getElementById('rk-radio-status');
+    var frame = document.getElementById('rk-music-frame');
+    if (frame) frame.innerHTML = ''; // cortar YouTube/Spotify si estaba sonando
+    if (st) st.textContent = 'Buscando ' + nombre + '…';
+    try {
+      var resp = await fetch('https://de1.api.radio-browser.info/json/stations/search?name=' + encodeURIComponent(nombre) + '&countrycode=AR&limit=20&hidebroken=true&order=votes&reverse=true');
+      var arr = await resp.json();
+      var httpsSt = (arr || []).filter(function(s){ return s.url_resolved && /^https:/i.test(s.url_resolved); });
+      var elegida = httpsSt[0] || (arr || [])[0];
+      if (!elegida || !elegida.url_resolved) { if (st) st.textContent = 'No encontré esta radio ahora. Probá otra.'; return; }
+      if (!/^https:/i.test(elegida.url_resolved)) { if (st) st.textContent = elegida.name + ' solo transmite en HTTP y el navegador lo bloquea. Probá otra.'; return; }
+      au.src = elegida.url_resolved;
+      au.style.display = '';
+      au.play().catch(function(){});
+      if (st) st.textContent = '▶ ' + (elegida.name || nombre);
+    } catch (e) {
+      if (st) st.textContent = 'No pude cargar la radio (revisá tu conexión).';
+    }
   }
   function rkMusicPlay() {
     var inp = document.getElementById('rk-music-url');
@@ -31379,6 +31428,46 @@
       }
     } catch (e) {}
   });
+
+  // Hacer el panel arrastrable (por el encabezado). Guarda la posición.
+  (function() {
+    var panel = document.getElementById('rk-music-panel');
+    var head = document.getElementById('rk-music-head');
+    if (!panel || !head) return;
+    var drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    function start(e) {
+      if (e.target && e.target.closest('button')) return; // no arrastrar al tocar el botón minimizar
+      var t = e.touches ? e.touches[0] : e;
+      var r = panel.getBoundingClientRect();
+      drag = true; sx = t.clientX; sy = t.clientY; ox = r.left; oy = r.top;
+      panel.style.bottom = 'auto'; panel.style.left = ox + 'px'; panel.style.top = oy + 'px';
+      if (e.cancelable) e.preventDefault();
+    }
+    function move(e) {
+      if (!drag) return;
+      var t = e.touches ? e.touches[0] : e;
+      var nx = ox + (t.clientX - sx), ny = oy + (t.clientY - sy);
+      nx = Math.max(4, Math.min(window.innerWidth - 60, nx));
+      ny = Math.max(4, Math.min(window.innerHeight - 60, ny));
+      panel.style.left = nx + 'px'; panel.style.top = ny + 'px';
+      if (e.cancelable) e.preventDefault();
+    }
+    function end() {
+      if (!drag) return; drag = false;
+      try { localStorage.setItem('rk_music_pos', panel.style.left + '|' + panel.style.top); } catch (e) {}
+    }
+    head.addEventListener('mousedown', start);
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', end);
+    head.addEventListener('touchstart', start, { passive: false });
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', end);
+    // Restaurar posición guardada
+    try {
+      var p = localStorage.getItem('rk_music_pos');
+      if (p) { var a = p.split('|'); if (a[0] && a[1]) { panel.style.bottom = 'auto'; panel.style.left = a[0]; panel.style.top = a[1]; } }
+    } catch (e) {}
+  })();
 </script>
 
 <!-- ==================== AGENTE DE AYUDA RK ==================== -->
