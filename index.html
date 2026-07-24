@@ -10720,11 +10720,22 @@
             '</tr>';
     }
 
+    // ¿Esta factura recibida computa para ARCA / IVA Compras? Un VEP (Volante Electrónico de
+    // Pago de impuestos: IIBB/AGIP, SICORE, etc.) se carga como factura con tipoComprobante 'X'
+    // y NO es un comprobante fiscal con crédito de IVA → NO debe sumar al Libro IVA Compras ni a
+    // los totales de ARCA. También queda afuera si se marcó manualmente computaARCA:false.
+    function _facComputaArca(f) {
+        if (!f) return false;
+        if (f.computaARCA === false) return false;
+        if (String(f.tipoComprobante || '') === 'X') return false;
+        return true;
+    }
+
     function rptRenderCompras(f) {
         var body = document.getElementById('rptComprasBody');
         var foot = document.getElementById('rptComprasFoot');
         if (!body) return;
-        var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+        var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && _facComputaArca(v); });
         if (!items.length) { body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
         var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false;
         body.innerHTML = items.map(function(v) {
@@ -10814,7 +10825,7 @@
         var el = document.getElementById('rptStats');
         if (!el) return;
         var ventas = (facturasARCA||[]).filter(function(v){ return rptEnPeriodo(v.fecha.length===8 ? v.fecha.slice(0,4)+'-'+v.fecha.slice(4,6)+'-'+v.fecha.slice(6,8) : v.fecha, f); });
-        var compras = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+        var compras = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && _facComputaArca(v); });
         var totVentas = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impTotal||0); },0);
         var totIVAV   = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impIVA||0); },0);
         var totCompras = compras.reduce(function(s,v){ return s+(v.importe||0); },0);
@@ -10880,7 +10891,7 @@
                     return '<tr><td>'+fecha+'</td><td>'+(_afipTiposNombreRpt[v.tipoComp]||v.tipoComp)+'</td><td>'+String(v.ptoVta||'').padStart(4,'0')+'-'+String(v.nro||'').padStart(8,'0')+'</td><td>'+(v.razon||'—')+'</td><td>'+(v.cuitRecep||'—')+'</td><td class="r">'+_fmtM(neto)+'</td><td class="c">'+alicPct+'%</td><td class="r">'+_fmtM(iva)+'</td><td class="r">'+_fmtM(total)+'</td></tr>';
                 }).join('')+'</tbody><tfoot><tr><td colspan="5">TOTAL ('+items.length+' comprobantes)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totT)+'</td></tr></tfoot></table>';
         } else if (tipo === 'compras') {
-            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && _facComputaArca(v); });
             var totN=0,totIV=0,totT=0,hayEst=false;
             content = '<h1>📥 Libro IVA Compras — Facturas de Proveedores</h1><h2>'+empresa+' — '+periodo+'</h2>' +
                 '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
@@ -10930,7 +10941,7 @@
         }
 
         function _sheetCompras() {
-            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && _facComputaArca(v); });
             return items.map(function(v) {
                 var d = _rptIvaCompra(v);
                 return { 'Fecha': v.fecha||'', 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
@@ -12163,7 +12174,8 @@
             (facturas || []).forEach(function(f, idx) {
                 var imp = f.importe || 0, pag = f.pagado || 0;
                 if (imp <= 0 || pag >= imp) return;
-                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
+                // Un VEP / factura no fiscal (tipoComprobante 'X') cuenta como Comprobante X, no ARCA.
+                rows.push({ tipo: _facComputaArca(f) ? 'ARCA' : 'X', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
                     mon: f.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('fact'," + idx + ")" });
             });
         };
@@ -12175,9 +12187,10 @@
                     mon: d.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('doc','" + d.id + "')" });
             });
         };
-        if (_provPendVista === 'arca') addFact();
-        else if (_provPendVista === 'x') addDocs();
-        else { addFact(); addDocs(); }
+        // Siempre armamos todas las filas etiquetadas por tipo (ARCA / X) y filtramos por la vista.
+        addFact(); addDocs();
+        if (_provPendVista === 'arca') rows = rows.filter(function(r){ return r.tipo === 'ARCA'; });
+        else if (_provPendVista === 'x') rows = rows.filter(function(r){ return r.tipo === 'X'; });
         // Filtros: proveedor/número y rango de fechas.
         rows = rows.filter(function(r) {
             if (busq && ((r.prov || '') + ' ' + (r.num || '')).toLowerCase().indexOf(busq) === -1) return false;
@@ -15119,7 +15132,7 @@
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}</td>
+                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fce8e6;color:#c5221f;" title="No computa para ARCA / IVA Compras (ej. VEP de impuestos)">No oficial</span>'}</td>
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR')}</strong></td>
