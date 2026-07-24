@@ -75,10 +75,14 @@ El sistema ya es **multiempresa por dentro** (datos por `empresas/<id>/proyectos
 
 Ya existe un objeto central **`BRAND`** con los valores de RK por defecto, sobreescribible por instalación desde **Config → 🎨 Marca del sistema** (solo superadmin). Se guarda en `global/config/brand` (Firebase) + `localStorage rk_brand` y se aplica en runtime a: **título de la pestaña**, **siglas del anillo**, **tagline del login**, **nombre del asistente** (saludo + placeholders), **pie de los PDF** y **razón social por defecto del emisor**. Con eso, cambiar el nombre visible del sistema NO requiere tocar el código.
 
-**Todavía NO cubierto por `BRAND` (queda pendiente / requiere reemplazo de archivos):**
-- **Assets estáticos:** logo del splash (`logo ..._blanco.png`), logo base64 embebido en el login (`index.html` ~2600), íconos PWA (`icons/*`), `manifest.json` (name/short_name/scope) — son archivos; se reemplazan por instalación.
-- **Prompts del asistente en el backend** (`functions/server.js` WhatsApp/mail) y el `sistemaPrompt` del front — mencionan "RK" y el rubro; parametrizarlos es una segunda pasada.
-- **Textos sueltos** con "RK"/"Estudio de Arquitectura", prefijos de export `RK-*.xlsx`, `ADMIN_EMAIL`, `firebaseConfig`, URL de Railway, EmailJS y Spotify Client ID (identidades por instalación).
+**Ya cubierto (además de lo anterior):**
+- **Logo configurable:** `BRAND.logo` (URL) reemplaza el logo del splash y del login en runtime. Se edita en Config → 🎨 Marca (campo "URL del logo") o en `config.js` (`brand.logo`). Vacío = logo RK integrado.
+- **Prompts del asistente parametrizados:** el `sistemaPrompt` del front usa `BRAND.nombre`/`BRAND.asistente`; el backend (WhatsApp/mail/alertas) usa variables de entorno `BRAND_NOMBRE` / `BRAND_ASISTENTE` / `BRAND_ALERTAS` (con RK por defecto).
+- **Identidades por instalación en `config.js`:** `firebaseConfig`, `ADMIN_EMAIL`, backend Railway, EmailJS, Spotify Client ID (ver `CLONAR.md`).
+
+**Todavía NO cubierto (requiere reemplazo de archivos o segunda pasada):**
+- **Assets estáticos:** el logo base64 del login/splash **integrado** (si no se usa `BRAND.logo`), íconos PWA (`icons/*`), `manifest.json` (name/short_name/scope) — archivos; se reemplazan por instalación.
+- **Textos sueltos** con "RK"/"Estudio de Arquitectura" y prefijos de export `RK-*.xlsx`.
 - **Localización/fisco** (Argentina/ARCA/AFIP/CAC/es-AR) — es el punto 5 del roadmap, aparte.
 
 ### A) Resto del hardcoding de RK (marca) → parametrizar

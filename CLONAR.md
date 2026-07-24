@@ -61,10 +61,10 @@ Abrí `config.js` en el repo del cliente y reemplazá:
 
 ## Assets de marca (logo/íconos)
 
-`config.js` cambia los **textos** de marca. El **logo, los íconos y la imagen del login** son archivos; para que el cliente tenga los suyos hay que reemplazar en el repo:
-- `logo png_Mesa de trabajo 1_blanco.png` (logo del splash),
-- `icons/icon-192.png`, `icons/icon-512.png`, `icons/icon.svg`,
-- la imagen del login (hoy embebida en `index.html`; se puede externalizar en una próxima pasada).
+**Logo:** lo más fácil es poner una **URL de logo** en `config.js` → `brand.logo` (o desde Config → 🎨 Marca → "URL del logo"). Eso reemplaza el logo del splash y del login sin tocar archivos. Los **íconos de la PWA** (los que se ven al instalar la app) sí son archivos y se reemplazan en el repo:
+- `icons/icon-192.png`, `icons/icon-512.png`, `icons/icon.svg`.
+
+**Asistente/mails del backend:** el nombre del asistente y de las alertas se configura en Railway con las variables `BRAND_NOMBRE`, `BRAND_ASISTENTE`, `BRAND_ALERTAS` (con RK por defecto).
 
 ---
 
