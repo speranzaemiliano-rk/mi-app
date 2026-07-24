@@ -547,6 +547,69 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             }
         } catch (e) { pasos.push('recibidos-error: ' + (e.message || e)); }
 
+        // En la pantalla de Recibidos: setear el rango de fechas, consultar y leer la tabla.
+        let filasResultado = [];
+        try {
+            function _pad(n){ return (n < 10 ? '0' : '') + n; }
+            function _toAr(s){ var p = String(s || '').split('-'); return (p.length === 3) ? (p[2] + '/' + p[1] + '/' + p[0]) : ''; }
+            var hoy = new Date();
+            var hace30 = new Date(hoy.getTime() - 30 * 24 * 3600 * 1000);
+            var hastaAr = _toAr(req.query.hasta) || (_pad(hoy.getDate()) + '/' + _pad(hoy.getMonth() + 1) + '/' + hoy.getFullYear());
+            var desdeAr = _toAr(req.query.desde) || (_pad(hace30.getDate()) + '/' + _pad(hace30.getMonth() + 1) + '/' + hace30.getFullYear());
+            var rango = desdeAr + ' - ' + hastaAr;
+
+            // Buscar el input de fecha por su valor con formato "DD/MM/YYYY - DD/MM/YYYY".
+            var inputs = await target.locator('input[type="text"], input:not([type])').all();
+            var dateInput = null;
+            for (var k = 0; k < inputs.length; k++) {
+                var v = await inputs[k].inputValue().catch(function(){ return ''; });
+                if (/\d{2}\/\d{2}\/\d{4}\s*-\s*\d{2}\/\d{2}\/\d{4}/.test(v)) { dateInput = inputs[k]; break; }
+            }
+            if (dateInput) {
+                await dateInput.click().catch(function(){});
+                await dateInput.fill(rango).catch(function(){});
+                await dateInput.evaluate(function(el, val){ el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('blur', { bubbles: true })); }, rango).catch(function(){});
+                await target.keyboard.press('Escape').catch(function(){});
+                pasos.push('fechas: ' + rango);
+            } else {
+                pasos.push('no-encontre-input-fecha');
+            }
+
+            // Botón Consultar / Buscar.
+            var btnC = target.getByRole('button', { name: /consultar|buscar/i }).first();
+            if (!(await btnC.count())) btnC = target.locator('button:has-text("Consultar"), a:has-text("Consultar"), button:has-text("Buscar")').first();
+            if (await btnC.count()) {
+                await btnC.click({ timeout: 8000 }).catch(function(){});
+                await target.waitForTimeout(5000);
+                pasos.push('consulté');
+            } else {
+                pasos.push('no-encontre-boton-consultar');
+            }
+
+            // Ir a la pestaña Resultados si no se abrió sola.
+            var tabRes = target.getByText('Resultados', { exact: false }).first();
+            if (await tabRes.count()) { await tabRes.click().catch(function(){}); await target.waitForTimeout(2500); }
+
+            // Leer la tabla de resultados (crudo, para escribir el mapeo con datos reales).
+            filasResultado = await target.evaluate(function(){
+                var out = [];
+                var tablas = document.querySelectorAll('table');
+                var tabla = null;
+                for (var t = 0; t < tablas.length; t++) { if (tablas[t].querySelectorAll('tbody tr').length) { tabla = tablas[t]; break; } }
+                if (!tabla) return out;
+                var head = Array.prototype.map.call(tabla.querySelectorAll('thead th'), function(th){ return (th.innerText || '').trim(); });
+                out.push(head);
+                var trs = tabla.querySelectorAll('tbody tr');
+                for (var i = 0; i < trs.length && i < 60; i++) {
+                    var tds = trs[i].querySelectorAll('td'); var row = [];
+                    for (var j = 0; j < tds.length; j++) row.push((tds[j].innerText || '').trim());
+                    if (row.length) out.push(row);
+                }
+                return out;
+            }).catch(function(){ return []; });
+            pasos.push('filas leídas: ' + Math.max(0, filasResultado.length - 1));
+        } catch (e) { pasos.push('consulta-error: ' + (e.message || e)); }
+
         // Estado final (idealmente ya la pantalla de Recibidos con filtro de fechas + tabla).
         const shot = await target.screenshot({ fullPage: false }).catch(function(){ return null; });
         const info = await target.evaluate(function(){
@@ -563,6 +626,7 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             pasos: pasos,
             tablasEnPagina: info.tablas,
             textosVisibles: info.textos,
+            filasResultado: filasResultado,
             screenshot: shot ? ('data:image/png;base64,' + shot.toString('base64')) : null
         });
     } catch (e) {
