@@ -27,6 +27,29 @@ El sistema tiene una arquitectura razonable (los certificados ARCA viven en el b
 
 ---
 
+## 🔎 Auditoría 2026-07-24 (revisión completa + foco multiempresa)
+
+Revisión integral de cara a convertir el sistema en un producto usable por **varias empresas-cliente**. Ver también **`MULTIEMPRESA.md`** (modelo multiusuario, APIs compartidas vs propias, plan de white-label).
+
+**✅ Corregido en esta consolidación (código):**
+- **XSS almacenado en las tablas principales:** se escapó con `escHtml()` el texto libre (proveedor, concepto, descripción, rubro/subrubro, número) en las tablas de **Presupuestos** (`index.html:6725-6727`), **Facturas** (`14859-14861`), **Comprobantes/Documentos** (`17077-17079`), **Presupuestos por proveedor** (`12061`) y **Proveedores** (`15366`). Antes, un `editor` podía guardar un proveedor con `<img src=x onerror=...>` y el script corría en la sesión del superadmin (escalada de privilegios).
+  - ⚠️ **Falta una pasada COMPLETA:** `escHtml` se usa de forma inconsistente en el resto del archivo (~33k líneas). Quedan otros `innerHTML` con datos de usuario sin escapar por auditar/corregir.
+- **Higiene multiusuario en el navegador:** al **cambiar de usuario** en el mismo dispositivo o al **cerrar sesión**, se limpian el **historial del asistente** (`rk_chat_memoria`) y la **sesión de Spotify** (`rk_sp_*`) — antes quedaban en localStorage y el siguiente usuario los veía (`_limpiarDatosSensiblesDispositivo()`).
+
+**🔴/🟠 Confirmado pendiente (requiere pasos en consola / desarrollo):**
+- **C1 — Secretos legibles por todos:** `database.rules.json:25-28` (`global` con `.read: auth != null`). `global/config/appToken` y `global/config/geminiKey` los lee cualquier autenticado (incluso `lector`).
+- **C2 — Backend sin control de rol:** `functions/server.js:101-127`. Sin `APP_API_TOKEN` queda abierto (modo compat); con token, acepta cualquier idToken sin chequear rol. Endpoints sensibles sin rol: `/afip`, `/whatsapp/send`, `/gemini`, `/ia/groq`, `/belvo/*`, `/prometeo/*`.
+- **A1 — Sin aislamiento entre empresas:** `database.rules.json:20-23` (`empresas` con `.read: auth != null`). Cualquier logueado lee TODAS las empresas; un `editor` escribe cualquiera. **Es el bloqueante principal para vender a otras empresas como clientes separados.** Ver plan en `MULTIEMPRESA.md` §6.B.
+- **A2 — `temp-pdf` de lectura pública:** `database.rules.json:40-44` (`.read: true`). Quien adivine un `docId` lee PDFs sin login. (Nota: se usa para compartir PDFs por link público; cerrar esto rompe esa función — decidir el trade-off.)
+- **M1 — `solicitudesBorrado` escribible por cualquier autenticado** (`database.rules.json:30-33`).
+- **M2 — CORS abierto por defecto** si falta `ALLOWED_ORIGINS` (`functions/server.js:90-91`).
+- **M3 — Token por query string** (`functions/server.js:105`, `?token=`) puede filtrarse en logs/Referer.
+- **M4 — Enumeración de roles/usuarios:** `roles` y `usuarios` con `.read: auth != null`.
+
+**Cadena de ataque más grave:** XSS (nombre de proveedor) → corre en la sesión del superadmin → con su idToken llama a `/usuarios/rol` y se auto-promueve. Mitigado en parte al escapar las tablas principales; se cierra del todo completando la pasada de XSS + control de rol en el backend.
+
+---
+
 ## ✅ Checklist de despliegue de seguridad (pasos que hace el administrador en su consola)
 
 Estos pasos **no se pueden automatizar desde el código** — los tenés que hacer vos en las consolas correspondientes:
