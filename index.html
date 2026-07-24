@@ -3729,13 +3729,22 @@
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
                             <button id="provPendArcaBtn" class="btn btn-gold btn-sm" onclick="setProvPendVista('arca')" title="Facturas oficiales (ARCA) con saldo pendiente">🧾 ARCA</button>
                             <button id="provPendXBtn" class="btn btn-outline btn-sm" onclick="setProvPendVista('x')" title="Comprobantes no oficiales (X) con saldo pendiente">📄 Comprobantes X</button>
+                            <button id="provPendAmbosBtn" class="btn btn-outline btn-sm" onclick="setProvPendVista('ambos')" title="ARCA + Comprobantes X juntos">🔀 Ambos</button>
                         </div>
+                    </div>
+                    <div class="search-row">
+                        <input type="text" class="search-input" id="provPendBuscador" oninput="renderProvPendientes()" placeholder="Buscar por proveedor o número…">
+                        <label style="font-size:12px; color:var(--text-3); white-space:nowrap;">Desde:</label>
+                        <input type="date" id="provPendDesde" onchange="renderProvPendientes()" style="padding:7px 10px; font-size:12px; width:auto;">
+                        <label style="font-size:12px; color:var(--text-3); white-space:nowrap;">Hasta:</label>
+                        <input type="date" id="provPendHasta" onchange="renderProvPendientes()" style="padding:7px 10px; font-size:12px; width:auto;">
+                        <button class="btn btn-outline btn-sm" onclick="limpiarFiltrosProvPend()" title="Quitar los filtros">✕ Limpiar</button>
                     </div>
                     <div class="table-wrap">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Fecha</th><th>Proveedor</th><th>Número</th>
+                                    <th>Fecha</th><th>Tipo</th><th>Proveedor</th><th>Número</th>
                                     <th style="text-align:right;">Importe</th>
                                     <th style="text-align:right;">Pagado</th>
                                     <th style="text-align:right;">Saldo</th>
@@ -12129,44 +12138,66 @@
         renderProvPendientes();
     }
 
-    // ── Comprobantes pendientes de pago (en Proveedores): ARCA (facturas oficiales) o X (documentos) ──
+    // ── Comprobantes pendientes de pago (en Proveedores): ARCA (facturas oficiales), X (documentos) o ambos ──
     var _provPendVista = 'arca';
     function setProvPendVista(v) {
-        _provPendVista = (v === 'x') ? 'x' : 'arca';
-        var ba = document.getElementById('provPendArcaBtn'), bx = document.getElementById('provPendXBtn');
-        if (ba) ba.className = 'btn btn-sm ' + (_provPendVista === 'arca' ? 'btn-gold' : 'btn-outline');
-        if (bx) bx.className = 'btn btn-sm ' + (_provPendVista === 'x' ? 'btn-gold' : 'btn-outline');
+        _provPendVista = (v === 'x') ? 'x' : (v === 'ambos') ? 'ambos' : 'arca';
+        var ba = document.getElementById('provPendArcaBtn'), bx = document.getElementById('provPendXBtn'), bam = document.getElementById('provPendAmbosBtn');
+        if (ba)  ba.className  = 'btn btn-sm ' + (_provPendVista === 'arca'  ? 'btn-gold' : 'btn-outline');
+        if (bx)  bx.className  = 'btn btn-sm ' + (_provPendVista === 'x'     ? 'btn-gold' : 'btn-outline');
+        if (bam) bam.className = 'btn btn-sm ' + (_provPendVista === 'ambos' ? 'btn-gold' : 'btn-outline');
+        renderProvPendientes();
+    }
+    function limpiarFiltrosProvPend() {
+        ['provPendBuscador','provPendDesde','provPendHasta'].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ''; });
         renderProvPendientes();
     }
     function renderProvPendientes() {
         var tbody = document.getElementById('provPendientesBody');
         if (!tbody) return;
+        var busq  = ((document.getElementById('provPendBuscador') || {}).value || '').toLowerCase().trim();
+        var desde = (document.getElementById('provPendDesde') || {}).value || '';
+        var hasta = (document.getElementById('provPendHasta') || {}).value || '';
         var rows = [];
-        if (_provPendVista === 'arca') {
+        var addFact = function() {
             (facturas || []).forEach(function(f, idx) {
                 var imp = f.importe || 0, pag = f.pagado || 0;
                 if (imp <= 0 || pag >= imp) return;
-                rows.push({ fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
+                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: imp - pag,
                     mon: f.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('fact'," + idx + ")" });
             });
-        } else {
+        };
+        var addDocs = function() {
             (documentos || []).forEach(function(d) {
                 var imp = d.importe || 0, pag = d.pagado || 0;
                 if (imp <= 0 || pag >= imp) return;
-                rows.push({ fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: imp - pag,
+                rows.push({ tipo: 'X', fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: imp - pag,
                     mon: d.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('doc','" + d.id + "')" });
             });
-        }
+        };
+        if (_provPendVista === 'arca') addFact();
+        else if (_provPendVista === 'x') addDocs();
+        else { addFact(); addDocs(); }
+        // Filtros: proveedor/número y rango de fechas.
+        rows = rows.filter(function(r) {
+            if (busq && ((r.prov || '') + ' ' + (r.num || '')).toLowerCase().indexOf(busq) === -1) return false;
+            if (desde && (r.fecha || '') < desde) return false;
+            if (hasta && (r.fecha || '') > hasta) return false;
+            return true;
+        });
         rows.sort(function(a, b) { return (a.fecha || '').localeCompare(b.fecha || ''); });
         if (!rows.length) {
-            var vacio = _provPendVista === 'arca' ? 'No hay facturas ARCA pendientes de pago.' : 'No hay comprobantes X pendientes de pago.';
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">' + vacio + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">No hay comprobantes pendientes que coincidan con el filtro.</td></tr>';
             return;
         }
         var totalSaldo = rows.reduce(function(s, r) { return s + (r.mon === '$' ? r.saldo : 0); }, 0);
         var html = rows.map(function(r) {
+            var pill = r.tipo === 'ARCA'
+                ? '<span class="pill" style="background:#e6f4ea;color:#137333;">ARCA</span>'
+                : '<span class="pill" style="background:#fce8e6;color:#c5221f;">X</span>';
             return '<tr>'
                 + '<td>' + (r.fecha ? formatearFecha(r.fecha) : '—') + '</td>'
+                + '<td>' + pill + '</td>'
                 + '<td><strong>' + escHtml(r.prov || '—') + '</strong></td>'
                 + '<td>' + escHtml(r.num || '—') + '</td>'
                 + '<td style="text-align:right;">' + r.mon + r.imp.toLocaleString('es-AR') + '</td>'
@@ -12175,7 +12206,7 @@
                 + '<td><button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Pagar</button></td>'
                 + '</tr>';
         }).join('');
-        html += '<tr><td colspan="5" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
+        html += '<tr><td colspan="6" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
              + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">$' + Math.round(totalSaldo).toLocaleString('es-AR') + '</td><td></td></tr>';
         tbody.innerHTML = html;
     }
