@@ -31427,10 +31427,19 @@
     </div>
     <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
       <button class="rkm-preset" onclick="rkMusicSpotify()" style="background:rgba(29,185,84,.18);color:#1ed760;border-color:rgba(29,185,84,.4);">🟢 Spotify</button>
+      <button class="rkm-preset" onclick="rkMusicYouTube()" style="background:rgba(255,0,0,.16);color:#ff5a5a;border-color:rgba(255,0,0,.4);">🔴 YouTube</button>
       <button class="rkm-preset" onclick="rkMusicPreset('lofi')">🎧 Lofi</button>
       <button class="rkm-preset" onclick="rkMusicPreset('jazz')">🎷 Jazz</button>
     </div>
     <div id="rk-music-frame" style="min-height:20px;"></div>
+    <div id="rk-yt-panel" style="display:none; margin-top:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
+      <div style="font-size:11px; color:#9aa0aa; margin-bottom:5px;">🔴 YouTube · buscar videos</div>
+      <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <input id="rk-yt-q" placeholder="Buscar en YouTube…" onkeydown="if(event.key==='Enter')rkYouTubeBuscar()" style="flex:1; min-width:0; padding:8px 10px; border-radius:8px; font-size:12px; border:1px solid rgba(255,255,255,.15); background:#0e0f13; color:#e8eaed;">
+        <button class="rkm-btn" style="background:#FF0000;" onclick="rkYouTubeBuscar()">🔍</button>
+      </div>
+      <div id="rk-yt-results" style="max-height:180px; overflow-y:auto; margin-bottom:6px;"></div>
+    </div>
     <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:8px;">
       <div id="rk-sp-connect" style="display:none;">
         <div style="font-size:11px; color:#9aa0aa; margin-bottom:5px;">🟢 Tu Spotify (buscar + tus me gusta)</div>
@@ -31496,6 +31505,73 @@
     var frame = document.getElementById('rk-music-frame');
     if (frame) frame.innerHTML = '';
     _rkMusicRender({ src: RK_SPOTIFY_DEFAULT, tipo: 'spotify' });
+  }
+
+  // ── YouTube: mostrar el buscador y cargar una radio de música por defecto ──
+  var RK_YT_DEFAULT = 'https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1'; // lofi hip hop radio (stream estable)
+  function rkMusicYouTube() {
+    var p = document.getElementById('rk-yt-panel');
+    if (p) p.style.display = '';
+    _rkMusicRender({ src: RK_YT_DEFAULT, tipo: 'youtube' });
+    var q = document.getElementById('rk-yt-q'); if (q) q.focus();
+  }
+  // La búsqueda de YouTube usa la YouTube Data API v3 (necesita una API key de Google).
+  // Reusa la key de Gemini si esa misma key tiene habilitada la YouTube Data API v3.
+  var _ytKeyCache = null;
+  async function _ytGetKey() {
+    if (_ytKeyCache) return _ytKeyCache;
+    var ls = (localStorage.getItem('rk_youtube_key') || '').trim();
+    if (ls) { _ytKeyCache = ls; return ls; }
+    try {
+      if (typeof db !== 'undefined' && db) {
+        var snap = await db.ref('global/config/youtubeKey').once('value');
+        var v = snap.val();
+        if (v) { _ytKeyCache = String(v).trim(); return _ytKeyCache; }
+      }
+    } catch (e) {}
+    var gk = (typeof getGeminiKey === 'function') ? getGeminiKey() : '';
+    if (gk) { _ytKeyCache = gk; return gk; }
+    return '';
+  }
+  function _ytMsgSinKey(detalle) {
+    return '<div style="font-size:11px;color:#F59E9E;padding:6px;line-height:1.5;">⚠️ La búsqueda de YouTube necesita una API key de Google con <strong>YouTube Data API v3</strong> habilitada (es gratis).<br>En Google Cloud Console habilitá "YouTube Data API v3", creá una API key y guardala en <strong>Config → Gemini</strong> (podés usar la misma key de Gemini si le habilitás esa API).'
+      + (detalle ? '<br><small style="opacity:.7;">(' + escHtml(detalle) + ')</small>' : '') + '</div>';
+  }
+  async function rkYouTubeBuscar() {
+    var q = (document.getElementById('rk-yt-q') || {}).value || '';
+    if (!q.trim()) return;
+    var box = document.getElementById('rk-yt-results');
+    var p = document.getElementById('rk-yt-panel'); if (p) p.style.display = '';
+    if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Buscando en YouTube…</div>';
+    var key = await _ytGetKey();
+    if (!key) { if (box) box.innerHTML = _ytMsgSinKey(); return; }
+    try {
+      var url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=15&q='
+        + encodeURIComponent(q.trim()) + '&key=' + encodeURIComponent(key);
+      var r = await fetch(url);
+      var j = await r.json().catch(function(){ return null; });
+      if (!r.ok) {
+        var m = (j && j.error && j.error.message) || ('error ' + r.status);
+        if (r.status === 403) { if (box) box.innerHTML = _ytMsgSinKey(m); return; }
+        if (box) box.innerHTML = '<div style="font-size:11px;color:#F59E9E;padding:6px;">⚠️ YouTube: ' + escHtml(m) + '</div>';
+        return;
+      }
+      var items = ((j && j.items) || []).filter(function(it){ return it && it.id && it.id.videoId; });
+      if (!items.length) { if (box) box.innerHTML = '<div style="font-size:11px;color:#9aa0aa;padding:6px;">Sin resultados.</div>'; return; }
+      box.innerHTML = items.map(function(it){
+        var s = it.snippet || {};
+        var thumb = (s.thumbnails && s.thumbnails.default && s.thumbnails.default.url) || '';
+        var vid = it.id.videoId;
+        return '<div onclick="rkYouTubePlay(\'' + vid + '\')" style="padding:6px 8px;cursor:pointer;border-radius:6px;display:flex;gap:8px;align-items:center;font-size:12px;" onmouseover="this.style.background=\'rgba(255,255,255,.06)\'" onmouseout="this.style.background=\'none\'">'
+          + (thumb ? '<img src="' + thumb + '" width="44" height="33" style="border-radius:4px;flex:0 0 auto;object-fit:cover;">' : '')
+          + '<span style="min-width:0;"><strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(s.title || '') + '</strong><span style="opacity:.7;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(s.channelTitle || '') + '</span></span></div>';
+      }).join('');
+    } catch (e) {
+      if (box) box.innerHTML = '<div style="font-size:11px;color:#F59E9E;padding:6px;">No pude contactar a YouTube (revisá tu conexión).</div>';
+    }
+  }
+  function rkYouTubePlay(id) {
+    _rkMusicRender({ src: 'https://www.youtube.com/embed/' + id + '?autoplay=1', tipo: 'youtube' });
   }
   function _rkMusicEmbed(url) {
     url = (url || '').trim();
