@@ -3011,6 +3011,10 @@
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                           Editar empresa
                         </div>
+                        <div id="ddAccesoEmpresa" class="hp-dditem" onclick="abrirAccesoEmpresa();hpCloseDd()" style="display:none;">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                          Accesos (usuarios)
+                        </div>
                         <div id="ddElimEmpresa" class="hp-dditem" onclick="eliminarEmpresa();hpCloseDd()" style="display:none;color:#D93025;">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                           Eliminar empresa
@@ -6181,7 +6185,7 @@
             }
             empresas = [];
             Object.keys(val).forEach(eid => {
-                const e = { id: eid, nombre: val[eid].nombre || eid, datos: val[eid].datos || {}, proyectos: [] };
+                const e = { id: eid, nombre: val[eid].nombre || eid, datos: val[eid].datos || {}, usuariosAutorizados: val[eid].usuariosAutorizados || null, proyectos: [] };
                 const proys = val[eid].proyectos || {};
                 Object.keys(proys).forEach(pid => {
                     e.proyectos.push({ id: pid, nombre: (proys[pid] && proys[pid].nombre) || pid, datos: (proys[pid] && proys[pid].datos) || {} });
@@ -6189,6 +6193,12 @@
                 if (e.proyectos.length === 0) e.proyectos.push({ id: 'proy_default', nombre: 'Proyecto 1' });
                 empresas.push(e);
             });
+            // Aislamiento por empresa (etapa 1, retrocompatible): cada usuario ve solo las empresas
+            // donde está autorizado. Una empresa SIN lista de autorizados la ve todo el mundo (como
+            // hasta hoy). El superadmin ve todas. Si el filtro deja afuera la empresa activa, se
+            // reelige la primera visible (no se queda "colgado" en una que ya no puede ver).
+            empresas = empresas.filter(_empresaVisiblePara);
+            if (empresaActual && !empresas.some(e => e.id === empresaActual.id)) { empresaActual = null; proyectoActual = null; }
             const obOv = document.getElementById('onboardingOverlay');
             const onboardingVisible = obOv && !obOv.classList.contains('app-hidden');
 
@@ -12135,7 +12145,7 @@
         if (elU) elU.style.display = esSuperAdmin ? '' : 'none';
         if (elS) elS.style.display = esAdmin ? '' : 'none';
         // Eliminar empresa/proyecto: solo superadmin
-        ['obBtnElimEmpresa','obBtnElimProyecto','ddElimEmpresa','ddElimProyecto'].forEach(id => {
+        ['obBtnElimEmpresa','obBtnElimProyecto','ddElimEmpresa','ddElimProyecto','ddAccesoEmpresa'].forEach(id => {
             const el = document.getElementById(id); if (el) el.style.display = esSuperAdmin ? '' : 'none';
         });
         // Remuneraciones: sección sensible, solo Super Administrador
@@ -15978,6 +15988,74 @@
 
     function cerrarModalEmpresa() {
         document.getElementById('modalEmpresa').classList.remove('active');
+    }
+
+    // ── Aislamiento por empresa (etapa 1): quién puede ver cada empresa ──
+    // Retrocompatible: una empresa SIN lista de autorizados la ve todo el mundo (como hasta hoy).
+    // El superadmin siempre ve y administra todas. La seguridad real llega con las reglas de
+    // Firebase (etapa 2); esto es el control de acceso en la interfaz + el modelo de datos.
+    function _empresaVisiblePara(e) {
+        if (typeof esSuperAdmin !== 'undefined' && esSuperAdmin) return true;
+        var ua = e && e.usuariosAutorizados;
+        if (!ua || Object.keys(ua).length === 0) return true; // sin lista → abierta
+        var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
+        return !!(uid && ua[uid]);
+    }
+
+    var _accesoEmpId = null;
+    function abrirAccesoEmpresa() {
+        if (!esSuperAdmin) { alert('Solo el Super Administrador puede gestionar los accesos por empresa.'); return; }
+        if (!empresaActual) { alert('Elegí primero una empresa.'); return; }
+        _accesoEmpId = empresaActual.id;
+        var titulo = document.getElementById('accesoEmpTitulo');
+        if (titulo) titulo.textContent = empresaActual.nombre || '';
+        var cont = document.getElementById('accesoEmpLista');
+        if (cont) cont.innerHTML = '<div style="color:#888;font-size:13px;padding:10px;">Cargando usuarios…</div>';
+        document.getElementById('modalAccesoEmpresa').classList.add('active');
+        Promise.all([
+            REF_USUARIOS.once('value'),
+            REF_EMPRESAS.child(_accesoEmpId + '/usuariosAutorizados').once('value'),
+            REF_ROLES.once('value')
+        ]).then(function(snaps) {
+            var usuarios = snaps[0].val() || {};
+            var autorizados = snaps[1].val() || {};
+            var roles = snaps[2].val() || {};
+            var uids = Object.keys(usuarios);
+            if (!uids.length) { cont.innerHTML = '<div style="color:#888;font-size:13px;padding:10px;">No hay usuarios registrados todavía.</div>'; return; }
+            var hayLista = Object.keys(autorizados).length > 0;
+            var html = '<div style="font-size:12px;color:#5F6368;margin-bottom:10px;line-height:1.5;">'
+                + (hayLista
+                    ? 'Solo los usuarios marcados pueden ver esta empresa.'
+                    : '⚠️ Con nadie marcado, esta empresa la ven <strong>todos</strong> los usuarios (abierta). Marcá usuarios para restringirla.')
+                + ' El Super Administrador siempre tiene acceso.</div>';
+            uids.forEach(function(uid) {
+                var u = usuarios[uid] || {};
+                var rol = roles[uid] || 'sin rol';
+                var esSuper = rol === 'superadmin';
+                var checked = autorizados[uid] ? 'checked' : '';
+                html += '<label style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #eee;font-size:13px;cursor:pointer;">'
+                    + '<input type="checkbox" class="accesoEmpChk" data-uid="' + uid + '" ' + checked + (esSuper ? ' disabled' : '') + '>'
+                    + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(u.email || uid) + '</span>'
+                    + '<span style="font-size:10px;color:#999;text-transform:uppercase;white-space:nowrap;">' + escHtml(esSuper ? 'superadmin (siempre)' : rol) + '</span>'
+                    + '</label>';
+            });
+            cont.innerHTML = html;
+        }).catch(function(e) {
+            cont.innerHTML = '<div style="color:#D93025;font-size:13px;padding:10px;">Error al cargar usuarios: ' + escHtml(e.message || String(e)) + '</div>';
+        });
+    }
+    function cerrarAccesoEmpresa() { document.getElementById('modalAccesoEmpresa').classList.remove('active'); }
+    function guardarAccesoEmpresa() {
+        if (!esSuperAdmin || !_accesoEmpId) return;
+        var autorizados = {};
+        document.querySelectorAll('.accesoEmpChk').forEach(function(c) {
+            if (c.checked && !c.disabled) autorizados[c.getAttribute('data-uid')] = true;
+        });
+        var ref = REF_EMPRESAS.child(_accesoEmpId + '/usuariosAutorizados');
+        // Sin nadie marcado → borrar la lista (empresa abierta, retrocompatible).
+        var op = Object.keys(autorizados).length ? ref.set(autorizados) : ref.remove();
+        op.then(function() { cerrarAccesoEmpresa(); initEmpresas(); alert('Accesos actualizados.'); })
+          .catch(function(e) { alert('No se pudo guardar: ' + (e.message || e)); });
     }
 
     function verificarAdminEmpresa() {
@@ -28229,6 +28307,22 @@
 </div>
 
 <!-- ── MODAL: EMPRESA ── -->
+<div class="modal" id="modalAccesoEmpresa">
+    <div class="modal-box" style="max-width:520px;">
+        <div class="modal-head">
+            <h2>👥 Accesos — <span id="accesoEmpTitulo"></span></h2>
+            <button class="modal-close" onclick="cerrarAccesoEmpresa()">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="accesoEmpLista" style="max-height:50vh;overflow-y:auto;margin-bottom:14px;"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="cerrarAccesoEmpresa()">Cancelar</button>
+                <button type="button" class="btn btn-primary" onclick="guardarAccesoEmpresa()">💾 Guardar accesos</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal" id="modalEmpresa">
     <div class="modal-box modal-box-wide">
         <div class="modal-head">

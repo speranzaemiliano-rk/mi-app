@@ -96,13 +96,34 @@ Para que la empresa X no vea los datos de la empresa Y hay que cambiar el modelo
 
 > Estos cambios de reglas hay que **publicarlos en la consola de Firebase** y probarlos con cuidado, porque **cambian quién ve qué**. No se aplican solos con un push al repo. Conviene hacerlo en una etapa dedicada, con backup y con un usuario de prueba.
 
+### Estado del aislamiento por empresa
+
+**✅ Etapa 1 — Infraestructura en la app (hecha):**
+- Modelo de datos: `empresas/<id>/usuariosAutorizados/<uid> = true`.
+- UI para el superadmin: menú de empresa → **"Accesos (usuarios)"** (`abrirAccesoEmpresa`), donde marca qué usuarios pueden ver la empresa activa. El superadmin siempre tiene acceso.
+- Filtro en la app: `initEmpresas()` muestra a cada usuario solo las empresas donde está autorizado (`_empresaVisiblePara`).
+- **Retrocompatible:** una empresa **sin** lista de autorizados la ven **todos** (como hasta hoy). Recién cuando el superadmin marca usuarios en una empresa, esa empresa queda restringida a ellos. Así **no se deja a nadie afuera** por accidente.
+- ⚠️ **Es control de acceso en la interfaz, no seguridad real todavía.** Las reglas de Firebase siguen abiertas: un usuario técnico podría leer otras empresas desde la consola del navegador. La barrera real llega en la etapa 2. Además, las **vistas cruza-empresa** (agenda de Vencimientos, consolidado) todavía muestran todas las empresas.
+
+**⏳ Etapa 2 — Reglas de Firebase (pendiente, requiere consola + prueba):**
+Reemplazar en `database.rules.json` el nodo `empresas` para que la lectura/escritura sea por empresa. **Clave:** hay que **sacar el `.read` a nivel `empresas`** (si queda, habilita todo el árbol) y ponerlo a nivel `$empId`:
+```json
+"empresas": {
+  "$empId": {
+    ".read": "root.child('roles').child(auth.uid).val() === 'superadmin' || !data.child('usuariosAutorizados').exists() || data.child('usuariosAutorizados').child(auth.uid).val() === true",
+    ".write": "root.child('roles').child(auth.uid).val() === 'superadmin' || ((root.child('roles').child(auth.uid).val() === 'admin' || root.child('roles').child(auth.uid).val() === 'editor') && (!data.child('usuariosAutorizados').exists() || data.child('usuariosAutorizados').child(auth.uid).val() === true))"
+  }
+}
+```
+Igual criterio (retrocompatible): empresa sin `usuariosAutorizados` → la ven todos; con lista → solo los de la lista + superadmin. **Antes de publicar:** backup del árbol, confirmar que tu superadmin esté OK, y probar con un usuario de prueba que (a) ve las empresas donde está y (b) NO ve las restringidas. Para cerrar del todo, mover también los datos hoy globales (proveedores/grupos/vencimientos) a por-empresa o restringir su lectura.
+
 ---
 
 ## 7. Roadmap sugerido (en orden)
 
 1. **(Hecho)** Higiene multiusuario en el navegador + XSS en tablas principales.
 2. **Cerrar el backend:** ✅ control de rol en endpoints sensibles agregado en código. **Falta (vos, en Railway):** setear `APP_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_BASE64` y `ALLOWED_ORIGINS`, y redeploy — sin esos pasos el control queda en modo compatibilidad (no bloquea).
-3. **Aislamiento por empresa** (multi-tenant real): lista de usuarios por empresa + reglas de Firebase por empresa.
+3. **Aislamiento por empresa** (multi-tenant real): ✅ **Etapa 1 hecha** (asignar usuarios por empresa + filtro en la app, retrocompatible). ⏳ **Etapa 2 pendiente:** publicar las reglas de Firebase por empresa (ver arriba) con backup y usuario de prueba.
 4. **Parametrizar la marca** (config `BRAND`) para poder instalar el producto para otra empresa sin tocar el código.
 5. **Abstraer región/fisco** (para países/regímenes distintos a Argentina/ARCA).
 
