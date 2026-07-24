@@ -610,6 +610,39 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             pasos.push('filas leídas: ' + Math.max(0, filasResultado.length - 1));
         } catch (e) { pasos.push('consulta-error: ' + (e.message || e)); }
 
+        // Mapear las filas a comprobantes recibidos (parte ARCA), por nombre de columna.
+        let comprobantes = [];
+        try {
+            var header = (filasResultado[0] || []).map(function(h){ return String(h || '').toLowerCase(); });
+            function colIdx(names){ for (var n = 0; n < names.length; n++) for (var h = 0; h < header.length; h++) if (header[h].indexOf(names[n]) !== -1) return h; return -1; }
+            var iF = colIdx(['fecha']), iT = colIdx(['tipo']), iN = colIdx(['número', 'numero', 'nro']),
+                iE = colIdx(['emisor', 'denomin', 'proveedor', 'razón', 'razon']),
+                iTot = colIdx(['imp. total', 'total', 'importe']),
+                iCuit = colIdx(['cuit', 'doc. emisor', 'documento', 'nro. doc']),
+                iNeto = colIdx(['neto grav', 'neto']), iIva = colIdx(['iva']), iPv = colIdx(['punto de venta', 'pto']);
+            function parseNum(s){ s = String(s || '').replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.'); var n = parseFloat(s); return isNaN(n) ? 0 : n; }
+            function toIso(s){ var p = String(s || '').trim().split('/'); return (p.length === 3) ? (p[2] + '-' + p[1] + '-' + p[0]) : String(s || ''); }
+            for (var r = 1; r < filasResultado.length; r++) {
+                var row = filasResultado[r]; if (!row || !row.length) continue;
+                var numFull = iN >= 0 ? String(row[iN] || '').replace(/\s+/g, '') : '';
+                var partes = numFull.split('-');
+                var ptoVta = iPv >= 0 ? String(row[iPv] || '').trim() : (partes.length > 1 ? partes[0] : '');
+                var numero = partes.length > 1 ? partes.slice(1).join('-') : numFull;
+                comprobantes.push({
+                    fecha: iF >= 0 ? toIso(row[iF]) : '',
+                    tipo: iT >= 0 ? String(row[iT] || '').trim() : '',
+                    ptoVta: ptoVta,
+                    numero: numero,
+                    proveedor: iE >= 0 ? String(row[iE] || '').trim() : '',
+                    cuit: iCuit >= 0 ? String(row[iCuit] || '').replace(/\D/g, '') : '',
+                    netoGravado: iNeto >= 0 ? parseNum(row[iNeto]) : 0,
+                    iva: iIva >= 0 ? parseNum(row[iIva]) : 0,
+                    total: iTot >= 0 ? parseNum(row[iTot]) : 0,
+                    importadoRobot: true
+                });
+            }
+        } catch (e) { pasos.push('mapeo-error: ' + (e.message || e)); }
+
         // Estado final (idealmente ya la pantalla de Recibidos con filtro de fechas + tabla).
         const shot = await target.screenshot({ fullPage: false }).catch(function(){ return null; });
         const info = await target.evaluate(function(){
@@ -627,6 +660,7 @@ app.get('/afip/robot/recibidos-test', async (req, res) => {
             tablasEnPagina: info.tablas,
             textosVisibles: info.textos,
             filasResultado: filasResultado,
+            comprobantes: comprobantes,
             screenshot: shot ? ('data:image/png;base64,' + shot.toString('base64')) : null
         });
     } catch (e) {
