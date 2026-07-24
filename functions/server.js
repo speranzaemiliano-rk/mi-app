@@ -91,6 +91,12 @@ const _allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(funct
 app.use(cors({ origin: _allowedOrigins.length ? _allowedOrigins : true }));
 app.use(express.json({ limit: '20mb' }));
 
+// Marca (white-label): configurable por variables de entorno, con RK por defecto.
+// Para otro cliente, seteá BRAND_NOMBRE / BRAND_ASISTENTE / BRAND_ALERTAS en Railway.
+const BRAND_NOMBRE    = process.env.BRAND_NOMBRE    || 'RK · Gestión Multiempresa';
+const BRAND_ASISTENTE = process.env.BRAND_ASISTENTE || 'Asistente RK';
+const BRAND_ALERTAS   = process.env.BRAND_ALERTAS   || 'RK Alertas';
+
 // Autenticación por token compartido (X-App-Token / ?token=).
 // Modo compatibilidad: mientras no se defina APP_API_TOKEN en el entorno, el
 // backend sigue aceptando pedidos sin autenticar (como hasta ahora), pero avisa
@@ -1155,10 +1161,10 @@ async function whatsappEnviarMensaje(to, texto) {
 async function whatsappGenerarRespuesta(textoUsuario) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return '⚠️ El asistente todavía no está configurado del lado del servidor (falta GEMINI_API_KEY en Railway).';
-    const systemPrompt = 'Sos el Asistente RK, el mismo asistente de la app "RK · Gestión Multiempresa", ahora respondiendo por WhatsApp. '
+    const systemPrompt = 'Sos el ' + BRAND_ASISTENTE + ', el mismo asistente de la app "' + BRAND_NOMBRE + '", ahora respondiendo por WhatsApp. '
         + 'Respondé en español argentino, de forma clara y breve (es un chat de WhatsApp: evitá formato markdown pesado, tablas o listas largas). '
         + 'Si te preguntan algo puntual sobre los datos cargados en la app (facturas, proveedores, aportantes, saldos, etc.) explicá que '
-        + 'por WhatsApp todavía no tenés acceso a esos datos en tiempo real, y sugerí consultarlo desde el Asistente RK dentro de la app. '
+        + 'por WhatsApp todavía no tenés acceso a esos datos en tiempo real, y sugerí consultarlo desde el ' + BRAND_ASISTENTE + ' dentro de la app. '
         + 'Para cualquier otra pregunta (general, cálculos, consejos, etc.) respondé con solvencia, como asistente de uso general.';
     try {
         const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
@@ -1262,10 +1268,10 @@ function mailBotConfigurado() {
 async function mailGenerarRespuesta(asunto, cuerpo) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return 'El asistente todavía no está configurado del lado del servidor (falta GEMINI_API_KEY en Railway).';
-    const systemPrompt = 'Sos el Asistente RK, el mismo asistente de la app "RK · Gestión Multiempresa", respondiendo por email. '
+    const systemPrompt = 'Sos el ' + BRAND_ASISTENTE + ', el mismo asistente de la app "' + BRAND_NOMBRE + '", respondiendo por email. '
         + 'Respondé en español argentino, claro y cordial, con el largo que amerite la consulta. Es un mail, podés usar párrafos pero evitá markdown pesado. '
-        + 'Si te preguntan por datos puntuales cargados en la app (facturas, proveedores, aportantes, saldos, etc.) aclarás que por mail todavía no tenés acceso a esos datos en tiempo real, y sugerís consultarlo desde el Asistente RK dentro de la app. '
-        + 'Para cualquier otra consulta (general, cálculos, redacción, consejos) respondé con solvencia. Cerrá el mail con una firma breve tipo "— Asistente RK".';
+        + 'Si te preguntan por datos puntuales cargados en la app (facturas, proveedores, aportantes, saldos, etc.) aclarás que por mail todavía no tenés acceso a esos datos en tiempo real, y sugerís consultarlo desde el ' + BRAND_ASISTENTE + ' dentro de la app. '
+        + 'Para cualquier otra consulta (general, cálculos, redacción, consejos) respondé con solvencia. Cerrá el mail con una firma breve tipo "— ' + BRAND_ASISTENTE + '".';
     const entrada = 'Asunto: ' + (asunto || '(sin asunto)') + '\n\nMensaje:\n' + (cuerpo || '');
     try {
         const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
@@ -1280,9 +1286,9 @@ async function mailGenerarRespuesta(asunto, cuerpo) {
         const data = await resp.json().catch(() => ({}));
         const texto = data.candidates && data.candidates[0] && data.candidates[0].content &&
             data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
-        return (texto && texto.trim()) || 'No pude generar una respuesta, probá de nuevo en un momento.\n\n— Asistente RK';
+        return (texto && texto.trim()) || ('No pude generar una respuesta, probá de nuevo en un momento.\n\n— ' + BRAND_ASISTENTE);
     } catch (e) {
-        return 'Tuve un problema al procesar tu consulta (' + (e.message || e) + '). Probá de nuevo más tarde.\n\n— Asistente RK';
+        return 'Tuve un problema al procesar tu consulta (' + (e.message || e) + '). Probá de nuevo más tarde.\n\n— ' + BRAND_ASISTENTE;
     }
 }
 
@@ -1327,7 +1333,7 @@ async function mailBotRevisar() {
                 const respuesta = await mailGenerarRespuesta(asunto, cuerpo);
 
                 await transporter.sendMail({
-                    from: '"Asistente RK" <' + user + '>',
+                    from: '"' + BRAND_ASISTENTE + '" <' + user + '>',
                     to: from,
                     subject: /^re:/i.test(asunto) ? asunto : ('Re: ' + (asunto || 'tu consulta')),
                     text: respuesta,
@@ -1452,9 +1458,9 @@ async function revisarVencimientos() {
                     'vence el ' + v.fechaVencimiento + ' (en ' + diasRestantes + ' día(s)).\n' +
                     (v.monto ? 'Monto: ' + (v.moneda || 'ARS') + ' ' + v.monto + '\n' : '') +
                     '\nEmpresa: ' + (emp.nombre || v.empresaId || 'sin asignar') +
-                    '\n\n— Agenda de Vencimientos, RK Gestión Multiempresa';
+                    '\n\n— Agenda de Vencimientos, ' + BRAND_NOMBRE;
 
-                await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to: destino, subject: asunto, text: cuerpo });
+                await transporter.sendMail({ from: '"' + BRAND_ALERTAS + '" <' + user + '>', to: destino, subject: asunto, text: cuerpo });
                 await admin.database()
                     .ref('global/vencimientosServicios/' + vencId + '/recordatorios/' + dia)
                     .set(true);
@@ -1568,9 +1574,9 @@ async function revisarAlquileres() {
                             (monto ? 'Monto: ' + monSym + Math.round(monto) + '\n' : '') +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
-                            '\n\n— RK Gestión Multiempresa';
+                            '\n\n— ' + BRAND_NOMBRE;
 
-                        await transporter.sendMail({ from: '"RK Alertas" <' + user + '>', to, subject: asunto, text: cuerpo });
+                        await transporter.sendMail({ from: '"' + BRAND_ALERTAS + '" <' + user + '>', to, subject: asunto, text: cuerpo });
                         await admin.database()
                             .ref('empresas/' + eid + '/proyectos/' + pid + '/alquileres/' + k + '/recordatoriosPago/' + periodo + '/' + d)
                             .set(true);

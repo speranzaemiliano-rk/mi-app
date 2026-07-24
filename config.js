@@ -40,6 +40,7 @@ window.APP_CONFIG = {
     siglas: "RK",
     tagline: "Arquitectura · Gestión",
     razonSocial: "RK Arquitectura",
-    asistente: "Asistente RK"
+    asistente: "Asistente RK",
+    logo: ""   // URL de un logo (PNG/SVG). Vacío = usa el logo RK integrado.
   }
 };
