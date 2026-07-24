@@ -4455,6 +4455,24 @@
                   </div>
 
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔴 API Key de YouTube (buscar música en el reproductor)</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Se usa para buscar videos desde el reproductor de música. <strong>La key de Gemini NO sirve para YouTube.</strong><br>
+                      En <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" style="color:var(--gold);">Google Cloud Console</a> habilitá <strong>"YouTube Data API v3"</strong>, después en <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--gold);">Credenciales</a> creá una <strong>API key</strong> y pegala acá. Es gratis (10.000 unidades/día).<br>
+                      Si no la cargás, el buscador igual te deja abrir la búsqueda en YouTube.com.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;">
+                      <div class="form-group" style="flex:1;margin:0;">
+                        <label>YouTube API Key</label>
+                        <input type="password" id="cfgYoutubeKey" placeholder="AIza…" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarYoutubeKey()" style="margin-bottom:1px;">💾 Guardar</button>
+                    </div>
+                    <div id="cfgYoutubeKeyStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    <button class="btn btn-outline btn-sm" onclick="borrarYoutubeKey()" style="margin-top:8px;">🗑️ Borrar YouTube Key</button>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔒 Token del backend (ARCA/Belvo/Prometeo)</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       Solo hace falta si en Railway configuraste la variable <code>APP_API_TOKEN</code> para cerrar el backend.
@@ -12725,6 +12743,49 @@
         document.getElementById('cfgGeminiKeyStatus').textContent = '⚠️ API Key de Gemini eliminada.';
     }
 
+    // ── API Key de YouTube (búsqueda de música en el reproductor) ──
+    var YOUTUBE_KEY_LS = 'rk_youtube_key';
+    function cargarYoutubeKeyUI() {
+        var el = document.getElementById('cfgYoutubeKey');
+        var st = document.getElementById('cfgYoutubeKeyStatus');
+        var key = (localStorage.getItem(YOUTUBE_KEY_LS) || '').trim();
+        if (el) el.value = key || '';
+        if (!st) return;
+        if (key) { st.textContent = '✅ API Key de YouTube activa.'; return; }
+        st.textContent = '🔄 Buscando key en la nube…';
+        db.ref('global/config/youtubeKey').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val) {
+                localStorage.setItem(YOUTUBE_KEY_LS, val);
+                if (el) el.value = val;
+                st.textContent = '✅ API Key de YouTube cargada desde la nube.';
+            } else {
+                st.textContent = '⚠️ No hay API Key de YouTube configurada (el buscador abrirá YouTube.com).';
+            }
+        }).catch(function() {
+            st.textContent = '⚠️ No hay API Key de YouTube configurada.';
+        });
+    }
+    function guardarYoutubeKey() {
+        var val = (document.getElementById('cfgYoutubeKey').value || '').trim();
+        if (!val) { alert('Ingresá la API Key de YouTube.'); return; }
+        localStorage.setItem(YOUTUBE_KEY_LS, val);
+        try { window._ytKeyCache = null; } catch (e) {}
+        db.ref('global/config/youtubeKey').set(val).then(function() {
+            document.getElementById('cfgYoutubeKeyStatus').textContent = '✅ API Key guardada en este dispositivo y en la nube.';
+        }).catch(function() {
+            document.getElementById('cfgYoutubeKeyStatus').textContent = '✅ API Key guardada en este dispositivo (sin acceso a nube).';
+        });
+    }
+    function borrarYoutubeKey() {
+        if (!confirm('¿Borrar la API Key de YouTube de todos los dispositivos?')) return;
+        localStorage.removeItem(YOUTUBE_KEY_LS);
+        try { window._ytKeyCache = null; } catch (e) {}
+        db.ref('global/config/youtubeKey').remove();
+        var el = document.getElementById('cfgYoutubeKey'); if (el) el.value = '';
+        document.getElementById('cfgYoutubeKeyStatus').textContent = '⚠️ API Key de YouTube eliminada.';
+    }
+
     function cargarGeminiKeyDesdeFirebase() {
         // Intentar cargar desde Firebase si no está en localStorage
         var local = localStorage.getItem(GEMINI_API_KEY_LS);
@@ -12761,6 +12822,7 @@
         var st = document.getElementById('cfgApiKeyStatus');
         if (st) st.textContent = key ? '✅ API Key de Anthropic guardada.' : '⚠️ No hay API Key de Anthropic configurada.';
         cargarGeminiKeyUI();
+        if (typeof cargarYoutubeKeyUI === 'function') cargarYoutubeKeyUI();
         cargarEmailJsConfigUI();
         cargarGoogleClientIdUI();
         cargarGmailFacturasUI();
@@ -31515,8 +31577,8 @@
     _rkMusicRender({ src: RK_YT_DEFAULT, tipo: 'youtube' });
     var q = document.getElementById('rk-yt-q'); if (q) q.focus();
   }
-  // La búsqueda de YouTube usa la YouTube Data API v3 (necesita una API key de Google).
-  // Reusa la key de Gemini si esa misma key tiene habilitada la YouTube Data API v3.
+  // La búsqueda de YouTube usa la YouTube Data API v3 (necesita una API key propia de YouTube;
+  // la key de Gemini NO sirve). Se configura en Config → API Key de YouTube.
   var _ytKeyCache = null;
   async function _ytGetKey() {
     if (_ytKeyCache) return _ytKeyCache;
@@ -31529,13 +31591,20 @@
         if (v) { _ytKeyCache = String(v).trim(); return _ytKeyCache; }
       }
     } catch (e) {}
-    var gk = (typeof getGeminiKey === 'function') ? getGeminiKey() : '';
-    if (gk) { _ytKeyCache = gk; return gk; }
     return '';
   }
+  // Botón que SIEMPRE funciona (sin key): abre la búsqueda en YouTube.com en otra pestaña.
+  function _ytBtnAbrir() {
+    return '<button class="rkm-preset" style="width:100%;margin-top:6px;" onclick="rkYouTubeAbrirWeb()">🔎 Abrir esta búsqueda en YouTube.com</button>';
+  }
+  function rkYouTubeAbrirWeb() {
+    var q = (document.getElementById('rk-yt-q') || {}).value || '';
+    if (!q.trim()) return;
+    window.open('https://www.youtube.com/results?search_query=' + encodeURIComponent(q.trim()), '_blank');
+  }
   function _ytMsgSinKey(detalle) {
-    return '<div style="font-size:11px;color:#F59E9E;padding:6px;line-height:1.5;">⚠️ La búsqueda de YouTube necesita una API key de Google con <strong>YouTube Data API v3</strong> habilitada (es gratis).<br>En Google Cloud Console habilitá "YouTube Data API v3", creá una API key y guardala en <strong>Config → Gemini</strong> (podés usar la misma key de Gemini si le habilitás esa API).'
-      + (detalle ? '<br><small style="opacity:.7;">(' + escHtml(detalle) + ')</small>' : '') + '</div>';
+    return '<div style="font-size:11px;color:#F59E9E;padding:6px;line-height:1.5;">⚠️ Para ver los resultados acá dentro necesitás una API key de Google con <strong>YouTube Data API v3</strong> habilitada (gratis). La key de Gemini NO sirve para YouTube.<br>Cargala en <strong>Config → API Key de YouTube</strong> (ahí están los pasos).'
+      + (detalle ? '<br><small style="opacity:.7;">(' + escHtml(detalle) + ')</small>' : '') + '</div>' + _ytBtnAbrir();
   }
   async function rkYouTubeBuscar() {
     var q = (document.getElementById('rk-yt-q') || {}).value || '';
@@ -31552,8 +31621,12 @@
       var j = await r.json().catch(function(){ return null; });
       if (!r.ok) {
         var m = (j && j.error && j.error.message) || ('error ' + r.status);
-        if (r.status === 403) { if (box) box.innerHTML = _ytMsgSinKey(m); return; }
-        if (box) box.innerHTML = '<div style="font-size:11px;color:#F59E9E;padding:6px;">⚠️ YouTube: ' + escHtml(m) + '</div>';
+        // La key de Gemini u otra no habilitada devuelve "API keys are not supported by this API"
+        // o pide OAuth: la tratamos como key no válida para YouTube y explicamos cómo resolverlo.
+        if (r.status === 403 || /not supported by this api|oauth2|authentication credentials|api key not valid/i.test(m)) {
+          if (box) box.innerHTML = _ytMsgSinKey(m); return;
+        }
+        if (box) box.innerHTML = '<div style="font-size:11px;color:#F59E9E;padding:6px;">⚠️ YouTube: ' + escHtml(m) + '</div>' + _ytBtnAbrir();
         return;
       }
       var items = ((j && j.items) || []).filter(function(it){ return it && it.id && it.id.videoId; });
