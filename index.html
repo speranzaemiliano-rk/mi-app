@@ -2799,6 +2799,9 @@
                         <button class="nav-item nav-sub" id="btnAgregar" data-navkey="nuevopresupuesto" onclick="agregarFila()" title="Crear un presupuesto nuevo" style="color:rgba(201,168,76,.85);">
                             <span class="nav-icon">add_circle</span> Nuevo presupuesto
                         </button>
+                        <button class="nav-item nav-sub" id="btnVerPresupuestos" data-navkey="verpresupuestos" onclick="mostrarTab('Presupuestos')" title="Ver el listado de presupuestos cargados">
+                            <span class="nav-icon">list_alt</span> Ver presupuestos
+                        </button>
                         <button class="nav-item nav-sub" id="btnEditarPresupuesto" data-navkey="editarpresupuesto" onclick="mostrarTab('Presupuestos')" title="Ver listado y editar un presupuesto existente">
                             <span class="nav-icon">edit</span> Editar existente
                         </button>
@@ -5500,6 +5503,7 @@
                     <div id="checkboxesCompartirPres" style="display:flex; flex-direction:column; gap:7px;"></div>
                 </div>
                 <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" onclick="cerrarModal(); mostrarTab('Presupuestos');" title="Ver el listado de presupuestos cargados">📋 Ver presupuestos</button>
                     <button type="button" class="btn btn-outline" onclick="cerrarModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Guardar</button>
                 </div>
@@ -6696,7 +6700,8 @@
                 <td>
                     <div class="action-btns">
                         ${docLink}
-                        <button class="btn btn-outline btn-sm" onclick="imprimirRecibo(${index})" title="Imprimir último comprobante">🧾</button>
+                        <button class="btn btn-outline btn-sm" onclick="imprimirPresupuestoDoc(${index})" title="Imprimir el Presupuesto (documento formal para presentar)">📄</button>
+                        <button class="btn btn-outline btn-sm" onclick="imprimirRecibo(${index})" title="Imprimir Orden de Pago / último comprobante">🧾</button>
                         ${(datos[index] && (datos[index].pagosHistorial||[]).length > 1) ? `<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosPresupuesto(${index})" title="Reimprimir pago anterior">🖨️</button>` : ''}
                         ${(puedeEditar && tieneFactODoc(index)) ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoDe(${index})" title="Hay facturas/docs aplicados a este presupuesto">💵 Pagar</button>` : ''}
                         ${botonesEdicion}
@@ -9903,6 +9908,55 @@
         '</div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (item.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
         '<div class="pie">Comprobante ' + recibo + ' · Generado el ' + emision + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
+        '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+
+        _imprimirDocHTML(html);
+    }
+
+    // Imprime el PRESUPUESTO como documento formal (cotización) para presentar,
+    // no como "Orden de Pago". Reusa el mismo encabezado y estilo profesional.
+    function imprimirPresupuestoDoc(index) {
+        var item = datos[index];
+        if (!item) return;
+        var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR'); };
+        var fmtUsd = function(n){ return 'USD ' + (Number(n||0)/exchangeRate).toLocaleString('es-AR',{maximumFractionDigits:2}); };
+        var c = calcPresupuesto(item);
+        var nro = item.reciboCorrelativo || item.recibo || generarNumeroRecibo();
+        var hoy = new Date();
+        var emision = hoy.toLocaleDateString('es-AR');
+        var vto = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('es-AR');
+        var mod = item.modalidad || 'A';
+        var modLabel = mod === 'A' ? 'Bancarizado (Modalidad A)' : mod === 'B' ? 'Efectivo (Modalidad B)' : 'Dual A + B';
+        var emp = getEmpresaParaRecibo();
+        var ajusteTxt = item.indiceCACBase ? ('Actualiza por índice ' + (item.indiceTipo || 'CAC')) : 'Precio fijo (sin ajuste)';
+        var rubroDet = [item.rubro, item.subrubro].filter(Boolean).join(' · ');
+        var entregaTxt = item.entrega ? formatearFecha(item.entrega) : '—';
+
+        var _rh = buildReciboHeader('Presupuesto', nro, emision, {
+            label: 'Proveedor / Destinatario', nombre: item.proveedor || '—', detalle: rubroDet
+        });
+        var html = '<html><head><meta charset="UTF-8"><title>Presupuesto ' + nro + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
+        '<table class="tbl">' +
+        '<thead><tr><th>Concepto</th><th>Detalle</th><th class="tr">Importe</th></tr></thead>' +
+        '<tbody>' +
+        '<tr><td><strong>' + (item.concepto || '—') + '</strong></td><td>' + (rubroDet || '—') + '</td><td class="tr">' + fmt(item.presupuesto) + '</td></tr>' +
+        '</tbody>' +
+        '<tfoot><tr><td colspan="2"><strong>Total del presupuesto</strong></td><td class="tr">' + fmt(item.presupuesto) + '</td></tr></tfoot>' +
+        '</table>' +
+        '<div class="bottom">' +
+        '<div class="instrucciones"><div class="instr-titulo">Condiciones</div><div class="instr-body">' +
+        'Forma de pago: ' + modLabel +
+        '<br>Plazo de entrega: ' + entregaTxt +
+        '<br>Ajuste: ' + ajusteTxt +
+        '<br>Validez del presupuesto: hasta el ' + vto + ' (15 días)' +
+        '</div></div>' +
+        '<div class="totales">' +
+        '<div class="tot-row"><span>Subtotal</span><span>' + fmt(item.presupuesto) + '</span></div>' +
+        '<div class="tot-row"><span>Equivalente USD</span><span>' + fmtUsd(item.presupuesto) + '</span></div>' +
+        '<div class="tot-final"><span>Total</span><span>' + fmt(item.presupuesto) + '</span></div>' +
+        '</div></div>' +
+        '<div class="firmas"><div class="fi">Conformidad — ' + (item.proveedor || 'Proveedor') + '</div><div class="fi">Firma y sello — ' + emp.nombre + '</div></div>' +
+        '<div class="pie">Presupuesto ' + nro + ' · Emitido el ' + emision + ' · ' + emp.nombre + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
         '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
 
         _imprimirDocHTML(html);
