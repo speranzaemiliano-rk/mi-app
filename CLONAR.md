@@ -1,5 +1,6 @@
 # 📦 Clonar el sistema para otra empresa (vender el "envase")
 
+> El producto se llama **Nexa** (*"Gestión conectada"*). Es la marca por defecto del sistema genérico. Cada instalación puede rebrandearse con la marca del cliente (RK es una instalación con marca "RK").
 > Guía paso a paso para crear una **instalación nueva y vacía** del sistema para otro cliente (Superbandas, Daking, etc.), **sin tocar RK**. Cada cliente queda con su propia base de datos, su marca y sus datos, totalmente separado.
 > Modelo elegido: **una copia por cliente** (ver `MULTIEMPRESA.md`).
 

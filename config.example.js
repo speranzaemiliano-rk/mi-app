@@ -29,14 +29,15 @@ window.APP_CONFIG = {
   spotifyClientId: "",
   // Opcional (envío de facturas por mail).
   emailjs: { serviceId: "", templateId: "", publicKey: "" },
-  // Marca inicial (después se edita desde Config → 🎨 Marca).
+  // Marca. Por defecto viene la del producto (Nexa). Cambiala por la del cliente
+  // acá o después desde la app (Config → 🎨 Marca). Si borrás este bloque, usa Nexa.
   brand: {
-    nombre: "<Nombre largo — título de la pestaña>",
-    nombreCorto: "<Nombre corto>",
-    siglas: "<AB>",
-    tagline: "<Bajada / rubro>",
-    razonSocial: "<Razón social por defecto>",
-    asistente: "<Nombre del asistente>",
+    nombre: "Nexa · Gestión",
+    nombreCorto: "Nexa",
+    siglas: "Nx",
+    tagline: "Gestión conectada",
+    razonSocial: "Nexa",
+    asistente: "Asistente Nexa",
     logo: ""   // URL de un logo (PNG/SVG). Vacío = logo genérico integrado.
   }
 };
