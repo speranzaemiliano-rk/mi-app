@@ -39,7 +39,7 @@ Abrí `config.js` en el repo del cliente y reemplazá:
 - `spotifyClientId` / `emailjs` → opcionales.
 
 ### 5) Desplegar
-- **GitHub Pages** (como RK) o el hosting que uses. Si usás una carpeta/dominio distinto, ajustá `BASE` en `sw.js` y `scope`/`start_url` en `manifest.json`.
+- **GitHub Pages** (como RK) o el hosting que uses. `sw.js` **deriva solo** su ruta base (no hay que tocarlo). Si el sitio queda en una **ruta distinta** a `/mi-app/` (p. ej. otro nombre de repo), ajustá `scope` y `start_url` en `manifest.json` para que coincidan con esa ruta. Tip: si nombrás el repo del cliente también `mi-app`, la ruta queda `/mi-app/` y no hace falta tocar nada.
 
 ### 6) Primer ingreso del cliente
 1. El cliente entra con el `adminEmail` configurado → se **auto-asigna Super Administrador**.
