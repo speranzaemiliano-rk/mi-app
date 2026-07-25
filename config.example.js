@@ -38,6 +38,6 @@ window.APP_CONFIG = {
     tagline: "Gestión conectada",
     razonSocial: "Nexa",
     asistente: "Asistente Nexa",
-    logo: ""   // URL de un logo (PNG/SVG). Vacío = logo genérico integrado.
+    logo: "assets/nexa-logo.svg"   // Logo del producto (Nexa). Poné la URL/ruta del logo del cliente, o "" para el logo integrado.
   }
 };
