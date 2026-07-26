@@ -6302,24 +6302,33 @@
         }
         var ids = await leer('/empresas', true);
         if (!ids || typeof ids !== 'object') return null;
-        var out = {};
-        await Promise.all(Object.keys(ids).map(async function(eid) {
+        // IMPORTANTE: las respuestas de red llegan en orden arbitrario. Firebase entrega
+        // los hijos ordenados por clave, y la app elige empresas[0]/proyectos[0] cuando no
+        // hay una selección previa: si armáramos la lista en el orden en que van llegando,
+        // se abriría una empresa/proyecto AL AZAR. Por eso ordenamos por clave.
+        var eids = Object.keys(ids).sort();
+        var porEmpresa = await Promise.all(eids.map(async function(eid) {
             var base = '/empresas/' + eid;
             var meta = await Promise.all([
                 leer(base + '/nombre'), leer(base + '/datos'),
                 leer(base + '/usuariosAutorizados'), leer(base + '/proyectos', true)
             ]);
-            var proyectos = {};
-            var pids = (meta[3] && typeof meta[3] === 'object') ? Object.keys(meta[3]) : [];
-            await Promise.all(pids.map(async function(pid) {
+            var pids = (meta[3] && typeof meta[3] === 'object') ? Object.keys(meta[3]).sort() : [];
+            var proys = await Promise.all(pids.map(async function(pid) {
                 var p = await Promise.all([
                     leer(base + '/proyectos/' + pid + '/nombre'),
                     leer(base + '/proyectos/' + pid + '/datos')
                 ]);
-                proyectos[pid] = { nombre: p[0], datos: p[1] };
+                return { id: pid, nombre: p[0], datos: p[1] };
             }));
-            out[eid] = { nombre: meta[0], datos: meta[1], usuariosAutorizados: meta[2], proyectos: proyectos };
+            var proyectos = {};
+            proys.forEach(function(p) { proyectos[p.id] = { nombre: p.nombre, datos: p.datos }; });
+            return { id: eid, nombre: meta[0], datos: meta[1], usuariosAutorizados: meta[2], proyectos: proyectos };
         }));
+        var out = {};
+        porEmpresa.forEach(function(e) {
+            out[e.id] = { nombre: e.nombre, datos: e.datos, usuariosAutorizados: e.usuariosAutorizados, proyectos: e.proyectos };
+        });
         return out;
     }
 
