@@ -6291,7 +6291,26 @@
             _obErrorEmpresas({ code: 'sin-conexion', message: (typeof FIREBASE_ERROR !== 'undefined' && FIREBASE_ERROR) ? FIREBASE_ERROR : 'No se pudo iniciar Firebase.' });
             return;
         }
+        // Firebase, cuando no logra conectar con la base, NO rechaza la lectura: la deja
+        // pendiente para siempre. Por eso la bienvenida se quedaba en "Cargando…" sin dar
+        // ninguna señal. Le ponemos un límite de tiempo para poder avisar y reintentar.
+        var _empDone = false;
+        var _empTimer = setTimeout(function() {
+            if (_empDone) return;
+            try {
+                db.ref('.info/connected').once('value').then(function(s) {
+                    _obErrorEmpresas(s.val()
+                        ? { code: 'sin-respuesta', message: 'Hay conexión con Firebase, pero la lista de empresas no respondió en 20 segundos.' }
+                        : { code: 'sin-conexion',  message: 'La app no logra conectarse a la base de datos (Firebase). Suele ser la red del dispositivo: probá con otra red o desactivando el ahorro de datos / VPN.' });
+                }).catch(function() {
+                    _obErrorEmpresas({ code: 'sin-conexion', message: 'La app no logra conectarse a la base de datos (Firebase).' });
+                });
+            } catch (e) {
+                _obErrorEmpresas({ code: 'sin-conexion', message: 'La app no logra conectarse a la base de datos (Firebase).' });
+            }
+        }, 20000);
         REF_EMPRESAS.once('value').then(snap => {
+            _empDone = true; clearTimeout(_empTimer);
             const val = snap.val();
             if (!val) {
                 // Primera vez: crear empresa y proyecto por defecto, y migrar datos viejos si existen
@@ -6356,6 +6375,7 @@
                 }
             }
         }).catch(err => {
+            _empDone = true; clearTimeout(_empTimer);
             console.error('Error leyendo empresas (posible regla de Firebase):', err);
             usarEmpresaLocal(true);
             // La pantalla de bienvenida NO puede quedar en "Cargando…" para siempre:
