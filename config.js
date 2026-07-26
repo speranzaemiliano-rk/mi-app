@@ -35,15 +35,15 @@ window.APP_CONFIG = {
   spotifyClientId: "ea1f2e04bfdc4c8abe4a116023a5f887",
   emailjs: { serviceId: "service_rk", templateId: "template_elux62l", publicKey: "1KBtAzAFvuD2WC9T-" },
   brand: {
-    nombre: "Nexa · Software de Gestión",
-    nombreCorto: "Nexa",
-    siglas: "Nx",
+    nombre: "Mess · Software de Gestión",
+    nombreCorto: "Mess",
+    siglas: "Ms",
     tagline: "Software de Gestión",
     // ⚠️ Razón social LEGAL: es la que sale impresa en los documentos fiscales
     // (ej. exportación SICORE) cuando no hay empresa seleccionada. NO es el nombre
     // del sistema: se cambia sólo si cambia la sociedad, no la marca.
     razonSocial: "RK Arquitectura",
-    asistente: "Asistente Nexa",
+    asistente: "Asistente Mess",
     logo: "assets/nexa-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
   }
 };
