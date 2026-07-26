@@ -1,0 +1,126 @@
+# 🎨 Kit de marca
+
+Todo lo necesario para aplicar la identidad visual en **otra app**. Este archivo está
+pensado para pasárselo tal cual a Claude en el otro proyecto: tiene los colores exactos,
+los archivos y el código listo para copiar.
+
+> ⚠️ **El nombre todavía no está cerrado.** "Nexa" es provisorio: el nombre está muy usado
+> en informática (ver `PENDIENTES.md`). **El logo y los colores no dependen del nombre** —
+> se pueden usar igual, y el día que se defina, se cambia solo el texto.
+
+---
+
+## 1. Archivos
+
+| Archivo | Para qué |
+|---|---|
+| `assets/nexa-logo.svg` | Logo principal. Fondo transparente, escala a cualquier tamaño. Para el splash, el login y encabezados. |
+| `assets/nexa-icon.svg` | Ícono con fondo (espacio profundo), *maskable*. Para la PWA. |
+| `assets/nexa-icon-192.png` | Ícono PWA 192×192. |
+| `assets/nexa-icon-512.png` | Ícono PWA 512×512. |
+
+**Diferencia importante:** el *logo* es transparente y se usa sobre cualquier fondo; el
+*ícono* trae fondo propio y sirve para el ícono instalado del teléfono.
+
+---
+
+## 2. Paleta
+
+| Color | Hex | Uso |
+|---|---|---|
+| Violeta | `#7C5CFF` | Principal. Botones, acentos, enlaces. |
+| Cian | `#22D3EE` | Secundario. Detalles, estados activos, nodos. |
+| Lila | `#C084FC` | Terciario. Degradados y toques suaves. |
+| Violeta claro | `#9E86FF` | Esfera del logo (medio). |
+| Violeta profundo | `#6D4BE0` | Esfera del logo (borde). |
+| Casi blanco | `#EAE4FF` | Textos sobre fondo oscuro. |
+
+**Fondos oscuros** (el logo está pensado para fondo oscuro):
+
+| Color | Hex |
+|---|---|
+| Fondo base | `#0A0D14` |
+| Panel / tarjeta | `#141926` |
+| Borde de panel | `#252D42` |
+
+**Degradado de marca** (el de las órbitas del logo):
+
+```css
+background: linear-gradient(90deg, #22D3EE, #7C5CFF 55%, #C084FC);
+```
+
+---
+
+## 3. Cómo ponerlo en otra app
+
+### Opción A — copiar el archivo (lo más simple)
+
+1. Copiá `assets/nexa-logo.svg` a la carpeta de la otra app.
+2. Usalo como cualquier imagen:
+
+```html
+<img src="assets/nexa-logo.svg" alt="Logo" style="width:180px">
+```
+
+### Opción B — pegar el SVG dentro del HTML
+
+Sirve si no querés manejar archivos sueltos, o si querés animar las órbitas.
+Abrí `assets/nexa-logo.svg`, copiá **todo** el contenido y pegalo directo en el HTML.
+Queda como un `<svg>` más y no necesita ningún archivo externo.
+
+> Si pegás el SVG en una página donde ya hay otro SVG, revisá que los `id` de los
+> degradados (`nexaSphere`, `nexaOrbit`, `nexaGlow`) no se repitan: si dos SVG usan el
+> mismo `id`, el navegador mezcla los degradados y se ve mal.
+
+### Órbitas girando (opcional)
+
+```css
+@media (prefers-reduced-motion: no-preference) {
+  .spin   { transform-box: fill-box; transform-origin: center;
+            animation: spin 44s linear infinite; }
+  .spin-2 { transform-box: fill-box; transform-origin: center;
+            animation: spin 60s linear infinite reverse; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+}
+```
+
+Y le ponés `class="spin"` al grupo de órbitas y `class="spin-2"` al de los nodos.
+
+### Íconos de la PWA
+
+Reemplazá los íconos de la otra app por estos y listo:
+
+```
+assets/nexa-icon-192.png  →  icons/icon-192.png
+assets/nexa-icon-512.png  →  icons/icon-512.png
+```
+
+En el `manifest.json` conviene que estén como `"purpose": "any maskable"`, porque el
+ícono ya trae margen de seguridad para que Android no recorte la galaxia.
+
+---
+
+## 4. Sistema de marca por configuración (opcional)
+
+Si la otra app también va a tener marca configurable, se puede copiar el mismo mecanismo
+que usa este sistema: un solo archivo `config.js` con un bloque `brand`, y el resto del
+código lee de ahí.
+
+```js
+window.APP_CONFIG = {
+  brand: {
+    nombre: "Nexa · Software de Gestión",  // título y presentación
+    nombreCorto: "Nexa",                   // nombre de la app instalada
+    siglas: "Nx",                          // el anillo del login
+    tagline: "Software de Gestión",
+    razonSocial: "RK Arquitectura",        // ⚠️ nombre LEGAL, sale en documentos fiscales
+    asistente: "Asistente Nexa",
+    logo: "assets/nexa-logo.svg"
+  }
+};
+```
+
+Ver `MULTIEMPRESA.md` y `CLONAR.md` para el mecanismo completo.
+
+> ⚠️ **`razonSocial` no es la marca.** Es el nombre legal que se imprime en documentos
+> fiscales. Cambiar el nombre del software no cambia la sociedad.
