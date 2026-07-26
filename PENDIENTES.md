@@ -6,6 +6,54 @@
 
 ---
 
+## 🔴 IMPORTANTE: los PDFs viven dentro de la base y hacen todo lento
+
+**Síntoma** (2026-07-26): en el celular la app se quedaba en "Cargando…" para siempre y no
+se podía entrar; una vez adentro, los datos tardan mucho en aparecer. En la computadora
+funcionaba (más lento). **Va a empeorar a medida que crezca la base.**
+
+**Causa.** Los archivos se guardan **dentro de la Realtime Database**, en base64:
+`REF_DOCS.child(id).set({ nombre, tipo, contenido })` (`index.html:7488` y `:7530`).
+Como `documentos` cuelga de `empresas/<emp>/proyectos/<proy>/`, cualquier lectura de un
+nivel superior arrastra todos los PDFs.
+
+Dos consecuencias concretas, una ya arreglada y otra pendiente:
+
+1. ✅ **Arreglado (PR #377/#378).** `initEmpresas()` hacía `REF_EMPRESAS.once('value')`
+   para mostrar una lista de nombres, y eso se bajaba **la base entera**. Ahora
+   `_leerEmpresasLiviano()` lee sólo los metadatos con consultas `shallow` del REST.
+   (Ojo: al armar la lista hay que **ordenar por clave**; si se arma en el orden en que
+   responde la red, la app abre una empresa/proyecto al azar — fue el bug del #378.)
+
+2. ⏳ **Pendiente — esto es lo que hace lenta la carga de datos.** El listener de
+   documentos (`index.html:6771-6785`) se baja **todos los documentos con su `contenido`
+   en base64** y después **los descarta**:
+
+   ```js
+   if (entry && entry.proveedor && !entry.contenido) documentos.push(entry);
+   ```
+
+   Es decir: descarga megas de PDFs para tirarlos. Los adjuntos (`{nombre,tipo,contenido}`)
+   no tienen `proveedor`; las filas útiles no tienen `contenido`.
+
+**Cómo arreglarlo (dos caminos, de menor a mayor esfuerzo):**
+
+- **A — Filtrar en el servidor (rápido, sin migrar datos).** Reemplazar el
+  `REF_DOCS.on('value')` por `REF_DOCS.orderByChild('proveedor').startAt('').on('value')`,
+  que devuelve sólo las entradas que tienen `proveedor` — nunca los adjuntos.
+  ⚠️ Requiere agregar `".indexOn": ["proveedor"]` en las reglas de Firebase para ese path;
+  **sin el índice, Firebase ordena en el cliente y se baja todo igual** (no sirve).
+
+- **B — Sacar los archivos de la base (solución de fondo).** Subir los PDFs a
+  **Firebase Storage** y guardar en la base sólo `{nombre, tipo, url}`. Deja la base chica
+  para siempre y arregla de raíz cualquier lectura pesada. Necesita migración de los
+  adjuntos ya cargados (script que recorra `documentos`, suba el base64 a Storage y
+  reemplace `contenido` por `url`).
+
+**Recomendación:** hacer **A** para alivio inmediato y planificar **B**.
+
+---
+
 ## 🔜 PRÓXIMO (mañana): Cargar credenciales de ARCA SDK en Railway
 
 El código de **importación automática de comprobantes** (emitidos y recibidos)
