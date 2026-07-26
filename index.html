@@ -6284,6 +6284,45 @@
         if (typeof actualizarRefCompRecibidos === 'function') actualizarRefCompRecibidos();  // ARCA: por empresa, no compartido
     }
 
+    // Lee SOLO los metadatos de empresas y proyectos (nombres y datos), sin arrastrar
+    // facturas, caja, ingresos ni documentos —que cuelgan del mismo nodo y pueden pesar
+    // decenas de MB por los PDFs en base64—. Usa consultas 'shallow' del REST de Firebase
+    // para listar los IDs y después pide sólo los campos chicos. Devuelve el mismo objeto
+    // que devolvía REF_EMPRESAS.once('value'), así el resto del código no cambia.
+    async function _leerEmpresasLiviano() {
+        var dbUrl = (typeof firebaseConfig !== 'undefined' && firebaseConfig && firebaseConfig.databaseURL)
+            ? String(firebaseConfig.databaseURL).replace(/\/+$/, '') : '';
+        if (!dbUrl || !auth || !auth.currentUser) throw new Error('sin-sesion');
+        var token = await auth.currentUser.getIdToken();
+        var sufijo = '.json?auth=' + encodeURIComponent(token);
+        async function leer(path, shallow) {
+            var r = await fetch(dbUrl + path + sufijo + (shallow ? '&shallow=true' : ''));
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' en ' + path);
+            return await r.json();
+        }
+        var ids = await leer('/empresas', true);
+        if (!ids || typeof ids !== 'object') return null;
+        var out = {};
+        await Promise.all(Object.keys(ids).map(async function(eid) {
+            var base = '/empresas/' + eid;
+            var meta = await Promise.all([
+                leer(base + '/nombre'), leer(base + '/datos'),
+                leer(base + '/usuariosAutorizados'), leer(base + '/proyectos', true)
+            ]);
+            var proyectos = {};
+            var pids = (meta[3] && typeof meta[3] === 'object') ? Object.keys(meta[3]) : [];
+            await Promise.all(pids.map(async function(pid) {
+                var p = await Promise.all([
+                    leer(base + '/proyectos/' + pid + '/nombre'),
+                    leer(base + '/proyectos/' + pid + '/datos')
+                ]);
+                proyectos[pid] = { nombre: p[0], datos: p[1] };
+            }));
+            out[eid] = { nombre: meta[0], datos: meta[1], usuariosAutorizados: meta[2], proyectos: proyectos };
+        }));
+        return out;
+    }
+
     function initEmpresas() {
         if (!REF_EMPRESAS) {
             console.error('REF_EMPRESAS no está definido. Firebase no se inició.');
@@ -6309,9 +6348,13 @@
                 _obErrorEmpresas({ code: 'sin-conexion', message: 'La app no logra conectarse a la base de datos (Firebase).' });
             }
         }, 20000);
-        REF_EMPRESAS.once('value').then(snap => {
+        // Primero la lectura liviana (sólo nombres). Si falla por lo que sea, se cae a la
+        // lectura completa de siempre, para no dejar a nadie sin poder entrar.
+        _leerEmpresasLiviano().catch(function(e) {
+            console.warn('Lectura liviana de empresas falló, uso la completa:', e);
+            return REF_EMPRESAS.once('value').then(function(s) { return s.val(); });
+        }).then(val => {
             _empDone = true; clearTimeout(_empTimer);
-            const val = snap.val();
             if (!val) {
                 // Primera vez: crear empresa y proyecto por defecto, y migrar datos viejos si existen
                 migrarDatosAEmpresa();
