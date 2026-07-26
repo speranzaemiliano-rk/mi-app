@@ -32,10 +32,10 @@ window.APP_CONFIG = {
   // Marca. Por defecto viene la del producto (Mess). Cambiala por la del cliente
   // acá o después desde la app (Config → 🎨 Marca). Si borrás este bloque, usa Mess.
   brand: {
-    nombre: "Mess · Software de Gestión",
+    nombre: "Mess · Sistema de Gestión",
     nombreCorto: "Mess",
     siglas: "Ms",
-    tagline: "Software de Gestión",
+    tagline: "Sistema de Gestión",
     razonSocial: "Mess",
     asistente: "Asistente Mess",
     logo: "assets/mess-logo.svg"   // Logo del producto. Poné la URL/ruta del logo del cliente, o "" para el logo integrado.
