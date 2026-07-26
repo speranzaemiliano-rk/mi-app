@@ -41,6 +41,6 @@ window.APP_CONFIG = {
     tagline: "Arquitectura · Gestión",
     razonSocial: "RK Arquitectura",
     asistente: "Asistente RK",
-    logo: ""   // URL de un logo (PNG/SVG). Vacío = usa el logo RK integrado.
+    logo: "assets/nexa-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
   }
 };
