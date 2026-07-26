@@ -107,14 +107,44 @@ camino más seguro:
 
 *No hace falta escribir un migrador a ciegas: el formato de respaldo ya existe y está probado.*
 
-### Etapa E — Permisos por módulo
+### Etapa E — Permisos por módulo, y el selector de entrada
 
 Recién acá aparece lo que se buscaba: **cada usuario ve lo que se le asigne**.
 
-El sistema ya tiene con qué: roles (`superadmin`/`admin`/`editor`/`lector`), accesos por
-empresa (`usuariosAutorizados`) y visibilidad de menú configurable
-(`cargarVisibilidadMenu`). Falta extenderlo a **qué módulos ve cada usuario** y que Caja
-sea uno de ellos.
+**Cómo se ve al entrar.** Después del login, el sistema pregunta a dónde va:
+
+```
+              ¿A dónde entrás?
+
+     ┌──────────────┐  ┌──────────────┐
+     │     Caja     │  │   Sistema    │
+     │   Movimientos│  │   Gestión    │
+     │   del día    │  │   completa   │
+     └──────────────┘  └──────────────┘
+```
+
+Pero **sólo aparecen las opciones habilitadas para ese usuario**, y la regla es:
+
+| Qué tiene habilitado | Qué pasa al entrar |
+|---|---|
+| Caja **y** Sistema | Ve el selector y elige |
+| Sólo Caja | Entra **directo** a la caja, sin preguntar |
+| Sólo Sistema | Entra **directo** al sistema, sin preguntar |
+
+> Que un usuario con una sola opción **no** vea el selector es importante: para un cliente
+> que sólo contrató la caja, el sistema de gestión no existe. Ni lo ve ni sabe que está.
+
+**Hoy, en RK, las dos son de la misma empresa** y el mismo usuario entra a ambas — así que
+el selector aparece siempre. El caso de "una sola opción" recién se usa al vender.
+
+El sistema ya tiene con qué armarlo: roles (`superadmin`/`admin`/`editor`/`lector`),
+accesos por empresa (`usuariosAutorizados`) y visibilidad de menú configurable
+(`cargarVisibilidadMenu`). Falta agregar **qué módulos ve cada usuario** —
+probablemente en `usuarios/<uid>/modulos` — y la pantalla del selector.
+
+**Ojo con el modelo de negocio:** conviene que los módulos se asignen **por empresa y por
+usuario**, no sólo por usuario. Si mañana a un cliente le vendés el sistema completo, le
+habilitás el módulo y ya está: no migra nada, no instala otra app, no cambia de cuenta.
 
 ---
 
