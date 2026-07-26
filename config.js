@@ -39,10 +39,11 @@ window.APP_CONFIG = {
     nombreCorto: "Mess",
     siglas: "Ms",
     tagline: "Software de Gestión",
-    // ⚠️ Razón social LEGAL: es la que sale impresa en los documentos fiscales
-    // (ej. exportación SICORE) cuando no hay empresa seleccionada. NO es el nombre
-    // del sistema: se cambia sólo si cambia la sociedad, no la marca.
-    razonSocial: "RK Arquitectura",
+    // Razón social del PRODUCTO (Mess), no de las empresas que lo usan.
+    // Ojo: en los recibos, cuando hay una empresa seleccionada se imprime el nombre
+    // de ESA empresa (emp.nombre), no este campo. Este es sólo el respaldo para
+    // cuando todavía no se eligió ninguna.
+    razonSocial: "Mess",
     asistente: "Asistente Mess",
     logo: "assets/nexa-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
   }
