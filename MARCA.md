@@ -1,6 +1,6 @@
 # 🎨 Kit de marca — Mess
 
-Todo lo necesario para aplicar la identidad visual de **Mess · Software de Gestión** en
+Todo lo necesario para aplicar la identidad visual de **Mess · Sistema de Gestión** en
 **otra app**. Este archivo está pensado para pasárselo tal cual a Claude en el otro
 proyecto: tiene los colores exactos, los archivos y el código listo para copiar.
 
@@ -107,10 +107,10 @@ código lee de ahí.
 ```js
 window.APP_CONFIG = {
   brand: {
-    nombre: "Mess · Software de Gestión",  // título y presentación
+    nombre: "Mess · Sistema de Gestión",  // título y presentación
     nombreCorto: "Mess",                   // nombre de la app instalada
     siglas: "Ms",                          // el anillo del login
-    tagline: "Software de Gestión",
+    tagline: "Sistema de Gestión",
     razonSocial: "Mess",                   // el PRODUCTO, no la empresa cliente
     asistente: "Asistente Mess",
     logo: "assets/mess-logo.svg"

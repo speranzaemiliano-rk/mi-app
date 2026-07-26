@@ -35,10 +35,10 @@ window.APP_CONFIG = {
   spotifyClientId: "ea1f2e04bfdc4c8abe4a116023a5f887",
   emailjs: { serviceId: "service_rk", templateId: "template_elux62l", publicKey: "1KBtAzAFvuD2WC9T-" },
   brand: {
-    nombre: "Mess · Software de Gestión",
+    nombre: "Mess · Sistema de Gestión",
     nombreCorto: "Mess",
     siglas: "Ms",
-    tagline: "Software de Gestión",
+    tagline: "Sistema de Gestión",
     // Razón social del PRODUCTO (Mess), no de las empresas que lo usan.
     // Ojo: en los recibos, cuando hay una empresa seleccionada se imprime el nombre
     // de ESA empresa (emp.nombre), no este campo. Este es sólo el respaldo para
