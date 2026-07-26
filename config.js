@@ -45,6 +45,11 @@ window.APP_CONFIG = {
     // cuando todavía no se eligió ninguna.
     razonSocial: "Mess",
     asistente: "Asistente Mess",
-    logo: "assets/mess-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
+    // Logo del PRODUCTO: presentación (paso 1) y barra lateral.
+    logo: "assets/mess-logo.svg",
+    // Logo de ESTA empresa: pantalla de ingreso y paso 2 de la presentación.
+    // Acá vive la identidad de RK. Una copia para otro cliente pone la suya (o la deja
+    // vacía y ve sólo la del producto): no queda ningún logo escrito en el código.
+    logoEmpresa: "logo png_Mesa de trabajo 1_blanco.png"
   }
 };
