@@ -38,6 +38,6 @@ window.APP_CONFIG = {
     tagline: "Software de Gestión",
     razonSocial: "Mess",
     asistente: "Asistente Mess",
-    logo: "assets/nexa-logo.svg"   // Logo del producto. Poné la URL/ruta del logo del cliente, o "" para el logo integrado.
+    logo: "assets/mess-logo.svg"   // Logo del producto. Poné la URL/ruta del logo del cliente, o "" para el logo integrado.
   }
 };

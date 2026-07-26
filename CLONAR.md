@@ -62,14 +62,14 @@ Abrí `config.js` en el repo del cliente y reemplazá:
 
 ## Assets de marca (logo/íconos)
 
-**Logo:** lo más fácil es poner una **URL de logo** en `config.js` → `brand.logo` (o desde Config → 🎨 Marca → "URL del logo"). Eso reemplaza el logo del splash y del login sin tocar archivos. El producto trae por defecto el logo de **Nexa** (`assets/nexa-logo.svg`, galaxia). Los **íconos de la PWA** (los que se ven al instalar la app) sí son archivos y se reemplazan en el repo:
+**Logo:** lo más fácil es poner una **URL de logo** en `config.js` → `brand.logo` (o desde Config → 🎨 Marca → "URL del logo"). Eso reemplaza el logo del splash y del login sin tocar archivos. El producto trae por defecto el logo de **Nexa** (`assets/mess-logo.svg`, galaxia). Los **íconos de la PWA** (los que se ven al instalar la app) sí son archivos y se reemplazan en el repo:
 - `icons/icon-192.png`, `icons/icon-512.png`, `icons/icon.svg`.
 
-**Íconos de Nexa listos para usar:** en `assets/` ya están los íconos del producto (`nexa-icon.svg`, `nexa-icon-192.png`, `nexa-icon-512.png`, galaxia sobre fondo espacial, *maskable*). Para que un clon quede con la marca Nexa por defecto, copiá esos PNG sobre los de `icons/`:
+**Íconos de Nexa listos para usar:** en `assets/` ya están los íconos del producto (`mess-icon.svg`, `mess-icon-192.png`, `mess-icon-512.png`, galaxia sobre fondo espacial, *maskable*). Para que un clon quede con la marca Nexa por defecto, copiá esos PNG sobre los de `icons/`:
 ```
-cp assets/nexa-icon-192.png icons/icon-192.png
-cp assets/nexa-icon-512.png icons/icon-512.png
-cp assets/nexa-icon.svg     icons/icon.svg
+cp assets/mess-icon-192.png icons/icon-192.png
+cp assets/mess-icon-512.png icons/icon-512.png
+cp assets/mess-icon.svg     icons/icon.svg
 ```
 > ⚠️ En el repo de **RK** los `icons/icon-*.png` son los de RK y **no se tocan** — RK sigue mostrando su ícono. Esta copia se hace solo en el repo del clon.
 

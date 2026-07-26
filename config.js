@@ -45,6 +45,6 @@ window.APP_CONFIG = {
     // cuando todavía no se eligió ninguna.
     razonSocial: "Mess",
     asistente: "Asistente Mess",
-    logo: "assets/nexa-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
+    logo: "assets/mess-logo.svg"   // Logo de la presentación y el login. Vacío = logo RK integrado.
   }
 };
