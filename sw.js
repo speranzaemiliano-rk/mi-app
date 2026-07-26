@@ -1,5 +1,5 @@
 // Service Worker — Gestión PWA
-const CACHE = 'rk-v233';
+const CACHE = 'rk-v234';
 // La ruta base se deriva de dónde está servido el propio sw.js (ej. /mi-app/sw.js → /mi-app/).
 // Así, al clonar el sistema en otra ruta/repo, no hace falta editar el service worker.
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
