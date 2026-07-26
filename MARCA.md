@@ -72,19 +72,18 @@ Queda como un `<svg>` más y no necesita ningún archivo externo.
 > degradados (`nexaSphere`, `nexaOrbit`, `nexaGlow`) no se repitan: si dos SVG usan el
 > mismo `id`, el navegador mezcla los degradados y se ve mal.
 
-### Órbitas girando (opcional)
+### El logo ya se mueve solo
 
-```css
-@media (prefers-reduced-motion: no-preference) {
-  .spin   { transform-box: fill-box; transform-origin: center;
-            animation: spin 44s linear infinite; }
-  .spin-2 { transform-box: fill-box; transform-origin: center;
-            animation: spin 60s linear infinite reverse; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-}
-```
+**No hace falta agregar nada.** La animación está *dentro* del SVG: las órbitas giran
+lento, los nodos giran al revés más lento todavía, y la esfera late suave.
 
-Y le ponés `class="spin"` al grupo de órbitas y `class="spin-2"` al de los nodos.
+Está hecha con **SMIL** (`<animateTransform>`), no con CSS, y eso es a propósito: cuando
+un SVG se usa como `<img src="...">`, el navegador **no ejecuta las animaciones CSS
+internas**, pero **sí las SMIL**. Con CSS el logo se movía sólo si se pegaba el SVG
+dentro del HTML; con SMIL se mueve en los dos casos, sin JavaScript.
+
+Si en algún lugar lo querés **quieto** (por ejemplo, en un PDF o un mail), usá el PNG del
+ícono en vez del SVG.
 
 ### Íconos de la PWA
 
