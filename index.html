@@ -5396,6 +5396,10 @@
                         </select>
                         <input type="text" id="cgFiltroBusq" oninput="renderCajaGeneral()" placeholder="Descripción…" style="padding:7px 10px; font-size:12px; width:150px;">
                         <input type="text" id="cgFiltroOrigen" oninput="renderCajaGeneral()" placeholder="Origen / Destino…" style="padding:7px 10px; font-size:12px; width:160px;">
+                        <select id="cgOrden" onchange="renderCajaGeneral()" title="Orden de los movimientos" style="width:auto; padding:7px 10px; font-size:12px;">
+                            <option value="desc">↓ Más recientes primero</option>
+                            <option value="asc">↑ Más antiguos primero</option>
+                        </select>
                         <button class="btn-clear-filters" onclick="cgLimpiarFiltros()">✕ Limpiar</button>
                         <div style="margin-left:auto;display:flex;gap:8px;">
                             <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso')">＋ Ingreso</button>
@@ -5502,6 +5506,10 @@
                     </select>
                     <input type="text" id="efpFiltroBusq" oninput="renderEfectivoPesos()" placeholder="Descripción…" style="padding:7px 10px; font-size:12px; width:140px;">
                     <input type="text" id="efpFiltroOrigen" oninput="renderEfectivoPesos()" placeholder="Origen / Destino…" style="padding:7px 10px; font-size:12px; width:150px;">
+                    <select id="efpOrden" onchange="renderEfectivoPesos()" title="Orden de los movimientos" style="width:auto; padding:7px 10px; font-size:12px;">
+                        <option value="desc">↓ Más recientes primero</option>
+                        <option value="asc">↑ Más antiguos primero</option>
+                    </select>
                     <button class="btn-clear-filters" onclick="efpLimpiarFiltros()">✕ Limpiar</button>
                     <div style="margin-left:auto;display:flex;gap:8px;">
                         <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso')">＋ Ingreso</button>
@@ -5567,6 +5575,10 @@
                     </select>
                     <input type="text" id="efuFiltroBusq" oninput="renderEfectivoUSD()" placeholder="Descripción…" style="padding:7px 10px; font-size:12px; width:140px;">
                     <input type="text" id="efuFiltroOrigen" oninput="renderEfectivoUSD()" placeholder="Origen / Destino…" style="padding:7px 10px; font-size:12px; width:150px;">
+                    <select id="efuOrden" onchange="renderEfectivoUSD()" title="Orden de los movimientos" style="width:auto; padding:7px 10px; font-size:12px;">
+                        <option value="desc">↓ Más recientes primero</option>
+                        <option value="asc">↑ Más antiguos primero</option>
+                    </select>
                     <button class="btn-clear-filters" onclick="efuLimpiarFiltros()">✕ Limpiar</button>
                     <div style="margin-left:auto;display:flex;gap:8px;">
                         <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso','USD')">＋ Ingreso USD</button>
@@ -5657,6 +5669,10 @@
                         </select>
                         <input type="text" id="cbFiltroBusq" oninput="renderExtractoBancario()" placeholder="Descripción…" style="padding:7px 10px; font-size:12px; width:140px;">
                         <input type="text" id="cbFiltroOrigen" oninput="renderExtractoBancario()" placeholder="Proveedor / Origen…" style="padding:7px 10px; font-size:12px; width:160px;">
+                        <select id="cbOrden" onchange="renderExtractoBancario()" title="Orden de los movimientos" style="width:auto; padding:7px 10px; font-size:12px;">
+                            <option value="desc">↓ Más recientes primero</option>
+                            <option value="asc">↑ Más antiguos primero</option>
+                        </select>
                         <button class="btn-clear-filters" onclick="cbFiltrosLimpiar()">✕ Limpiar</button>
                         <span class="results-count" id="cbExtContador" style="margin-left:auto;"></span>
                     </div>
@@ -10680,6 +10696,23 @@
             el.value = d.toISOString().substring(0, 10);
         }
     }
+    // Orden de las tablas de movimientos (Caja General, Efectivo ARS/USD, Extracto
+    // Bancario). Por defecto lo MÁS NUEVO va arriba: es lo que se quiere ver primero.
+    // OJO: los saldos corridos/acumulados se calculan SIEMPRE sobre el array ascendente
+    // (el saldo de un movimiento arrastra al siguiente). Acá sólo se da vuelta lo que se
+    // pinta, nunca el array de cálculo.
+    function _ordenarParaPintar(arr, selectId) {
+        var el = document.getElementById(selectId);
+        var asc = !!(el && el.value === 'asc');
+        return asc ? arr : arr.slice().reverse();
+    }
+    // Pinta las filas de una sola vez (fragmento) en lugar de un appendChild por fila:
+    // con cientos de movimientos el navegador recalcula el layout una vez y no N veces.
+    function _pintarFilas(tbody, filas) {
+        var frag = document.createDocumentFragment();
+        filas.forEach(function(tr) { frag.appendChild(tr); });
+        tbody.appendChild(frag);
+    }
 
     function mostrarTab(nombre) {
         const ALL_TABS = [
@@ -10814,7 +10847,7 @@
         if (nombre === 'Vencimientos')     renderVencimientos();
         if (nombre === 'Pagos')             renderPagos();
         if (nombre === 'ResumenIngresos')  renderResumenIngresos();
-        if (nombre === 'CajaGeneral')      { renderCajaGeneral(); }
+        if (nombre === 'CajaGeneral')      { _prellenar30dias('cgFiltroDesde'); renderCajaGeneral(); }
         if (nombre === 'PlanTrabajo')      renderPlanTrabajo();
         if (nombre === 'EfectivoPesos')    { _prellenar30dias('efpFiltroDesde'); renderEfectivoPesos(); }
         if (nombre === 'EfectivoUSD')      { _prellenar30dias('efuFiltroDesde'); renderEfectivoUSD(); }
@@ -16123,23 +16156,33 @@
         if(tbody){
             tbody.innerHTML='';
             if(!cuentasBancarias.length){tbody.innerHTML='<tr><td colspan="8" class="empty-msg">No hay cuentas. Agregá una con el botón.</td></tr>';}
-            else{cuentasBancarias.forEach(function(cb,i){
-                var sal=0,ent=0;
-                datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
-                facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=p.monto||0;});});
-                documentos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A'&&p.cuentaId===(cb.id||cb.banco))sal+=p.monto||0;});});
-                ingGeneral.forEach(function(ig){if(!ig.esBancario||ig.cuentaId!==(cb.id||cb.banco))return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')sal+=ig.monto||0;else ent+=ig.monto||0;});
-                ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
-                alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
-                servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.cuentaId===(cb.id||cb.banco))ent+=c.monto||0;});});
+            else{
+            // Entradas/salidas por cuenta en UNA sola pasada. Antes se recorrían todos los
+            // pagos, cobros y movimientos una vez POR CADA cuenta: con muchos movimientos
+            // el panel tardaba en aparecer. Ahora se acumula en un mapa cuentaId → {ent,sal}.
+            var _porCta={};
+            var _acu=function(cId,ent,sal){ if(!cId)return; var a=_porCta[cId]||(_porCta[cId]={ent:0,sal:0}); a.ent+=ent||0; a.sal+=sal||0; };
+            datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.capital||0)+(p.mayores||0)||p.montoPagado||0);});});
+            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,p.monto||0);});});
+            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,p.monto||0);});});
+            ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,esS?0:ig.monto||0,esS?ig.monto||0:0);});
+            ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
+            alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
+            servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
+            var _filasCb=[];
+            cuentasBancarias.forEach(function(cb,i){
+                var _a=_porCta[cb.id||cb.banco]||{ent:0,sal:0};
+                var sal=_a.sal, ent=_a.ent;
                 var saldoAct=(cb.saldo||0)+ent-sal;
                 var monSym=cb.moneda==='USD'?'USD ':'$';
                 var empN=empresas&&empresas.find?((empresas.find(function(e){return e.id===cb.empresaId;})||{}).nombre||'—'):'—';
                 var acc=esSuperAdmin?'<button class="btn btn-outline btn-sm" onclick="editarCuenta('+i+')">✏</button><button class="btn btn-danger-sm" onclick="eliminarCuenta('+i+')">✕</button>':puedeEditar?'<button class="btn btn-outline btn-sm" onclick="editarCuenta('+i+')">✏</button>':'—';
                 var tr=document.createElement('tr');
                 tr.innerHTML='<td><strong>'+(cb.banco||'—')+'</strong></td><td>'+(cb.tipo||'—')+'</td><td style="font-size:12px;color:var(--text-3);">'+(cb.alias||'')+(cb.cbu?' · '+cb.cbu.substring(0,10)+'…':'')+'</td><td>'+(cb.moneda||'ARS')+'</td><td>'+empN+'</td><td style="text-align:right;">'+monSym+(cb.saldo||0).toLocaleString('es-AR')+'</td><td style="text-align:right;font-weight:700;color:'+(saldoAct>=0?'var(--success)':'var(--danger)')+';">'+monSym+Math.round(saldoAct).toLocaleString('es-AR')+'</td><td><div class="action-btns">'+acc+'</div></td>';
-                tbody.appendChild(tr);
-            });}
+                _filasCb.push(tr);
+            });
+            _pintarFilas(tbody,_filasCb);
+            }
         }
         var csel=document.getElementById('cbCuentaFiltro');
         if(csel){var prev=csel.value;csel.innerHTML='<option value="">— Todas las cuentas —</option>';cuentasBancarias.forEach(function(cb){var o=document.createElement('option');o.value=cb.id||cb.banco;o.textContent=cb.banco+(cb.tipo?' — '+cb.tipo:'')+(cb.moneda?' ('+cb.moneda+')':'');if(o.value===prev)o.selected=true;csel.appendChild(o);});}
@@ -16257,7 +16300,8 @@
             tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
             return;
         }
-        filtrados.slice().reverse().forEach(function(m){
+        var _cbFilas = [];
+        _ordenarParaPintar(filtrados, 'cbOrden').forEach(function(m){
             var s = m.saldoAcum;
             var tipoBadge = m.entrada>0 ? '<span class="badge-rol badge-ok" style="font-size:10px;">Entrada</span>' : '<span class="badge-rol badge-err" style="font-size:10px;">Salida</span>';
             var tr = document.createElement('tr');
@@ -16275,8 +16319,9 @@
                 '<td style="text-align:right;color:var(--danger);">'+(m.salida>0?'$'+Math.round(m.salida).toLocaleString('es-AR'):'—')+'</td>'+
                 '<td style="text-align:right;font-weight:700;color:'+(s>=0?'var(--success)':'var(--danger)')+';">$'+Math.round(s).toLocaleString('es-AR')+'</td>'+
                 '<td style="text-align:center;white-space:nowrap;">'+acciones+'</td>';
-            tbody.appendChild(tr);
+            _cbFilas.push(tr);
         });
+        _pintarFilas(tbody, _cbFilas);
     }
 
     // ===================== RENDER: EFECTIVO EN PESOS =====================
@@ -16403,7 +16448,8 @@
             tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
             return;
         }
-        filtrados.forEach(m => {
+        const _efpFilas = [];
+        _ordenarParaPintar(filtrados, 'efpOrden').forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
             _filaMovClickeable(tr, m.srcTipo, m.srcRef);
@@ -16417,8 +16463,9 @@
                 <td style="text-align:right; color:var(--danger);">${m.egreso>0?'$'+Math.round(m.egreso).toLocaleString('es-AR'):'—'}</td>
                 <td style="text-align:right; font-weight:600; color:${saldo>=0?'var(--success)':'var(--danger)'};">$${Math.round(saldo).toLocaleString('es-AR')}</td>
                 <td>${bEFP}</td>`;
-            tbody.appendChild(tr);
+            _efpFilas.push(tr);
         });
+        _pintarFilas(tbody, _efpFilas);
     }
 
     function efuLimpiarFiltros() {
@@ -16513,7 +16560,8 @@
             tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
             return;
         }
-        filtrados.forEach(m => {
+        const _efuFilas = [];
+        _ordenarParaPintar(filtrados, 'efuOrden').forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
             _filaMovClickeable(tr, m.srcTipo, m.srcRef);
@@ -16527,8 +16575,9 @@
                 '<td style="text-align:right; color:var(--danger);">'+(m.egreso>0?fmt(m.egreso):'—')+'</td>'+
                 '<td style="text-align:right; font-weight:600; color:'+(saldo>=0?'var(--success)':'var(--danger)')+';">'+fmt(saldo)+'</td>'+
                 '<td>'+bEFU+'</td>';
-            tbody.appendChild(tr);
+            _efuFilas.push(tr);
         });
+        _pintarFilas(tbody, _efuFilas);
     }
 
     // ===================== EDITAR/ELIMINAR EMPRESA Y PROYECTO (legacy wrappers) =====================
@@ -24272,6 +24321,7 @@
         ['cgFiltroTipo','cgFiltroMovTipo','cgFiltroMedio'].forEach(function(id) {
             var el = document.getElementById(id); if (el) el.value = '';
         });
+        _prellenar30dias('cgFiltroDesde');
         renderCajaGeneral();
     }
 
@@ -24496,7 +24546,8 @@
         if (filtrados.length === 0) {
             tbody.innerHTML = '<tr><td colspan="11" class="empty-msg">No hay movimientos para los filtros seleccionados.</td></tr>';
         } else {
-            filtrados.forEach(function(m) {
+            var _cgFilas = [];
+            _ordenarParaPintar(filtrados, 'cgOrden').forEach(function(m) {
                 var tr = document.createElement('tr');
                 var pillClass  = m.esIngreso ? 'badge-ok' : 'badge-err';
                 var medioColor = m.medio==='Banco' ? 'var(--blue)' : 'var(--warn)';
@@ -24535,8 +24586,9 @@
                     '<td>'+m.origen+'</td>'+
                     '<td><span class="pill" style="font-size:10px;color:'+medioColor+';border-color:'+medioColor+';">'+m.medio+'</span></td>'+
                     ingARS+egrARS+sldARS+ingUSD+egrUSD+sldUSD+'<td><div class="action-btns">'+bAcc+'</div></td>';
-                tbody.appendChild(tr);
+                _cgFilas.push(tr);
             });
+            _pintarFilas(tbody, _cgFilas);
         }
     }
 
