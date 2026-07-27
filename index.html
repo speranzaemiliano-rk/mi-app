@@ -4672,7 +4672,19 @@
                     <div id="cfgApiKeyStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                   </div>
 
-                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;" id="cfgCACCard">
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;" id="cfgIndiceCard">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">⚡ Velocidad de carga — índice de documentos</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Los PDF adjuntos viven en la misma rama que los documentos. Para no descargarlos
+                      enteros en cada arranque, la app le pide a Firebase sólo los documentos reales, y eso
+                      necesita un <strong>índice</strong> publicado en las reglas. Si falta, Firebase igual
+                      baja todos los archivos y la app tarda. Este botón lo comprueba de verdad contra la base.
+                    </p>
+                    <button class="btn btn-outline btn-sm" onclick="verificarIndiceDocumentos()">🔍 Verificar índice</button>
+                    <div id="cfgIndiceEstado" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;"></div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;" id="cfgCACCard">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">📈 Índice CAC (mensual)</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       Cargá el valor del índice CAC de cada mes (fuente:
@@ -6418,6 +6430,10 @@
     let exchangeRate = 950;
     let tcInicializado = false;
     let datosInicializado = false;
+    // Los nodos pesados (comprobantes y vencimientos, con los PDF adjuntos) se
+    // enganchan después de lo liviano: estas banderas distinguen "todavía no llegó"
+    // de "llegó y está vacío", para no mostrar un "no hay nada" que es mentira.
+    let _docsCargados = false, _vencCargados = false;
     let puedeEditar   = false;
     let esAdmin       = false;  // admin o superadmin
     let esSuperAdmin  = false;
@@ -6485,6 +6501,58 @@
     // decenas de MB por los PDFs en base64—. Usa consultas 'shallow' del REST de Firebase
     // para listar los IDs y después pide sólo los campos chicos. Devuelve el mismo objeto
     // que devolvía REF_EMPRESAS.once('value'), así el resto del código no cambia.
+    // ── ¿Está publicado el índice de documentos? ──────────────────────────────
+    // No se puede saber desde el SDK: sin índice Firebase no falla, sólo filtra en el
+    // cliente (y baja igual todos los PDF). Por REST, en cambio, la misma consulta
+    // devuelve HTTP 400 con "Index not defined". Así que la preguntamos por REST con
+    // el token del propio usuario y tenemos una respuesta binaria y confiable.
+    async function _chequearIndiceDocs() {
+        var dbUrl = (typeof firebaseConfig !== 'undefined' && firebaseConfig && firebaseConfig.databaseURL)
+            ? String(firebaseConfig.databaseURL).replace(/\/+$/, '') : '';
+        if (!dbUrl) return { ok: false, motivo: 'config', detalle: 'No hay databaseURL configurada.' };
+        if (!auth || !auth.currentUser) return { ok: false, motivo: 'sesion', detalle: 'No hay sesión iniciada.' };
+        if (!empresaActual || !proyectoActual) return { ok: false, motivo: 'sesion', detalle: 'Elegí primero una empresa y un proyecto.' };
+        var token = await auth.currentUser.getIdToken();
+        // limitToFirst=1: sólo nos importa el código de respuesta, no los datos.
+        var url = dbUrl + '/' + getBasePath() + '/documentos.json'
+                + '?auth=' + encodeURIComponent(token)
+                + '&orderBy=' + encodeURIComponent('"proveedor"')
+                + '&startAt=' + encodeURIComponent('""')
+                + '&limitToFirst=1';
+        var r = await fetch(url);
+        if (r.ok) return { ok: true };
+        var txt = '';
+        try { txt = JSON.stringify(await r.json()); } catch (e) { txt = 'HTTP ' + r.status; }
+        if (/index not defined|indexOn/i.test(txt)) return { ok: false, motivo: 'indice', detalle: txt };
+        return { ok: false, motivo: 'otro', detalle: 'HTTP ' + r.status + ' — ' + txt };
+    }
+
+    var REGLAS_INDICE_DOCS = '"empresas": {\n  "$empresaId": {\n    "proyectos": {\n      "$proyectoId": {\n        "documentos": { ".indexOn": ["proveedor"] }\n      }\n    }\n  }\n}';
+
+    async function verificarIndiceDocumentos() {
+        var el = document.getElementById('cfgIndiceEstado');
+        if (el) el.innerHTML = 'Consultando la base…';
+        var res;
+        try { res = await _chequearIndiceDocs(); }
+        catch (e) { res = { ok: false, motivo: 'red', detalle: e.message || String(e) }; }
+        if (!el) return;
+        if (res.ok) {
+            el.innerHTML = '<span style="color:var(--success);font-weight:600;">✓ El índice está publicado.</span> '
+                         + 'Los PDF adjuntos no se descargan al arrancar.';
+            return;
+        }
+        if (res.motivo === 'indice') {
+            el.innerHTML = '<span style="color:var(--danger);font-weight:600;">✕ Falta publicar el índice.</span> '
+                + 'Por eso la app tarda: Firebase está bajando todos los PDF en cada arranque.<br>'
+                + 'Andá a <strong>Firebase → Realtime Database → Reglas</strong> y agregá este bloque dentro de <code>"rules"</code>, después tocá <strong>Publicar</strong>:'
+                + '<pre style="background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:8px;overflow-x:auto;font-size:11px;line-height:1.5;">'
+                + escHtml(REGLAS_INDICE_DOCS) + '</pre>'
+                + '<span style="color:var(--text-3);">Si la rama <code>"empresas"</code> ya existe en tus reglas, sumá sólo lo de adentro; no la dupliques.</span>';
+            return;
+        }
+        el.innerHTML = '<span style="color:var(--warn);font-weight:600;">No se pudo verificar.</span> ' + escHtml(res.detalle || '');
+    }
+
     async function _leerEmpresasLiviano() {
         var dbUrl = (typeof firebaseConfig !== 'undefined' && firebaseConfig && firebaseConfig.databaseURL)
             ? String(firebaseConfig.databaseURL).replace(/\/+$/, '') : '';
@@ -6890,7 +6958,16 @@
             return;
         }
         datosInicializado = true;
+        _docsCargados = false; _vencCargados = false;
         mostrarTab('Home');
+
+        // Marcadores para saber cuándo llegó lo liviano (ver _engancharPesados abajo).
+        var _livianoDatos = false, _livianoFacturas = false;
+        function _avisarLiviano(cual) {
+            if (cual === 'datos')    _livianoDatos    = true;
+            if (cual === 'facturas') _livianoFacturas = true;
+            if (_livianoDatos && _livianoFacturas) _engancharPesados();
+        }
 
         actualizarDisplayTipoCambio();
         cargarTipoCambio();
@@ -6918,6 +6995,7 @@
             if (REF_DATOS && REF_DATOS.toString() !== refPathDatos) return;
             datos = _colProcesarCarga('datos', REF_DATOS, snap.val());
             renderizar();
+            _avisarLiviano('datos');
         }); activeListeners.push({ref:l3, event:'value'});
 
         const l4 = REF_PROV; l4.on('value', (snap) => {
@@ -6944,6 +7022,7 @@
             facturas.forEach(function(f){ if (typeof _estadoFactDoc === 'function') f.estado = _estadoFactDoc(f); });
             renderFacturas();
             if (_tabActivo === 'Documentos' && typeof renderDocumentos === 'function') renderDocumentos();
+            _avisarLiviano('facturas');
         }); activeListeners.push({ref:l5, event:'value'});
 
         const l6 = REF_CAJA; l6.on('value', (snap) => {
@@ -6964,40 +7043,78 @@
             }); activeListeners.push({ref:l8, event:'value'});
         }
 
-        // Los adjuntos (PDFs) se guardan en este mismo nodo como {nombre,tipo,contenido}
-        // con el archivo en base64, y NO tienen 'proveedor'. Antes se bajaba el nodo entero
-        // —megas de PDFs— para descartarlos acá abajo con '!entry.contenido'. Pidiéndole a
-        // Firebase sólo los hijos que tienen 'proveedor', los archivos no viajan nunca.
-        // Requiere el índice ".indexOn": ["proveedor"] en las reglas (ver database.rules.json);
-        // sin índice Firebase filtra en el cliente y se bajaría todo igual.
-        // Guardamos la CONSULTA (no el ref) en activeListeners: off() sobre el ref no
-        // desengancha un listener registrado en una consulta y quedaría colgado.
-        const l9 = REF_DOCS.orderByChild('proveedor').startAt('');
-        const refPathDocs = REF_DOCS.toString();
-        l9.on('value', (snap) => {
-            if (REF_DOCS && REF_DOCS.toString() !== refPathDocs) return;
-            documentos = [];
-            const val = snap.val();
-            if (val && typeof val === 'object') {
-                Object.keys(val).forEach(k => {
-                    const entry = val[k];
-                    if (entry && entry.proveedor && !entry.contenido) {
-                        if (!entry.id) entry.id = k;
-                        documentos.push(entry);
-                    }
-                });
-            }
-            renderDocumentos();
-        }); activeListeners.push({ref:l9, event:'value'});
+        // ── Nodos PESADOS: se enganchan al final, no al arranque ──────────────
+        // 'documentos' (todos los PDF del proyecto en base64) y 'vencimientosServicios'
+        // (la factura de cada servicio, también en base64) son, de lejos, lo más grande
+        // de la base. Firebase multiplexa todo por una sola conexión: si estas dos
+        // consultas salen junto con las demás, los datos livianos (presupuestos,
+        // facturas, caja, banco) quedan haciendo cola detrás de varios MB y la app
+        // tarda en aparecer. Enganchándolos DESPUÉS de que llegó lo liviano, la app
+        // queda usable enseguida y los adjuntos entran por detrás.
+        var _basePesados = REF_DOCS.toString();
+        var _pesadosListos = false;
+        function _engancharPesados() {
+            if (_pesadosListos) return;
+            // Si mientras tanto se cambió de empresa/proyecto, este enganche ya no
+            // corresponde: cargarDatos() vuelve a correr para el proyecto nuevo.
+            if (!REF_DOCS || REF_DOCS.toString() !== _basePesados) return;
+            _pesadosListos = true;
 
-        const l10 = REF_VENCIMIENTOS;
-        const refPathVenc = l10.toString();
-        l10.on('value', (snap) => {
-            if (REF_VENCIMIENTOS && REF_VENCIMIENTOS.toString() !== refPathVenc) return;
-            const val = snap.val();
-            vencimientos = val ? (Array.isArray(val) ? val.filter(Boolean) : Object.values(val)) : [];
-            renderVencimientos();
-        }); activeListeners.push({ref:l10, event:'value'});
+            // Los adjuntos (PDFs) se guardan en este mismo nodo como {nombre,tipo,contenido}
+            // con el archivo en base64, y NO tienen 'proveedor'. Antes se bajaba el nodo entero
+            // —megas de PDFs— para descartarlos acá abajo con '!entry.contenido'. Pidiéndole a
+            // Firebase sólo los hijos que tienen 'proveedor', los archivos no viajan nunca.
+            // Requiere el índice ".indexOn": ["proveedor"] en las reglas (ver database.rules.json);
+            // sin índice Firebase filtra en el cliente y se bajaría todo igual.
+            // Guardamos la CONSULTA (no el ref) en activeListeners: off() sobre el ref no
+            // desengancha un listener registrado en una consulta y quedaría colgado.
+            const l9 = REF_DOCS.orderByChild('proveedor').startAt('');
+            const refPathDocs = REF_DOCS.toString();
+            l9.on('value', (snap) => {
+                if (REF_DOCS && REF_DOCS.toString() !== refPathDocs) return;
+                documentos = [];
+                const val = snap.val();
+                if (val && typeof val === 'object') {
+                    Object.keys(val).forEach(k => {
+                        const entry = val[k];
+                        if (entry && entry.proveedor && !entry.contenido) {
+                            if (!entry.id) entry.id = k;
+                            documentos.push(entry);
+                        }
+                    });
+                }
+                _docsCargados = true;
+                renderDocumentos();
+                // Caja General, Banco, Efectivo y Egresos arman renglones con los pagos
+                // de documentos: como ahora llegan más tarde, hay que repintar la pestaña
+                // que el usuario esté mirando o le quedaría incompleta. (Repintamos sólo
+                // esa pestaña, no usamos refreshTabActivo() para no hacer girar el botón
+                // de refrescar cada vez que cambia un documento.)
+                var _repintar = {
+                    'CajaGeneral':      renderCajaGeneral,
+                    'CuentasBancarias': renderCuentasBancarias,
+                    'EfectivoPesos':    renderEfectivoPesos,
+                    'EfectivoUSD':      renderEfectivoUSD,
+                    'Egresos':          typeof renderEgresos === 'function' ? renderEgresos : null,
+                    'Pagos':            typeof renderPagos   === 'function' ? renderPagos   : null
+                };
+                var _fnRep = _repintar[_tabActivo];
+                if (typeof _fnRep === 'function') _fnRep();
+            }); activeListeners.push({ref:l9, event:'value'});
+
+            const l10 = REF_VENCIMIENTOS;
+            const refPathVenc = l10.toString();
+            l10.on('value', (snap) => {
+                if (REF_VENCIMIENTOS && REF_VENCIMIENTOS.toString() !== refPathVenc) return;
+                const val = snap.val();
+                vencimientos = val ? (Array.isArray(val) ? val.filter(Boolean) : Object.values(val)) : [];
+                _vencCargados = true;
+                renderVencimientos();
+            }); activeListeners.push({ref:l10, event:'value'});
+        }
+        // Arrancan cuando llegaron presupuestos + facturas (lo liviano que la pantalla
+        // inicial necesita), con un tope de 3 s por si alguno no llega nunca.
+        setTimeout(_engancharPesados, 3000);
 
         cargarDatosIngresos();
     }
@@ -17835,7 +17952,11 @@
         if (el('docsPendientes')) el('docsPendientes').textContent = pendientes;
 
         if (list.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay comprobantes cargados.</td></tr>';
+            // Los comprobantes se enganchan después de lo liviano (ver _engancharPesados):
+            // mientras no llegaron, "no hay comprobantes" sería mentira.
+            tbody.innerHTML = _docsCargados
+                ? '<tr><td colspan="9" class="empty-msg">No hay comprobantes cargados.</td></tr>'
+                : '<tr><td colspan="9" class="empty-msg">Cargando comprobantes…</td></tr>';
             return;
         }
         tbody.innerHTML = '';
@@ -18336,7 +18457,9 @@
         if (el('vencProximos'))  el('vencProximos').textContent = proximos;
 
         if (list.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">No hay vencimientos cargados.</td></tr>';
+            tbody.innerHTML = _vencCargados
+                ? '<tr><td colspan="8" class="empty-msg">No hay vencimientos cargados.</td></tr>'
+                : '<tr><td colspan="8" class="empty-msg">Cargando vencimientos…</td></tr>';
             return;
         }
         tbody.innerHTML = '';
