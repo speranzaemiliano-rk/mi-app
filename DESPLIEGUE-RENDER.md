@@ -1,4 +1,15 @@
-# Mover el backend a Render (plan gratuito)
+# Mover el backend a Render (plan gratuito) — PLAN B
+
+> **Esto NO es el despliegue activo.** El backend vive en **Railway (plan Hobby)**.
+> Se probó Render y funciona, pero el plan gratuito duerme el servicio a los 15
+> minutos y eso deja sin correr el aviso diario de vencimientos y el bot de mail.
+> Esta guía queda como salida de emergencia: si Railway se cae o hay que mudarse
+> rápido, en 15 minutos se levanta acá.
+>
+> ⚠️ Si dejás un servicio de Render andando **al mismo tiempo** que el de Railway,
+> los dos ejecutan las revisiones diarias contra la misma base y pueden mandar
+> avisos duplicados. Tené uno solo activo: borrá el Blueprint en Render cuando no
+> lo uses.
 
 Guía para levantar `functions/server.js` en [Render](https://render.com) en lugar de Railway.
 
