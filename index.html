@@ -8247,6 +8247,10 @@
         var t2=document.getElementById('modalIngGeneralTitle');
         if(t2) t2.textContent=tipo==='egreso'?'💸 Nuevo Egreso de Caja':'💰 Nuevo Ingreso de Caja';
         var gb=document.getElementById('igGuardarBtn');if(gb) gb.textContent=tipo==='egreso'?'💾 Guardar Egreso':'💾 Guardar Ingreso';
+        // En un EGRESO aparece el selector de préstamo a otra empresa: es la otra
+        // punta del mismo caso (acá sale la plata, allá tiene que entrar).
+        igTogglePrestamo();
+        var _sp0=document.getElementById('igPrestamoOrigen'); if(_sp0) _sp0.value='';
         document.getElementById('modalIngGeneral').classList.add('active');
     }
 
@@ -23568,19 +23572,39 @@
         });
         return out;
     }
+    // Un préstamo se puede cargar desde cualquiera de las dos puntas, y el espejo va
+    // en el sentido contrario:
+    //   'recibo' → estoy en la empresa que RECIBE (ingreso tipo préstamo)  → allá se crea el EGRESO
+    //   'presto' → estoy en la empresa que PRESTA (egreso de caja/banco)    → allá se crea el INGRESO
+    function _prestamoDireccion() {
+        var t = (document.getElementById('igTipoIngreso') || {}).value || '';
+        if (t === 'prestamo_empresa') return 'recibo';
+        if (t === 'mov_egreso_caja' || t === 'mov_banco_salida') return 'presto';
+        return '';
+    }
     function igTogglePrestamo() {
         var bloque = document.getElementById('igPrestamoBloque');
         var sel    = document.getElementById('igPrestamoOrigen');
+        var lbl    = document.getElementById('igPrestamoLabel');
+        var hint   = document.getElementById('igPrestamoHint');
         if (!bloque || !sel) return;
-        var esPrestamo = (document.getElementById('igTipoIngreso') || {}).value === 'prestamo_empresa';
-        bloque.style.display = esPrestamo ? '' : 'none';
-        if (!esPrestamo) { sel.value = ''; return; }
+        var dir = _prestamoDireccion();
+        bloque.style.display = dir ? '' : 'none';
+        if (!dir) { sel.value = ''; return; }
+        if (lbl)  lbl.textContent = dir === 'recibo'
+            ? '¿Qué empresa / proyecto presta la plata?'
+            : '¿Es un préstamo a otra empresa? Elegí a cuál';
+        if (hint) hint.innerHTML = dir === 'recibo'
+            ? 'Si elegís una, se registra automáticamente el <strong>egreso</strong> allá por el mismo importe y moneda, y el <strong>ingreso</strong> acá. Los dos quedan vinculados: si borrás uno, se borra el otro.'
+            : 'Si elegís una, se registra automáticamente el <strong>ingreso</strong> allá por el mismo importe y moneda, y el <strong>egreso</strong> acá. Los dos quedan vinculados: si borrás uno, se borra el otro.';
         var prev = sel.value;
         var pares = _paresEmpresaProyecto(
             empresaActual ? empresaActual.id : null,
             proyectoActual ? proyectoActual.id : null
         );
-        sel.innerHTML = '<option value="">— Nadie (sólo registrar el ingreso acá) —</option>';
+        sel.innerHTML = '<option value="">' + (dir === 'recibo'
+            ? '— Nadie (sólo registrar el ingreso acá) —'
+            : '— No es un préstamo entre empresas —') + '</option>';
         pares.forEach(function(x) {
             var o = document.createElement('option');
             o.value = x.empresaId + '|' + x.proyectoId;
@@ -23594,31 +23618,37 @@
     // Escribe (o borra) el egreso espejo en el proyecto que presta, con una sola
     // escritura multi-path de rutas absolutas — el mismo patrón que usa
     // confirmarMoverAlquileres para tocar dos proyectos de forma atómica.
-    function _prestamoEscribirContraparte(ingreso, destino) {
-        if (!ingreso || !ingreso.id || !destino) return Promise.resolve();
-        var contraId = _idContraparte(ingreso.id);
+    // dir: 'recibo' (acá entra → allá sale) | 'presto' (acá sale → allá entra)
+    function _prestamoEscribirContraparte(mov, destino, dir) {
+        if (!mov || !mov.id || !destino) return Promise.resolve();
+        var contraId = _idContraparte(mov.id);
         var ruta = 'empresas/' + destino.empresaId + '/proyectos/' + destino.proyectoId + '/ingGeneral/' + contraId;
         var aca = (empresaActual ? (empresaActual.nombre || empresaActual.id) : '') +
                   (proyectoActual ? ' / ' + (proyectoActual.nombre || proyectoActual.id) : '');
+        var espejoEsEgreso = (dir !== 'presto'); // si acá recibo, allá sale
         var contra = {
             id:        contraId,
-            fecha:     ingreso.fecha,
-            tipo:      'mov_egreso_caja',
-            esEgreso:  true,
-            origen:    'Préstamo a ' + aca,
+            fecha:     mov.fecha,
+            // El tipo importa: define en qué pantallas aparece. Los 'mov_*' son los
+            // que Caja General, Efectivo y Banco toman como movimiento de caja.
+            tipo:      espejoEsEgreso
+                         ? (mov.tipoAB === 'A' ? 'mov_banco_salida'  : 'mov_egreso_caja')
+                         : (mov.tipoAB === 'A' ? 'mov_banco_entrada' : 'mov_ingreso_caja'),
+            esEgreso:  espejoEsEgreso,
+            origen:    (espejoEsEgreso ? 'Préstamo a ' : 'Préstamo de ') + aca,
             origenDest: aca,
-            referencia: ingreso.referencia || '',
-            moneda:    ingreso.moneda,
-            monto:     ingreso.monto,
-            tipoAB:    ingreso.tipoAB || 'B',
-            esBancario: (ingreso.tipoAB === 'A'),
+            referencia: mov.referencia || '',
+            moneda:    mov.moneda,
+            monto:     mov.monto,
+            tipoAB:    mov.tipoAB || 'B',
+            esBancario: (mov.tipoAB === 'A'),
             obs:       'Generado automáticamente por el préstamo registrado en ' + aca +
-                       (ingreso.obs ? ' — ' + ingreso.obs : ''),
-            prestamoId: ingreso.id,
+                       (mov.obs ? ' — ' + mov.obs : ''),
+            prestamoId: mov.id,
             prestamoContraparte: {
                 empresaId:  empresaActual ? empresaActual.id : null,
                 proyectoId: proyectoActual ? proyectoActual.id : null,
-                id:         ingreso.id
+                id:         mov.id
             }
         };
         var upd = {}; upd[ruta] = contra;
@@ -23670,9 +23700,11 @@
             ingGeneral.push(nuevo);
         }
 
-        // ── Préstamo entre empresas: crear/actualizar/quitar el egreso del otro lado ──
-        var _presSel = (nuevo.tipo === 'prestamo_empresa')
-            ? ((document.getElementById('igPrestamoOrigen') || {}).value || '') : '';
+        // ── Préstamo entre empresas: crear/actualizar/quitar el movimiento espejo ──
+        // Sirve en las dos direcciones: cargando el ingreso en el que recibe, o el
+        // egreso en el que presta. El espejo va siempre con el signo contrario.
+        var _presDir = _prestamoDireccion();
+        var _presSel = _presDir ? ((document.getElementById('igPrestamoOrigen') || {}).value || '') : '';
         var _presAnterior = nuevo.prestamoContraparte || null;
         var _presDestino = null;
         if (_presSel) {
@@ -23700,7 +23732,7 @@
                 || _presAnterior.proyectoId !== _presDestino.proyectoId)) {
                 await _prestamoBorrarContraparte({ prestamoContraparte: _presAnterior });
             }
-            if (_presDestino) await _prestamoEscribirContraparte(igSnap, _presDestino);
+            if (_presDestino) await _prestamoEscribirContraparte(igSnap, _presDestino, _presDir);
         } catch (e) {
             console.error(e);
             alert('El ingreso se guardó, pero no se pudo registrar el egreso en la otra empresa: ' +
@@ -31460,7 +31492,7 @@
       <!-- Préstamo entre empresas: genera el egreso del lado del que presta -->
       <div id="igPrestamoBloque" style="display:none;">
         <div class="form-group">
-          <label>¿Qué empresa / proyecto presta la plata?</label>
+          <label id="igPrestamoLabel">¿Qué empresa / proyecto presta la plata?</label>
           <select id="igPrestamoOrigen"><option value="">— Nadie (sólo registrar el ingreso acá) —</option></select>
           <div class="form-hint" id="igPrestamoHint" style="color:var(--text-3);">
             Si elegís una, se registra automáticamente el <strong>egreso</strong> allá por el mismo importe y moneda,
