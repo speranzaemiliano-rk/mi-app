@@ -4672,7 +4672,26 @@
                     <div id="cfgApiKeyStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                   </div>
 
-                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;" id="cfgIndiceCard">
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;" id="cfgBackendUrlCard">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔗 URL del backend</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Dirección del servidor que atiende el Asistente, la lectura de facturas con IA,
+                      ARCA y los bancos. Se guarda <strong>en la nube</strong>: la cargás una vez y vale
+                      para todos los dispositivos y usuarios, sin volver a publicar el sitio.
+                      Si mudás el backend (Railway, Render, otro), lo cambiás acá.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                      <div class="form-group" style="flex:1;min-width:220px;margin:0;">
+                        <label>Dirección</label>
+                        <input type="url" id="cfgBackendUrl" placeholder="https://mess-backend.onrender.com" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarBackendUrl()" style="margin-bottom:1px;">💾 Guardar</button>
+                      <button class="btn btn-outline btn-sm" onclick="probarBackendUrl()" style="margin-bottom:1px;">🔌 Probar conexión</button>
+                    </div>
+                    <div id="cfgBackendUrlStatus" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;word-break:break-all;"></div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;" id="cfgIndiceCard">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">⚡ Velocidad de carga — índice de documentos</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       Los PDF adjuntos viven en la misma rama que los documentos. Para no descargarlos
@@ -6597,6 +6616,10 @@
     }
 
     function initEmpresas() {
+        // La URL del backend vive en la nube: la traemos apenas hay sesión, para que
+        // el Asistente/ARCA/IA apunten al servidor correcto aunque este dispositivo
+        // nunca la haya tenido (o el backend se haya mudado desde otra máquina).
+        if (typeof _hidratarBackendUrl === 'function') _hidratarBackendUrl();
         if (!REF_EMPRESAS) {
             console.error('REF_EMPRESAS no está definido. Firebase no se inició.');
             usarEmpresaLocal(true);
@@ -13691,6 +13714,7 @@
         cargarGoogleClientIdUI();
         cargarGmailFacturasUI();
         cargarAppTokenUI();
+        if (typeof cargarBackendUrlUI === 'function') cargarBackendUrlUI();
     }
 
     // ── Token compartido del backend (X-App-Token) ──────────────────────
@@ -13908,12 +13932,80 @@
         }
     }
 
-    // ── Gestión de Usuarios (superadmin) ─────────────────────────────
+    // ── URL del backend ──────────────────────────────────────────────
+    // Se guarda en Firebase (global/config/backendUrl) igual que el token, así al
+    // mudar el backend (Railway → Render, o donde sea) se cambia UNA vez desde
+    // Configuración y vale para todos los dispositivos y usuarios: no hay que
+    // publicar el sitio de nuevo ni repetirlo en cada teléfono. El localStorage es
+    // sólo la copia local de ese valor (y lo que permite seguir andando sin red).
+    var BACKEND_URL_LS = 'rk_afip_function_url';
+    function _limpiarUrlBackend(u) {
+        return String(u || '').trim().replace(/\/afip\/?$/, '').replace(/\/+$/, '');
+    }
     function _backendUrl() {
-        var u = (localStorage.getItem('rk_afip_function_url') || '').replace(/\/afip\/?$/, '').replace(/\/+$/, '');
-        var cfg = (_APPCFG.backendUrl || 'https://mi-app-production-e1cd.up.railway.app').replace(/\/afip\/?$/, '').replace(/\/+$/, '');
+        var u = _limpiarUrlBackend(localStorage.getItem(BACKEND_URL_LS));
+        var cfg = _limpiarUrlBackend(_APPCFG.backendUrl || 'https://mi-app-production-e1cd.up.railway.app');
         return u || cfg;
     }
+    // Trae la URL guardada en la nube al arrancar. Si cambió respecto de la copia
+    // local, gana la nube: es la que acaba de configurar quien hizo la mudanza.
+    function _hidratarBackendUrl() {
+        try {
+            if (typeof db === 'undefined' || !db) return;
+            db.ref('global/config/backendUrl').once('value').then(function(snap) {
+                var v = _limpiarUrlBackend(snap.val());
+                if (v && v !== _limpiarUrlBackend(localStorage.getItem(BACKEND_URL_LS))) {
+                    localStorage.setItem(BACKEND_URL_LS, v);
+                    if (typeof AFIP_FUNCTION_URL !== 'undefined') AFIP_FUNCTION_URL = v + '/afip';
+                }
+                cargarBackendUrlUI();
+            }).catch(function(){});
+        } catch (e) {}
+    }
+    function cargarBackendUrlUI() {
+        var el = document.getElementById('cfgBackendUrl');
+        if (el && !el.value) el.value = _limpiarUrlBackend(localStorage.getItem(BACKEND_URL_LS));
+        var st = document.getElementById('cfgBackendUrlStatus');
+        if (!st) return;
+        var propia = _limpiarUrlBackend(localStorage.getItem(BACKEND_URL_LS));
+        st.innerHTML = propia
+            ? '✅ Usando <code>' + escHtml(propia) + '</code>'
+            : 'ℹ️ Sin URL configurada — se usa la que trae la instalación: <code>' + escHtml(_backendUrl()) + '</code>';
+    }
+    function guardarBackendUrl() {
+        var val = _limpiarUrlBackend((document.getElementById('cfgBackendUrl') || {}).value);
+        var st  = document.getElementById('cfgBackendUrlStatus');
+        if (!val) { alert('Pegá la dirección del backend (ej. https://mess-backend.onrender.com).'); return; }
+        if (!/^https:\/\//i.test(val)) { alert('La dirección tiene que empezar con https://'); return; }
+        localStorage.setItem(BACKEND_URL_LS, val);
+        if (typeof AFIP_FUNCTION_URL !== 'undefined') AFIP_FUNCTION_URL = val + '/afip';
+        db.ref('global/config/backendUrl').set(val).then(function() {
+            if (st) st.innerHTML = '✅ Guardada en la nube: <code>' + escHtml(val) + '</code>. Vale para todos los dispositivos.';
+        }).catch(function() {
+            if (st) st.innerHTML = '✅ Guardada en este dispositivo: <code>' + escHtml(val) + '</code> (sin acceso a la nube).';
+        });
+    }
+    // Prueba que el backend responda de verdad. Sin CORS no se puede leer la
+    // respuesta de un servicio que no existe, así que distinguimos los casos.
+    async function probarBackendUrl() {
+        var st = document.getElementById('cfgBackendUrlStatus');
+        var url = _limpiarUrlBackend((document.getElementById('cfgBackendUrl') || {}).value) || _backendUrl();
+        if (!url) { if (st) st.textContent = 'Pegá primero una dirección.'; return; }
+        if (st) st.innerHTML = 'Probando <code>' + escHtml(url) + '</code>… (si el servicio estaba dormido puede tardar hasta un minuto)';
+        try {
+            var r = await fetch(url + '/diag', { headers: { 'X-App-Token': getAppToken() || '' } });
+            var txt = '';
+            try { txt = JSON.stringify(await r.json()).slice(0, 200); } catch (e) { txt = 'HTTP ' + r.status; }
+            if (st) st.innerHTML = r.ok
+                ? '<span style="color:var(--success);font-weight:600;">✓ El backend responde.</span> <code>' + escHtml(txt) + '</code>'
+                : '<span style="color:var(--warn);font-weight:600;">Responde pero con error HTTP ' + r.status + '.</span> ' + escHtml(txt);
+        } catch (e) {
+            if (st) st.innerHTML = '<span style="color:var(--danger);font-weight:600;">✕ No responde.</span> '
+                + 'O la dirección no existe, o el servicio está caído. Si es un plan gratuito que estaba dormido, esperá un minuto y reintentá.';
+        }
+    }
+
+    // ── Gestión de Usuarios (superadmin) ─────────────────────────────
     function _fetchBackend(path, opts) {
         opts = opts || {};
         var url = _backendUrl();
