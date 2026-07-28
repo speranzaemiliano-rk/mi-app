@@ -15012,6 +15012,79 @@
         lfInicializarPaso2(provSel);
     }
 
+    // ══════════════════════════════════════════════════════════
+    // AVISO DE COMPROBANTE DUPLICADO
+    // ══════════════════════════════════════════════════════════
+    // Caso real: una persona cargó una factura y, un rato después, otra volvió a
+    // cargar la misma. Antes el control existía SOLO en el formulario manual de
+    // facturas, y sólo miraba la colección 'facturas' con el número tal cual venía
+    // escrito. Se colaba por tres lados: la carga con IA no chequeaba nada, los
+    // comprobantes X tampoco, y "0001-00012345" no matcheaba con "1-12345".
+    //
+    // Este control es el único: lo usan los tres caminos de carga. Avisa, no bloquea
+    // — a veces un proveedor repite número de verdad, y el usuario decide.
+
+    // Normaliza un número de comprobante: separa por lo que no sea dígito y le saca
+    // los ceros a la izquierda a cada parte. '0001-00012345' y '1-12345' → '1-12345'.
+    function _normNumComp(s) {
+        var partes = String(s || '').match(/\d+/g);
+        if (!partes || !partes.length) return '';
+        return partes.map(function(p) { return p.replace(/^0+/, '') || '0'; }).join('-');
+    }
+    function _normTexto(s) { return String(s || '').trim().toLowerCase(); }
+
+    // Busca un comprobante ya cargado que probablemente sea el mismo. Mira TANTO
+    // facturas (ARCA) como documentos (comprobantes X): la misma factura de papel se
+    // puede haber cargado de las dos formas.
+    // excluirId evita que un registro se detecte a sí mismo al editarlo.
+    function buscarComprobanteDuplicado(nuevo, excluirId) {
+        var prov = _normTexto(nuevo.proveedor);
+        if (!prov) return null;
+        var num  = _normNumComp(nuevo.numero);
+        var cola = num ? num.split('-').pop() : '';
+        var imp  = Math.round(Number(nuevo.importe) || 0);
+        var candidatos = [];
+        (facturas || []).forEach(function(f) { if (f) candidatos.push({ item: f, donde: 'Facturas' }); });
+        (documentos || []).forEach(function(d) { if (d) candidatos.push({ item: d, donde: 'Comprobantes' }); });
+
+        for (var i = 0; i < candidatos.length; i++) {
+            var c = candidatos[i], x = c.item;
+            if (excluirId && x.id === excluirId) continue;
+            if (_normTexto(x.proveedor) !== prov) continue;
+            var xnum  = _normNumComp(x.numero);
+            var ximp  = Math.round(Number(x.importe) || 0);
+            var xcola = xnum ? xnum.split('-').pop() : '';
+
+            // 1. Mismo proveedor y mismo número normalizado: es el caso claro.
+            if (num && xnum && num === xnum) return { item: x, donde: c.donde, motivo: 'mismo número' };
+            // 2. Coincide el número de comprobante pero no el punto de venta (uno lo
+            //    trae y el otro no). Pedimos que además coincida el importe.
+            if (cola && xcola && cola === xcola && imp && imp === ximp)
+                return { item: x, donde: c.donde, motivo: 'mismo número e importe' };
+            // 3. Sin número en alguno de los dos: mismo proveedor, importe y fecha.
+            if ((!num || !xnum) && imp && imp === ximp && nuevo.fecha && nuevo.fecha === x.fecha)
+                return { item: x, donde: c.donde, motivo: 'mismo importe y fecha' };
+        }
+        return null;
+    }
+
+    // Devuelve true si hay que seguir adelante (no había duplicado, o el usuario aceptó).
+    function confirmarSiDuplicado(nuevo, excluirId) {
+        var d = buscarComprobanteDuplicado(nuevo, excluirId);
+        if (!d) return true;
+        var x = d.item;
+        var mon = (x.moneda === 'USD' ? 'USD ' : '$');
+        return confirm(
+            '⚠️ Ya hay un comprobante cargado que parece el mismo (' + d.motivo + ').\n\n' +
+            'Proveedor: ' + (x.proveedor || '—') + '\n' +
+            'Número: '    + (x.numero || '(sin número)') + '\n' +
+            'Fecha: '     + (x.fecha || '—') + '\n' +
+            'Importe: '   + mon + Math.round(x.importe || 0).toLocaleString('es-AR') + '\n' +
+            'Está en: '   + d.donde + '\n\n' +
+            'Puede que otra persona ya lo haya cargado.\n\n¿Cargarlo igual?'
+        );
+    }
+
     async function confirmarFacturaPDF() {
         var prov       = document.getElementById('leerFactProv').value.trim();
         var numero     = document.getElementById('leerFactNumero').value.trim();
@@ -15030,6 +15103,9 @@
         if (!prov)        { alert('Seleccioná o ingresá el proveedor.'); return; }
         if (!fecha)       { alert('La fecha es obligatoria.'); return; }
         if (importe <= 0) { alert('El importe debe ser mayor a cero.'); return; }
+        // Este camino (leer el PDF con IA) no chequeaba duplicados: era por donde se
+        // colaba la misma factura cargada por dos personas.
+        if (!confirmarSiDuplicado({ proveedor: prov, numero: numero, importe: importe, fecha: fecha })) return;
 
         // ── Tipo de carga + presupuesto vinculado ────────────────────
         var tipoCarga = document.getElementById('lfTipo').value || 'presup';
@@ -15544,21 +15620,10 @@
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
-        // Aviso de posible factura DUPLICADA: mismo proveedor + mismo número (típicamente cuando dos
-        // personas cargan la misma factura, o al subir dos veces la misma). No bloquea: solo avisa.
-        if (editandoFactIndex < 0 && (nuevo.numero||'').trim()) {
-            var _numDup = (nuevo.numero||'').trim().toLowerCase();
-            var _provDup = (nuevo.proveedor||'').trim().toLowerCase();
-            var _dup = (facturas||[]).find(function(f){
-                return f && (f.numero||'').trim().toLowerCase() === _numDup && (f.proveedor||'').trim().toLowerCase() === _provDup;
-            });
-            if (_dup) {
-                var _mon = (nuevo.moneda === 'USD' ? 'USD ' : '$');
-                if (!confirm('⚠️ Ya hay una factura de "' + nuevo.proveedor + '" con el número ' + nuevo.numero +
-                    ' (importe ' + _mon + Math.round(_dup.importe||0).toLocaleString('es-AR') + ', fecha ' + (_dup.fecha||'—') + ').\n\n' +
-                    'Puede ser un duplicado (quizás otra persona ya la cargó).\n\n¿Cargarla igual?')) return;
-            }
-        }
+        // Aviso de posible comprobante DUPLICADO. Antes el chequeo vivía acá suelto y
+        // sólo miraba 'facturas' con el número tal cual: ahora usa el control común, que
+        // también mira los comprobantes X y normaliza el número.
+        if (editandoFactIndex < 0 && !confirmarSiDuplicado(nuevo)) return;
         if (editandoFactIndex >= 0 && document.getElementById('factPagarAhora').value === 'true' && _saldoFactDoc(nuevo) <= 0 && (nuevo.pagado||0) > 0) {
             alert('Esta factura ya está pagada en su totalidad. No se puede registrar otro pago.\nSi el pago está mal cargado, editalo o eliminalo desde la pestaña Pagos (✏️).');
             return;
@@ -17991,6 +18056,11 @@
             alert('No encontramos "' + proveedor + '" entre los proveedores cargados. Tocá el botón ＋ para darlo de alta antes de guardar.');
             return;
         }
+        // Mismo control que en facturas: el comprobante puede haberlo cargado otra persona.
+        if (!confirmarSiDuplicado({
+                proveedor: proveedor, numero: (document.getElementById('docNumero').value || '').trim(),
+                importe: importe, fecha: fecha
+            }, editandoDocId)) return;
         // Si ya tiene pagos registrados vía el botón "Pagar" (pagosHistorial), ese historial
         // manda: el toggle de esta pantalla no puede pisarlo ni ponerlo en 0 por accidente.
         const existente = editandoDocId ? documentos.find(x => x.id === editandoDocId) : null;
