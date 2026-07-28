@@ -1425,16 +1425,13 @@ async function revisarVencimientos() {
 
     let revisados = 0, avisados = 0;
     try {
-        const [vencSnap, empSnap] = await Promise.all([
-            admin.database().ref('global/vencimientosServicios').once('value'),
-            admin.database().ref('empresas').once('value')
-        ]);
-        const vencimientosVal = vencSnap.val() || {};
-        const empresasVal = empSnap.val() || {};
+        // Sólo los ids, y después cada vencimiento SIN su adjunto en base64.
+        const vencIds = await _idsDe('global/vencimientosServicios');
+        const cacheEmp = {};
         const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
 
-        for (const vencId of Object.keys(vencimientosVal)) {
-            const v = vencimientosVal[vencId];
+        for (const vencId of vencIds) {
+            const v = await _vencimientoLiviano(vencId);
             if (!v || v.pagado || !v.fechaVencimiento) continue;
             revisados++;
             const fechaVenc = new Date(v.fechaVencimiento + 'T00:00:00');
@@ -1444,8 +1441,8 @@ async function revisarVencimientos() {
             const diasAviso = Array.isArray(v.diasAviso) && v.diasAviso.length ? v.diasAviso : [10, 5];
             const recordatorios = v.recordatorios || {};
 
-            const emp = (v.empresaId && empresasVal[v.empresaId]) || {};
-            const emailEmpresa = (emp.datos && emp.datos.email) || '';
+            const emp = await _empresaLiviana(v.empresaId, cacheEmp);
+            const emailEmpresa = emp.email || '';
 
             for (const dia of diasAviso) {
                 if (diasRestantes > dia || recordatorios[String(dia)]) continue;
@@ -1510,6 +1507,62 @@ if (mailBotConfigurado()) {
 let _alquileresCorriendo = false;
 const ALQ_DIAS_AVISO = [5, 1, 0]; // días antes del vencimiento en que se avisa
 
+// ═══════════════════════════════════════════════════════════════════
+//  Lecturas LIVIANAS de la base (para las tareas programadas)
+//
+//  Las revisiones diarias hacían admin.database().ref('empresas').once('value'),
+//  es decir se bajaban el árbol ENTERO: todas las empresas, todos los proyectos
+//  y —lo grave— el nodo 'documentos' de cada proyecto, que guarda los PDF
+//  adjuntos en base64. Son varios MB. En un contenedor de 512 MB eso revienta el
+//  proceso con SIGABRT (Render lo reporta como "Exited with status 134") a los
+//  pocos minutos de arrancar, que es justo cuando disparan estas tareas.
+//
+//  Estas funciones bajan sólo lo que las tareas usan de verdad: el nombre y el
+//  mail de la empresa, y los alquileres de cada proyecto. Los adjuntos no viajan.
+// ═══════════════════════════════════════════════════════════════════
+
+// El Admin SDK no soporta "shallow", así que para listar ids sin bajar su
+// contenido usamos la API REST de la base con el token del service account.
+let _tokBase = { valor: '', vence: 0 };
+async function _tokenBaseDatos() {
+    if (_tokBase.valor && Date.now() < _tokBase.vence - 60000) return _tokBase.valor;
+    const cred = admin.app().options.credential;
+    const r = await cred.getAccessToken();
+    _tokBase = { valor: r.access_token, vence: Date.now() + (r.expires_in || 3600) * 1000 };
+    return _tokBase.valor;
+}
+async function _idsDe(path) {
+    const base = String(admin.app().options.databaseURL || '').replace(/\/+$/, '');
+    if (!base) throw new Error('Falta databaseURL en la configuración de Firebase Admin.');
+    const tok = await _tokenBaseDatos();
+    const r = await fetch(base + '/' + path + '.json?shallow=true&access_token=' + encodeURIComponent(tok));
+    if (!r.ok) throw new Error('REST ' + r.status + ' leyendo ' + path);
+    const j = await r.json();
+    return (j && typeof j === 'object') ? Object.keys(j) : [];
+}
+// Nombre + mail de una empresa, sin tocar sus proyectos. Cacheado por corrida.
+async function _empresaLiviana(eid, cache) {
+    if (!eid) return {};
+    if (cache && cache[eid]) return cache[eid];
+    const [nom, mail] = await Promise.all([
+        admin.database().ref('empresas/' + eid + '/nombre').once('value'),
+        admin.database().ref('empresas/' + eid + '/datos/email').once('value')
+    ]);
+    const out = { nombre: nom.val() || '', email: mail.val() || '' };
+    if (cache) cache[eid] = out;
+    return out;
+}
+// Un vencimiento sin su adjunto (v.adjunto.contenido es un PDF en base64).
+const VENC_CAMPOS = ['alias', 'fechaVencimiento', 'pagado', 'diasAviso', 'recordatorios',
+                     'emailAlerta', 'empresaId', 'empresaProveedora', 'monto', 'moneda'];
+async function _vencimientoLiviano(vencId) {
+    const base = admin.database().ref('global/vencimientosServicios/' + vencId);
+    const vals = await Promise.all(VENC_CAMPOS.map(c => base.child(c).once('value')));
+    const v = {};
+    VENC_CAMPOS.forEach((c, i) => { v[c] = vals[i].val(); });
+    return v;
+}
+
 async function revisarAlquileres() {
     if (!admin.apps.length) { const e = new Error('Firebase Admin no está inicializado.'); e.faltanCreds = true; throw e; }
     if (!mailBotConfigurado()) { const e = new Error('Faltan MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD en Railway.'); e.faltanCreds = true; throw e; }
@@ -1524,18 +1577,23 @@ async function revisarAlquileres() {
 
     let revisados = 0, avisados = 0;
     try {
-        const empSnap = await admin.database().ref('empresas').once('value');
-        const empresasVal = empSnap.val() || {};
+        // Sólo los ids y, de cada proyecto, únicamente su rama 'alquileres'.
+        // Nunca se baja 'documentos' (los PDF en base64), que era lo que hacía
+        // volar por los aires el proceso.
+        const eids = await _idsDe('empresas');
+        const cacheEmp = {};
         const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
         const periodo = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0');
         const diasMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
 
-        for (const eid of Object.keys(empresasVal)) {
-            const emp = empresasVal[eid] || {};
-            const emailEmpresa = (emp.datos && emp.datos.email) || '';
-            const proys = emp.proyectos || {};
-            for (const pid of Object.keys(proys)) {
-                const alqs = (proys[pid] && proys[pid].alquileres) || {};
+        for (const eid of eids) {
+            const emp = await _empresaLiviana(eid, cacheEmp);
+            const emailEmpresa = emp.email || '';
+            const pids = await _idsDe('empresas/' + eid + '/proyectos');
+            for (const pid of pids) {
+                const alqSnap = await admin.database()
+                    .ref('empresas/' + eid + '/proyectos/' + pid + '/alquileres').once('value');
+                const alqs = alqSnap.val() || {};
                 const keys = Array.isArray(alqs)
                     ? alqs.map((_, i) => i).filter((i) => alqs[i])
                     : Object.keys(alqs);
