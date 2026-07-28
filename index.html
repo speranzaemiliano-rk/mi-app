@@ -3893,6 +3893,7 @@
                     <div class="table-card-head">
                         <h3>Listado de Proveedores</h3>
                         <button class="btn btn-primary btn-sm" id="btnAgregarProv" onclick="agregarProveedor()">＋ Agregar Proveedor</button>
+                        <button class="btn btn-gold btn-sm" id="btnCargarCompProv" onclick="abrirCargarComprobante()" title="Cargar una factura oficial (ARCA) o un comprobante no oficial (X)">📥 Cargar comprobante</button>
                         <button class="btn btn-outline btn-sm" onclick="abrirResumenProveedores()">📊 Resumen</button>
                     </div>
                     <div class="search-row">
@@ -6235,7 +6236,10 @@
             <form id="formFact">
                 <div class="form-group">
                     <label>Proveedor *</label>
-                    <select id="factProveedor" required onchange="onFactProveedorChange()"></select>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <select id="factProveedor" required onchange="onFactProveedorChange()" style="flex:1;"></select>
+                        <button type="button" class="btn btn-gold btn-sm" onclick="factDarDeAltaProv()" title="Dar de alta un proveedor que todavía no está en el maestro" style="white-space:nowrap;">➕ Nuevo</button>
+                    </div>
                 </div>
 
                 <!-- Opción: vincular a presupuesto existente o pago directo -->
@@ -12543,9 +12547,14 @@
                 const certificados = (p.certificadosExento && p.certificadosExento.length)
                     ? p.certificadosExento
                     : (p.certExentoId ? [{ id: p.certExentoId, nombre: p.certExentoNombre }] : []);
+                // Cargar un comprobante ya a nombre de ESTE proveedor, sin volver a elegirlo.
+                const btnComp = puedeEditar
+                    ? ` <button class="btn btn-outline btn-sm" title="Cargar factura o comprobante de ${escHtml(p.razonSocial||'')}" onclick="abrirCargarComprobante('${escHtml(p.razonSocial||'').replace(/'/g,"\\'")}')">📥</button>`
+                    : '';
                 const acciones = (esSuperAdmin
                     ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button><button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>`
                     : puedeEditar ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>` : '—')
+                    + btnComp
                     + certificados.map(c => ` <button class="btn btn-outline btn-sm" title="Ver ${escHtml(c.nombre||'certificado')}" onclick="descargarDoc('${c.id}','${escHtml(c.nombre||'').replace(/'/g,"\\'")}')">📎</button>`).join('');
                 const regs = p.exentoRetenciones
                     ? '<span class="pill" style="font-size:10px; background:#EEF2FF; color:#3730A3; border:1px solid #C7D2FE;">🚫 Exento</span>'
@@ -15191,6 +15200,58 @@
             if (n === seleccionado) o.selected = true;
             sel.appendChild(o);
         });
+    }
+
+    // Dar de alta un proveedor sin salir de la carga del comprobante. Abre el
+    // formulario completo de proveedor (con regímenes de retención) por encima, y
+    // al guardarlo vuelve acá con el proveedor nuevo ya seleccionado. Mismo
+    // mecanismo que usa la carga por IA (lfDarDeAltaProv).
+    function factDarDeAltaProv() {
+        if (typeof agregarProveedor !== 'function') return;
+        agregarProveedor();
+        var mp = document.getElementById('modalProv'); if (mp) mp.style.zIndex = 700;
+        window._provAltaCallback = function(nuevo) {
+            if (mp) mp.style.zIndex = '';
+            var nom = nuevo && nuevo.razonSocial;
+            poblarSelectProveedoresFact(nom || undefined);
+            if (nom) {
+                var sel = document.getElementById('factProveedor');
+                if (sel) sel.value = nom;
+                if (typeof onFactProveedorChange === 'function') onFactProveedorChange();
+            }
+        };
+    }
+
+    // ── Cargar comprobante desde Proveedores ───────────────────────────
+    // La carga de comprobantes ya existía completa (proveedor con alta rápida,
+    // oficial ARCA vs Comprobante X, con o sin presupuesto, adjunto, pago), pero
+    // sólo se llegaba desde la pestaña Facturas. Esto la abre desde Proveedores,
+    // opcionalmente con el proveedor ya elegido.
+    var _provCompPrefill = '';
+    function abrirCargarComprobante(provNombre) {
+        _provCompPrefill = provNombre || '';
+        var sub = document.getElementById('cargarCompSub');
+        if (sub) sub.textContent = _provCompPrefill
+            // Sin punto final si el nombre ya termina en uno ("ACME S.A." → "ACME S.A..").
+            ? 'Se va a cargar a nombre de ' + _provCompPrefill + (/[.]$/.test(_provCompPrefill) ? '' : '.')
+            : 'Sirve para facturas oficiales (ARCA) y para comprobantes no oficiales (X): el tipo se elige adentro.';
+        document.getElementById('modalCargarComp').classList.add('active');
+    }
+    function cerrarCargarComprobante() {
+        document.getElementById('modalCargarComp').classList.remove('active');
+    }
+    function cargarCompAMano() {
+        cerrarCargarComprobante();
+        agregarFactura();
+        if (_provCompPrefill) {
+            poblarSelectProveedoresFact(_provCompPrefill);
+            var sel = document.getElementById('factProveedor');
+            if (sel) { sel.value = _provCompPrefill; if (typeof onFactProveedorChange === 'function') onFactProveedorChange(); }
+        }
+    }
+    function cargarCompConIA() {
+        cerrarCargarComprobante();
+        if (typeof abrirLeerFacturaPDF === 'function') abrirLeerFacturaPDF();
     }
 
     // ===================== FACTURAS ENHANCED =====================
@@ -31856,6 +31917,38 @@
 </div>
 
 <!-- MODAL: Leer Factura con IA -->
+<!-- Elegir cómo cargar el comprobante (se abre desde Proveedores) -->
+<div class="modal" id="modalCargarComp">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-head">
+      <h2>📥 Cargar comprobante</h2>
+      <button class="modal-close" onclick="cerrarCargarComprobante()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-2);margin-bottom:18px;" id="cargarCompSub"></p>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <button type="button" class="btn btn-gold" onclick="cargarCompAMano()" style="text-align:left;padding:14px 16px;height:auto;">
+          <div style="font-weight:700;font-size:14px;">✏️ Cargar a mano</div>
+          <div style="font-weight:400;font-size:12px;opacity:.85;margin-top:4px;line-height:1.5;">
+            Completás vos los datos. Podés adjuntar el archivo igual.
+          </div>
+        </button>
+        <button type="button" class="btn btn-outline" onclick="cargarCompConIA()" style="text-align:left;padding:14px 16px;height:auto;">
+          <div style="font-weight:700;font-size:14px;">📎 Leer PDF con IA</div>
+          <div style="font-weight:400;font-size:12px;color:var(--text-3);margin-top:4px;line-height:1.5;">
+            Subís el PDF o la foto y se extraen los datos solos, para que los revises. Necesita el backend andando.
+          </div>
+        </button>
+      </div>
+      <div style="margin-top:18px;padding:10px 12px;background:var(--bg-2);border-radius:8px;font-size:12px;color:var(--text-3);line-height:1.6;">
+        En cualquiera de los dos elegís si <strong>computa ARCA</strong> (factura oficial) o es un
+        <strong>Comprobante X</strong> (no oficial), si se <strong>aplica a un presupuesto</strong> o es
+        un pago directo, y si el proveedor no existe lo <strong>das de alta ahí mismo</strong>.
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="modalLeerFactPDF">
   <div class="modal-box" style="max-width:560px;">
     <div class="modal-head">
