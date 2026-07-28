@@ -23477,6 +23477,14 @@
             document.getElementById('igTipoIngreso').value = 'aporte_socio';
             document.getElementById('igModalidad').value = 'B';
         }
+        // Arma el selector de préstamo y, si el registro ya tenía una empresa que
+        // presta, la deja elegida para que editar no la pierda.
+        igTogglePrestamo();
+        var _selPres = document.getElementById('igPrestamoOrigen');
+        if (_selPres) {
+            var c = ig && ig.prestamoContraparte;
+            _selPres.value = (c && c.empresaId) ? (c.empresaId + '|' + c.proyectoId) : '';
+        }
         document.getElementById('modalIngGeneral').classList.add('active');
     }
 
@@ -23500,14 +23508,24 @@
         if(t2) t2.textContent=esEgr?'💸 Editar Egreso':'💰 Editar Ingreso';
         var gb=document.getElementById('igGuardarBtn');
         if(gb) gb.textContent=esEgr?'💾 Guardar Egreso':'💾 Guardar Ingreso';
+        igTogglePrestamo();
+        var _sp=document.getElementById('igPrestamoOrigen');
+        if(_sp){ var _c=ig.prestamoContraparte; _sp.value=(_c&&_c.empresaId)?(_c.empresaId+'|'+_c.proyectoId):''; }
         document.getElementById('modalIngGeneral').classList.add('active');
     }
     function eliminarMovCaja(idx){
         var ig = ingGeneral[idx];
         if(!ig) return;
-        if(!confirm('¿Eliminar este movimiento?'))return;
+        var _espejo = (ig.prestamoContraparte && ig.prestamoContraparte.id) ? JSON.parse(JSON.stringify(ig)) : null;
+        if(!confirm(_espejo
+            ? '¿Eliminar este préstamo?\n\nTambién se elimina el movimiento que generó en la otra empresa.'
+            : '¿Eliminar este movimiento?'))return;
         var emitId = ig.origenEmitidoId;
         ingGeneral.splice(idx,1);persistirIngGeneral();
+        if(_espejo) _prestamoBorrarContraparte(_espejo).catch(function(e){
+            console.error(e);
+            alert('Se borró el movimiento, pero no se pudo borrar el de la otra empresa: '+(e.message||e)+'\n\nBorralo a mano desde ese proyecto.');
+        });
         // Liberar el número correlativo propio del movimiento si era el último de su tipo
         if(ig.nroCorrelativo) _liberarNroComprobante(ig.nroCorrelativo, ig.tipoAB);
         // Si el movimiento provino de un comprobante emitido, ofrecer eliminar también el comprobante
@@ -23523,6 +23541,96 @@
         if(typeof renderEfectivoUSD==='function')renderEfectivoUSD();
     }
 
+
+    // ══════════════════════════════════════════════════════════
+    // PRÉSTAMOS ENTRE EMPRESAS
+    // ══════════════════════════════════════════════════════════
+    // Un préstamo tiene dos patas: sale plata de una empresa y entra en la otra.
+    // Antes se cargaba sólo el ingreso del lado que recibe y el egreso del que
+    // presta había que acordarse de cargarlo a mano en el otro proyecto (o quedaba
+    // sin registrar, y esa empresa mostraba más plata de la que tenía).
+    //
+    // Ahora se carga el ingreso donde estás parado, elegís quién presta, y el
+    // egreso se escribe solo del otro lado. Los dos registros quedan vinculados por
+    // `prestamoId`, y el id de la contraparte es DETERMINÍSTICO (derivado del id del
+    // ingreso): si dos personas guardan el mismo préstamo a la vez, convergen al
+    // mismo nodo en vez de duplicarlo — mismo criterio que `_emitSincronizarMovCaja`.
+
+    // Todos los pares empresa/proyecto, menos el activo (no tiene sentido prestarse
+    // a uno mismo).
+    function _paresEmpresaProyecto(excluirEid, excluirPid) {
+        var out = [];
+        (empresas || []).forEach(function(e) {
+            (e.proyectos || []).forEach(function(p) {
+                if (e.id === excluirEid && p.id === excluirPid) return;
+                out.push({ empresaId: e.id, proyectoId: p.id, nombre: (e.nombre || e.id) + ' / ' + (p.nombre || p.id) });
+            });
+        });
+        return out;
+    }
+    function igTogglePrestamo() {
+        var bloque = document.getElementById('igPrestamoBloque');
+        var sel    = document.getElementById('igPrestamoOrigen');
+        if (!bloque || !sel) return;
+        var esPrestamo = (document.getElementById('igTipoIngreso') || {}).value === 'prestamo_empresa';
+        bloque.style.display = esPrestamo ? '' : 'none';
+        if (!esPrestamo) { sel.value = ''; return; }
+        var prev = sel.value;
+        var pares = _paresEmpresaProyecto(
+            empresaActual ? empresaActual.id : null,
+            proyectoActual ? proyectoActual.id : null
+        );
+        sel.innerHTML = '<option value="">— Nadie (sólo registrar el ingreso acá) —</option>';
+        pares.forEach(function(x) {
+            var o = document.createElement('option');
+            o.value = x.empresaId + '|' + x.proyectoId;
+            o.textContent = x.nombre;
+            sel.appendChild(o);
+        });
+        if (prev) sel.value = prev;
+    }
+    function _idContraparte(idIngreso) { return 'PREST-' + idIngreso; }
+
+    // Escribe (o borra) el egreso espejo en el proyecto que presta, con una sola
+    // escritura multi-path de rutas absolutas — el mismo patrón que usa
+    // confirmarMoverAlquileres para tocar dos proyectos de forma atómica.
+    function _prestamoEscribirContraparte(ingreso, destino) {
+        if (!ingreso || !ingreso.id || !destino) return Promise.resolve();
+        var contraId = _idContraparte(ingreso.id);
+        var ruta = 'empresas/' + destino.empresaId + '/proyectos/' + destino.proyectoId + '/ingGeneral/' + contraId;
+        var aca = (empresaActual ? (empresaActual.nombre || empresaActual.id) : '') +
+                  (proyectoActual ? ' / ' + (proyectoActual.nombre || proyectoActual.id) : '');
+        var contra = {
+            id:        contraId,
+            fecha:     ingreso.fecha,
+            tipo:      'mov_egreso_caja',
+            esEgreso:  true,
+            origen:    'Préstamo a ' + aca,
+            origenDest: aca,
+            referencia: ingreso.referencia || '',
+            moneda:    ingreso.moneda,
+            monto:     ingreso.monto,
+            tipoAB:    ingreso.tipoAB || 'B',
+            esBancario: (ingreso.tipoAB === 'A'),
+            obs:       'Generado automáticamente por el préstamo registrado en ' + aca +
+                       (ingreso.obs ? ' — ' + ingreso.obs : ''),
+            prestamoId: ingreso.id,
+            prestamoContraparte: {
+                empresaId:  empresaActual ? empresaActual.id : null,
+                proyectoId: proyectoActual ? proyectoActual.id : null,
+                id:         ingreso.id
+            }
+        };
+        var upd = {}; upd[ruta] = contra;
+        return db.ref().update(upd);
+    }
+    function _prestamoBorrarContraparte(ingreso) {
+        var c = ingreso && ingreso.prestamoContraparte;
+        if (!c || !c.empresaId || !c.proyectoId || !c.id) return Promise.resolve();
+        var upd = {};
+        upd['empresas/' + c.empresaId + '/proyectos/' + c.proyectoId + '/ingGeneral/' + c.id] = null;
+        return db.ref().update(upd);
+    }
 
     async function guardarIngGeneral() {
         var origen = document.getElementById('igOrigen').value.trim();
@@ -23556,17 +23664,69 @@
             ingGeneral[editandoIgIdx]=nuevo;
         } else {
             nuevo.nroCorrelativo = await obtenerProximoComprobante(tipoAB);
+            // El id se asigna ACÁ (y no en _colPersist) porque de él se deriva el id
+            // de la contraparte del préstamo: necesitamos conocerlo antes de escribir.
+            if (!nuevo.id) nuevo.id = _colUidItem();
             ingGeneral.push(nuevo);
         }
+
+        // ── Préstamo entre empresas: crear/actualizar/quitar el egreso del otro lado ──
+        var _presSel = (nuevo.tipo === 'prestamo_empresa')
+            ? ((document.getElementById('igPrestamoOrigen') || {}).value || '') : '';
+        var _presAnterior = nuevo.prestamoContraparte || null;
+        var _presDestino = null;
+        if (_presSel) {
+            var _pp = _presSel.split('|');
+            _presDestino = { empresaId: _pp[0], proyectoId: _pp[1] };
+            nuevo.prestamoId = nuevo.id;
+            nuevo.prestamoContraparte = {
+                empresaId: _presDestino.empresaId,
+                proyectoId: _presDestino.proyectoId,
+                id: _idContraparte(nuevo.id)
+            };
+        } else {
+            delete nuevo.prestamoId; delete nuevo.prestamoContraparte;
+        }
+
         var igSnap = JSON.parse(JSON.stringify(nuevo));
         cerrarModalIngGeneral();
         persistirIngGeneral();
+
+        try {
+            // Si se cambió la empresa que presta (o se sacó), primero se borra el
+            // espejo viejo para no dejar un egreso huérfano en el otro proyecto.
+            if (_presAnterior && (!_presDestino
+                || _presAnterior.empresaId !== _presDestino.empresaId
+                || _presAnterior.proyectoId !== _presDestino.proyectoId)) {
+                await _prestamoBorrarContraparte({ prestamoContraparte: _presAnterior });
+            }
+            if (_presDestino) await _prestamoEscribirContraparte(igSnap, _presDestino);
+        } catch (e) {
+            console.error(e);
+            alert('El ingreso se guardó, pero no se pudo registrar el egreso en la otra empresa: ' +
+                  (e.message || e) + '\n\nRevisá la conexión y volvé a guardarlo.');
+        }
         var _esEgr = igSnap.esEgreso || igSnap.tipo==='mov_egreso_caja' || igSnap.tipo==='mov_banco_salida';
         if (confirm((_esEgr?'Egreso':'Ingreso')+' guardado. ¿Emitir comprobante?')) imprimirComprobanteIngGeneral(igSnap);
     }
 
     function eliminarIngGeneral(idx) {
-        if (confirm('¿Eliminar este ingreso?')) { ingGeneral.splice(idx, 1); persistirIngGeneral(); }
+        var ig = ingGeneral[idx];
+        var tieneEspejo = !!(ig && ig.prestamoContraparte && ig.prestamoContraparte.id);
+        var msg = tieneEspejo
+            ? '¿Eliminar este préstamo?\n\nTambién se elimina el egreso que generó en la otra empresa.'
+            : '¿Eliminar este ingreso?';
+        if (!confirm(msg)) return;
+        var copia = tieneEspejo ? JSON.parse(JSON.stringify(ig)) : null;
+        ingGeneral.splice(idx, 1);
+        persistirIngGeneral();
+        // Si no se borra el espejo, la otra empresa queda con un egreso que no
+        // corresponde a nada — plata que "salió" sin motivo.
+        if (copia) _prestamoBorrarContraparte(copia).catch(function(e) {
+            console.error(e);
+            alert('Se borró el ingreso, pero no se pudo borrar el egreso de la otra empresa: ' +
+                  (e.message || e) + '\n\nBorralo a mano desde ese proyecto.');
+        });
     }
 
     // ¿Este movimiento de ingGeneral es en realidad un EGRESO?
@@ -31287,7 +31447,7 @@
         </div>
         <div class="form-group">
           <label>Tipo de ingreso *</label>
-          <select id="igTipoIngreso">
+          <select id="igTipoIngreso" onchange="igTogglePrestamo()">
             <option value="aporte_socio">Aporte de socio</option>
             <option value="prestamo_empresa">Préstamo de empresa</option>
             <option value="prestamo_bancario">Préstamo bancario</option>
@@ -31295,6 +31455,17 @@
             <option value="devolucion">Devolución / Reintegro</option>
             <option value="otro">Otro</option>
           </select>
+        </div>
+      </div>
+      <!-- Préstamo entre empresas: genera el egreso del lado del que presta -->
+      <div id="igPrestamoBloque" style="display:none;">
+        <div class="form-group">
+          <label>¿Qué empresa / proyecto presta la plata?</label>
+          <select id="igPrestamoOrigen"><option value="">— Nadie (sólo registrar el ingreso acá) —</option></select>
+          <div class="form-hint" id="igPrestamoHint" style="color:var(--text-3);">
+            Si elegís una, se registra automáticamente el <strong>egreso</strong> allá por el mismo importe y moneda,
+            y el <strong>ingreso</strong> acá. Los dos quedan vinculados: si borrás uno, se borra el otro.
+          </div>
         </div>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
