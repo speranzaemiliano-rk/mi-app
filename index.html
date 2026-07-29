@@ -27581,7 +27581,11 @@
                     var basePath='empresas/'+eid+'/proyectos/'+pid;
                     var fila={emp:empNombre,proy:proyNombre,ars:0,usd:0,banco:0};
                     filas.push(fila);
-                    var p=db.ref(basePath+'/ingresosGenerales').once('value').then(function(cs){
+                    // Lee '/ingGeneral' —la rama real de movimientos de caja, la misma
+                    // que Caja General/Efectivo/Banco— y NO '/ingresosGenerales', que
+                    // era una rama huérfana donde sólo caían los préstamos y hacía que
+                    // esta tabla mostrara números que no eran los saldos reales.
+                    var p=db.ref(basePath+'/ingGeneral').once('value').then(function(cs){
                         var cv=cs.val();
                         if(cv){
                             var arr=Array.isArray(cv)?cv:Object.values(cv);
@@ -27750,14 +27754,25 @@
 
 
     /* ── Escribir movimiento de caja en una empresa/proyecto ── */
+    // Rama donde viven los movimientos de caja de un proyecto. Es la MISMA que usa
+    // REF_ING_GENERAL (`<base>/ingGeneral`) y que leen Caja General, Efectivo y Banco.
+    //
+    // ⚠️ Hasta ahora los préstamos entre proyectos escribían en '/ingresosGenerales',
+    // una rama que no lee nadie más: el movimiento se registraba pero NO figuraba en
+    // ninguna caja. Y la tabla de saldos de Tesorería leía esa misma rama huérfana,
+    // así que no mostraba los saldos reales sino el neto de los préstamos (por eso
+    // un proyecto podía aparecer en varios millones negativos y los totales en cero).
+    function _rutaMovCaja(empId, proyId){
+        return 'empresas/'+empId+'/proyectos/'+proyId+'/ingGeneral';
+    }
+    // Escribe UN movimiento por su id, sin releer ni reescribir la colección entera.
+    // El read-modify-write anterior (once + push + set del array completo) perdía el
+    // movimiento de otro usuario que estuviera guardando al mismo tiempo.
     function _escribirMovCaja(empId, proyId, movimiento){
-        var ref=db.ref('empresas/'+empId+'/proyectos/'+proyId+'/ingresosGenerales');
-        return ref.once('value').then(function(snap){
-            var arr=snap.val();
-            if(!arr||!Array.isArray(arr)) arr=[];
-            arr.push(movimiento);
-            return ref.set(arr);
-        });
+        if(!movimiento.id) movimiento.id = _colUidItem();
+        var upd={};
+        upd[_rutaMovCaja(empId, proyId)+'/'+movimiento.id]=movimiento;
+        return db.ref().update(upd);
     }
 
     function guardarPrestamo(){
@@ -27814,14 +27829,9 @@
             _escribirMovCaja(empDe.id, proyDeId, movEgreso),
             _escribirMovCaja(empA.id, proyAId, movIngreso)
         ]).then(function(){
-            /* Si la empresa activa es una de las dos, actualizar ingGeneral local */
-            if(empresaActual&&proyectoActual){
-                if(empresaActual.id===empDe.id&&proyectoActual.id===proyDeId){
-                    ingGeneral.push(movEgreso);
-                } else if(empresaActual.id===empA.id&&proyectoActual.id===proyAId){
-                    ingGeneral.push(movIngreso);
-                }
-            }
+            // No hace falta empujar el movimiento al array local: _escribirMovCaja ya
+            // lo escribió en '/ingGeneral' y el listener de esa rama (cargarDatosIngresos)
+            // recarga ingGeneral solo. Empujarlo a mano dejaba un duplicado transitorio.
             /* Guardar préstamo en registro global */
             var nuevo={
                 de:deNombre, a:aNombre,
