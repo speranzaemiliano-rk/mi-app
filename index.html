@@ -27768,11 +27768,13 @@
     // Escribe UN movimiento por su id, sin releer ni reescribir la colección entera.
     // El read-modify-write anterior (once + push + set del array completo) perdía el
     // movimiento de otro usuario que estuviera guardando al mismo tiempo.
+    // Devuelve el id que le asignó, para poder guardarlo en el registro del préstamo
+    // y después borrar EXACTAMENTE ese movimiento (sin adivinar por la referencia).
     function _escribirMovCaja(empId, proyId, movimiento){
         if(!movimiento.id) movimiento.id = _colUidItem();
         var upd={};
         upd[_rutaMovCaja(empId, proyId)+'/'+movimiento.id]=movimiento;
-        return db.ref().update(upd);
+        return db.ref().update(upd).then(function(){ return { e:empId, p:proyId, id:movimiento.id }; });
     }
 
     function guardarPrestamo(){
@@ -27828,7 +27830,7 @@
         Promise.all([
             _escribirMovCaja(empDe.id, proyDeId, movEgreso),
             _escribirMovCaja(empA.id, proyAId, movIngreso)
-        ]).then(function(){
+        ]).then(function(refsMov){
             // No hace falta empujar el movimiento al array local: _escribirMovCaja ya
             // lo escribió en '/ingGeneral' y el listener de esa rama (cargarDatosIngresos)
             // recarga ingGeneral solo. Empujarlo a mano dejaba un duplicado transitorio.
@@ -27842,6 +27844,10 @@
                 fecha:fecha, concepto:concepto,
                 estado:'pendiente',
                 refMov:movEgreso.referencia,
+                // Ids EXACTOS de los dos movimientos de caja generados. Es lo que
+                // permite borrarlos con precisión al eliminar el préstamo, sin depender
+                // de la referencia (texto libre que podría coincidir con otro movimiento).
+                movs: refsMov.filter(Boolean),
                 timestamp:Date.now()
             };
             prestamos.push(nuevo);
@@ -27888,13 +27894,13 @@
         Promise.all([
             _escribirMovCaja(pr.empDeId, pr.proyDeId, movDevOrigen),
             _escribirMovCaja(pr.empAId, pr.proyAId, movDevDestino)
-        ]).then(function(){
-            if(empresaActual&&proyectoActual){
-                if(empresaActual.id===pr.empDeId&&proyectoActual.id===pr.proyDeId) ingGeneral.push(movDevOrigen);
-                else if(empresaActual.id===pr.empAId&&proyectoActual.id===pr.proyAId) ingGeneral.push(movDevDestino);
-            }
+        ]).then(function(refsDev){
+            // El listener de ingGeneral recarga solo; no se empuja a mano (evita
+            // el duplicado transitorio). Se guardan los ids de los movimientos de la
+            // devolución en el préstamo, para que al eliminarlo también se borren.
             prestamos[idx].estado='devuelto';
             prestamos[idx].fechaDevolucion=fechaHoy;
+            prestamos[idx].movs=(prestamos[idx].movs||[]).concat(refsDev.filter(Boolean));
             if(REF_PRESTAMOS) _colPersist('prestamos', REF_PRESTAMOS, prestamos);
             _renderPrestamosTabla();
             renderTesoreria();
@@ -27906,10 +27912,67 @@
     }
 
     function eliminarPrestamo(idx){
-        if(!confirm('¿Eliminar este préstamo del registro? (Los movimientos de caja ya realizados NO se eliminan)')) return;
-        prestamos.splice(idx,1);
-        if(REF_PRESTAMOS) _colPersist('prestamos', REF_PRESTAMOS, prestamos);
-        _renderPrestamosTabla();
+        var pr = prestamos[idx];
+        if(!pr) return;
+        if(!confirm('¿Eliminar este préstamo?\n\nSe eliminan también los movimientos de caja que generó: el EGRESO de quien prestó y el INGRESO de quien recibió, en las dos empresas. Si el préstamo estaba marcado como devuelto, también se quitan los movimientos de la devolución.\n\nEsta acción no se puede deshacer.')) return;
+
+        // ── Qué rutas de caja borrar ─────────────────────────────────────────
+        // Préstamos nuevos: guardan en pr.movs el {empresa,proyecto,id} EXACTO de
+        //   cada movimiento → se borran por id, sin ambigüedad.
+        // Préstamos viejos (sin pr.movs): se buscan por referencia PERO exigiendo
+        //   además esPrestamo===true — la referencia sola es texto libre y podría
+        //   coincidir con un movimiento manual que el usuario haya cargado.
+        var rutasPromise;
+        if (pr.movs && pr.movs.length) {
+            rutasPromise = Promise.resolve(pr.movs.filter(Boolean).map(function(m){
+                return _rutaMovCaja(m.e, m.p) + '/' + m.id;
+            }));
+        } else {
+            var refs = [pr.refMov, 'DEV-' + pr.refMov].filter(Boolean);
+            var puntas = [];
+            if(pr.empDeId && pr.proyDeId) puntas.push({ e: pr.empDeId, p: pr.proyDeId });
+            if(pr.empAId  && pr.proyAId)  puntas.push({ e: pr.empAId,  p: pr.proyAId });
+            // SIN .catch que trague el error: si una lectura falla, todo el borrado se
+            // aborta y no se toca nada (mejor no borrar que dejar un movimiento huérfano).
+            rutasPromise = Promise.all(puntas.map(function(pt){
+                var base = _rutaMovCaja(pt.e, pt.p);
+                return db.ref(base).once('value').then(function(s){
+                    var v = s.val(); if(!v || typeof v !== 'object') return [];
+                    var rutas = [];
+                    Object.keys(v).forEach(function(k){
+                        var m = v[k];
+                        if(m && m.esPrestamo === true && refs.indexOf(m.referencia) !== -1) rutas.push(base + '/' + k);
+                    });
+                    return rutas;
+                });
+            })).then(function(listas){ return listas.reduce(function(a,l){ return a.concat(l); }, []); });
+        }
+
+        rutasPromise.then(function(rutas){
+            // UN SOLO update atómico con los movimientos de caja Y el registro del
+            // préstamo. Así no hay estado intermedio: o se borra todo, o no se borra
+            // nada. Antes el registro se borraba aparte (fire-and-forget) y podía
+            // quedar la caja limpia pero el préstamo fantasma, o al revés.
+            var upd = {};
+            rutas.forEach(function(ruta){ upd[ruta] = null; });
+            if(pr.id) upd['global/prestamos/' + pr.id] = null;
+            return db.ref().update(upd);
+        }).then(function(){
+            if(pr.id){
+                // El registro ya se borró en el update atómico: re-leemos de Firebase
+                // (re-sincroniza _colSnap para que el guardado por-diff no lo recree).
+                _cargarPrestamos(function(){ _renderPrestamosTabla(); });
+            } else {
+                // Préstamo sin id (nunca persistido): borrado local best-effort.
+                var i = prestamos.indexOf(pr); if(i >= 0) prestamos.splice(i, 1);
+                _renderPrestamosTabla();
+            }
+            renderTesoreria();
+        }).catch(function(err){
+            console.error(err);
+            alert('No se pudo eliminar el préstamo: ' + (err.message || err) +
+                  '\n\nNo se borró nada. Revisá la conexión e intentá de nuevo.');
+        });
     }
 
     // ══════════════════════════════════════════════════════════
