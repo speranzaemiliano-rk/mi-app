@@ -27906,10 +27906,50 @@
     }
 
     function eliminarPrestamo(idx){
-        if(!confirm('¿Eliminar este préstamo del registro? (Los movimientos de caja ya realizados NO se eliminan)')) return;
-        prestamos.splice(idx,1);
-        if(REF_PRESTAMOS) _colPersist('prestamos', REF_PRESTAMOS, prestamos);
-        _renderPrestamosTabla();
+        var pr = prestamos[idx];
+        if(!pr) return;
+        if(!confirm('¿Eliminar este préstamo?\n\nSe eliminan también los movimientos de caja que generó: el EGRESO de quien prestó y el INGRESO de quien recibió, en las dos empresas. Si el préstamo estaba marcado como devuelto, también se quitan los movimientos de la devolución.\n\nEsta acción no se puede deshacer.')) return;
+
+        // Los dos movimientos del préstamo (y los de su devolución, si la hubo)
+        // comparten la 'referencia' del préstamo. Los buscamos por esa referencia en
+        // la caja de las dos puntas y los borramos con un solo update() atómico.
+        var refs = [pr.refMov, 'DEV-' + pr.refMov].filter(Boolean);
+        var puntas = [];
+        if(pr.empDeId && pr.proyDeId) puntas.push({ e: pr.empDeId, p: pr.proyDeId });
+        if(pr.empAId  && pr.proyAId)  puntas.push({ e: pr.empAId,  p: pr.proyAId });
+
+        var lecturas = puntas.map(function(pt){
+            var base = 'empresas/' + pt.e + '/proyectos/' + pt.p + '/ingGeneral';
+            return db.ref(base).once('value').then(function(s){
+                var v = s.val(); if(!v || typeof v !== 'object') return [];
+                var rutas = [];
+                Object.keys(v).forEach(function(k){
+                    var m = v[k];
+                    if(m && refs.indexOf(m.referencia) !== -1) rutas.push(base + '/' + k);
+                });
+                return rutas;
+            }).catch(function(){ return []; });
+        });
+
+        Promise.all(lecturas).then(function(listas){
+            var upd = {};
+            listas.forEach(function(l){ l.forEach(function(ruta){ upd[ruta] = null; }); });
+            return Object.keys(upd).length ? db.ref().update(upd) : Promise.resolve();
+        }).then(function(){
+            // Sólo después de que los movimientos de caja se borraron sacamos el
+            // registro, para no quedar con un préstamo sin registro pero con la caja
+            // todavía afectada si algo falla en el medio.
+            var i = prestamos.findIndex(function(x){ return x && x.refMov === pr.refMov && x.timestamp === pr.timestamp; });
+            if(i < 0) i = idx;
+            prestamos.splice(i, 1);
+            if(REF_PRESTAMOS) _colPersist('prestamos', REF_PRESTAMOS, prestamos);
+            _renderPrestamosTabla();
+            renderTesoreria();
+        }).catch(function(err){
+            console.error(err);
+            alert('No se pudieron borrar los movimientos de caja del préstamo: ' + (err.message || err) +
+                  '\n\nEl préstamo NO se eliminó. Revisá la conexión e intentá de nuevo.');
+        });
     }
 
     // ══════════════════════════════════════════════════════════
