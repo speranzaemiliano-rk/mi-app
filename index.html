@@ -18701,7 +18701,7 @@
 
     // Calcula el estado visual de un vencimiento (pagado / vencido / próximo (≤10 días) / al día)
     function _vencEstado(v) {
-        if (v.pagado) return { estado:'pagado', label:'Pagado', cssClass:'badge-ok' };
+        if (v.pagado) return { estado:'pagado', label:'Sin deuda', cssClass:'badge-ok' };
         if (!v.fechaVencimiento) return { estado:'aldia', label:'Sin fecha', cssClass:'badge-warn' };
         var hoy = new Date(); hoy.setHours(0,0,0,0);
         var fv = new Date(v.fechaVencimiento + 'T00:00:00');
@@ -18771,7 +18771,9 @@
                 <td>${avisoTxt}</td>
                 <td><span class="pill ${est.cssClass}">${est.label}</span></td>
                 <td><div class="action-btns">
-                    ${!v.pagado ? `<button class="btn btn-gold btn-sm" onclick="marcarVencimientoPagado('${v.id}')">✓ Pagado</button>` : ''}
+                    ${v.pagado
+                        ? `<button class="btn btn-outline btn-sm" title="Marcar como adeudado de nuevo" onclick="marcarVencimientoAdeudado('${v.id}')">✓ Sin deuda hasta el próximo</button>`
+                        : `<button class="btn btn-gold btn-sm" title="Marcar como pagado" onclick="marcarVencimientoPagado('${v.id}')">💸 Adeudado</button>`}
                     ${v.adjunto ? `<button class="btn btn-outline btn-sm" title="Ver factura" onclick="descargarVencimientoAdjunto('${v.id}')">📎</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalVencimiento('${v.id}')">✏</button>
                     <button class="btn btn-danger-sm" onclick="eliminarVencimiento('${v.id}')">✕</button>
@@ -18818,6 +18820,14 @@
     }
 
     function _crearProximoVencimiento(v) {
+        var proxFecha = _proximoVencimientoMensual(v.fechaVencimiento);
+        // Anti-duplicado: si ya existe el próximo (mismo servicio/empresa/fecha), no crear otro.
+        // Evita duplicados al alternar pagado↔adeudado o si dos usuarios lo marcan pagado.
+        var yaExiste = (vencimientos||[]).some(function(x){
+            return x && x.id !== v.id && x.empresaId === v.empresaId && (x.alias||'') === (v.alias||'') &&
+                   (x.empresaProveedora||'') === (v.empresaProveedora||'') && x.fechaVencimiento === proxFecha;
+        });
+        if (yaExiste) return;
         var nuevo = {
             id: 'VS-' + Date.now() + '-' + Math.floor(Math.random()*1000),
             alias: v.alias,
@@ -18825,7 +18835,7 @@
             proyectoId: v.proyectoId || null,
             empresaProveedora: v.empresaProveedora || '',
             cuit: v.cuit || '',
-            fechaVencimiento: _proximoVencimientoMensual(v.fechaVencimiento),
+            fechaVencimiento: proxFecha,
             monto: v.monto || 0,
             moneda: v.moneda || 'ARS',
             descripcion: v.descripcion || '',
@@ -18856,6 +18866,20 @@
             return cur;
         }).then(function(res) {
             if (res && res.committed && v.recurrente) _crearProximoVencimiento(v);
+        }).catch(function(){});
+    }
+
+    // Revierte el estado a adeudado (por si se marcó pagado por error). El próximo
+    // vencimiento recurrente ya generado, si existe, no se toca; _crearProximoVencimiento
+    // no lo vuelve a duplicar (chequea que no exista antes de crear).
+    function marcarVencimientoAdeudado(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!v) return;
+        if (!confirm('¿Marcar "' + (v.alias||'este vencimiento') + '" como adeudado de nuevo?')) return;
+        REF_VENCIMIENTOS.child(id).transaction(function(cur) {
+            if (!cur) return cur;
+            cur.pagado = false; cur.fechaPago = null;
+            return cur;
         }).catch(function(){});
     }
 
