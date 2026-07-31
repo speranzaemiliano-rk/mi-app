@@ -22911,38 +22911,103 @@
     }
 
     // Recibo de sueldo imprimible (estimativo). Si se pasa `mes` ('YYYY-MM') lo muestra como período.
+    // Monto entero a letras en pesos (es-AR). Simplificado, para el neto del recibo.
+    function _montoEnLetras(n) {
+        n = Math.floor(Math.abs(n || 0));
+        if (n === 0) return 'Cero pesos';
+        var UNI = ['','uno','dos','tres','cuatro','cinco','seis','siete','ocho','nueve','diez','once','doce','trece','catorce','quince','dieciséis','diecisiete','dieciocho','diecinueve'];
+        var DEC = ['','','','treinta','cuarenta','cincuenta','sesenta','setenta','ochenta','noventa'];
+        var CEN = ['','ciento','doscientos','trescientos','cuatrocientos','quinientos','seiscientos','setecientos','ochocientos','novecientos'];
+        function m1000(x) {
+            if (x === 0) return '';
+            if (x === 100) return 'cien';
+            var c = Math.floor(x/100), dd = x%100, d = Math.floor(dd/10), u = dd%10, s = '';
+            if (c) s += CEN[c] + ' ';
+            if (dd < 20) s += UNI[dd];
+            else if (dd < 30) s += (u ? 'veinti' + UNI[u] : 'veinte');
+            else { s += DEC[d]; if (u) s += ' y ' + UNI[u]; }
+            return s.trim();
+        }
+        var mill = Math.floor(n/1000000), miles = Math.floor((n%1000000)/1000), resto = n%1000, partes = [];
+        if (mill)  partes.push(mill === 1 ? 'un millón' : m1000(mill).replace(/uno$/, 'ún') + ' millones');
+        if (miles) partes.push(miles === 1 ? 'mil' : m1000(miles).replace(/uno$/, 'ún') + ' mil');
+        if (resto) partes.push(m1000(resto));
+        var txt = partes.join(' ').replace(/\s+/g, ' ').trim().replace(/uno$/, 'ún');
+        return txt.charAt(0).toUpperCase() + txt.slice(1) + ' pesos';
+    }
+
     function _imprimirReciboDe(emp, mes) {
         if (!emp) return;
-        var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
-        var emp2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
+        var fmt = function(n) { return '$ ' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var e2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
         var t = remTotalesConceptos(emp);
         var ap = remAportesLey(emp);
         var totalDesc = t.descuentos + ap.total;
-        var filas = '<tr><td>Sueldo básico</td><td style="text-align:right;">' + fmt(emp.sueldoBasico) + '</td><td></td></tr>';
+        var totalHab = (emp.sueldoBasico || 0) + t.haberes;
+        var neto = remNetoEmpleado(emp);
+        var esMono = emp.tipoContrato === 'monotributo';
+        var filas = '<tr><td>Sueldo básico</td><td class="r">' + fmt(emp.sueldoBasico) + '</td><td class="r"></td></tr>';
         (emp.conceptos || []).forEach(function(c) {
             var esDesc = c.tipo === 'descuento';
-            filas += '<tr><td>' + escHtml(c.nombre || '') + '</td><td style="text-align:right;">' + (esDesc ? '' : fmt(c.monto)) + '</td><td style="text-align:right;">' + (esDesc ? fmt(c.monto) : '') + '</td></tr>';
+            filas += '<tr><td>' + escHtml(c.nombre || '') + '</td><td class="r">' + (esDesc ? '' : fmt(c.monto)) + '</td><td class="r">' + (esDesc ? fmt(c.monto) : '') + '</td></tr>';
         });
         if (ap.total > 0) {
-            filas += '<tr><td>Jubilación (11%)</td><td></td><td style="text-align:right;">' + fmt(ap.jubilacion) + '</td></tr>' +
-                     '<tr><td>Ley 19032 / INSSJP (3%)</td><td></td><td style="text-align:right;">' + fmt(ap.ley19032) + '</td></tr>' +
-                     '<tr><td>Obra social (3%)</td><td></td><td style="text-align:right;">' + fmt(ap.obraSocial) + '</td></tr>';
+            filas += '<tr><td>Jubilación (11%)</td><td class="r"></td><td class="r">' + fmt(ap.jubilacion) + '</td></tr>' +
+                     '<tr><td>Ley 19032 / INSSJP (3%)</td><td class="r"></td><td class="r">' + fmt(ap.ley19032) + '</td></tr>' +
+                     '<tr><td>Obra social (3%)</td><td class="r"></td><td class="r">' + fmt(ap.obraSocial) + '</td></tr>';
         }
         var emision = new Date().toLocaleDateString('es-AR');
-        var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + (mes ? ' ' + escHtml(_mesLabel(mes)) : '') + '</title>' +
-            '<style>body{font-family:Arial,sans-serif;padding:24px;color:#222;} h1{font-size:18px;margin-bottom:2px;} .periodo{font-size:14px;font-weight:700;color:#1a3a6b;margin:2px 0 8px;} table{width:100%;border-collapse:collapse;margin-top:12px;} th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;} th{background:#f0f0f0;} .tot{font-weight:700;} .muted{color:#777;font-size:11px;margin-top:16px;}</style></head><body>' +
-            '<h1>Recibo de haberes (estimativo)</h1>' +
-            (mes ? '<div class="periodo">Período liquidado: ' + escHtml(_mesLabel(mes)) + '</div>' : '') +
-            '<div>' + escHtml(emp2.nombre || '') + '</div>' +
-            '<div style="margin-top:8px;font-size:13px;">Empleado: <strong>' + escHtml(emp.nombre || '') + '</strong> · CUIL: ' + escHtml(emp.cuil || '—') + '<br>' +
-            'Ingreso: ' + (emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') + ' · Puesto: ' + escHtml(emp.puesto || '—') + ' · ' + (emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia') + '</div>' +
-            '<table><thead><tr><th>Concepto</th><th style="text-align:right;">Haberes</th><th style="text-align:right;">Descuentos</th></tr></thead><tbody>' + filas +
-            '<tr class="tot"><td>Totales</td><td style="text-align:right;">' + fmt((emp.sueldoBasico || 0) + t.haberes) + '</td><td style="text-align:right;">' + fmt(totalDesc) + '</td></tr>' +
-            '<tr class="tot"><td>Neto a cobrar' + (emp.tipoContrato === 'monotributo' ? ' (monotributo)' : '') + '</td><td colspan="2" style="text-align:right;">' + fmt(remNetoEmpleado(emp)) + '</td></tr>' +
-            '</tbody></table>' +
-            '<div class="muted">Documento estimativo generado el ' + emision + '. Verificá siempre con tu contador. No reemplaza el recibo oficial de sueldo.</div>' +
+        var info = function(lbl, val) { return '<div class="celda"><span class="k">' + lbl + '</span><span class="v">' + val + '</span></div>'; };
+        var css =
+            '*{box-sizing:border-box;} body{font-family:"Segoe UI",Arial,sans-serif;color:#1a1a2e;margin:0;padding:28px;background:#fff;font-size:12.5px;line-height:1.35;}' +
+            '.doc{max-width:760px;margin:0 auto;border:1px solid #d5dae4;border-radius:10px;overflow:hidden;}' +
+            '.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:18px 22px;border-bottom:3px solid #1a3a6b;background:#f7f9fc;}' +
+            '.emp-nom{font-size:17px;font-weight:800;color:#1a3a6b;letter-spacing:.2px;} .emp-sub{font-size:11px;color:#5a6376;margin-top:3px;}' +
+            '.tit-box{text-align:right;flex-shrink:0;} .tit{font-size:15px;font-weight:800;color:#1a1a2e;letter-spacing:.5px;}' +
+            '.periodo{display:inline-block;margin-top:6px;padding:4px 10px;background:#1a3a6b;color:#fff;border-radius:5px;font-size:12px;font-weight:700;}' +
+            '.datos{display:grid;grid-template-columns:1fr 1fr;gap:0 0;border-bottom:1px solid #e3e8f0;}' +
+            '.celda{padding:8px 22px;border-top:1px solid #eef1f6;} .celda:nth-child(-n+2){border-top:none;}' +
+            '.k{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:#8a92a6;font-weight:700;} .v{font-size:13px;font-weight:600;}' +
+            'table{width:100%;border-collapse:collapse;} thead th{background:#eef2f8;color:#1a3a6b;font-size:10px;text-transform:uppercase;letter-spacing:.4px;padding:8px 22px;text-align:left;border-bottom:1px solid #d5dae4;}' +
+            'thead th.r{text-align:right;} tbody td{padding:6px 22px;font-size:12.5px;border-bottom:1px solid #f0f2f7;} td.r{text-align:right;font-variant-numeric:tabular-nums;}' +
+            'tbody tr:nth-child(even){background:#fafbfd;}' +
+            '.tot td{font-weight:700;border-top:2px solid #d5dae4;background:#f7f9fc;} .neto td{font-weight:800;font-size:14px;color:#0a7d33;background:#f0faf3;border-top:2px solid #cfe9d8;}' +
+            '.letras{padding:10px 22px;font-size:11.5px;color:#3a4256;background:#fafbfd;border-bottom:1px solid #eef1f6;} .letras strong{color:#1a1a2e;}' +
+            '.firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:34px 22px 16px;} .firma{border-top:1px solid #9aa3b5;padding-top:6px;text-align:center;font-size:11px;color:#5a6376;}' +
+            '.pie{padding:10px 22px 16px;font-size:10px;color:#9098a8;border-top:1px solid #eef1f6;}' +
+            '@media print{body{padding:0;} .doc{border:none;border-radius:0;max-width:none;}}';
+        var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + (mes ? ' - ' + escHtml(_mesLabel(mes)) : '') + '</title><style>' + css + '</style></head><body>' +
+            '<div class="doc">' +
+              '<div class="head">' +
+                '<div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
+                  '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.condIva || ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div>' +
+                  (e2.proyecto ? '<div class="emp-sub">' + escHtml(e2.proyecto) + '</div>' : '') +
+                '</div>' +
+                '<div class="tit-box"><div class="tit">RECIBO DE HABERES</div>' +
+                  (mes ? '<div class="periodo">' + escHtml(_mesLabel(mes)) + '</div>' : '') +
+                '</div>' +
+              '</div>' +
+              '<div class="datos">' +
+                info('Empleado', escHtml(emp.nombre || '—')) +
+                info('CUIL', escHtml(emp.cuil || '—')) +
+                info('Fecha de ingreso', emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') +
+                info('Puesto / Categoría', escHtml(emp.puesto || '—')) +
+                info('Condición', esMono ? 'Monotributista' : 'Relación de dependencia') +
+                info('Período liquidado', mes ? escHtml(_mesLabel(mes)) : '—') +
+              '</div>' +
+              '<table><thead><tr><th>Concepto</th><th class="r">Haberes</th><th class="r">Descuentos</th></tr></thead><tbody>' + filas +
+                '<tr class="tot"><td>Totales</td><td class="r">' + fmt(totalHab) + '</td><td class="r">' + fmt(totalDesc) + '</td></tr>' +
+                '<tr class="neto"><td>NETO A COBRAR' + (esMono ? ' (monotributo)' : '') + '</td><td class="r" colspan="2">' + fmt(neto) + '</td></tr>' +
+              '</tbody></table>' +
+              '<div class="letras">Son <strong>' + escHtml(_montoEnLetras(neto)) + '</strong> ($ ' + Math.round(neto).toLocaleString('es-AR') + ').</div>' +
+              '<div class="firmas">' +
+                '<div class="firma">Firma y sello del empleador</div>' +
+                '<div class="firma">Recibí conforme — Firma del empleado</div>' +
+              '</div>' +
+              '<div class="pie">Documento estimativo generado el ' + emision + '. Los importes son aproximados; verificá siempre con tu contador. No reemplaza el recibo oficial de sueldo (Ley 20.744).</div>' +
+            '</div>' +
             '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
-        var w = window.open('', '_blank', 'width=780,height=950');
+        var w = window.open('', '_blank', 'width=820,height=1000');
         if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
         w.document.write(html); w.document.close();
     }
