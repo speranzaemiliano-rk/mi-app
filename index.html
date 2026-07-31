@@ -7128,6 +7128,12 @@
                 remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val());
                 if (typeof renderRemuneraciones === 'function') renderRemuneraciones();
             }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrp, event:'value'});
+            // Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte.
+            if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref('remuneracionesRecibos');
+            const lrr = REF_REMUN_RECIBOS; lrr.on('value', (snap) => {
+                remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val());
+                if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo();
+            }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrr, event:'value'});
         }
 
         if (REF_CREDITOS) {
@@ -21763,6 +21769,10 @@
     let remunPagos = [];
     var _remPagoSel = {};   // ids tildados para consolidar
     function persistirRemunPagos() { return _colPersist('remunPagos', REF_REMUN_PAGOS, remunPagos).catch(function(e){ console.error(e); }); }
+    // ── Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte. ──
+    let REF_REMUN_RECIBOS = null;
+    let remunRecibos = [];
+    function persistirRemunRecibos() { return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(function(e){ console.error(e); }); }
     // Solo este email ve Remuneraciones (además del gate de reglas en la base).
     function _esDuenoRemun() {
         var e = ((typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.email) || '').toLowerCase().trim();
@@ -22752,7 +22762,12 @@
         if (pLiq) pLiq.style.display = tab === 'liquidacion' ? '' : 'none';
         if (bLeg) bLeg.className = 'modalidad-btn' + (tab === 'liquidacion' ? '' : ' selected-A');
         if (bLiq) bLiq.className = 'modalidad-btn' + (tab === 'liquidacion' ? ' selected-A' : '');
-        if (tab === 'liquidacion') renderPreviewLiquidacion();
+        if (tab === 'liquidacion') {
+            renderPreviewLiquidacion();
+            var mesEl = document.getElementById('empLiqMes');
+            if (mesEl && !mesEl.value) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+            _renderRecibosEmpleadoActivo();
+        }
     };
 
     window.abrirModalEmpleado = function(idx, tab) {
@@ -22783,6 +22798,7 @@
         setVal('empJornada', emp ? emp.jornada : '');
         setVal('empLugarTrabajo', emp ? emp.lugarTrabajo : '');
         setVal('empObs', emp ? emp.obs : '');
+        setVal('empLiqMes', '');   // se re-setea al mes actual al abrir la solapa Liquidación
         var cont = document.getElementById('empConceptosLista');
         cont.innerHTML = (emp && emp.conceptos && emp.conceptos.length) ? emp.conceptos.map(_empConceptoHTML).join('') : '';
         var contSH = document.getElementById('empSueldoHistLista');
@@ -22790,6 +22806,7 @@
         _empAdjuntosWorking = (emp && emp.adjuntos) ? emp.adjuntos.slice() : [];
         _empRenderAdjuntos();
         renderPreviewLiquidacion();
+        _renderRecibosEmpleadoActivo();
         // Abrir en la solapa pedida (por defecto Legajo; 'liquidacion' cuando se toca "Liquidar sueldo")
         if (tab === 'liquidacion') empSelTab('liquidacion');
         document.getElementById('modalEmpleado').classList.add('active');
@@ -22850,9 +22867,32 @@
         renderRemuneraciones();
     };
 
-    // Recibo de sueldo imprimible (estimativo).
-    window.imprimirReciboSueldo = function(idx) {
-        var emp = remuneraciones[idx]; if (!emp) return;
+    // 'YYYY-MM' → "Julio 2026"
+    function _mesLabel(mes) {
+        if (!mes) return '';
+        var p = String(mes).split('-'); if (p.length < 2) return mes;
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        return (meses[parseInt(p[1],10)-1] || p[1]) + ' ' + p[0];
+    }
+
+    // Arma un objeto "emp" con los datos que están AHORA MISMO en el modal de liquidación
+    // (identidad + básico + conceptos), para imprimir/guardar el recibo del período en curso.
+    function _empDesdeModal() {
+        return {
+            id:           (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx]) ? remuneraciones[editandoEmpleadoIdx].id : null,
+            nombre:       (document.getElementById('empleadoNombre').value || '').trim(),
+            cuil:         (document.getElementById('empCuil').value || '').trim(),
+            fechaIngreso: document.getElementById('empFechaIngreso').value || '',
+            puesto:       (document.getElementById('empPuesto').value || '').trim(),
+            tipoContrato: document.getElementById('empTipoContrato').value || 'dependencia',
+            sueldoBasico: parseFloat(document.getElementById('empSueldo').value) || 0,
+            conceptos:    _empLeerConceptos()
+        };
+    }
+
+    // Recibo de sueldo imprimible (estimativo). Si se pasa `mes` ('YYYY-MM') lo muestra como período.
+    function _imprimirReciboDe(emp, mes) {
+        if (!emp) return;
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var emp2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
         var t = remTotalesConceptos(emp);
@@ -22869,9 +22909,10 @@
                      '<tr><td>Obra social (3%)</td><td></td><td style="text-align:right;">' + fmt(ap.obraSocial) + '</td></tr>';
         }
         var emision = new Date().toLocaleDateString('es-AR');
-        var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + '</title>' +
-            '<style>body{font-family:Arial,sans-serif;padding:24px;color:#222;} h1{font-size:18px;} table{width:100%;border-collapse:collapse;margin-top:12px;} th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;} th{background:#f0f0f0;} .tot{font-weight:700;} .muted{color:#777;font-size:11px;margin-top:16px;}</style></head><body>' +
+        var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + (mes ? ' ' + escHtml(_mesLabel(mes)) : '') + '</title>' +
+            '<style>body{font-family:Arial,sans-serif;padding:24px;color:#222;} h1{font-size:18px;margin-bottom:2px;} .periodo{font-size:14px;font-weight:700;color:#1a3a6b;margin:2px 0 8px;} table{width:100%;border-collapse:collapse;margin-top:12px;} th,td{border:1px solid #ccc;padding:6px 10px;font-size:13px;} th{background:#f0f0f0;} .tot{font-weight:700;} .muted{color:#777;font-size:11px;margin-top:16px;}</style></head><body>' +
             '<h1>Recibo de haberes (estimativo)</h1>' +
+            (mes ? '<div class="periodo">Período liquidado: ' + escHtml(_mesLabel(mes)) + '</div>' : '') +
             '<div>' + escHtml(emp2.nombre || '') + '</div>' +
             '<div style="margin-top:8px;font-size:13px;">Empleado: <strong>' + escHtml(emp.nombre || '') + '</strong> · CUIL: ' + escHtml(emp.cuil || '—') + '<br>' +
             'Ingreso: ' + (emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') + ' · Puesto: ' + escHtml(emp.puesto || '—') + ' · ' + (emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia') + '</div>' +
@@ -22884,6 +22925,87 @@
         var w = window.open('', '_blank', 'width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
         w.document.write(html); w.document.close();
+    }
+
+    // Impresión rápida desde la lista de empleados (sin período).
+    window.imprimirReciboSueldo = function(idx) {
+        var emp = remuneraciones[idx]; if (!emp) return;
+        _imprimirReciboDe(emp, '');
+    };
+
+    // Imprime el recibo con la liquidación cargada ahora en el modal, para el mes elegido.
+    window.imprimirReciboActual = function() {
+        var emp = _empDesdeModal();
+        if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
+        _imprimirReciboDe(emp, (document.getElementById('empLiqMes') || {}).value || '');
+    };
+
+    // Guarda (graba) el recibo de sueldo del mes elegido como una foto de la liquidación actual.
+    window.guardarReciboMes = function() {
+        if (!_esDuenoRemun()) return;
+        var emp = _empDesdeModal();
+        if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
+        if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con "Guardar empleado", y después guardá el recibo del mes.'); return; }
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!mes) { alert('Elegí el mes que estás liquidando.'); return; }
+        var t = remTotalesConceptos(emp);
+        var ap = remAportesLey(emp);
+        var snap = {
+            empleadoId: emp.id, empleadoNombre: emp.nombre, cuil: emp.cuil,
+            fechaIngreso: emp.fechaIngreso, puesto: emp.puesto, tipoContrato: emp.tipoContrato,
+            mes: mes, fechaEmision: new Date().toISOString().slice(0, 10),
+            basico: emp.sueldoBasico, conceptos: emp.conceptos,
+            aportes: ap, haberes: t.haberes, descuentos: t.descuentos, neto: remNetoEmpleado(emp),
+            empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+            proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+            empresaNombre: (getEmpresaParaRecibo ? (getEmpresaParaRecibo().nombre || '') : '')
+        };
+        var existente = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
+        if (existente) {
+            if (!confirm('Ya hay un recibo guardado de ' + emp.nombre + ' para ' + _mesLabel(mes) + '. ¿Reemplazarlo con la liquidación actual?')) return;
+            Object.assign(existente, snap);   // conserva el id existente
+        } else {
+            snap.id = 'REC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            remunRecibos.push(snap);
+        }
+        persistirRemunRecibos();
+        _renderRecibosEmpleado(emp.id);
+        alert('✅ Recibo de ' + _mesLabel(mes) + ' guardado. Lo podés reimprimir cuando quieras desde «Recibos guardados».');
+    };
+
+    // Lista los recibos guardados de un empleado, con reimprimir / eliminar.
+    function _renderRecibosEmpleado(empId) {
+        var cont = document.getElementById('empRecibosHist'); if (!cont) return;
+        var lista = (remunRecibos || []).filter(function(r){ return r.empleadoId === empId; });
+        lista.sort(function(a, b){ return (b.mes || '').localeCompare(a.mes || ''); });
+        if (!lista.length) { cont.innerHTML = '<div style="font-size:11px;color:var(--text-3);padding:4px 2px;">No hay recibos guardados todavía.</div>'; return; }
+        var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var rows = lista.map(function(r){
+            return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:5px;">' +
+                '<div style="font-size:12px;"><strong>' + escHtml(_mesLabel(r.mes)) + '</strong> · Neto ' + fmt(r.neto) + ' <span style="color:var(--text-3);font-size:11px;">(emitido ' + (r.fechaEmision ? formatearFecha(r.fechaEmision) : '—') + ')</span></div>' +
+                '<div style="display:flex;gap:5px;">' +
+                    '<button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboGuardado(\'' + r.id + '\')" title="Reimprimir">🖨️</button>' +
+                    '<button type="button" class="btn btn-danger-sm" onclick="eliminarReciboGuardado(\'' + r.id + '\')" title="Eliminar">✕</button>' +
+                '</div></div>';
+        }).join('');
+        cont.innerHTML = '<div style="font-size:12px;font-weight:600;margin:8px 0 6px;">📄 Recibos guardados</div>' + rows;
+    }
+    function _renderRecibosEmpleadoActivo() {
+        if (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx]) _renderRecibosEmpleado(remuneraciones[editandoEmpleadoIdx].id);
+    }
+    window.imprimirReciboGuardado = function(id) {
+        var r = (remunRecibos || []).find(function(x){ return x.id === id; });
+        if (!r) return;
+        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [] }, r.mes);
+    };
+    window.eliminarReciboGuardado = function(id) {
+        var r = (remunRecibos || []).find(function(x){ return x.id === id; });
+        if (!r) return;
+        if (!confirm('¿Eliminar el recibo guardado de ' + _mesLabel(r.mes) + '?')) return;
+        var empId = r.empleadoId;
+        remunRecibos = remunRecibos.filter(function(x){ return x.id !== id; });
+        persistirRemunRecibos();
+        _renderRecibosEmpleado(empId);
     };
 
     function escHtml(s) {
@@ -32175,7 +32297,14 @@
         </div>
         <div id="empConceptosLista"></div>
         <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
-        <div class="form-hint">Guardá el legajo y después imprimí el recibo con 🖨️ desde la lista de empleados.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
+          <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" style="padding:6px 8px; font-size:13px;"></label>
+          <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()">🖨️ Imprimir</button>
+          <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
+        </div>
+        <div id="empRecibosHist" style="margin-top:6px;"></div>
+        <div class="form-hint">Cada recibo guardado es una foto de la liquidación de ese mes (básico, conceptos, aportes y neto). Cambiar el legajo no altera los recibos ya guardados.</div>
       </div>
 
       <div class="modal-footer">
