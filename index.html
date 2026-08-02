@@ -23069,7 +23069,11 @@
             puesto:       (document.getElementById('empPuesto').value || '').trim(),
             tipoContrato: document.getElementById('empTipoContrato').value || 'dependencia',
             sueldoBasico: parseFloat(document.getElementById('empSueldo').value) || 0,
-            conceptos:    _empLeerConceptos()
+            conceptos:    _empLeerConceptos(),
+            dni:          (document.getElementById('empDni').value || '').trim(),
+            obraSocial:   (document.getElementById('empObraSocial').value || '').trim(),
+            convenio:     (document.getElementById('empConvenio').value || '').trim(),
+            legajoNro:    (document.getElementById('empLegajoNro').value || '').trim()
         };
     }
 
@@ -23121,6 +23125,25 @@
         }
         var emision = new Date().toLocaleDateString('es-AR');
         var info = function(lbl, val) { return '<div class="celda"><span class="k">' + lbl + '</span><span class="v">' + val + '</span></div>'; };
+        // Logo del empleador para el encabezado (empresa o, si no hay, el del producto).
+        // Se resuelve a URL absoluta para que cargue en la ventana de impresión.
+        var logo = '';
+        try {
+            // Logo de la EMPRESA (config brand.logoEmpresa). No se usa el del producto (Mess):
+            // el recibo es un documento del empleador, no del software.
+            var _lg = (typeof getBrand === 'function' ? getBrand().logoEmpresa : '') || '';
+            if (_lg) logo = (_lg.indexOf('data:') === 0) ? _lg : new URL(_lg, location.href).href;
+        } catch (e) { logo = ''; }
+        // Celdas de datos del empleado (las opcionales solo si tienen valor).
+        var celdas = [ info('Empleado', escHtml(emp.nombre || '—')), info('CUIL', escHtml(emp.cuil || '—')) ];
+        if (emp.dni)       celdas.push(info('DNI', escHtml(emp.dni)));
+        if (emp.legajoNro) celdas.push(info('Legajo N°', escHtml(emp.legajoNro)));
+        celdas.push(info('Fecha de ingreso', emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—'));
+        celdas.push(info('Puesto / Categoría', escHtml(emp.puesto || '—')));
+        if (emp.obraSocial) celdas.push(info('Obra social', escHtml(emp.obraSocial)));
+        if (emp.convenio)   celdas.push(info('Convenio', escHtml(emp.convenio)));
+        celdas.push(info('Condición', esMono ? 'Monotributista' : 'Relación de dependencia'));
+        celdas.push(info('Período liquidado', mes ? escHtml(_mesLabel(mes)) : '—'));
         var css =
             '*{box-sizing:border-box;} body{font-family:"Segoe UI",Arial,sans-serif;color:#1a1a2e;margin:0;padding:28px;background:#fff;font-size:12.5px;line-height:1.35;}' +
             '.doc{max-width:760px;margin:0 auto;border:1px solid #d5dae4;border-radius:10px;overflow:hidden;}' +
@@ -23142,22 +23165,19 @@
         var html = '<html><head><meta charset="UTF-8"><title>Recibo ' + escHtml(emp.nombre || '') + (mes ? ' - ' + escHtml(_mesLabel(mes)) : '') + '</title><style>' + css + '</style></head><body>' +
             '<div class="doc">' +
               '<div class="head">' +
-                '<div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
-                  '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.condIva || ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div>' +
-                  (e2.proyecto ? '<div class="emp-sub">' + escHtml(e2.proyecto) + '</div>' : '') +
+                '<div style="display:flex;gap:14px;align-items:center;">' +
+                  (logo ? '<img src="' + escHtml(logo) + '" alt="" style="height:46px;width:auto;max-width:130px;object-fit:contain;">' : '') +
+                  '<div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
+                    '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.condIva || ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div>' +
+                    (e2.proyecto ? '<div class="emp-sub">' + escHtml(e2.proyecto) + '</div>' : '') +
+                  '</div>' +
                 '</div>' +
                 '<div class="tit-box"><div class="tit">RECIBO DE HABERES</div>' +
+                  (emp.nroRecibo ? '<div style="font-size:11px;color:#5a6376;margin-top:3px;font-weight:600;">N° ' + escHtml(emp.nroRecibo) + '</div>' : '') +
                   (mes ? '<div class="periodo">' + escHtml(_mesLabel(mes)) + '</div>' : '') +
                 '</div>' +
               '</div>' +
-              '<div class="datos">' +
-                info('Empleado', escHtml(emp.nombre || '—')) +
-                info('CUIL', escHtml(emp.cuil || '—')) +
-                info('Fecha de ingreso', emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') +
-                info('Puesto / Categoría', escHtml(emp.puesto || '—')) +
-                info('Condición', esMono ? 'Monotributista' : 'Relación de dependencia') +
-                info('Período liquidado', mes ? escHtml(_mesLabel(mes)) : '—') +
-              '</div>' +
+              '<div class="datos">' + celdas.join('') + '</div>' +
               '<table><thead><tr><th>Concepto</th><th class="r">Haberes</th><th class="r">Descuentos</th></tr></thead><tbody>' + filas +
                 '<tr class="tot"><td>Totales</td><td class="r">' + fmt(totalHab) + '</td><td class="r">' + fmt(totalDesc) + '</td></tr>' +
                 '<tr class="neto"><td>NETO A COBRAR' + (esMono ? ' (monotributo)' : '') + '</td><td class="r" colspan="2">' + fmt(neto) + '</td></tr>' +
@@ -23199,8 +23219,9 @@
         var t = remTotalesConceptos(emp);
         var ap = remAportesLey(emp);
         var snap = {
-            empleadoId: emp.id, empleadoNombre: emp.nombre, cuil: emp.cuil,
+            empleadoId: emp.id, empleadoNombre: emp.nombre, cuil: emp.cuil, dni: emp.dni,
             fechaIngreso: emp.fechaIngreso, puesto: emp.puesto, tipoContrato: emp.tipoContrato,
+            obraSocial: emp.obraSocial, convenio: emp.convenio, legajoNro: emp.legajoNro,
             mes: mes, fechaEmision: new Date().toISOString().slice(0, 10),
             basico: emp.sueldoBasico, conceptos: emp.conceptos,
             aportes: ap, haberes: t.haberes, descuentos: t.descuentos, neto: remNetoEmpleado(emp),
@@ -23208,6 +23229,15 @@
             proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
             empresaNombre: (getEmpresaParaRecibo ? (getEmpresaParaRecibo().nombre || '') : '')
         };
+        // N° de recibo correlativo (se asigna una vez; al reemplazar se conserva el existente).
+        var _existePrev = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
+        if (_existePrev && _existePrev.nroRecibo) {
+            snap.nroRecibo = _existePrev.nroRecibo; snap.nroReciboSeq = _existePrev.nroReciboSeq;
+        } else {
+            var _maxSeq = (remunRecibos || []).reduce(function(m, r){ return Math.max(m, r.nroReciboSeq || 0); }, 0);
+            snap.nroReciboSeq = _maxSeq + 1;
+            snap.nroRecibo = 'RS-' + String(snap.nroReciboSeq).padStart(6, '0');
+        }
         var existente = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
         if (existente) {
             if (!confirm('Ya hay un recibo guardado de ' + emp.nombre + ' para ' + _mesLabel(mes) + '. ¿Reemplazarlo con la liquidación actual?')) return;
@@ -23252,7 +23282,7 @@
     window.imprimirReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
         if (!r) return;
-        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [] }, r.mes);
+        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, dni: r.dni, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [], obraSocial: r.obraSocial, convenio: r.convenio, legajoNro: r.legajoNro, nroRecibo: r.nroRecibo }, r.mes);
     };
     window.eliminarReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
