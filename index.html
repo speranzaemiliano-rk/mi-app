@@ -4653,6 +4653,29 @@
                                 Al consolidar se generan DOS movimientos con la fecha elegida, etiquetados solo <strong>«Remuneraciones»</strong>: uno en <strong>Caja</strong> (suma del efectivo) y uno en <strong>Banco</strong> (suma de la parte banco). El detalle por empleado queda solo acá (privado); en Caja/Banco nadie ve nombres ni montos individuales.
                             </div>
                         </div>
+
+                        <!-- Consolidaciones hechas (para adjuntarles comprobantes) -->
+                        <div class="table-card" id="remConsolCard" style="margin-top:16px;">
+                            <div class="table-card-head">
+                                <h3>📊 Consolidaciones</h3>
+                                <span style="font-size:11px; color:var(--text-3);">Adjuntá acá el comprobante de transferencia, factura o recibo de cada consolidación.</span>
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th><th>Pagos</th>
+                                            <th style="text-align:right">Banco</th><th style="text-align:right">Efectivo</th>
+                                            <th>Cuenta</th><th>Comprobantes</th><th>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="remConsolBody">
+                                        <tr><td colspan="7" class="empty-msg">Todavía no consolidaste ningún pago.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <input type="file" id="remConsAdjInput" accept=".pdf,image/*" style="display:none;" onchange="_remConsAdjArchivo()">
+                        </div>
                     </div>
                 </div>
             </div><!-- /panelRemuneraciones -->
@@ -7139,6 +7162,12 @@
                 remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val());
                 if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo();
             }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrr, event:'value'});
+            // Consolidaciones de pagos (para adjuntarles comprobantes después). Nodo privado aparte.
+            if (!REF_REMUN_CONSOL) REF_REMUN_CONSOL = db.ref('remuneracionesConsolidados');
+            const lrc = REF_REMUN_CONSOL; lrc.on('value', (snap) => {
+                remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val());
+                if (typeof renderRemuneraciones === 'function') renderRemuneraciones();
+            }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrc, event:'value'});
         }
 
         if (REF_CREDITOS) {
@@ -21793,6 +21822,12 @@
     let REF_REMUN_RECIBOS = null;
     let remunRecibos = [];
     function persistirRemunRecibos() { return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(function(e){ console.error(e); }); }
+    // ── Consolidaciones de pagos (batch): entidad editable para adjuntarle después el
+    //    comprobante de transferencia / factura / recibo. Nodo privado aparte. ──
+    let REF_REMUN_CONSOL = null;
+    let remunConsolidados = [];
+    var _remConsTarget = null;   // consId al que se le va a adjuntar un archivo
+    function persistirRemunConsolidados() { return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(function(e){ console.error(e); }); }
     // Solo este email ve Remuneraciones (además del gate de reglas en la base).
     function _esDuenoRemun() {
         var e = ((typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.email) || '').toLowerCase().trim();
@@ -22359,6 +22394,7 @@
         sEl('remSacTotal', fmt(totalSac));
         sEl('remVacTotal', fmt(totalVac));
         _renderRemunPagos();   // sección de pagos de sueldo del mes (aunque no haya legajos)
+        _renderRemunConsolidados();   // consolidaciones hechas (con adjuntos de comprobantes)
 
         var visibles = remuneraciones.filter(function(emp) {
             return !q || ((emp.nombre || '') + ' ' + (emp.cuil || '') + ' ' + (emp.puesto || '')).toLowerCase().indexOf(q) !== -1;
@@ -22553,24 +22589,41 @@
         if (banco>0) msg += '• Banco: $'+Math.round(banco).toLocaleString('es-AR')+'\n';
         msg += '\nSe registran como «Remuneraciones» (sin detalle por empleado).';
         if (!confirm(msg)) return;
+        var consId = 'CONS-' + Date.now();
+        var cajaMovId = '', bancoMovId = '', cb = null;
         if (efe > 0) {
+            cajaMovId = consId + '-CAJA';
             ingGeneral.push({
+                id: cajaMovId,
                 tipo:'mov_egreso_caja', fecha: fecha, origen:'Remuneraciones',
-                referencia:'REMUN-'+Date.now(), moneda:'ARS', monto: efe,
+                referencia: consId, moneda:'ARS', monto: efe,
                 obs:'Remuneraciones', esEgreso:true, tipoAB:'B'
             });
         }
         if (banco > 0) {
-            var cb = (cuentasBancarias||[]).find(function(c){ return (c.id||c.banco)===cuentaId; }) || {};
+            cb = (cuentasBancarias||[]).find(function(c){ return (c.id||c.banco)===cuentaId; }) || {};
+            bancoMovId = consId + '-BANCO';
             ingGeneral.push({
+                id: bancoMovId,
                 tipo:'mov_banco_salida', fecha: fecha, cuentaId: cuentaId, origen:'Remuneraciones',
-                referencia:'REMUN-'+(Date.now()+1), moneda: cb.moneda||'ARS', monto: banco,
+                referencia: consId, moneda: cb.moneda||'ARS', monto: banco,
                 medio:'Transferencia', origenDest:'', esEgreso:true, esBancario:true, tipoAB:'A'
             });
         }
         await persistirIngGeneral();
-        sel.forEach(function(rp){ rp.consolidado = true; rp.consolidadoFecha = fecha; delete _remPagoSel[rp.id]; });
+        sel.forEach(function(rp){ rp.consolidado = true; rp.consolidadoFecha = fecha; rp.consolidadoId = consId; delete _remPagoSel[rp.id]; });
         await persistirRemunPagos();
+        remunConsolidados.push({
+            id: consId, fecha: fecha, cuentaId: cuentaId,
+            cuentaNombre: cb ? ((cb.banco || 'Cuenta') + (cb.alias ? ' · ' + cb.alias : '')) : '',
+            totalBanco: banco, totalEfectivo: efe,
+            pagoIds: sel.map(function(rp){ return rp.id; }),
+            cajaMovId: cajaMovId, bancoMovId: bancoMovId,
+            empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+            proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+            adjuntos: [], creadoEn: Date.now()
+        });
+        await persistirRemunConsolidados();
         renderRemuneraciones();
         if (typeof renderCajaGeneral==='function') renderCajaGeneral();
         if (typeof renderEfectivoPesos==='function') renderEfectivoPesos();
@@ -22604,6 +22657,110 @@
         delete _remPagoSel[id];
         persistirRemunPagos();
         renderRemuneraciones();
+    }
+
+    // ═══════════ Consolidaciones — adjuntar comprobante/factura/recibo, revertir ═══════════
+    function _remConsolidadosDelProyecto() {
+        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
+        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        return (remunConsolidados || []).filter(function(c){
+            if (!c) return false;
+            if (eId && c.empresaId && c.empresaId !== eId) return false;
+            if (pId && c.proyectoId && c.proyectoId !== pId) return false;
+            return true;
+        });
+    }
+
+    function _renderRemunConsolidados() {
+        var tbody = document.getElementById('remConsolBody'); if (!tbody) return;
+        var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var lista = _remConsolidadosDelProyecto().slice().sort(function(a, b){ return (b.fecha || '').localeCompare(a.fecha || '') || ((b.creadoEn || 0) - (a.creadoEn || 0)); });
+        if (!lista.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">Todavía no consolidaste ningún pago.</td></tr>'; return; }
+        tbody.innerHTML = '';
+        lista.forEach(function(c){
+            var adjHtml = (c.adjuntos && c.adjuntos.length) ? c.adjuntos.map(function(a, i){
+                return '<span style="display:inline-flex;align-items:center;gap:2px;margin:2px 4px 2px 0;">' +
+                    '<button class="btn btn-outline btn-sm" title="Ver ' + escHtml(a.nombre || '') + '" onclick="verAdjuntoConsolidado(\'' + c.id + '\',' + i + ')">📎 ' + escHtml((a.nombre || 'archivo').slice(0, 18)) + '</button>' +
+                    '<button class="btn btn-danger-sm" title="Quitar" onclick="quitarAdjuntoConsolidado(\'' + c.id + '\',' + i + ')">✕</button></span>';
+            }).join('') : '<span style="color:var(--text-3);font-size:11px;">— sin comprobantes —</span>';
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td>' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>' +
+                '<td>' + ((c.pagoIds || []).length) + '</td>' +
+                '<td style="text-align:right;">' + fmt(c.totalBanco) + '</td>' +
+                '<td style="text-align:right;">' + fmt(c.totalEfectivo) + '</td>' +
+                '<td>' + escHtml(c.cuentaNombre || '—') + '</td>' +
+                '<td>' + adjHtml + '</td>' +
+                '<td><div class="action-btns">' +
+                    '<button class="btn btn-gold btn-sm" title="Adjuntar comprobante de transferencia, factura o recibo" onclick="adjuntarAConsolidado(\'' + c.id + '\')">📎 Adjuntar</button>' +
+                    '<button class="btn btn-danger-sm" title="Revertir consolidación (borra los movimientos de Caja/Banco y libera los pagos)" onclick="revertirConsolidado(\'' + c.id + '\')">↩️</button>' +
+                '</div></td>';
+            tbody.appendChild(tr);
+        });
+    }
+
+    function adjuntarAConsolidado(consId) {
+        if (!_esDuenoRemun()) return;
+        _remConsTarget = consId;
+        var inp = document.getElementById('remConsAdjInput');
+        if (inp) { inp.value = ''; inp.click(); }
+    }
+    async function _remConsAdjArchivo() {
+        var inp = document.getElementById('remConsAdjInput');
+        var file = inp && inp.files && inp.files[0];
+        var consId = _remConsTarget;
+        if (!file || !consId) return;
+        var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
+        if (!c) { alert('No encontré la consolidación.'); return; }
+        try {
+            var b64 = await leerArchivoBase64(file);
+            if (!c.adjuntos) c.adjuntos = [];
+            c.adjuntos.push({ nombre: file.name, tipo: file.type || 'application/octet-stream', contenido: b64, subidoEn: Date.now() });
+            await persistirRemunConsolidados();
+            renderRemuneraciones();
+        } catch (e) { console.error(e); alert('No se pudo subir el comprobante: ' + (e && e.message ? e.message : e)); }
+        finally { if (inp) inp.value = ''; _remConsTarget = null; }
+    }
+    function verAdjuntoConsolidado(consId, idx) {
+        var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
+        var a = c && c.adjuntos && c.adjuntos[idx];
+        if (!a || !a.contenido) { alert('Adjunto no disponible.'); return; }
+        try {
+            var cont = a.contenido, tipo = a.tipo || 'application/octet-stream';
+            var b64 = cont.indexOf(',') !== -1 ? cont.split(',')[1] : cont;
+            var bs = atob(b64), arr = new Uint8Array(bs.length);
+            for (var i = 0; i < bs.length; i++) arr[i] = bs.charCodeAt(i);
+            var url = URL.createObjectURL(new Blob([arr], { type: tipo }));
+            window.open(url, '_blank'); setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+        } catch (e) { console.error(e); alert('No se pudo abrir el adjunto.'); }
+    }
+    function quitarAdjuntoConsolidado(consId, idx) {
+        var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
+        if (!c || !c.adjuntos || !c.adjuntos[idx]) return;
+        if (!confirm('¿Quitar el comprobante "' + (c.adjuntos[idx].nombre || '') + '"?')) return;
+        c.adjuntos.splice(idx, 1);
+        persistirRemunConsolidados();
+        renderRemuneraciones();
+    }
+    function revertirConsolidado(consId) {
+        if (!_esDuenoRemun()) return;
+        var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
+        if (!c) return;
+        if (!confirm('¿Revertir esta consolidación?\n\nSe borran los movimientos «Remuneraciones» de Caja/Banco y los pagos vuelven a quedar PENDIENTES para volver a consolidar. Los comprobantes adjuntos se pierden.')) return;
+        var ids = {}; if (c.cajaMovId) ids[c.cajaMovId] = 1; if (c.bancoMovId) ids[c.bancoMovId] = 1;
+        if (Object.keys(ids).length) { ingGeneral = ingGeneral.filter(function(m){ return !(m && m.id && ids[m.id]); }); persistirIngGeneral(); }
+        (c.pagoIds || []).forEach(function(pid){
+            var rp = (remunPagos || []).find(function(x){ return x.id === pid; });
+            if (rp && rp.consolidadoId === consId) { rp.consolidado = false; delete rp.consolidadoFecha; delete rp.consolidadoId; }
+        });
+        persistirRemunPagos();
+        remunConsolidados = remunConsolidados.filter(function(x){ return x.id !== consId; });
+        persistirRemunConsolidados();
+        renderRemuneraciones();
+        if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderIngGeneral === 'function') renderIngGeneral();
+        alert('Consolidación revertida. Los pagos quedaron pendientes de nuevo.');
     }
 
     // ── Conceptos adicionales (filas dinámicas en el modal) ──
