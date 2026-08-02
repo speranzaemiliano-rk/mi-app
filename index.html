@@ -4648,8 +4648,19 @@
                                 <h3>💵 Pagos de sueldo del mes</h3>
                                 <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                                     <input type="month" id="remPagoMesFiltro" onchange="renderRemuneraciones()" title="Mostrar los pagos de este mes" style="padding:6px 8px; font-size:12px;">
+                                    <button class="btn btn-outline btn-sm" onclick="abrirCargarDesdeRecibos()" id="btnDesdeRecibos" title="Generar los pagos a partir de los recibos ya emitidos del mes">📋 Desde recibos</button>
                                     <button class="btn btn-gold btn-sm" onclick="abrirFormRemunPago()" id="btnCargarRemunPago">➕ Cargar pago</button>
                                 </div>
+                            </div>
+                            <div id="remDesdeRecibosPanel" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2);">
+                                <div style="font-size:12px; font-weight:600; margin-bottom:8px;">Recibos emitidos de <span id="remDesdeRecibosMes"></span> — tildá los que quieras convertir en pago:</div>
+                                <div id="remDesdeRecibosLista" style="max-height:220px; overflow-y:auto;"></div>
+                                <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px; align-items:center;">
+                                    <span id="remDesdeRecibosEstado" style="font-size:11px; color:var(--text-3); margin-right:auto;"></span>
+                                    <button class="btn btn-outline btn-sm" onclick="cerrarCargarDesdeRecibos()">Cancelar</button>
+                                    <button class="btn btn-gold btn-sm" onclick="cargarPagosDesdeRecibos()">💾 Cargar pagos seleccionados</button>
+                                </div>
+                                <div class="form-hint" style="color:var(--text-3);">Cada recibo tildado genera un pago por su neto (todo por banco; después repartís banco/efectivo en la lista si hace falta). Los recibos que ya tienen pago cargado ese mes aparecen deshabilitados.</div>
                             </div>
                             <div id="remPagoForm" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2);">
                                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; align-items:end;">
@@ -22626,6 +22637,73 @@
             : '';
     }
     function cerrarFormRemunPago() { var f = document.getElementById('remPagoForm'); if (f) f.style.display = 'none'; }
+
+    // ── Cargar pagos a partir de los recibos ya emitidos del mes (selección múltiple) ──
+    function _remRecibosDelMesSinPago(mes) {
+        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
+        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        var enProy = function(o){ return (!eId || !o.empresaId || o.empresaId === eId) && (!pId || !o.proyectoId || o.proyectoId === pId); };
+        var pagosMes = {};
+        (remunPagos || []).forEach(function(rp){ if (rp && rp.mes === mes && enProy(rp)) pagosMes[_remNorm(rp.nombre)] = true; });
+        return (remunRecibos || []).filter(function(r){ return r && r.mes === mes && enProy(r); })
+            .sort(function(a, b){ return (a.empleadoNombre || '').localeCompare(b.empleadoNombre || ''); })
+            .map(function(r){ return { r: r, yaTienePago: !!pagosMes[_remNorm(r.empleadoNombre)] }; });
+    }
+    function abrirCargarDesdeRecibos() {
+        if (!_esDuenoRemun()) return;
+        var mf = document.getElementById('remPagoMesFiltro');
+        var mes = (mf && mf.value) || _remMesActualISO();
+        if (mf && !mf.value) mf.value = mes;
+        var lista = _remRecibosDelMesSinPago(mes);
+        var mesLbl = document.getElementById('remDesdeRecibosMes'); if (mesLbl) mesLbl.textContent = _mesLabel(mes);
+        var cont = document.getElementById('remDesdeRecibosLista');
+        var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+        if (!lista.length) {
+            cont.innerHTML = '<div style="font-size:12px;color:var(--text-3);padding:6px;">No hay recibos emitidos para ' + escHtml(_mesLabel(mes)) + '. Emití los recibos primero (o cambiá el mes de arriba).</div>';
+        } else {
+            cont.innerHTML = lista.map(function(o){
+                var r = o.r;
+                return '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--border);font-size:12px;' + (o.yaTienePago ? 'opacity:.5;' : '') + '">' +
+                    '<input type="checkbox" class="remDesdeRecChk" data-id="' + r.id + '" ' + (o.yaTienePago ? 'disabled' : 'checked') + '>' +
+                    '<span style="flex:1;"><strong>' + escHtml(r.empleadoNombre || '—') + '</strong></span>' +
+                    '<span style="font-weight:600;">' + fmt(r.neto) + '</span>' +
+                    (o.yaTienePago ? '<span style="font-size:10px;color:var(--text-3);">ya tiene pago</span>' : '') +
+                '</label>';
+            }).join('');
+        }
+        var est = document.getElementById('remDesdeRecibosEstado'); if (est) est.textContent = '';
+        document.getElementById('remDesdeRecibosPanel').style.display = '';
+        var f = document.getElementById('remPagoForm'); if (f) f.style.display = 'none';
+    }
+    function cerrarCargarDesdeRecibos() { var p = document.getElementById('remDesdeRecibosPanel'); if (p) p.style.display = 'none'; }
+    function cargarPagosDesdeRecibos() {
+        if (!_esDuenoRemun()) return;
+        var chks = document.querySelectorAll('.remDesdeRecChk:checked');
+        if (!chks.length) { alert('Tildá al menos un recibo.'); return; }
+        var creados = 0, nuevosIds = [];
+        Array.prototype.forEach.call(chks, function(ch, i){
+            var id = ch.getAttribute('data-id');
+            var r = (remunRecibos || []).find(function(x){ return x.id === id; });
+            if (!r) return;
+            var dup = (remunPagos || []).some(function(rp){ return rp && rp.mes === r.mes && _remNorm(rp.nombre) === _remNorm(r.empleadoNombre); });
+            if (dup) return;
+            var rp = {
+                id: 'RP-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 100000),
+                nombre: r.empleadoNombre, mes: r.mes, fecha: _remHoyISO(),
+                montoBanco: (r.neto || 0), montoEfectivo: 0, adjunto: null,
+                empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+                proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+                consolidado: false, creadoEn: Date.now(), origenReciboId: r.id
+            };
+            remunPagos.push(rp); nuevosIds.push(rp.id); creados++;
+        });
+        if (!creados) { alert('Esos recibos ya tenían pago cargado.'); return; }
+        persistirRemunPagos();
+        nuevosIds.forEach(function(id){ _remPagoSel[id] = true; });   // quedan tildados para consolidar
+        cerrarCargarDesdeRecibos();
+        renderRemuneraciones();
+        alert('✅ Se cargaron ' + creados + ' pago(s) desde los recibos, ya tildados. Elegí la cuenta y tocá «Consolidar en Caja/Banco» (o repartí banco/efectivo antes).');
+    }
 
     async function guardarRemunPago() {
         if (!_esDuenoRemun()) return;
