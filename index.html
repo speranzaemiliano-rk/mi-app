@@ -4604,6 +4604,44 @@
                             </div>
                         </div>
 
+                        <!-- Resumen mensual: liquidado vs pagado vs pendiente -->
+                        <div class="table-card" id="remResumenCard" style="margin-top:16px;">
+                            <div class="table-card-head">
+                                <h3>📅 Resumen mensual</h3>
+                                <input type="month" id="remResumenMes" onchange="renderRemuneraciones()" title="Mes a resumir" style="padding:6px 8px; font-size:12px;">
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Empleado</th>
+                                            <th style="text-align:right">Liquidado</th>
+                                            <th style="text-align:right">Pagado banco</th>
+                                            <th style="text-align:right">Pagado efectivo</th>
+                                            <th style="text-align:right">Pagado total</th>
+                                            <th style="text-align:right">Pendiente</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="remResumenBody">
+                                        <tr><td colspan="6" class="empty-msg">Sin datos para este mes.</td></tr>
+                                    </tbody>
+                                    <tfoot>
+                                        <tr style="font-weight:700; border-top:2px solid var(--border);">
+                                            <td>Totales</td>
+                                            <td style="text-align:right;" id="remResTotLiq">$0</td>
+                                            <td style="text-align:right;" id="remResTotBanco">$0</td>
+                                            <td style="text-align:right;" id="remResTotEfe">$0</td>
+                                            <td style="text-align:right;" id="remResTotPagado">$0</td>
+                                            <td style="text-align:right;" id="remResTotPend">$0</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <div class="form-hint" style="color:var(--text-3); padding:8px 14px;">
+                                Cruza los <strong>recibos guardados</strong> (liquidado) con los <strong>pagos de sueldo</strong> (pagado) del mes. Pendiente = liquidado − pagado. Se empareja por nombre de empleado.
+                            </div>
+                        </div>
+
                         <!-- Pagos de sueldo del mes (privado) -->
                         <div class="table-card" id="remPagosCard" style="margin-top:16px;">
                             <div class="table-card-head">
@@ -4675,6 +4713,27 @@
                                 </table>
                             </div>
                             <input type="file" id="remConsAdjInput" accept=".pdf,image/*" style="display:none;" onchange="_remConsAdjArchivo()">
+                        </div>
+
+                        <!-- Recibos de sueldo emitidos (todos, no por empleado) -->
+                        <div class="table-card" id="remRecibosCard" style="margin-top:16px;">
+                            <div class="table-card-head">
+                                <h3>📄 Recibos emitidos</h3>
+                                <input type="text" id="remRecibosBuscador" placeholder="Empleado o mes…" oninput="_renderRemunRecibosLista()" style="padding:7px 10px; font-size:12px; width:180px;">
+                            </div>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>N°</th><th>Empleado</th><th>Mes</th>
+                                            <th style="text-align:right">Neto</th><th>Emitido</th><th>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="remRecibosBody">
+                                        <tr><td colspan="6" class="empty-msg">Todavía no guardaste ningún recibo.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -22393,8 +22452,10 @@
         sEl('remMasaNeta', fmt(totalNeto));
         sEl('remSacTotal', fmt(totalSac));
         sEl('remVacTotal', fmt(totalVac));
+        _renderRemunResumen();        // resumen mensual: liquidado vs pagado vs pendiente
         _renderRemunPagos();   // sección de pagos de sueldo del mes (aunque no haya legajos)
         _renderRemunConsolidados();   // consolidaciones hechas (con adjuntos de comprobantes)
+        _renderRemunRecibosLista();   // listado global de recibos emitidos
 
         var visibles = remuneraciones.filter(function(emp) {
             return !q || ((emp.nombre || '') + ' ' + (emp.cuil || '') + ' ' + (emp.puesto || '')).toLowerCase().indexOf(q) !== -1;
@@ -22767,6 +22828,72 @@
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderIngGeneral === 'function') renderIngGeneral();
         alert('Consolidación revertida. Los pagos quedaron pendientes de nuevo.');
+    }
+
+    // ═══════════ Resumen mensual y listado de recibos emitidos ═══════════
+    function _remNorm(s){ return (s || '').toLowerCase().trim().replace(/\s+/g, ' '); }
+
+    function _renderRemunResumen() {
+        var tbody = document.getElementById('remResumenBody'); if (!tbody) return;
+        var mesEl = document.getElementById('remResumenMes');
+        if (mesEl && !mesEl.value) mesEl.value = _remMesActualISO();
+        var mes = mesEl ? mesEl.value : '';
+        var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
+        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        var enProy = function(o){ return (!eId || !o.empresaId || o.empresaId === eId) && (!pId || !o.proyectoId || o.proyectoId === pId); };
+        var map = {};
+        var ent = function(nom){ var k = _remNorm(nom); if (!map[k]) map[k] = { nombre: nom || '—', liquidado: 0, banco: 0, efectivo: 0 }; return map[k]; };
+        (remunRecibos || []).forEach(function(r){ if (r && r.mes === mes && enProy(r)) ent(r.empleadoNombre).liquidado += (r.neto || 0); });
+        (remunPagos || []).forEach(function(rp){ if (rp && rp.mes === mes && enProy(rp)) { var e = ent(rp.nombre); e.banco += (rp.montoBanco || 0); e.efectivo += (rp.montoEfectivo || 0); } });
+        var filas = Object.keys(map).map(function(k){ return map[k]; }).sort(function(a, b){ return a.nombre.localeCompare(b.nombre); });
+        var s = function(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; };
+        if (!filas.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">Sin datos para este mes.</td></tr>'; s('remResTotLiq', fmt(0)); s('remResTotBanco', fmt(0)); s('remResTotEfe', fmt(0)); s('remResTotPagado', fmt(0)); s('remResTotPend', fmt(0)); return; }
+        var tL = 0, tB = 0, tE = 0; tbody.innerHTML = '';
+        filas.forEach(function(e){
+            var pagado = e.banco + e.efectivo, pend = e.liquidado - pagado;
+            tL += e.liquidado; tB += e.banco; tE += e.efectivo;
+            var col = pend > 0.5 ? 'var(--danger)' : (pend < -0.5 ? 'var(--gold)' : 'var(--success)');
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td><strong>' + escHtml(e.nombre) + '</strong></td>' +
+                '<td style="text-align:right;">' + fmt(e.liquidado) + '</td>' +
+                '<td style="text-align:right;">' + fmt(e.banco) + '</td>' +
+                '<td style="text-align:right;">' + fmt(e.efectivo) + '</td>' +
+                '<td style="text-align:right;font-weight:700;">' + fmt(pagado) + '</td>' +
+                '<td style="text-align:right;font-weight:700;color:' + col + ';">' + fmt(pend) + '</td>';
+            tbody.appendChild(tr);
+        });
+        s('remResTotLiq', fmt(tL)); s('remResTotBanco', fmt(tB)); s('remResTotEfe', fmt(tE)); s('remResTotPagado', fmt(tB + tE)); s('remResTotPend', fmt(tL - (tB + tE)));
+    }
+
+    function _renderRemunRecibosLista() {
+        var tbody = document.getElementById('remRecibosBody'); if (!tbody) return;
+        var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var q = _remNorm((document.getElementById('remRecibosBuscador') || {}).value || '');
+        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
+        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        var lista = (remunRecibos || []).filter(function(r){
+            if (!r) return false;
+            if (eId && r.empresaId && r.empresaId !== eId) return false;
+            if (pId && r.proyectoId && r.proyectoId !== pId) return false;
+            if (q) { var hay = _remNorm((r.empleadoNombre || '') + ' ' + (r.mes || '') + ' ' + _mesLabel(r.mes) + ' ' + (r.nroRecibo || '')); if (hay.indexOf(q) === -1) return false; }
+            return true;
+        }).sort(function(a, b){ return (b.mes || '').localeCompare(a.mes || '') || (b.fechaEmision || '').localeCompare(a.fechaEmision || ''); });
+        if (!lista.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">' + ((remunRecibos && remunRecibos.length) ? 'Sin resultados.' : 'Todavía no guardaste ningún recibo.') + '</td></tr>'; return; }
+        tbody.innerHTML = '';
+        lista.forEach(function(r){
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + escHtml(r.nroRecibo || '—') + '</td>' +
+                '<td><strong>' + escHtml(r.empleadoNombre || '—') + '</strong></td>' +
+                '<td>' + escHtml(_mesLabel(r.mes)) + '</td>' +
+                '<td style="text-align:right;">' + fmt(r.neto) + '</td>' +
+                '<td>' + (r.fechaEmision ? formatearFecha(r.fechaEmision) : '—') + '</td>' +
+                '<td><div class="action-btns">' +
+                    '<button class="btn btn-outline btn-sm" title="Reimprimir" onclick="imprimirReciboGuardado(\'' + r.id + '\')">🖨️</button>' +
+                    '<button class="btn btn-danger-sm" title="Eliminar" onclick="eliminarReciboGuardado(\'' + r.id + '\')">✕</button>' +
+                '</div></td>';
+            tbody.appendChild(tr);
+        });
     }
 
     // ── Conceptos adicionales (filas dinámicas en el modal) ──
@@ -23292,6 +23419,8 @@
         remunRecibos = remunRecibos.filter(function(x){ return x.id !== id; });
         persistirRemunRecibos();
         _renderRecibosEmpleado(empId);
+        if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista();
+        if (typeof _renderRemunResumen === 'function') _renderRemunResumen();
     };
 
     function escHtml(s) {
