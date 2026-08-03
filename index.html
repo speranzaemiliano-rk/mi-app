@@ -21914,13 +21914,20 @@
     let remunConsolidados = [];
     var _remConsTarget = null;   // consId al que se le va a adjuntar un archivo
     function persistirRemunConsolidados() { _asegurarRefsRemun(); return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(_avisarErrorRemun); }
-    // Lazy-init de los 3 nodos privados de remuneraciones. Así un guardado NUNCA se pierde por
-    // REF null (si cargarDatos corrió antes de estar lista la sesión del dueño).
+    // Lazy-init de los 3 nodos privados de remuneraciones. Se guardan bajo
+    // 'cajaDiaria/<uid>/...' porque ese nodo tiene reglas de Firebase PRIVADAS (solo ese uid lee
+    // y escribe) que YA ESTÁN DESPLEGADAS — así los recibos/pagos persisten sin depender de
+    // desplegar reglas nuevas para los nodos remuneraciones* de nivel raíz (que la base rechaza
+    // con el '.write': false por defecto si esas reglas no se publicaron). Las dos variantes del
+    // mail del dueño son la misma cuenta de Gmail (los puntos no cuentan) → mismo uid siempre.
     function _asegurarRefsRemun() {
         if (typeof db === 'undefined' || !db) return;
-        if (!REF_REMUN_PAGOS)   REF_REMUN_PAGOS   = db.ref('remuneracionesPagos');
-        if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref('remuneracionesRecibos');
-        if (!REF_REMUN_CONSOL)  REF_REMUN_CONSOL  = db.ref('remuneracionesConsolidados');
+        var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
+        if (!uid) return;
+        var base = 'cajaDiaria/' + uid + '/';
+        if (!REF_REMUN_PAGOS)   REF_REMUN_PAGOS   = db.ref(base + 'remuneracionesPagos');
+        if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref(base + 'remuneracionesRecibos');
+        if (!REF_REMUN_CONSOL)  REF_REMUN_CONSOL  = db.ref(base + 'remuneracionesConsolidados');
     }
     // Avisa (una sola vez) si un guardado privado falla — típicamente PERMISSION_DENIED por reglas
     // de Firebase sin desplegar. Antes el error se tragaba y el dato "desaparecía" en silencio.
@@ -21930,15 +21937,16 @@
         if (_remunErrAvisado) return;
         _remunErrAvisado = true;
         var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
-        alert('⚠️ No se pudo guardar en la nube (recibo / pago de sueldo).\n\nDetalle: ' + msg + '\n\nSi dice PERMISSION_DENIED, faltan DESPLEGAR las reglas de Firebase de remuneraciones (remuneracionesRecibos / remuneracionesPagos / remuneracionesConsolidados). Hasta entonces los datos no se guardan entre sesiones.');
+        alert('⚠️ No se pudo guardar en la nube (recibo / pago de sueldo).\n\nDetalle: ' + msg + '\n\nRevisá la conexión e intentá de nuevo. Si el problema persiste, avisá.');
     }
     // Suscripción idempotente a los 3 nodos privados. Se llama desde cargarDatos y también al abrir
     // Remuneraciones, por si al arrancar la sesión la auth (dueño) todavía no estaba lista.
     var _remunPrivadoSub = false;
     function _suscribirRemunPrivado() {
         if (_remunPrivadoSub || !_esDuenoRemun() || typeof db === 'undefined' || !db) return;
-        _remunPrivadoSub = true;
         _asegurarRefsRemun();
+        if (!REF_REMUN_RECIBOS) return;   // uid todavía no listo → se reintenta al abrir la pestaña
+        _remunPrivadoSub = true;
         REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
         REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); }, function(){});
         REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
