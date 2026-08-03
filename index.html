@@ -7232,27 +7232,10 @@
             renderizar();
         }); activeListeners.push({ref:l4, event:'value'});
 
-        // Remuneraciones — pagos de sueldo: nodo PRIVADO global, restringido por email en
-        // las reglas. Solo se suscribe el dueño (otros darían permission-denied).
-        if (_esDuenoRemun()) {
-            if (!REF_REMUN_PAGOS) REF_REMUN_PAGOS = db.ref('remuneracionesPagos');
-            const lrp = REF_REMUN_PAGOS; lrp.on('value', (snap) => {
-                remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val());
-                if (typeof renderRemuneraciones === 'function') renderRemuneraciones();
-            }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrp, event:'value'});
-            // Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte.
-            if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref('remuneracionesRecibos');
-            const lrr = REF_REMUN_RECIBOS; lrr.on('value', (snap) => {
-                remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val());
-                if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo();
-            }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrr, event:'value'});
-            // Consolidaciones de pagos (para adjuntarles comprobantes después). Nodo privado aparte.
-            if (!REF_REMUN_CONSOL) REF_REMUN_CONSOL = db.ref('remuneracionesConsolidados');
-            const lrc = REF_REMUN_CONSOL; lrc.on('value', (snap) => {
-                remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val());
-                if (typeof renderRemuneraciones === 'function') renderRemuneraciones();
-            }, function(){ /* sin permiso: ignorar */ }); activeListeners.push({ref:lrc, event:'value'});
-        }
+        // Remuneraciones — nodos PRIVADOS globales (pagos / recibos / consolidados), restringidos
+        // por email en las reglas. Suscripción idempotente y resiliente al timing de la auth
+        // (también se reintenta al abrir la pestaña Remuneraciones).
+        _suscribirRemunPrivado();
 
         if (REF_CREDITOS) {
             const l4b = REF_CREDITOS; l4b.on('value', (snap) => {
@@ -21920,17 +21903,46 @@
     let REF_REMUN_PAGOS = null;
     let remunPagos = [];
     var _remPagoSel = {};   // ids tildados para consolidar
-    function persistirRemunPagos() { return _colPersist('remunPagos', REF_REMUN_PAGOS, remunPagos).catch(function(e){ console.error(e); }); }
+    function persistirRemunPagos() { _asegurarRefsRemun(); return _colPersist('remunPagos', REF_REMUN_PAGOS, remunPagos).catch(_avisarErrorRemun); }
     // ── Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte. ──
     let REF_REMUN_RECIBOS = null;
     let remunRecibos = [];
-    function persistirRemunRecibos() { return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(function(e){ console.error(e); }); }
+    function persistirRemunRecibos() { _asegurarRefsRemun(); return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(_avisarErrorRemun); }
     // ── Consolidaciones de pagos (batch): entidad editable para adjuntarle después el
     //    comprobante de transferencia / factura / recibo. Nodo privado aparte. ──
     let REF_REMUN_CONSOL = null;
     let remunConsolidados = [];
     var _remConsTarget = null;   // consId al que se le va a adjuntar un archivo
-    function persistirRemunConsolidados() { return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(function(e){ console.error(e); }); }
+    function persistirRemunConsolidados() { _asegurarRefsRemun(); return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(_avisarErrorRemun); }
+    // Lazy-init de los 3 nodos privados de remuneraciones. Así un guardado NUNCA se pierde por
+    // REF null (si cargarDatos corrió antes de estar lista la sesión del dueño).
+    function _asegurarRefsRemun() {
+        if (typeof db === 'undefined' || !db) return;
+        if (!REF_REMUN_PAGOS)   REF_REMUN_PAGOS   = db.ref('remuneracionesPagos');
+        if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref('remuneracionesRecibos');
+        if (!REF_REMUN_CONSOL)  REF_REMUN_CONSOL  = db.ref('remuneracionesConsolidados');
+    }
+    // Avisa (una sola vez) si un guardado privado falla — típicamente PERMISSION_DENIED por reglas
+    // de Firebase sin desplegar. Antes el error se tragaba y el dato "desaparecía" en silencio.
+    var _remunErrAvisado = false;
+    function _avisarErrorRemun(e) {
+        console.error('Remuneraciones (guardado en la nube):', e);
+        if (_remunErrAvisado) return;
+        _remunErrAvisado = true;
+        var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+        alert('⚠️ No se pudo guardar en la nube (recibo / pago de sueldo).\n\nDetalle: ' + msg + '\n\nSi dice PERMISSION_DENIED, faltan DESPLEGAR las reglas de Firebase de remuneraciones (remuneracionesRecibos / remuneracionesPagos / remuneracionesConsolidados). Hasta entonces los datos no se guardan entre sesiones.');
+    }
+    // Suscripción idempotente a los 3 nodos privados. Se llama desde cargarDatos y también al abrir
+    // Remuneraciones, por si al arrancar la sesión la auth (dueño) todavía no estaba lista.
+    var _remunPrivadoSub = false;
+    function _suscribirRemunPrivado() {
+        if (_remunPrivadoSub || !_esDuenoRemun() || typeof db === 'undefined' || !db) return;
+        _remunPrivadoSub = true;
+        _asegurarRefsRemun();
+        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
+        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); }, function(){});
+        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
+    }
     // Solo este email ve Remuneraciones (además del gate de reglas en la base).
     function _esDuenoRemun() {
         var e = ((typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.email) || '').toLowerCase().trim();
@@ -22480,6 +22492,9 @@
         if (noAcceso) noAcceso.style.display = esSA ? 'none' : '';
         if (contenido) contenido.style.display = esSA ? '' : 'none';
         if (!esSA) return;
+        _suscribirRemunPrivado();   // por si al arrancar la sesión la auth no estaba lista
+
+
 
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var q = ((document.getElementById('remBuscador') || {}).value || '').toLowerCase().trim();
@@ -22997,12 +23012,10 @@
         var tbody = document.getElementById('remRecibosBody'); if (!tbody) return;
         var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var q = _remNorm((document.getElementById('remRecibosBuscador') || {}).value || '');
-        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
-        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        // Los recibos de sueldo son GLOBALES (un empleado no está atado a un proyecto): se listan
+        // todos, sin filtrar por la empresa/proyecto activos (antes se ocultaban al cambiar de proyecto).
         var lista = (remunRecibos || []).filter(function(r){
             if (!r) return false;
-            if (eId && r.empresaId && r.empresaId !== eId) return false;
-            if (pId && r.proyectoId && r.proyectoId !== pId) return false;
             if (q) { var hay = _remNorm((r.empleadoNombre || '') + ' ' + (r.mes || '') + ' ' + _mesLabel(r.mes) + ' ' + (r.nroRecibo || '')); if (hay.indexOf(q) === -1) return false; }
             return true;
         }).sort(function(a, b){ return (b.mes || '').localeCompare(a.mes || '') || (b.fechaEmision || '').localeCompare(a.fechaEmision || ''); });
