@@ -22429,10 +22429,11 @@
     }
 
     // SAC (aguinaldo) proporcional = base ÷ 12 × meses trabajados en el semestre. Si no se pasa
-    // base explícita, se usa la mejor remuneración mensual del semestre.
-    function remSacSemestral(emp, base) {
+    // base explícita, se usa la mejor remuneración mensual del semestre. `ref` = fecha del
+    // período que se liquida (para tomar el semestre correcto); si no se pasa, usa hoy.
+    function remSacSemestral(emp, base, ref) {
         var b = (base != null) ? base : remMejorRemuneracion(emp);
-        var meses = remMesesSemestre(emp.fechaIngreso);
+        var meses = remMesesSemestre(emp.fechaIngreso, ref);
         return (b / 12) * meses;
     }
 
@@ -23044,13 +23045,29 @@
         return num;
     }
 
+    // Fecha de referencia (mediados del mes que se está liquidando) para tomar el semestre
+    // correcto del SAC. Si no hay mes elegido, devuelve null (se usa hoy).
+    function _empLiqMesRef() {
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!/^\d{4}-\d{2}$/.test(mes)) return null;
+        return new Date(parseInt(mes.slice(0, 4), 10), parseInt(mes.slice(5, 7), 10) - 1, 15);
+    }
+
     // Calcula el aguinaldo (SAC) proporcional del semestre y lo agrega como concepto haber.
-    // Pregunta sobre qué remuneración calcularlo (por defecto, la mejor del semestre).
+    // Usa el MES QUE SE ESTÁ LIQUIDANDO (no la fecha de hoy) para tomar el semestre correcto:
+    // liquidar junio → 1er semestre (ene-jun); liquidar diciembre → 2do semestre (jul-dic).
     window.empAgregarConceptoSAC = function() {
         var emp = _empDatosFormulario();
-        var base = _empPedirBase(remMejorRemuneracion(emp), '💰 Aguinaldo (SAC)\n¿Sobre qué remuneración mensual calculamos el SAC? Se prorratea por los meses trabajados del semestre.');
+        var ref = _empLiqMesRef();
+        var r = ref || new Date();
+        var meses = remMesesSemestre(emp.fechaIngreso, ref);
+        var sem = r.getMonth() <= 5 ? '1er semestre (ene–jun)' : '2do semestre (jul–dic)';
+        var base = _empPedirBase(remMejorRemuneracion(emp),
+            '💰 Aguinaldo (SAC) — ' + sem + ' de ' + r.getFullYear() + '\n' +
+            'Se prorratea por los meses trabajados del semestre: ' + meses + ' de 6.\n' +
+            '¿Sobre qué remuneración mensual calculamos el SAC?');
         if (base == null) return;
-        var monto = Math.round(remSacSemestral(emp, base) * 100) / 100;
+        var monto = Math.round(remSacSemestral(emp, base, ref) * 100) / 100;
         empAgregarConcepto('Aguinaldo (SAC)', 'haber', monto);
     };
 
