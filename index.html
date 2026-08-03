@@ -23193,29 +23193,13 @@
         el.innerHTML = html;
     };
 
-    window.empSelTab = function(tab) {
-        var pLeg = document.getElementById('empPanelLegajo');
-        var pLiq = document.getElementById('empPanelLiquidacion');
-        var bLeg = document.getElementById('empTabLegajoBtn');
-        var bLiq = document.getElementById('empTabLiqBtn');
-        if (pLeg) pLeg.style.display = tab === 'liquidacion' ? 'none' : '';
-        if (pLiq) pLiq.style.display = tab === 'liquidacion' ? '' : 'none';
-        if (bLeg) bLeg.className = 'modalidad-btn' + (tab === 'liquidacion' ? '' : ' selected-A');
-        if (bLiq) bLiq.className = 'modalidad-btn' + (tab === 'liquidacion' ? ' selected-A' : '');
-        if (tab === 'liquidacion') {
-            renderPreviewLiquidacion();
-            var mesEl = document.getElementById('empLiqMes');
-            if (mesEl && !mesEl.value) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
-            _renderRecibosEmpleadoActivo();
-        }
-    };
-
     window.abrirModalEmpleado = function(idx, tab) {
         if (!(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) { alert('Solo el Super Administrador puede acceder a Remuneraciones.'); return; }
+        // "Liquidar sueldo" abre su propio modal, separado del legajo.
+        if (tab === 'liquidacion') { liquidarSueldoEmpleado(idx); return; }
         editandoEmpleadoIdx = (idx !== undefined) ? idx : -1;
         var emp = editandoEmpleadoIdx >= 0 ? remuneraciones[editandoEmpleadoIdx] : null;
         document.getElementById('modalEmpleadoTitle').textContent = emp ? '👤 Editar empleado' : '👤 Nuevo empleado';
-        empSelTab('legajo');
         var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.value = v != null ? v : ''; };
         setVal('empleadoNombre', emp ? emp.nombre : '');
         setVal('empCuil', emp ? emp.cuil : '');
@@ -23238,21 +23222,43 @@
         setVal('empJornada', emp ? emp.jornada : '');
         setVal('empLugarTrabajo', emp ? emp.lugarTrabajo : '');
         setVal('empObs', emp ? emp.obs : '');
-        setVal('empLiqMes', '');   // se re-setea al mes actual al abrir la solapa Liquidación
-        var cont = document.getElementById('empConceptosLista');
-        cont.innerHTML = (emp && emp.conceptos && emp.conceptos.length) ? emp.conceptos.map(_empConceptoHTML).join('') : '';
         var contSH = document.getElementById('empSueldoHistLista');
         if (contSH) contSH.innerHTML = (emp && emp.sueldoHistorial && emp.sueldoHistorial.length) ? emp.sueldoHistorial.map(_empSueldoHistHTML).join('') : '';
         _empAdjuntosWorking = (emp && emp.adjuntos) ? emp.adjuntos.slice() : [];
         _empRenderAdjuntos();
-        renderPreviewLiquidacion();
-        _renderRecibosEmpleadoActivo();
-        // Abrir en la solapa pedida (por defecto Legajo; 'liquidacion' cuando se toca "Liquidar sueldo")
-        if (tab === 'liquidacion') empSelTab('liquidacion');
         document.getElementById('modalEmpleado').classList.add('active');
     };
-    // Abre el legajo directamente en la solapa de Liquidación de Sueldo.
-    window.liquidarSueldoEmpleado = function(idx) { abrirModalEmpleado(idx, 'liquidacion'); };
+    // Liquidar sueldo: modal DEDICADO, separado del legajo. Toma los datos del empleado ya
+    // guardado y arranca de sus conceptos; lo que se guarde queda en el recibo del mes.
+    window.liquidarSueldoEmpleado = function(idx) {
+        if (!(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) { alert('Solo el Super Administrador puede acceder a Remuneraciones.'); return; }
+        editandoEmpleadoIdx = (idx !== undefined) ? idx : -1;
+        var emp = editandoEmpleadoIdx >= 0 ? remuneraciones[editandoEmpleadoIdx] : null;
+        if (!emp) { alert('Guardá primero el legajo del empleado, y después liquidá el sueldo.'); return; }
+        var setVal = function(id, v) { var el = document.getElementById(id); if (el) el.value = v != null ? v : ''; };
+        // Campos del legajo que usa la liquidación (viven en el modal de legajo, oculto).
+        setVal('empleadoNombre', emp.nombre); setVal('empCuil', emp.cuil); setVal('empDni', emp.dni);
+        setVal('empFechaIngreso', emp.fechaIngreso); setVal('empPuesto', emp.puesto);
+        setVal('empTipoContrato', emp.tipoContrato || 'dependencia'); setVal('empSueldo', emp.sueldoBasico);
+        setVal('empObraSocial', emp.obraSocial); setVal('empConvenio', emp.convenio); setVal('empLegajoNro', emp.legajoNro);
+        var cont = document.getElementById('empConceptosLista');
+        if (cont) cont.innerHTML = (emp.conceptos && emp.conceptos.length) ? emp.conceptos.map(_empConceptoHTML).join('') : '';
+        document.getElementById('modalLiquidarTitle').textContent = '💰 Liquidar sueldo — ' + (emp.nombre || '');
+        var infoEl = document.getElementById('liqEmpInfo');
+        if (infoEl) {
+            var fmt = function(n){ return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
+            infoEl.innerHTML = '<strong>' + escHtml(emp.nombre || '—') + '</strong>' +
+                (emp.cuil ? ' · CUIL ' + escHtml(emp.cuil) : '') + (emp.puesto ? ' · ' + escHtml(emp.puesto) : '') +
+                ' · ' + (emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia') +
+                '<br>Sueldo básico: <strong>' + fmt(emp.sueldoBasico) + '</strong> <span style="color:var(--text-3);">(para cambiarlo, editá el legajo)</span>';
+        }
+        var mesEl = document.getElementById('empLiqMes');
+        if (mesEl) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+        renderPreviewLiquidacion();
+        _renderRecibosEmpleadoActivo();
+        document.getElementById('modalLiquidar').classList.add('active');
+    };
+    window.cerrarModalLiquidar = function() { document.getElementById('modalLiquidar').classList.remove('active'); };
     window.cerrarModalEmpleado = function() { document.getElementById('modalEmpleado').classList.remove('active'); };
 
     window.guardarEmpleado = function() {
@@ -23282,7 +23288,7 @@
             sindicato: (document.getElementById('empSindicato').value || '').trim(),
             jornada: document.getElementById('empJornada').value || '',
             lugarTrabajo: (document.getElementById('empLugarTrabajo').value || '').trim(),
-            conceptos: _empLeerConceptos(),
+            conceptos: (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx] && remuneraciones[editandoEmpleadoIdx].conceptos) ? remuneraciones[editandoEmpleadoIdx].conceptos : [],
             sueldoHistorial: _empLeerSueldoHist(),
             adjuntos: _empAdjuntosWorking.slice(),
             obs: (document.getElementById('empObs').value || '').trim()
@@ -23535,12 +23541,17 @@
             remunRecibos.push(snap);
         }
         persistirRemunRecibos();
+        // Recordar los conceptos en el legajo, para arrancar de ahí la próxima liquidación.
+        if (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx]) {
+            remuneraciones[editandoEmpleadoIdx].conceptos = emp.conceptos;
+            persistirRemuneraciones();
+        }
         _renderRecibosEmpleado(emp.id);
         var _neto = remNetoEmpleado(emp);
         // Ofrecer cargar el PAGO de sueldo del mes con el neto ya calculado (para consolidarlo
         // después en Caja/Banco). Se pre-carga por banco; el usuario reparte banco/efectivo.
         if (confirm('✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\n¿Cargar también el PAGO de sueldo de este mes (neto $' + Math.round(_neto).toLocaleString('es-AR') + ') en «Pagos de sueldo»? Después lo consolidás en Caja/Banco.')) {
-            cerrarModalEmpleado();
+            cerrarModalLiquidar();
             abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: _neto, efectivo: 0 });
             var card = document.getElementById('remPagosCard');
             if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -32730,11 +32741,6 @@
       <button class="modal-close" onclick="cerrarModalEmpleado()">✕</button>
     </div>
     <div class="modal-body">
-      <div class="modalidad-toggle" style="margin-bottom:14px;">
-        <button type="button" class="modalidad-btn selected-A" id="empTabLegajoBtn" onclick="empSelTab('legajo')">📋 Legajo</button>
-        <button type="button" class="modalidad-btn" id="empTabLiqBtn" onclick="empSelTab('liquidacion')">💰 Liquidación de Sueldo</button>
-      </div>
-
       <div id="empPanelLegajo">
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
@@ -32856,37 +32862,50 @@
       </div>
       </div>
 
-      <div id="empPanelLiquidacion" style="display:none;">
-        <div class="form-hint" style="margin-bottom:10px;">Conceptos que se suman o descuentan del sueldo básico este período, y el desglose de la liquidación (aportes de ley, neto). El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber más.</div>
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-          <strong style="font-size:13px;">Conceptos adicionales (haberes / descuentos)</strong>
-        </div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Recupero Obra Social','descuento')">+ Recupero Obra Social</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo','descuento')">+ Monotributo</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('IIBB Unificado','descuento')">+ IIBB Unificado</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo e IIBB Unificado','descuento')">+ Monotributo e IIBB Unificado</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Ingresos Brutos','descuento')">+ Ingresos Brutos</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber')">+ Otro</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoSAC()" style="border-color:var(--success);color:var(--success);" title="Calcula el aguinaldo proporcional del semestre y lo agrega como haber">+ Aguinaldo (SAC)</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoVacaciones()" style="border-color:var(--success);color:var(--success);" title="Calcula las vacaciones según antigüedad y las agrega como haber">+ Vacaciones</button>
-        </div>
-        <div id="empConceptosLista"></div>
-        <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
-          <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" style="padding:6px 8px; font-size:13px;"></label>
-          <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()">🖨️ Imprimir</button>
-          <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
-        </div>
-        <div id="empRecibosHist" style="margin-top:6px;"></div>
-        <div class="form-hint">Cada recibo guardado es una foto de la liquidación de ese mes (básico, conceptos, aportes y neto). Cambiar el legajo no altera los recibos ya guardados.</div>
-      </div>
-
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalEmpleado()">Cancelar</button>
         <button type="button" class="btn btn-gold" onclick="guardarEmpleado()">Guardar empleado</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL: LIQUIDAR SUELDO (separado del legajo) ═══════════ -->
+<div class="modal" id="modalLiquidar">
+  <div class="modal-box" style="max-width:720px;max-height:94vh;">
+    <div class="modal-head">
+      <h2 id="modalLiquidarTitle">💰 Liquidar sueldo</h2>
+      <button class="modal-close" onclick="cerrarModalLiquidar()">✕</button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto; max-height:calc(94vh - 130px);">
+      <div id="liqEmpInfo" style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px; color:var(--text-2);"></div>
+      <div class="form-hint" style="margin-bottom:10px;">Conceptos que se suman o descuentan del sueldo básico este período, y el desglose de la liquidación (aportes de ley, neto). El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber más.</div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <strong style="font-size:13px;">Conceptos adicionales (haberes / descuentos)</strong>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Recupero Obra Social','descuento')">+ Recupero Obra Social</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo','descuento')">+ Monotributo</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('IIBB Unificado','descuento')">+ IIBB Unificado</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo e IIBB Unificado','descuento')">+ Monotributo e IIBB Unificado</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Ingresos Brutos','descuento')">+ Ingresos Brutos</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber')">+ Otro</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoSAC()" style="border-color:var(--success);color:var(--success);" title="Calcula el aguinaldo proporcional del semestre y lo agrega como haber">+ Aguinaldo (SAC)</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoVacaciones()" style="border-color:var(--success);color:var(--success);" title="Calcula las vacaciones según antigüedad y las agrega como haber">+ Vacaciones</button>
+      </div>
+      <div id="empConceptosLista"></div>
+      <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
+        <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" style="padding:6px 8px; font-size:13px;"></label>
+        <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()">🖨️ Imprimir</button>
+        <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
+      </div>
+      <div id="empRecibosHist" style="margin-top:6px;"></div>
+      <div class="form-hint">Cada recibo guardado es una foto de la liquidación de ese mes (básico, conceptos, aportes y neto). Editar el legajo no altera los recibos ya guardados.</div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-outline" onclick="cerrarModalLiquidar()">Cerrar</button>
     </div>
   </div>
 </div>
