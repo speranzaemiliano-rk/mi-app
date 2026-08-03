@@ -4650,7 +4650,9 @@
                             <div class="table-card-head">
                                 <h3>💵 Pagos de sueldo del mes</h3>
                                 <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                                    <input type="month" id="remPagoMesFiltro" onchange="renderRemuneraciones()" title="Mostrar los pagos de este mes" style="padding:6px 8px; font-size:12px;">
+                                    <label style="font-size:11px; color:var(--text-3);">Desde<br><input type="month" id="remPagoMesFiltro" onchange="renderRemuneraciones()" title="Mostrar pagos desde este mes (vacío = todos)" style="padding:5px 8px; font-size:12px;"></label>
+                                    <label style="font-size:11px; color:var(--text-3);">Hasta<br><input type="month" id="remPagoMesHasta" onchange="renderRemuneraciones()" title="Mostrar pagos hasta este mes (vacío = todos)" style="padding:5px 8px; font-size:12px;"></label>
+                                    <button class="btn btn-outline btn-sm" onclick="_remPagoVerTodos()" title="Ver los pagos de todos los meses">🗓️ Todos</button>
                                     <button class="btn btn-outline btn-sm" onclick="abrirCargarDesdeRecibos()" id="btnDesdeRecibos" title="Generar los pagos a partir de los recibos ya emitidos del mes">📋 Desde recibos</button>
                                     <button class="btn btn-gold btn-sm" onclick="abrirFormRemunPago()" id="btnCargarRemunPago">➕ Cargar pago</button>
                                 </div>
@@ -22574,9 +22576,10 @@
     function _renderRemunPagos() {
         var tbody = document.getElementById('remPagosBody');
         if (!tbody) return;
-        var mesF = document.getElementById('remPagoMesFiltro');
-        if (mesF && !mesF.value) mesF.value = _remMesActualISO();
-        var mesSel = mesF ? mesF.value : '';
+        // Rango de meses (ambos opcionales): vacío = TODOS los meses. Para un mes puntual,
+        // poné el mismo mes en Desde y Hasta.
+        var desde = (document.getElementById('remPagoMesFiltro') || {}).value || '';
+        var hasta = (document.getElementById('remPagoMesHasta') || {}).value || '';
         // datalist de empleados (legajos)
         var dl = document.getElementById('remPagoEmpleados');
         if (dl) dl.innerHTML = (remuneraciones||[]).map(function(e){ return '<option value="'+escHtml(e.nombre||'')+'">'; }).join('');
@@ -22595,10 +22598,10 @@
         if (fC && !fC.value) fC.value = _remHoyISO();
 
         var fmt = function(n){ return '$' + Math.round(n||0).toLocaleString('es-AR'); };
-        var lista = _remPagosDelProyecto().filter(function(rp){ return !mesSel || rp.mes === mesSel; });
-        lista.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
+        var lista = _remPagosDelProyecto().filter(function(rp){ return (!desde || (rp.mes||'') >= desde) && (!hasta || (rp.mes||'') <= hasta); });
+        lista.sort(function(a,b){ return (b.mes||'').localeCompare(a.mes||'') || (a.fecha||'').localeCompare(b.fecha||''); });
         if (!lista.length) {
-            tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">Sin pagos cargados este mes.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">' + ((desde||hasta) ? 'Sin pagos en el rango elegido.' : 'Sin pagos de sueldo cargados.') + '</td></tr>';
             _remPagoActualizarResumen();
             return;
         }
@@ -22624,7 +22627,7 @@
                 '<td style="text-align:right;font-weight:700;">'+fmt(total)+'</td>' +
                 '<td>'+recibo+'</td>' +
                 '<td>'+estado+'</td>' +
-                '<td><div class="action-btns"><button class="btn btn-danger-sm" onclick="eliminarRemunPago(\''+rp.id+'\')" title="Eliminar">✕</button></div></td>';
+                '<td><div class="action-btns"><button class="btn btn-outline btn-sm" onclick="editarRemunPago(\''+rp.id+'\')" title="Editar: adjuntar comprobante/factura o corregir el reparto banco/efectivo">✏</button><button class="btn btn-danger-sm" onclick="eliminarRemunPago(\''+rp.id+'\')" title="Eliminar">✕</button></div></td>';
             tbody.appendChild(tr);
         });
         _remPagoActualizarResumen();
@@ -22640,15 +22643,16 @@
             : 'Tildá los pagos que querés consolidar.';
     }
 
+    var editandoRemunPagoId = null;   // id del pago que se está editando (null = alta nueva)
     function abrirFormRemunPago(prefill) {
         prefill = prefill || {};
+        editandoRemunPagoId = null;
         var f = document.getElementById('remPagoForm'); if (!f) return;
         f.style.display = '';
+        var bg = document.getElementById('btnGuardarRemunPago'); if (bg) bg.textContent = '💾 Guardar pago';
         document.getElementById('remPagoNombre').value = prefill.nombre || '';
-        var mes = prefill.mes || (document.getElementById('remPagoMesFiltro')||{}).value || _remMesActualISO();
+        var mes = prefill.mes || _remMesActualISO();
         document.getElementById('remPagoMes').value = mes;
-        // Alinear el filtro al mes para que el pago aparezca en la lista al guardarlo.
-        var mf = document.getElementById('remPagoMesFiltro'); if (mf && prefill.mes) mf.value = prefill.mes;
         document.getElementById('remPagoFecha').value = _remHoyISO();
         document.getElementById('remPagoBanco').value    = (prefill.banco    != null && prefill.banco    > 0) ? Math.round(prefill.banco)    : '';
         document.getElementById('remPagoEfectivo').value = (prefill.efectivo != null && prefill.efectivo > 0) ? Math.round(prefill.efectivo) : '';
@@ -22657,7 +22661,27 @@
             ? 'Pre-cargado desde el recibo de ' + prefill.nombre + '. Repartí cuánto va por banco y cuánto en efectivo.'
             : '';
     }
-    function cerrarFormRemunPago() { var f = document.getElementById('remPagoForm'); if (f) f.style.display = 'none'; }
+    // Editar un pago ya guardado (ej.: adjuntarle la factura/comprobante que faltó, o corregir el reparto).
+    window.editarRemunPago = function(id) {
+        if (!_esDuenoRemun()) return;
+        var rp = (remunPagos || []).find(function(x){ return x.id === id; });
+        if (!rp) return;
+        var f = document.getElementById('remPagoForm'); if (!f) return;
+        editandoRemunPagoId = id;
+        f.style.display = '';
+        var bg = document.getElementById('btnGuardarRemunPago'); if (bg) bg.textContent = '💾 Guardar cambios';
+        document.getElementById('remPagoNombre').value = rp.nombre || '';
+        document.getElementById('remPagoMes').value = rp.mes || '';
+        document.getElementById('remPagoFecha').value = rp.fecha || _remHoyISO();
+        document.getElementById('remPagoBanco').value = rp.montoBanco || '';
+        document.getElementById('remPagoEfectivo').value = rp.montoEfectivo || '';
+        var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
+        document.getElementById('remPagoFormEstado').textContent = 'Editando el pago de ' + (rp.nombre || '') + '. '
+            + (rp.adjunto && rp.adjunto.contenido ? 'Ya tiene un comprobante adjunto (subí uno nuevo solo si querés reemplazarlo).' : 'Podés adjuntarle el comprobante/factura acá.')
+            + (rp.consolidado ? ' ⚠️ Ya está consolidado en Caja/Banco: evitá cambiar los montos.' : '');
+        f.scrollIntoView && f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    function cerrarFormRemunPago() { editandoRemunPagoId = null; var f = document.getElementById('remPagoForm'); if (f) f.style.display = 'none'; }
 
     // ── Cargar pagos a partir de los recibos ya emitidos del mes (selección múltiple) ──
     function _remRecibosDelMesSinPago(mes) {
@@ -22763,15 +22787,24 @@
                 var b64 = await leerArchivoBase64(file, function(t){ if(estado) estado.textContent='Procesando… '+t; });
                 adjunto = { nombre: file.name, tipo: file.type || 'application/octet-stream', contenido: b64 };
             }
-            var rp = {
-                id: 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000),
-                nombre: nombre, mes: mes, fecha: fecha || _remHoyISO(),
-                montoBanco: banco, montoEfectivo: efe, adjunto: adjunto,
-                empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
-                proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
-                consolidado: false, creadoEn: Date.now()
-            };
-            remunPagos.push(rp);
+            if (editandoRemunPagoId) {
+                // Editar: actualizar el pago existente (conserva id, consolidado, empresa/proyecto).
+                var ex = (remunPagos || []).find(function(x){ return x.id === editandoRemunPagoId; });
+                if (ex) {
+                    ex.nombre = nombre; ex.mes = mes; ex.fecha = fecha || ex.fecha || _remHoyISO();
+                    ex.montoBanco = banco; ex.montoEfectivo = efe;
+                    if (adjunto) ex.adjunto = adjunto;   // solo reemplaza el comprobante si subió uno nuevo
+                }
+            } else {
+                remunPagos.push({
+                    id: 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+                    nombre: nombre, mes: mes, fecha: fecha || _remHoyISO(),
+                    montoBanco: banco, montoEfectivo: efe, adjunto: adjunto,
+                    empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+                    proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+                    consolidado: false, creadoEn: Date.now()
+                });
+            }
             await persistirRemunPagos();
             cerrarFormRemunPago();
             renderRemuneraciones();
@@ -22785,12 +22818,19 @@
 
     function remPagoToggleUno(id, ch) { if (ch) _remPagoSel[id] = true; else delete _remPagoSel[id]; _remPagoActualizarResumen(); }
     function remPagoToggleTodos(ch) {
-        var mesSel = (document.getElementById('remPagoMesFiltro')||{}).value || '';
-        _remPagosDelProyecto().filter(function(rp){ return !rp.consolidado && (!mesSel||rp.mes===mesSel); }).forEach(function(rp){
+        var desde = (document.getElementById('remPagoMesFiltro')||{}).value || '';
+        var hasta = (document.getElementById('remPagoMesHasta')||{}).value || '';
+        _remPagosDelProyecto().filter(function(rp){ return !rp.consolidado && (!desde||(rp.mes||'')>=desde) && (!hasta||(rp.mes||'')<=hasta); }).forEach(function(rp){
             if (ch) _remPagoSel[rp.id] = true; else delete _remPagoSel[rp.id];
         });
         _renderRemunPagos();
     }
+    // Limpia el rango de meses → muestra los pagos de todos los meses.
+    window._remPagoVerTodos = function() {
+        var d = document.getElementById('remPagoMesFiltro'); if (d) d.value = '';
+        var h = document.getElementById('remPagoMesHasta');  if (h) h.value = '';
+        renderRemuneraciones();
+    };
 
     async function consolidarRemunPagos() {
         if (!_esDuenoRemun()) return;
