@@ -4664,8 +4664,9 @@
                                     <label style="font-size:11px;">Empleado<br><input list="remPagoEmpleados" id="remPagoNombre" placeholder="Nombre del empleado" style="width:100%; padding:6px; font-size:12px;"><datalist id="remPagoEmpleados"></datalist></label>
                                     <label style="font-size:11px;">Mes<br><input type="month" id="remPagoMes" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;">Fecha de pago<br><input type="date" id="remPagoFecha" style="width:100%; padding:6px; font-size:12px;"></label>
-                                    <label style="font-size:11px;">Parte banco $<br><input type="number" id="remPagoBanco" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
-                                    <label style="font-size:11px;">Parte efectivo $<br><input type="number" id="remPagoEfectivo" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
+                                    <label style="font-size:11px;" title="Parte pagada por transferencia (oficial, va en el recibo)">Banco (oficial) $<br><input type="number" id="remPagoBanco" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
+                                    <label style="font-size:11px;" title="Parte pagada en efectivo que SÍ va en el recibo oficial">Efectivo oficial $<br><input type="number" id="remPagoEfectivo" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
+                                    <label style="font-size:11px; color:var(--warn);" title="Parte pagada en efectivo que NO va en el recibo oficial (no oficial)">No oficial (efvo) $<br><input type="number" id="remPagoNoOficial" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;">Recibo oficial (PDF)<br><input type="file" id="remPagoAdjunto" accept="application/pdf,image/*" style="width:100%; font-size:11px;"></label>
                                 </div>
                                 <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px; align-items:center;">
@@ -4680,12 +4681,12 @@
                                         <tr>
                                             <th style="width:30px;"><input type="checkbox" id="remPagoCheckAll" onclick="remPagoToggleTodos(this.checked)" title="Seleccionar todos"></th>
                                             <th>Empleado</th><th>Mes</th><th>Fecha</th>
-                                            <th style="text-align:right">Banco</th><th style="text-align:right">Efectivo</th><th style="text-align:right">Total</th>
+                                            <th style="text-align:right">Banco</th><th style="text-align:right">Efectivo</th><th style="text-align:right;color:var(--warn);">No oficial</th><th style="text-align:right">Total</th>
                                             <th>Recibo</th><th>Estado</th><th>Acciones</th>
                                         </tr>
                                     </thead>
                                     <tbody id="remPagosBody">
-                                        <tr><td colspan="10" class="empty-msg">Sin pagos cargados este mes.</td></tr>
+                                        <tr><td colspan="11" class="empty-msg">Sin pagos cargados.</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -22593,13 +22594,13 @@
         var lista = _remPagosDelProyecto().filter(function(rp){ return (!desde || (rp.mes||'') >= desde) && (!hasta || (rp.mes||'') <= hasta); });
         lista.sort(function(a,b){ return (b.mes||'').localeCompare(a.mes||'') || (a.fecha||'').localeCompare(b.fecha||''); });
         if (!lista.length) {
-            tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">' + ((desde||hasta) ? 'Sin pagos en el rango elegido.' : 'Sin pagos de sueldo cargados.') + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="empty-msg">' + ((desde||hasta) ? 'Sin pagos en el rango elegido.' : 'Sin pagos de sueldo cargados.') + '</td></tr>';
             _remPagoActualizarResumen();
             return;
         }
         tbody.innerHTML = '';
         lista.forEach(function(rp){
-            var total = (rp.montoBanco||0) + (rp.montoEfectivo||0);
+            var total = (rp.montoBanco||0) + (rp.montoEfectivo||0) + (rp.montoNoOficial||0);
             var cons = !!rp.consolidado;
             var chk = cons ? '' : '<input type="checkbox" onclick="remPagoToggleUno(\''+rp.id+'\',this.checked)" '+(_remPagoSel[rp.id]?'checked':'')+'>';
             var estado = cons
@@ -22616,6 +22617,7 @@
                 '<td>'+(rp.fecha?formatearFecha(rp.fecha):'—')+'</td>' +
                 '<td style="text-align:right;">'+fmt(rp.montoBanco)+'</td>' +
                 '<td style="text-align:right;">'+fmt(rp.montoEfectivo)+'</td>' +
+                '<td style="text-align:right;'+((rp.montoNoOficial||0)>0?'color:var(--warn);':'color:var(--text-3);')+'">'+((rp.montoNoOficial||0)>0?fmt(rp.montoNoOficial):'—')+'</td>' +
                 '<td style="text-align:right;font-weight:700;">'+fmt(total)+'</td>' +
                 '<td>'+recibo+'</td>' +
                 '<td>'+estado+'</td>' +
@@ -22628,10 +22630,10 @@
     function _remPagoActualizarResumen() {
         var sel = _remPagosDelProyecto().filter(function(rp){ return !rp.consolidado && _remPagoSel[rp.id]; });
         var banco = sel.reduce(function(s,rp){ return s+(rp.montoBanco||0); },0);
-        var efe   = sel.reduce(function(s,rp){ return s+(rp.montoEfectivo||0); },0);
+        var efe   = sel.reduce(function(s,rp){ return s+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); },0);   // efectivo oficial + no oficial (todo sale de la caja)
         var el = document.getElementById('remPagoSelResumen');
         if (el) el.textContent = sel.length
-            ? (sel.length+' pago(s) · Banco $'+Math.round(banco).toLocaleString('es-AR')+' · Efectivo $'+Math.round(efe).toLocaleString('es-AR'))
+            ? (sel.length+' pago(s) · Banco $'+Math.round(banco).toLocaleString('es-AR')+' · Efectivo (incl. no oficial) $'+Math.round(efe).toLocaleString('es-AR'))
             : 'Tildá los pagos que querés consolidar.';
     }
 
@@ -22648,6 +22650,7 @@
         document.getElementById('remPagoFecha').value = _remHoyISO();
         document.getElementById('remPagoBanco').value    = (prefill.banco    != null && prefill.banco    > 0) ? Math.round(prefill.banco)    : '';
         document.getElementById('remPagoEfectivo').value = (prefill.efectivo != null && prefill.efectivo > 0) ? Math.round(prefill.efectivo) : '';
+        var _rpno = document.getElementById('remPagoNoOficial'); if (_rpno) _rpno.value = '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
         document.getElementById('remPagoFormEstado').textContent = prefill.nombre
             ? 'Pre-cargado desde el recibo de ' + prefill.nombre + '. Repartí cuánto va por banco y cuánto en efectivo.'
@@ -22667,6 +22670,7 @@
         document.getElementById('remPagoFecha').value = rp.fecha || _remHoyISO();
         document.getElementById('remPagoBanco').value = rp.montoBanco || '';
         document.getElementById('remPagoEfectivo').value = rp.montoEfectivo || '';
+        var _rpno = document.getElementById('remPagoNoOficial'); if (_rpno) _rpno.value = rp.montoNoOficial || '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
         document.getElementById('remPagoFormEstado').textContent = 'Editando el pago de ' + (rp.nombre || '') + '. '
             + (rp.adjunto && rp.adjunto.contenido ? 'Ya tiene un comprobante adjunto (subí uno nuevo solo si querés reemplazarlo).' : 'Podés adjuntarle el comprobante/factura acá.')
@@ -22749,9 +22753,10 @@
         var fecha = document.getElementById('remPagoFecha').value||'';
         var banco = parseFloat(document.getElementById('remPagoBanco').value)||0;
         var efe = parseFloat(document.getElementById('remPagoEfectivo').value)||0;
+        var noOfi = parseFloat((document.getElementById('remPagoNoOficial')||{}).value)||0;
         if (!nombre) { alert('Poné el nombre del empleado.'); return; }
         if (!mes) { alert('Elegí el mes.'); return; }
-        if (banco<=0 && efe<=0) { alert('Cargá al menos un monto (banco o efectivo).'); return; }
+        if (banco<=0 && efe<=0 && noOfi<=0) { alert('Cargá al menos un monto (banco, efectivo o no oficial).'); return; }
         // Chequear que el total (banco + efectivo) coincida con el neto del recibo de ese mes.
         var _rec = (typeof remunRecibos !== 'undefined' ? remunRecibos : []).filter(function(r){
             return r && r.mes === mes && (r.empleadoNombre || '').trim().toLowerCase() === nombre.toLowerCase();
@@ -22784,14 +22789,14 @@
                 var ex = (remunPagos || []).find(function(x){ return x.id === editandoRemunPagoId; });
                 if (ex) {
                     ex.nombre = nombre; ex.mes = mes; ex.fecha = fecha || ex.fecha || _remHoyISO();
-                    ex.montoBanco = banco; ex.montoEfectivo = efe;
+                    ex.montoBanco = banco; ex.montoEfectivo = efe; ex.montoNoOficial = noOfi;
                     if (adjunto) ex.adjunto = adjunto;   // solo reemplaza el comprobante si subió uno nuevo
                 }
             } else {
                 remunPagos.push({
                     id: 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000),
                     nombre: nombre, mes: mes, fecha: fecha || _remHoyISO(),
-                    montoBanco: banco, montoEfectivo: efe, adjunto: adjunto,
+                    montoBanco: banco, montoEfectivo: efe, montoNoOficial: noOfi, adjunto: adjunto,
                     empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
                     proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
                     consolidado: false, creadoEn: Date.now()
@@ -22830,7 +22835,7 @@
         if (!sel.length) { alert('Tildá al menos un pago (no consolidado) para consolidar.'); return; }
         var fecha = (document.getElementById('remConsolFecha')||{}).value || _remHoyISO();
         var banco = sel.reduce(function(s,rp){ return s+(rp.montoBanco||0); },0);
-        var efe   = sel.reduce(function(s,rp){ return s+(rp.montoEfectivo||0); },0);
+        var efe   = sel.reduce(function(s,rp){ return s+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); },0);   // efectivo oficial + no oficial (todo sale de la caja)
         var cuentaId = (document.getElementById('remConsolCuenta')||{}).value || '';
         if (banco > 0 && !cuentaId) { alert('Hay parte en banco: elegí la cuenta bancaria de salida.'); return; }
         var msg = '¿Consolidar '+sel.length+' pago(s) con fecha '+formatearFecha(fecha)+'?\n\n';
