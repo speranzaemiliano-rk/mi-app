@@ -3949,7 +3949,7 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Fecha</th><th>Tipo</th><th>Proveedor</th><th>Número</th>
+                                    <th>Fecha</th><th>Tipo</th><th>Proveedor</th><th>Número</th><th>Descripción</th>
                                     <th style="text-align:right;">Importe</th>
                                     <th style="text-align:right;">Pagado</th>
                                     <th style="text-align:right;">Saldo</th>
@@ -4053,6 +4053,14 @@
                             <option value="pagado">Pagado</option>
                             <option value="parcial">Parcialmente pagado</option>
                         </select>
+                        <button class="btn btn-outline btn-sm" id="btnDocsSel" onclick="toggleDocsSelMode()" title="Seleccionar facturas para marcarlas como que NO computan ARCA (o para volver a computarlas)">☑️ Seleccionar facturas</button>
+                    </div>
+                    <div id="docsSelBar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 6px;padding:8px 12px;background:var(--warn-bg);border:1px solid rgba(107,78,0,.15);border-radius:8px;">
+                        <span id="docsSelCount" style="font-size:12px;font-weight:600;color:var(--warn);">0 facturas seleccionadas</span>
+                        <button class="btn btn-gold btn-sm" onclick="docsBulkComputaArca(false)" title="Las seleccionadas dejan de computar para ARCA (pasan a Comprobantes X)">🚫 No computan ARCA</button>
+                        <button class="btn btn-outline btn-sm" onclick="docsBulkComputaArca(true)" title="Las seleccionadas vuelven a computar para ARCA">✓ Sí computan ARCA</button>
+                        <button class="btn btn-outline btn-sm" onclick="_docsSelTodas()" title="Seleccionar todas las facturas visibles">Seleccionar todas</button>
+                        <button class="btn btn-outline btn-sm" onclick="toggleDocsSelMode()">Cancelar</button>
                     </div>
                     <div class="search-row" style="gap:8px;align-items:center;flex-wrap:wrap;">
                         <span style="font-size:12px;color:var(--text-3);white-space:nowrap;">📥 Importar de ARCA:</span>
@@ -11499,7 +11507,7 @@
         var body = document.getElementById('rptComprasBody');
         var foot = document.getElementById('rptComprasFoot');
         if (!body) return;
-        var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+        var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
         if (!items.length) { body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
         var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false;
         body.innerHTML = items.map(function(v) {
@@ -11592,7 +11600,7 @@
         var el = document.getElementById('rptStats');
         if (!el) return;
         var ventas = (facturasARCA||[]).filter(function(v){ return rptEnPeriodo(v.fecha.length===8 ? v.fecha.slice(0,4)+'-'+v.fecha.slice(4,6)+'-'+v.fecha.slice(6,8) : v.fecha, f); });
-        var compras = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+        var compras = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
         var totVentas = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impTotal||0); },0);
         var totIVAV   = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impIVA||0); },0);
         var totCompras = compras.reduce(function(s,v){ return s+(v.importe||0); },0);
@@ -11658,7 +11666,7 @@
                     return '<tr><td>'+fecha+'</td><td>'+(_afipTiposNombreRpt[v.tipoComp]||v.tipoComp)+'</td><td>'+String(v.ptoVta||'').padStart(4,'0')+'-'+String(v.nro||'').padStart(8,'0')+'</td><td>'+(v.razon||'—')+'</td><td>'+(v.cuitRecep||'—')+'</td><td class="r">'+_fmtM(neto)+'</td><td class="c">'+alicPct+'%</td><td class="r">'+_fmtM(iva)+'</td><td class="r">'+_fmtM(total)+'</td></tr>';
                 }).join('')+'</tbody><tfoot><tr><td colspan="5">TOTAL ('+items.length+' comprobantes)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totT)+'</td></tr></tfoot></table>';
         } else if (tipo === 'compras') {
-            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
             var totN=0,totIV=0,totT=0,hayEst=false;
             content = '<h1>📥 Libro IVA Compras — Facturas de Proveedores</h1><h2>'+empresa+' — '+periodo+'</h2>' +
                 '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
@@ -12944,7 +12952,7 @@
                 var saldo = _saldoFactDoc(f);
                 if (imp <= 0 || saldo <= 0) return;
                 // Las facturas (incluidos los VEP de ARCA) son comprobantes ARCA registrables.
-                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, imp: imp, pag: pag, saldo: saldo,
+                rows.push({ tipo: 'ARCA', fecha: f.fecha, prov: f.proveedor, num: f.numero, desc: f.descripcion, imp: imp, pag: pag, saldo: saldo,
                     mon: f.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('fact'," + idx + ")" });
             });
         };
@@ -12953,7 +12961,7 @@
                 var imp = d.importe || 0, pag = d.pagado || 0;
                 var saldo = _saldoFactDoc(d);
                 if (imp <= 0 || saldo <= 0) return;
-                rows.push({ tipo: 'X', fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, imp: imp, pag: pag, saldo: saldo,
+                rows.push({ tipo: 'X', fecha: d.fecha, prov: d.proveedor, num: d.numero || d.nro, desc: d.descripcion, imp: imp, pag: pag, saldo: saldo,
                     mon: d.moneda === 'USD' ? 'USD ' : '$', pagar: "abrirPagoFD('doc','" + d.id + "')" });
             });
         };
@@ -12963,7 +12971,7 @@
                 if (!e || e.estadoPago !== 'pendiente' || e.afectaCaja) return;
                 var imp = e.importe || e.total || 0;
                 if (imp <= 0) return;
-                rows.push({ tipo: 'X', fecha: e.fecha, prov: e.cliente || e.proveedorNombre || '—', num: e.nro, imp: imp, pag: 0, saldo: imp,
+                rows.push({ tipo: 'X', fecha: e.fecha, prov: e.cliente || e.proveedorNombre || '—', num: e.nro, desc: e.concepto || (e.items && e.items[0] && e.items[0].desc) || '', imp: imp, pag: 0, saldo: imp,
                     mon: e.moneda === 'USD' ? 'USD ' : '$', pagar: "pagarEmitido('" + e.id + "')" });
             });
         };
@@ -12973,14 +12981,14 @@
         else if (_provPendVista === 'x') rows = rows.filter(function(r){ return r.tipo === 'X'; });
         // Filtros: proveedor/número y rango de fechas.
         rows = rows.filter(function(r) {
-            if (busq && ((r.prov || '') + ' ' + (r.num || '')).toLowerCase().indexOf(busq) === -1) return false;
+            if (busq && ((r.prov || '') + ' ' + (r.num || '') + ' ' + (r.desc || '')).toLowerCase().indexOf(busq) === -1) return false;
             if (desde && (r.fecha || '') < desde) return false;
             if (hasta && (r.fecha || '') > hasta) return false;
             return true;
         });
         rows.sort(function(a, b) { return (a.fecha || '').localeCompare(b.fecha || ''); });
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">No hay comprobantes pendientes que coincidan con el filtro.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay comprobantes pendientes que coincidan con el filtro.</td></tr>';
             return;
         }
         var totalSaldo = rows.reduce(function(s, r) { return s + (r.mon === '$' ? r.saldo : 0); }, 0);
@@ -12993,13 +13001,14 @@
                 + '<td>' + pill + '</td>'
                 + '<td><strong>' + escHtml(r.prov || '—') + '</strong></td>'
                 + '<td>' + escHtml(r.num || '—') + '</td>'
+                + '<td style="max-width:220px;white-space:normal;font-size:12px;color:var(--text-2);">' + escHtml(r.desc || '—') + '</td>'
                 + '<td style="text-align:right;">' + r.mon + r.imp.toLocaleString('es-AR') + '</td>'
                 + '<td style="text-align:right;color:var(--text-3);">' + r.mon + r.pag.toLocaleString('es-AR') + '</td>'
                 + '<td style="text-align:right;font-weight:700;color:var(--danger,#c0392b);">' + r.mon + r.saldo.toLocaleString('es-AR') + '</td>'
                 + '<td><button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Pagar</button></td>'
                 + '</tr>';
         }).join('');
-        html += '<tr><td colspan="6" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
+        html += '<tr><td colspan="7" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
              + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">$' + Math.round(totalSaldo).toLocaleString('es-AR') + '</td><td></td></tr>';
         tbody.innerHTML = html;
     }
@@ -18491,6 +18500,55 @@
         });
     }
 
+    // ── Selección de facturas para marcar si computan o no para ARCA ──
+    var _docsSelMode = false;
+    var _docsSelIds = {};
+    var _docsRenderedFacIds = [];
+    function toggleDocsSelMode() {
+        _docsSelMode = !_docsSelMode;
+        if (!_docsSelMode) _docsSelIds = {};
+        renderDocumentos();
+    }
+    function _docsToggleSel(id, checked) {
+        if (checked) _docsSelIds[id] = true; else delete _docsSelIds[id];
+        _docsActualizarSelBar();
+    }
+    function _docsActualizarSelBar() {
+        var bar = document.getElementById('docsSelBar');
+        var btn = document.getElementById('btnDocsSel');
+        if (bar) bar.style.display = _docsSelMode ? 'flex' : 'none';
+        if (btn) btn.textContent = _docsSelMode ? '✖ Salir de selección' : '☑️ Seleccionar facturas';
+        var n = Object.keys(_docsSelIds).length;
+        var cnt = document.getElementById('docsSelCount');
+        if (cnt) cnt.textContent = n + ' factura' + (n === 1 ? '' : 's') + ' seleccionada' + (n === 1 ? '' : 's');
+    }
+    // Selecciona todas las facturas actualmente visibles (respeta los filtros del listado).
+    function _docsSelTodas() {
+        _docsRenderedFacIds.forEach(function(id){ if (id) _docsSelIds[id] = true; });
+        renderDocumentos();
+    }
+    // Marca (o desmarca) el "computa ARCA" de las facturas seleccionadas, en lote.
+    function docsBulkComputaArca(val) {
+        var ids = Object.keys(_docsSelIds);
+        if (!ids.length) { alert('No seleccionaste ninguna factura. Tildá al menos una.'); return; }
+        var n = 0;
+        ids.forEach(function(id){
+            var f = (facturas||[]).find(function(x){ return x && x.id === id; });
+            if (f) { if (val) delete f.computaARCA; else f.computaARCA = false; n++; }
+        });
+        persistirFacturas();
+        _docsSelMode = false; _docsSelIds = {};
+        renderDocumentos();
+        alert(n + ' factura(s) actualizada(s): ' + (val ? 'vuelven a computar para ARCA.' : 'ya NO computan para ARCA (pasan a Comprobantes X).'));
+    }
+    // Toggle rápido de una sola factura desde su fila.
+    function toggleComputaArcaFactura(idx) {
+        var f = facturas[idx]; if (!f) return;
+        if (f.computaARCA === false) delete f.computaARCA; else f.computaARCA = false;
+        persistirFacturas();
+        renderDocumentos();
+    }
+
     function renderDocumentos() {
         if (!documentos) return;
         const busq = (document.getElementById('buscadorDoc')?.value || '').toLowerCase();
@@ -18562,6 +18620,7 @@
 
         let list = docsX.concat(facsA, facsXf, arcaImp, emitX);
         list.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')); // más nuevo primero
+        _docsRenderedFacIds = [];
 
         const tbody = document.getElementById('documentosBody');
         if (!tbody) return;
@@ -18661,6 +18720,7 @@
             } else {
                 const f = row.item;
                 const idx = facturas.indexOf(f);
+                if (f.id) _docsRenderedFacIds.push(f.id);
                 const imp = f.importe || 0;
                 const pag = f.pagado || 0;
                 const estado = f.estado || 'pendiente';
@@ -18682,6 +18742,9 @@
                     <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
                     <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
                     <td><div class="action-btns">
+                        ${_docsSelMode
+                            ? `<label style="display:inline-flex;align-items:center;margin-right:4px;cursor:pointer;" title="Seleccionar esta factura"><input type="checkbox" onchange="_docsToggleSel('${f.id}',this.checked)" ${_docsSelIds[f.id]?'checked':''} style="width:auto;"></label>`
+                            : `<button class="btn btn-outline btn-sm" onclick="toggleComputaArcaFactura(${idx})" title="${f.computaARCA===false?'Volver a computar para ARCA':'Marcar que NO computa para ARCA'}">${f.computaARCA===false?'✓ ARCA':'🚫 ARCA'}</button>`}
                         ${editable && estado!=='pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                         <button class="btn btn-outline btn-sm" onclick="imprimirComprobanteFacturaItem(${idx})" title="Imprimir esta factura como comprobante">📄</button>
                         ${((f.pagosHistorial&&f.pagosHistorial.length)||pag>0) ? `<button class="btn btn-outline btn-sm" title="Imprimir Orden de Pago" onclick="abrirHistorialPagosFactura(${idx})">🖨️ OP</button>` : ''}
@@ -18694,6 +18757,7 @@
                 tbody.appendChild(tr);
             }
         });
+        _docsActualizarSelBar();
         if (typeof renderProvPendientes === 'function') renderProvPendientes();
     }
 
