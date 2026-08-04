@@ -22042,6 +22042,27 @@
 
     function persistirAlquileres()  { return _colPersist('alquileres', REF_ALQUILERES, alquileres).catch(function(e){ console.error(e); }); }
 
+    // Compatibilidad de adjuntos del alquiler: devuelve un array [{id,nombre,tipo}]. Migra el
+    // esquema viejo (un solo archivo en adjuntoId/adjuntoNombre/adjuntoTipo) al array nuevo.
+    function _alqAdjuntos(a) {
+        if (!a) return [];
+        if (Array.isArray(a.adjuntos)) return a.adjuntos.filter(function(x){ return x && x.id; }).slice();
+        if (a.adjuntoId) return [{ id: a.adjuntoId, nombre: a.adjuntoNombre || 'Contrato', tipo: a.adjuntoTipo || '' }];
+        return [];
+    }
+    // Desglose de IVA sobre un monto de canon. La proporción gravada (ivaPctGravado) se aplica al
+    // canon vigente, así al actualizarse el canon las dos partes (gravada y no gravada) crecen igual.
+    function _alqCalcIVA(a, monto) {
+        var base = monto || 0;
+        if (!a || !a.ivaActivo) return { activo:false, gravado:base, iva:0, noGravado:0, total:base, alicuota:0, pct:100 };
+        var pct  = Math.max(0, Math.min(100, a.ivaPctGravado != null ? a.ivaPctGravado : 100));
+        var alic = (a.ivaAlicuota != null ? a.ivaAlicuota : 21);
+        var gravado = base * pct / 100;
+        var noGravado = base - gravado;
+        var iva = gravado * alic / 100;
+        return { activo:true, gravado:gravado, iva:iva, noGravado:noGravado, total:base + iva, alicuota:alic, pct:pct };
+    }
+
     // ── Mover alquileres seleccionados del proyecto actual a otra empresa/proyecto ──
     function abrirMoverAlquileres() {
         if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para mover alquileres.'); return; }
@@ -23823,10 +23844,15 @@
         _marcarEdicion('alquiler', editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null);
         const a = editandoAlqIdx >= 0 ? alquileres[editandoAlqIdx] : null;
         document.getElementById('modalAlquilerTitle').textContent = a ? '🔑 Editar Contrato' : '🔑 Nuevo Contrato de Alquiler';
-        ['alqUnidad','alqDireccion','alqInquilino','alqEmailInquilino','alqDiaPago','alqInicio','alqFin',
-         'alqCanon','alqCanonActual','alqCACBase','alqCACActual','alqDeposito','alqObs'].forEach(function(id) {
+        ['alqUnidad','alqDireccion','alqInquilino','alqEmailInquilino','alqInquilinoDoc','alqDiaPago','alqInicio','alqFin',
+         'alqCanon','alqCanonActual','alqCACBase','alqCACActual','alqDeposito','alqObs',
+         'alqGarante','alqGaranteDoc','alqGaranteContacto','alqIvaConIva','alqIvaSinIva','alqIvaPct'].forEach(function(id) {
             var el = document.getElementById(id); if (el) el.value = '';
         });
+        document.getElementById('alqInquilinoDocTipo').value = 'CUIT';
+        document.getElementById('alqGaranteDocTipo').value   = 'CUIT';
+        document.getElementById('alqIvaActivo').checked      = false;
+        document.getElementById('alqIvaAlicuota').value      = '21';
         document.getElementById('alqDepMeses').value = '1';
         _poblarSelectsMesIPC();
         document.getElementById('alqIPCResultado').innerHTML = '';
@@ -23834,13 +23860,24 @@
         _alqAjustesCanonWorking = (a && a.ajustesCanon) ? a.ajustesCanon.slice() : [];
         _renderAjustesCanonLista();
         document.getElementById('alqArchivo').value = '';
-        _renderEstadoAdjunto('alqArchivoEstado', a && a.adjuntoNombre, a && a.adjuntoId);
+        document.getElementById('alqArchivoEstado').textContent = '';
+        _alqAdjuntosWorking = _alqAdjuntos(a);
+        _renderAlqAdjuntosLista();
         var hoy = new Date();
         if (a) {
             document.getElementById('alqUnidad').value       = a.unidad || '';
             document.getElementById('alqDireccion').value    = a.direccion || '';
             document.getElementById('alqInquilino').value    = a.inquilino || '';
             document.getElementById('alqEmailInquilino').value = a.emailInquilino || '';
+            document.getElementById('alqInquilinoDocTipo').value = a.inquilinoDocTipo || 'CUIT';
+            document.getElementById('alqInquilinoDoc').value  = a.inquilinoDoc || '';
+            document.getElementById('alqGarante').value       = a.garante || '';
+            document.getElementById('alqGaranteDocTipo').value = a.garanteDocTipo || 'CUIT';
+            document.getElementById('alqGaranteDoc').value     = a.garanteDoc || '';
+            document.getElementById('alqGaranteContacto').value = a.garanteContacto || '';
+            document.getElementById('alqIvaActivo').checked    = !!a.ivaActivo;
+            document.getElementById('alqIvaAlicuota').value    = (a.ivaAlicuota != null ? a.ivaAlicuota : 21);
+            document.getElementById('alqIvaPct').value         = a.ivaActivo ? (a.ivaPctGravado != null ? a.ivaPctGravado : 100) : '';
             document.getElementById('alqInicio').value       = a.inicio || '';
             document.getElementById('alqFin').value          = a.fin || '';
             document.getElementById('alqMoneda').value       = a.moneda || 'ARS';
@@ -23882,6 +23919,7 @@
         }
         _alqToggleCochera();
         onAlqIndiceChange();
+        _alqIvaToggle();
         document.getElementById('modalAlquiler').classList.add('active');
     }
 
@@ -23900,6 +23938,83 @@
         var ipcSec = document.getElementById('alqIPCSector');
         if (cacSec) cacSec.style.display = (indice === 'CAC') ? 'grid' : 'none';
         if (ipcSec) ipcSec.style.display = (indice === 'IPC') ? '' : 'none';
+    }
+
+    // ── IVA sobre el canon (parte gravada / no gravada) ──
+    var _r2 = function(n){ return Math.round((n||0) * 100) / 100; };
+    function _alqIvaToggle() {
+        var chk = document.getElementById('alqIvaActivo');
+        var pan = document.getElementById('alqIvaPanel');
+        if (pan) pan.style.display = (chk && chk.checked) ? '' : 'none';
+        if (chk && chk.checked) { _alqIvaSync('pct'); }
+    }
+    // Se dispara al cambiar el monto inicial: si el IVA está activo, redistribuye las partes según el %.
+    function _alqCanonChanged() {
+        var chk = document.getElementById('alqIvaActivo');
+        if (chk && chk.checked) _alqIvaSync('pct');
+    }
+    // Enlaza los tres campos ($ con IVA, $ sin IVA, % gravado) tomando como total el monto inicial.
+    function _alqIvaSync(src) {
+        var total = parseFloat(document.getElementById('alqCanon').value) || 0;
+        var con = parseFloat(document.getElementById('alqIvaConIva').value) || 0;
+        var sin = parseFloat(document.getElementById('alqIvaSinIva').value) || 0;
+        var pct = parseFloat(document.getElementById('alqIvaPct').value);
+        if (isNaN(pct)) pct = 100;
+        if (src === 'con') {
+            if (total > 0) { sin = Math.max(0, total - con); pct = (con / total) * 100; }
+            else { pct = (con + sin) ? (con / (con + sin)) * 100 : 100; }
+            document.getElementById('alqIvaSinIva').value = _r2(sin);
+            document.getElementById('alqIvaPct').value = _r2(pct);
+        } else if (src === 'sin') {
+            if (total > 0) { con = Math.max(0, total - sin); pct = (con / total) * 100; }
+            else { pct = (con + sin) ? (con / (con + sin)) * 100 : 100; }
+            document.getElementById('alqIvaConIva').value = _r2(con);
+            document.getElementById('alqIvaPct').value = _r2(pct);
+        } else { // 'pct' o refresco
+            pct = Math.max(0, Math.min(100, pct));
+            con = total * pct / 100; sin = Math.max(0, total - con);
+            document.getElementById('alqIvaConIva').value = total ? _r2(con) : '';
+            document.getElementById('alqIvaSinIva').value = total ? _r2(sin) : '';
+            document.getElementById('alqIvaPct').value = _r2(pct);
+        }
+        _alqIvaPreview();
+    }
+    function _alqIvaPreview() {
+        var el = document.getElementById('alqIvaPreview'); if (!el) return;
+        var chk = document.getElementById('alqIvaActivo');
+        if (!chk || !chk.checked) { el.innerHTML = ''; return; }
+        var canonAct = parseFloat(document.getElementById('alqCanonActual').value) || parseFloat(document.getElementById('alqCanon').value) || 0;
+        var pct  = parseFloat(document.getElementById('alqIvaPct').value); if (isNaN(pct)) pct = 100;
+        var alic = parseFloat(document.getElementById('alqIvaAlicuota').value) || 0;
+        var mon = document.getElementById('alqMoneda').value === 'USD' ? 'USD ' : '$ ';
+        var brk = _alqCalcIVA({ ivaActivo:true, ivaPctGravado:pct, ivaAlicuota:alic }, canonAct);
+        var f = function(n){ return mon + Math.round(n).toLocaleString('es-AR'); };
+        el.innerHTML = 'Sobre el canon actual (' + f(canonAct) + '): gravado ' + f(brk.gravado) + ' + IVA ' + f(brk.iva)
+            + ' + no gravado ' + f(brk.noGravado) + ' = <strong>total a facturar ' + f(brk.total) + '</strong>';
+    }
+
+    // ── Adjuntos del alquiler (varios archivos) ──
+    var _alqAdjuntosWorking = [];
+    function _renderAlqAdjuntosLista() {
+        var cont = document.getElementById('alqAdjuntosLista'); if (!cont) return;
+        if (!_alqAdjuntosWorking.length) { cont.innerHTML = ''; return; }
+        cont.innerHTML = '<div style="color:var(--text-3);margin-bottom:3px;">Adjuntos guardados:</div>' + _alqAdjuntosWorking.map(function(ad, i) {
+            var nom = escHtml(ad.nombre || 'Adjunto');
+            return '<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;">'
+                + '<span>📎 <a href="#" onclick="descargarDoc(\'' + ad.id + '\',\'' + nom.replace(/'/g,"\\'") + '\');return false;">' + nom + '</a></span>'
+                + '<button type="button" onclick="_quitarAlqAdjunto(' + i + ')" style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:12px;" title="Quitar (se borra al guardar)">✕</button>'
+                + '</div>';
+        }).join('');
+    }
+    // Solo lo saca de la lista en memoria; el borrado real en REF_DOCS se hace al guardar (así Cancelar no rompe nada).
+    function _quitarAlqAdjunto(i) {
+        _alqAdjuntosWorking.splice(i, 1);
+        _renderAlqAdjuntosLista();
+    }
+    // Botón 📎 de la lista de alquileres: abre cada adjunto (uno por archivo, cada uno con su propio gesto).
+    function _verAlqAdjunto(idx, adjIdx) {
+        var adjs = _alqAdjuntos(alquileres[idx]);
+        var ad = adjs[adjIdx]; if (ad) descargarDoc(ad.id, ad.nombre);
     }
 
     function _poblarSelectsMesIPC() {
@@ -24076,6 +24191,12 @@
             disponible:  document.getElementById('alqDisponible').checked,
             inquilino:   document.getElementById('alqInquilino').value.trim(),
             emailInquilino: document.getElementById('alqEmailInquilino').value.trim(),
+            inquilinoDocTipo: document.getElementById('alqInquilinoDocTipo').value,
+            inquilinoDoc:     document.getElementById('alqInquilinoDoc').value.trim(),
+            garante:          document.getElementById('alqGarante').value.trim(),
+            garanteDocTipo:   document.getElementById('alqGaranteDocTipo').value,
+            garanteDoc:       document.getElementById('alqGaranteDoc').value.trim(),
+            garanteContacto:  document.getElementById('alqGaranteContacto').value.trim(),
             inicio:      document.getElementById('alqInicio').value,
             fin:         document.getElementById('alqFin').value,
             moneda:      document.getElementById('alqMoneda').value,
@@ -24095,27 +24216,37 @@
             deposito:    parseFloat(document.getElementById('alqDeposito').value) || 0,
             depMeses:    parseInt(document.getElementById('alqDepMeses').value) || 1,
             obs:         document.getElementById('alqObs').value.trim(),
-            adjuntoId:     existente ? (existente.adjuntoId || '')     : '',
-            adjuntoNombre: existente ? (existente.adjuntoNombre || '') : '',
-            adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : '',
+            ivaActivo:     document.getElementById('alqIvaActivo').checked,
+            ivaAlicuota:   parseFloat(document.getElementById('alqIvaAlicuota').value) || 0,
+            ivaPctGravado: document.getElementById('alqIvaActivo').checked ? Math.max(0, Math.min(100, parseFloat(document.getElementById('alqIvaPct').value) || 0)) : 0,
+            adjuntoId: '', adjuntoNombre: '', adjuntoTipo: '',   // legacy: ahora se usa `adjuntos`
+            adjuntos:  _alqAdjuntosWorking.slice(),
             cobrosHistorial: (existente && existente.cobrosHistorial) || []
         };
-        var archivoContrato = document.getElementById('alqArchivo').files[0];
+        var archivos = Array.prototype.slice.call(document.getElementById('alqArchivo').files || []);
         var btnAlq = document.getElementById('alqGuardarBtn');
         var estAlq = document.getElementById('alqArchivoEstado');
-        if (archivoContrato) {
-            if (!_archivoComprimible(archivoContrato) && archivoContrato.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo del contrato supera los ' + MAX_DOC_MB + ' MB.'); return; }
-            if (btnAlq) { btnAlq.disabled = true; btnAlq.textContent = archivoContrato.size > MAX_DOC_MB*1024*1024 ? 'Comprimiendo y subiendo…' : 'Subiendo…'; }
-            if (estAlq) estAlq.textContent = 'Subiendo el contrato, un momento…';
+        for (var _vi = 0; _vi < archivos.length; _vi++) {
+            if (!_archivoComprimible(archivos[_vi]) && archivos[_vi].size > MAX_DOC_MB * 1024 * 1024) {
+                alert('El archivo "' + archivos[_vi].name + '" supera los ' + MAX_DOC_MB + ' MB.'); return;
+            }
+        }
+        if (archivos.length) {
+            if (btnAlq) btnAlq.disabled = true;
             try {
-                var base64Contrato = await leerArchivoBase64(archivoContrato, function(pag, total) {
-                    if (estAlq) estAlq.textContent = 'Comprimiendo página ' + pag + ' de ' + total + '…';
-                });
-                var adjIdContrato = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-                await REF_DOCS.child(adjIdContrato).set({ nombre: archivoContrato.name, tipo: archivoContrato.type, contenido: base64Contrato });
-                nuevo.adjuntoId = adjIdContrato; nuevo.adjuntoNombre = archivoContrato.name; nuevo.adjuntoTipo = archivoContrato.type;
+                for (var fi = 0; fi < archivos.length; fi++) {
+                    var f = archivos[fi];
+                    if (btnAlq) btnAlq.textContent = 'Subiendo ' + (fi+1) + ' de ' + archivos.length + '…';
+                    if (estAlq) estAlq.textContent = 'Subiendo "' + f.name + '" (' + (fi+1) + '/' + archivos.length + ')…';
+                    var b64 = await leerArchivoBase64(f, function(pag, total) {
+                        if (estAlq) estAlq.textContent = 'Comprimiendo "' + f.name + '" — página ' + pag + ' de ' + total + '…';
+                    });
+                    var adjId = 'ALQ-' + Date.now() + '-' + Math.floor(Math.random() * 100000) + '-' + fi;
+                    await REF_DOCS.child(adjId).set({ nombre: f.name, tipo: f.type, contenido: b64 });
+                    nuevo.adjuntos.push({ id: adjId, nombre: f.name, tipo: f.type });
+                }
             } catch (err) {
-                alert('No se pudo subir el contrato: ' + (err.message || err));
+                alert('No se pudo subir un archivo: ' + (err.message || err));
                 if (btnAlq) { btnAlq.disabled = false; btnAlq.textContent = 'Guardar Contrato'; }
                 if (estAlq) estAlq.textContent = '';
                 return;
@@ -24123,6 +24254,10 @@
             if (btnAlq) { btnAlq.disabled = false; btnAlq.textContent = 'Guardar Contrato'; }
             if (estAlq) estAlq.textContent = '';
         }
+        // Borra del almacenamiento los adjuntos que el usuario quitó con ✕ (estaban y ya no están).
+        var _origIds = _alqAdjuntos(existente).map(function(x){ return x.id; });
+        var _quedanIds = nuevo.adjuntos.map(function(x){ return x.id; });
+        _origIds.forEach(function(id){ if (_quedanIds.indexOf(id) === -1) REF_DOCS.child(id).remove(); });
         if (editandoAlqIdx >= 0) {
             var _ia = _resolverEdicion(alquileres, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.id, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.snap, 'contrato de alquiler');
             if (_ia < 0) { var _bA=document.getElementById('alqGuardarBtn'); if(_bA){_bA.disabled=false;_bA.textContent='Guardar Contrato';} return; }
@@ -24176,7 +24311,10 @@
     }
 
     function eliminarAlquiler(idx) {
-        if (confirm('¿Eliminar este contrato de alquiler?')) { alquileres.splice(idx, 1); persistirAlquileres(); }
+        if (confirm('¿Eliminar este contrato de alquiler?')) {
+            _alqAdjuntos(alquileres[idx]).forEach(function(ad){ if (ad.id) REF_DOCS.child(ad.id).remove(); });
+            alquileres.splice(idx, 1); persistirAlquileres();
+        }
     }
 
     // ── Editar un cobro de alquiler ya registrado (fecha, monto, período, etc.) ──
@@ -24399,7 +24537,7 @@
                       '<button class="btn btn-outline btn-sm" title="Ver cobros: reimprimir, editar (corregir mes/monto) o eliminar" onclick="abrirHistorialCobrosAlquiler(' + idx + ')">🖨️ Cobros</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalAlquiler(' + idx + ')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Generar contrato imprimible" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
-                      (a.adjuntoId ? '<button class="btn btn-outline btn-sm" title="Ver contrato adjunto" onclick="descargarDoc(\'' + a.adjuntoId + '\',\'' + escHtml(a.adjuntoNombre||'').replace(/'/g,"\\'") + '\')">📎</button> ' : '') +
+                      _alqAdjuntos(a).map(function(ad, ai, arr){ return '<button class="btn btn-outline btn-sm" title="Ver ' + escHtml(ad.nombre||'adjunto') + '" onclick="_verAlqAdjunto(' + idx + ',' + ai + ')">📎' + (arr.length>1?(ai+1):'') + '</button> '; }).join('') +
                       btnElim('alquiler', idx)
                     : '—';
                 var tr = document.createElement('tr');
@@ -24476,8 +24614,19 @@
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var _rh = buildReciboHeader('Contrato de Locación', null, emision, {
-            nombre: a.inquilino||'Inquilino', detalle: escHtml(a.unidad||'') + (a.tipo?' — '+escHtml(a.tipo):'') + (a.incluyeCochera?' + 🚗 Cochera'+(a.cocheraDetalle?' ('+escHtml(a.cocheraDetalle)+')':''):'') + (a.direccion?'<br>'+escHtml(a.direccion):'')
+            nombre: a.inquilino||'Inquilino', detalle: escHtml(a.unidad||'') + (a.tipo?' — '+escHtml(a.tipo):'') + (a.incluyeCochera?' + 🚗 Cochera'+(a.cocheraDetalle?' ('+escHtml(a.cocheraDetalle)+')':''):'') + (a.direccion?'<br>'+escHtml(a.direccion):'') + (a.inquilinoDoc?'<br>'+escHtml(a.inquilinoDocTipo||'Doc')+': '+escHtml(a.inquilinoDoc):'')
         });
+        var _ivaBrk = _alqCalcIVA(a, a.canonActual || a.canon);
+        var _filasIva = _ivaBrk.activo
+            ? '<tr><td>Canon neto gravado</td><td></td><td class="tr">'+fmtN(_ivaBrk.gravado,a.moneda)+'</td></tr>'
+              + '<tr><td>IVA ('+(_ivaBrk.alicuota)+'%)</td><td></td><td class="tr">'+fmtN(_ivaBrk.iva,a.moneda)+'</td></tr>'
+              + (_ivaBrk.noGravado ? '<tr><td>Canon no gravado</td><td></td><td class="tr">'+fmtN(_ivaBrk.noGravado,a.moneda)+'</td></tr>' : '')
+              + '<tr><td><strong>Total a facturar</strong></td><td></td><td class="tr"><strong>'+fmtN(_ivaBrk.total,a.moneda)+'</strong></td></tr>'
+            : '';
+        var _filasGarante = a.garante
+            ? '<tr><td>Garante</td><td></td><td class="tr">'+escHtml(a.garante)+(a.garanteDoc?' ('+escHtml(a.garanteDocTipo||'Doc')+': '+escHtml(a.garanteDoc)+')':'')+'</td></tr>'
+              + (a.garanteContacto ? '<tr><td>Contacto garante</td><td></td><td class="tr">'+escHtml(a.garanteContacto)+'</td></tr>' : '')
+            : '';
         var filaCobros = cobros.length
             ? cobros.map(function(c){ return '<tr><td>'+(c.fecha?formatearFecha(c.fecha):'—')+'</td><td>'+(c.periodo||'—')+'</td><td class="tr">'+fmtN(c.monto,a.moneda)+'</td></tr>'; }).join('')
             : '<tr><td colspan="3" style="color:#aaa;font-size:12px;padding:12px;">Sin cobros registrados</td></tr>';
@@ -24488,8 +24637,10 @@
         '<tr><td>Amueblado</td><td></td><td class="tr">'+(a.amueblado?'🛋️ Sí':'No')+'</td></tr>'+
         '<tr><td>Canon inicial</td><td></td><td class="tr">'+fmtN(a.canon,a.moneda)+'</td></tr>' +
         '<tr><td>Canon actual</td><td></td><td class="tr">'+fmtN(a.canonActual||a.canon,a.moneda)+'</td></tr>' +
+        _filasIva +
         '<tr><td>Índice / Frecuencia</td><td></td><td class="tr">'+escHtml(a.indice||'—')+' / cada '+escHtml(a.frecuencia||'—')+' meses</td></tr>' +
         (a.deposito?'<tr><td>Depósito de garantía</td><td></td><td class="tr">'+fmtN(a.deposito,a.depMoneda)+'</td></tr>':'')+
+        _filasGarante +
         '</tbody></table>' +
         '<table class="tbl"><thead><tr><th>Fecha cobro</th><th>Período</th><th class="tr">Monto</th></tr></thead><tbody>' + filaCobros + '</tbody>' +
         '<tfoot><tr><td colspan="2"><strong>Total cobrado</strong></td><td class="tr"><strong>'+fmtN(totalCob,a.moneda)+'</strong></td></tr></tfoot></table>' +
@@ -32568,6 +32719,16 @@
           <input type="email" id="alqEmailInquilino" placeholder="Para el aviso de vencimiento" autocomplete="off">
         </div>
       </div>
+      <div class="form-group">
+        <label>CUIT / DNI del inquilino</label>
+        <div style="display:flex; gap:6px;">
+          <select id="alqInquilinoDocTipo" style="width:90px;">
+            <option value="CUIT">CUIT</option>
+            <option value="DNI">DNI</option>
+          </select>
+          <input type="text" id="alqInquilinoDoc" placeholder="Solo números (sin guiones)" style="flex:1;" inputmode="numeric" autocomplete="off">
+        </div>
+      </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Inicio del contrato</label>
@@ -32592,11 +32753,11 @@
           </div>
           <div class="form-group" style="margin:0;">
             <label>Monto inicial</label>
-            <input type="number" id="alqCanon" step="0.01" min="0" placeholder="0">
+            <input type="number" id="alqCanon" step="0.01" min="0" placeholder="0" oninput="_alqCanonChanged()">
           </div>
           <div class="form-group" style="margin:0;">
             <label>Canon actual</label>
-            <input type="number" id="alqCanonActual" step="0.01" min="0" placeholder="0">
+            <input type="number" id="alqCanonActual" step="0.01" min="0" placeholder="0" oninput="_alqIvaPreview()">
           </div>
           <div class="form-group" style="margin:0;">
             <label>Día de pago del mes</label>
@@ -32679,6 +32840,38 @@
         </div>
       </div>
 
+      <!-- IVA sobre el canon -->
+      <div class="cac-desglose" style="margin-bottom:12px;">
+        <div class="ret-panel-title">🧾 IVA sobre el canon</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px;">
+          <input type="checkbox" id="alqIvaActivo" onchange="_alqIvaToggle()"> El canon tiene una parte gravada con IVA
+        </label>
+        <div id="alqIvaPanel" style="display:none;">
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group" style="margin:0;">
+              <label>Parte con IVA ($)</label>
+              <input type="number" id="alqIvaConIva" step="0.01" min="0" placeholder="0" oninput="_alqIvaSync('con')">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Parte sin IVA ($)</label>
+              <input type="number" id="alqIvaSinIva" step="0.01" min="0" placeholder="0" oninput="_alqIvaSync('sin')">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>% gravado</label>
+              <input type="number" id="alqIvaPct" step="0.01" min="0" max="100" placeholder="100" oninput="_alqIvaSync('pct')">
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:120px 1fr; gap:10px; margin-top:8px; align-items:end;">
+            <div class="form-group" style="margin:0;">
+              <label>Alícuota IVA %</label>
+              <input type="number" id="alqIvaAlicuota" step="0.01" min="0" value="21" oninput="_alqIvaPreview()">
+            </div>
+            <div class="form-hint" id="alqIvaPreview" style="align-self:center;"></div>
+          </div>
+          <div class="form-hint">Los montos ($) son sobre el <strong>monto inicial</strong>. Se guarda la proporción gravada y se aplica también al canon actualizado, así se ajustan las dos partes por igual.</div>
+        </div>
+      </div>
+
       <!-- Depósito de garantía -->
       <div class="cac-desglose" style="margin-bottom:12px;">
         <div class="ret-panel-title">🛡️ Depósito de garantía</div>
@@ -32701,14 +32894,40 @@
         </div>
       </div>
 
+      <!-- Garante -->
+      <div class="cac-desglose" style="margin-bottom:12px;">
+        <div class="ret-panel-title">👥 Garante</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group" style="margin:0;">
+            <label>Nombre del garante</label>
+            <input type="text" id="alqGarante" placeholder="Nombre completo o razón social">
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>CUIT / DNI del garante</label>
+            <div style="display:flex; gap:6px;">
+              <select id="alqGaranteDocTipo" style="width:80px;">
+                <option value="CUIT">CUIT</option>
+                <option value="DNI">DNI</option>
+              </select>
+              <input type="text" id="alqGaranteDoc" placeholder="Solo números" style="flex:1;" inputmode="numeric" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin:8px 0 0;">
+          <label>Contacto del garante (email o teléfono)</label>
+          <input type="text" id="alqGaranteContacto" placeholder="Opcional" autocomplete="off">
+        </div>
+      </div>
+
       <div class="form-group">
         <label>Observaciones</label>
         <input type="text" id="alqObs" placeholder="Opcional">
       </div>
       <div class="form-group">
-        <label>Contrato (PDF o foto) <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
-        <input type="file" id="alqArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:6px;">
+        <label>Contrato y documentos (PDF o foto) <span style="color:var(--text-3);font-weight:400;">(opcional · podés subir varios)</span></label>
+        <input type="file" id="alqArchivo" accept=".pdf,.jpg,.jpeg,.png" multiple style="font-size:12px;padding:6px;">
         <div class="form-hint" id="alqArchivoEstado"></div>
+        <div id="alqAdjuntosLista" style="margin-top:6px;font-size:12px;"></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalAlquiler()">Cancelar</button>
