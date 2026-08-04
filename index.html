@@ -23846,13 +23846,15 @@
         document.getElementById('modalAlquilerTitle').textContent = a ? '🔑 Editar Contrato' : '🔑 Nuevo Contrato de Alquiler';
         ['alqUnidad','alqDireccion','alqInquilino','alqEmailInquilino','alqInquilinoDoc','alqDiaPago','alqInicio','alqFin',
          'alqCanon','alqCanonActual','alqCACBase','alqCACActual','alqDeposito','alqObs',
-         'alqGarante','alqGaranteDoc','alqGaranteContacto','alqIvaConIva','alqIvaSinIva','alqIvaPct'].forEach(function(id) {
+         'alqGarante','alqGaranteDoc','alqGaranteContacto','alqIvaConIva','alqIvaSinIva','alqIvaPct',
+         'alqContactoNombre','alqContactoDato'].forEach(function(id) {
             var el = document.getElementById(id); if (el) el.value = '';
         });
         document.getElementById('alqInquilinoDocTipo').value = 'CUIT';
         document.getElementById('alqGaranteDocTipo').value   = 'CUIT';
         document.getElementById('alqIvaActivo').checked      = false;
         document.getElementById('alqIvaAlicuota').value      = '21';
+        document.getElementById('alqEsSociedad').checked     = false;
         document.getElementById('alqDepMeses').value = '1';
         _poblarSelectsMesIPC();
         document.getElementById('alqIPCResultado').innerHTML = '';
@@ -23871,6 +23873,9 @@
             document.getElementById('alqEmailInquilino').value = a.emailInquilino || '';
             document.getElementById('alqInquilinoDocTipo').value = a.inquilinoDocTipo || 'CUIT';
             document.getElementById('alqInquilinoDoc').value  = a.inquilinoDoc || '';
+            document.getElementById('alqEsSociedad').checked  = !!a.esSociedad;
+            document.getElementById('alqContactoNombre').value = a.contactoNombre || '';
+            document.getElementById('alqContactoDato').value   = a.contactoDato || '';
             document.getElementById('alqGarante').value       = a.garante || '';
             document.getElementById('alqGaranteDocTipo').value = a.garanteDocTipo || 'CUIT';
             document.getElementById('alqGaranteDoc').value     = a.garanteDoc || '';
@@ -23918,6 +23923,7 @@
             document.getElementById('alqDisponible').checked     = false;
         }
         _alqToggleCochera();
+        _alqToggleSociedad();
         onAlqIndiceChange();
         _alqIvaToggle();
         document.getElementById('modalAlquiler').classList.add('active');
@@ -23929,6 +23935,11 @@
         var chk = document.getElementById('alqIncluyeCochera');
         var wrap = document.getElementById('alqCocheraWrap');
         if (wrap) wrap.style.display = (chk && chk.checked) ? '' : 'none';
+    }
+    function _alqToggleSociedad() {
+        var chk = document.getElementById('alqEsSociedad');
+        var pan = document.getElementById('alqSociedadPanel');
+        if (pan) pan.style.display = (chk && chk.checked) ? '' : 'none';
     }
 
     // Muestra el bloque de índice CAC o el de la calculadora de IPC según lo elegido.
@@ -24193,6 +24204,9 @@
             emailInquilino: document.getElementById('alqEmailInquilino').value.trim(),
             inquilinoDocTipo: document.getElementById('alqInquilinoDocTipo').value,
             inquilinoDoc:     document.getElementById('alqInquilinoDoc').value.trim(),
+            esSociedad:       document.getElementById('alqEsSociedad').checked,
+            contactoNombre:   document.getElementById('alqContactoNombre').value.trim(),
+            contactoDato:     document.getElementById('alqContactoDato').value.trim(),
             garante:          document.getElementById('alqGarante').value.trim(),
             garanteDocTipo:   document.getElementById('alqGaranteDocTipo').value,
             garanteDoc:       document.getElementById('alqGaranteDoc').value.trim(),
@@ -24280,6 +24294,8 @@
         document.getElementById('cobroAlqRef').value   = '';
         document.getElementById('cobroAlqPeriodo').value = periodo;
         document.getElementById('cobroAlqConcepto').value = 'alquiler';
+        document.getElementById('cobroAlqMonto').disabled = false;
+        _cobroAlqSetupDesglose(a, periodo);
         var modalCobro = document.getElementById('modalCobroAlquiler');
         modalCobro.style.zIndex = 600; // por encima del modal de Plan de pagos, si está abierto
         modalCobro.classList.add('active');
@@ -24287,21 +24303,109 @@
 
     function cerrarModalCobroAlquiler() { document.getElementById('modalCobroAlquiler').classList.remove('active'); }
 
+    // Prepara el desglose IVA del cobro (Parte A gravada / Parte B no gravada) según el canon del período.
+    function _cobroAlqSetupDesglose(a, periodo) {
+        var wrap = document.getElementById('cobroAlqIvaWrap');
+        var activo = !!(a && a.ivaActivo);
+        wrap.style.display = activo ? '' : 'none';
+        document.getElementById('cobroAlqDesglose').checked = activo;   // por defecto desglosa si el contrato tiene IVA
+        document.getElementById('cobroAlqFacturaArchivo').value = '';
+        document.getElementById('cobroAlqFacturaNro').value = '';
+        if (activo) {
+            var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
+            var brk = _alqCalcIVA(a, canon);
+            document.getElementById('cobroAlqGravado').value   = _r2(brk.gravado);
+            document.getElementById('cobroAlqIvaMonto').value  = _r2(brk.iva);
+            document.getElementById('cobroAlqNoGravado').value = _r2(brk.noGravado);
+        }
+        _cobroAlqToggleDesglose();
+    }
+    function _cobroAlqDesgloseActivo() {
+        return document.getElementById('cobroAlqDesglose').checked
+            && document.getElementById('cobroAlqIvaWrap').style.display !== 'none';
+    }
+    function _cobroAlqToggleDesglose() {
+        var on = _cobroAlqDesgloseActivo();
+        document.getElementById('cobroAlqDesglosePanel').style.display = on ? '' : 'none';
+        var montoInput = document.getElementById('cobroAlqMonto');
+        montoInput.disabled = on;
+        if (on) _cobroAlqPreview();
+    }
+    function _cobroAlqPreview() {
+        var idx = parseInt(document.getElementById('cobroAlqIdx').value);
+        var a = alquileres[idx]; var mon = (a && a.moneda==='USD') ? 'USD ' : '$ ';
+        var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
+        var iva  = parseFloat(document.getElementById('cobroAlqIvaMonto').value) || 0;
+        var nog  = parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0;
+        var totalA = grav + iva;
+        var f = function(n){ return mon + Math.round(n).toLocaleString('es-AR'); };
+        var el = document.getElementById('cobroAlqDesglosePreview');
+        if (el) el.innerHTML = '<strong>Recibo A</strong> (gravada): ' + f(grav) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
+            + ' &nbsp;·&nbsp; <strong>Recibo B</strong> (no gravada): ' + f(nog)
+            + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>';
+        var montoInput = document.getElementById('cobroAlqMonto');
+        if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
+    }
+
     async function guardarCobroAlquiler() {
         var idx     = parseInt(document.getElementById('cobroAlqIdx').value);
-        var montoC  = parseFloat(document.getElementById('cobroAlqMonto').value) || 0;
         var fechaC  = document.getElementById('cobroAlqFecha').value;
         var periodo = document.getElementById('cobroAlqPeriodo').value;
         var refC    = document.getElementById('cobroAlqRef').value.trim();
         var concepto= document.getElementById('cobroAlqConcepto').value;
-        if (!montoC || montoC <= 0) { alert('Ingresá un monto válido.'); return; }
         if (!fechaC) { alert('Ingresá la fecha del cobro.'); return; }
         if (!alquileres[idx]) return;
-        if (!alquileres[idx].cobrosHistorial) alquileres[idx].cobrosHistorial = [];
+        var a = alquileres[idx];
+        if (!a.cobrosHistorial) a.cobrosHistorial = [];
         var tipoAB = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
+
+        // ── Desglose IVA: dos recibos separados (Parte A gravada + Parte B no gravada) ──
+        if (_cobroAlqDesgloseActivo()) {
+            var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
+            var iva  = parseFloat(document.getElementById('cobroAlqIvaMonto').value) || 0;
+            var nog  = parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0;
+            var totalA = grav + iva;
+            if (totalA <= 0 && nog <= 0) { alert('Cargá al menos un monto en la Parte A o en la Parte B.'); return; }
+            // Subir la factura emitida (parte A), si se adjuntó.
+            var facturaMeta = null;
+            var fFile = document.getElementById('cobroAlqFacturaArchivo').files[0];
+            if (fFile) {
+                if (!_archivoComprimible(fFile) && fFile.size > MAX_DOC_MB * 1024 * 1024) { alert('La factura supera los ' + MAX_DOC_MB + ' MB.'); return; }
+                try {
+                    var b64 = await leerArchivoBase64(fFile, function(){});
+                    var facId = 'ALQFAC-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+                    await REF_DOCS.child(facId).set({ nombre: fFile.name, tipo: fFile.type, contenido: b64 });
+                    facturaMeta = { facturaId: facId, facturaNombre: fFile.name, facturaTipo: fFile.type };
+                } catch (err) { alert('No se pudo subir la factura: ' + (err.message || err)); return; }
+            }
+            var facturaNro = document.getElementById('cobroAlqFacturaNro').value.trim();
+            var recibos = [];
+            if (totalA > 0) {
+                var nroA = await obtenerProximoComprobante(tipoAB);
+                var regA = { fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: tipoAB,
+                             parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro };
+                if (facturaMeta) { regA.facturaId = facturaMeta.facturaId; regA.facturaNombre = facturaMeta.facturaNombre; regA.facturaTipo = facturaMeta.facturaTipo; }
+                a.cobrosHistorial.push(regA); recibos.push(regA);
+            }
+            if (nog > 0) {
+                var nroB = await obtenerProximoComprobante(tipoAB);
+                var regB = { fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: tipoAB, parteIva: 'nograv' };
+                a.cobrosHistorial.push(regB); recibos.push(regB);
+            }
+            cerrarModalCobroAlquiler();
+            persistirAlquileres();
+            _refrescarPlanAlquilerSiAbierto(idx);
+            alert('Cobro registrado en ' + recibos.length + ' recibo(s). Se emiten los comprobantes.');
+            recibos.forEach(function(r){ imprimirComprobanteAlquiler(a, r.monto, r.fecha, r.periodo, r.concepto, r.ref, r.nroRecibo, r); });
+            return;
+        }
+
+        // ── Camino normal: un solo cobro ──
+        var montoC = parseFloat(document.getElementById('cobroAlqMonto').value) || 0;
+        if (!montoC || montoC <= 0) { alert('Ingresá un monto válido.'); return; }
         var nroReciboAlq = await obtenerProximoComprobante(tipoAB);
-        alquileres[idx].cobrosHistorial.push({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
-        var alqSnap = alquileres[idx];
+        a.cobrosHistorial.push({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
+        var alqSnap = a;
         cerrarModalCobroAlquiler();
         persistirAlquileres();
         _refrescarPlanAlquilerSiAbierto(idx);
@@ -24313,6 +24417,7 @@
     function eliminarAlquiler(idx) {
         if (confirm('¿Eliminar este contrato de alquiler?')) {
             _alqAdjuntos(alquileres[idx]).forEach(function(ad){ if (ad.id) REF_DOCS.child(ad.id).remove(); });
+            (alquileres[idx].cobrosHistorial||[]).forEach(function(c){ if (c.facturaId) REF_DOCS.child(c.facturaId).remove(); });
             alquileres.splice(idx, 1); persistirAlquileres();
         }
     }
@@ -24358,6 +24463,7 @@
         var a = alquileres[idx]; if (!a) return;
         var c = (a.cobrosHistorial||[])[cIdx]; if (!c) return;
         if (!confirm('¿Eliminar este cobro de $' + Number(c.monto||0).toLocaleString('es-AR') + '?')) return;
+        if (c.facturaId) REF_DOCS.child(c.facturaId).remove();   // borra la factura emitida adjunta, si tenía
         a.cobrosHistorial.splice(cIdx, 1);
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
@@ -24378,6 +24484,15 @@
     function _refrescarPlanAlquilerSiAbierto(idx) {
         var modal = document.getElementById('modalPlanAlquiler');
         if (_planAlqIdx === idx && modal && modal.classList.contains('active')) _renderPlanAlquiler();
+    }
+    // Plazo de gracia: bonifica / quita la bonificación de un mes puntual (cualquier mes) del alquiler.
+    function _alqToggleBonificado(idx, periodo) {
+        var a = alquileres[idx]; if (!a) return;
+        if (!Array.isArray(a.mesesBonificados)) a.mesesBonificados = [];
+        var pos = a.mesesBonificados.indexOf(periodo);
+        if (pos === -1) a.mesesBonificados.push(periodo); else a.mesesBonificados.splice(pos, 1);
+        persistirAlquileres();
+        _renderPlanAlquiler();
     }
     function _renderPlanAlquiler() {
         var idx = _planAlqIdx;
@@ -24411,8 +24526,12 @@
             // "actual" en vivo) — así un ajuste que se aplique a futuro nunca recalcula ni cambia
             // el estado de un mes que ya se cobró.
             var canonPeriodo = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo);
+            var esBonif = (a.mesesBonificados||[]).indexOf(periodo) !== -1;
             var estado, estadoHtml;
-            if (canonPeriodo > 0 && cobrado >= canonPeriodo * 0.98) {
+            if (esBonif) {
+                estado = 'bonificada';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#EDE7F6;color:#6A1B9A;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">🎁 Bonificado</span>';
+            } else if (canonPeriodo > 0 && cobrado >= canonPeriodo * 0.98) {
                 estado = 'pagada';
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
             } else if (cobrado > 0) {
@@ -24426,18 +24545,25 @@
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#F1F3F4;color:#5F6368;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500;">⏳ Pendiente</span>';
             }
             var accion = '';
-            if (estado === 'pagada' || estado === 'parcial') {
-                var cIdx = (a.cobrosHistorial||[]).findIndex(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
-                if (cIdx >= 0) accion += '<button type="button" class="btn btn-outline btn-sm" onclick="abrirEditarCobroAlquiler(' + idx + ',' + cIdx + ')" title="Editar cobro">✏️</button> ';
-            }
-            if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
-                accion += '<button type="button" class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ',\'' + periodo + '\')">💵 ' + (estado==='parcial' ? 'Completar' : 'Cobrar') + '</button>';
+            if (esBonif) {
+                accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqToggleBonificado(' + idx + ',\'' + periodo + '\')" title="Quitar la bonificación de este mes">✖ Quitar bonif.</button>';
+            } else {
+                if (estado === 'pagada' || estado === 'parcial') {
+                    var cIdx = (a.cobrosHistorial||[]).findIndex(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
+                    if (cIdx >= 0) accion += '<button type="button" class="btn btn-outline btn-sm" onclick="abrirEditarCobroAlquiler(' + idx + ',' + cIdx + ')" title="Editar cobro">✏️</button> ';
+                }
+                if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
+                    accion += '<button type="button" class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ',\'' + periodo + '\')">💵 ' + (estado==='parcial' ? 'Completar' : 'Cobrar') + '</button> ';
+                }
+                if (estado === 'pendiente' || estado === 'vencida') {
+                    accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqToggleBonificado(' + idx + ',\'' + periodo + '\')" title="Bonificar este mes (plazo de gracia)">🎁</button>';
+                }
             }
             var mesLbl = cursor.toLocaleDateString('es-AR', {month:'long', year:'numeric'});
-            filas.push('<tr style="background:' + (estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
+            filas.push('<tr style="background:' + (esBonif?'#F6F2FB':estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
                 + '<td style="padding:7px 10px;text-transform:capitalize;">' + mesLbl + '</td>'
-                + '<td style="padding:7px 10px;text-align:right;">' + monSym + Math.round(canonPeriodo).toLocaleString('es-AR') + '</td>'
-                + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (cobrado>0 ? monSym+Math.round(cobrado).toLocaleString('es-AR') : '—') + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;' + (esBonif?'color:var(--text-3);text-decoration:line-through;':'') + '">' + monSym + Math.round(canonPeriodo).toLocaleString('es-AR') + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (esBonif ? '—' : (cobrado>0 ? monSym+Math.round(cobrado).toLocaleString('es-AR') : '—')) + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;">' + estadoHtml + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + accion + '</td>'
                 + '</tr>');
@@ -24469,6 +24595,7 @@
         // Si el contrato terminó, no avisamos
         if (a.fin) { var _f = new Date(a.fin+'T00:00:00'); if (_f < hoy) return null; }
         var periodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
+        if ((a.mesesBonificados||[]).indexOf(periodo) !== -1) return { estado:'bonificada', label:'Mes bonificado', cls:'badge-ok', icon:'🎁' };
         var cobrada = (a.cobrosHistorial||[]).some(function(c){ return (c.concepto==='alquiler'||!c.concepto) && c.periodo === periodo; });
         if (cobrada) return { estado:'cobrada', label:'Cuota del mes cobrada', cls:'badge-ok', icon:'✓' };
         if (!a.diaPago) return null;
@@ -24581,21 +24708,28 @@
         }
     }
 
-    function imprimirComprobanteAlquiler(a, monto, fecha, periodo, concepto, ref, nroRecibo) {
+    function imprimirComprobanteAlquiler(a, monto, fecha, periodo, concepto, ref, nroRecibo, reg) {
         var fmtN = function(n,mon){ return (mon==='USD'?'USD ':'$ ')+Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var cLabel = {alquiler:'Alquiler mensual',deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'}[concepto]||concepto;
+        if (reg && reg.parteIva === 'gravada') cLabel += ' — Parte A (gravada, con IVA)';
+        else if (reg && reg.parteIva === 'nograv') cLabel += ' — Parte B (no gravada)';
         var _rh = buildReciboHeader('Orden de Recibo', nroRecibo || null, emision, {
             nombre: a.inquilino||'Inquilino', detalle: escHtml(a.unidad||'') + (a.tipo?' — '+escHtml(a.tipo):'') + (a.direccion?'<br>'+escHtml(a.direccion):'')
         });
+        var _filasDesglose = (reg && reg.parteIva === 'gravada')
+            ? '<tr><td>Neto gravado</td><td></td><td class="tr">'+fmtN(reg.montoGravado,a.moneda)+'</td></tr>'
+              + '<tr><td>IVA</td><td></td><td class="tr">'+fmtN(reg.iva,a.moneda)+'</td></tr>'
+            : '';
         var html = '<html><head><meta charset="UTF-8"><title>Orden de Recibo — Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl"><thead><tr><th>Concepto</th><th>Período</th><th class="tr">Monto</th></tr></thead>' +
-        '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,a.moneda) + '</strong></td></tr></tbody>' +
+        '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,a.moneda) + '</strong></td></tr>' + _filasDesglose + '</tbody>' +
         '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+escHtml(ref):'') + '</td><td class="tr">' + fmtN(monto,a.moneda) + '</td></tr></tfoot></table>' +
         '<div class="bottom"><div class="instrucciones"><div class="instr-titulo">Datos del contrato</div><div class="instr-body">' +
         'Vigencia: ' + (a.inicio?formatearFecha(a.inicio):'—') + ' al ' + (a.fin?formatearFecha(a.fin):'sin vto.') +
         '<br>Canon: ' + fmtN(a.canonActual||a.canon,a.moneda) +
+        (reg && reg.facturaNro ? '<br>Factura emitida: ' + escHtml(reg.facturaNro) : '') +
         (a.deposito?'<br>Depósito: ' + fmtN(a.deposito,a.depMoneda):'') + '</div></div>' +
         '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmtN(monto,a.moneda) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + escHtml(a.inquilino||'Inquilino') + '</div><div class="fi">Entregó — Locador / ' + escHtml(emp.nombre) + '</div></div>' +
@@ -24614,7 +24748,7 @@
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var _rh = buildReciboHeader('Contrato de Locación', null, emision, {
-            nombre: a.inquilino||'Inquilino', detalle: escHtml(a.unidad||'') + (a.tipo?' — '+escHtml(a.tipo):'') + (a.incluyeCochera?' + 🚗 Cochera'+(a.cocheraDetalle?' ('+escHtml(a.cocheraDetalle)+')':''):'') + (a.direccion?'<br>'+escHtml(a.direccion):'') + (a.inquilinoDoc?'<br>'+escHtml(a.inquilinoDocTipo||'Doc')+': '+escHtml(a.inquilinoDoc):'')
+            nombre: a.inquilino||'Inquilino', detalle: escHtml(a.unidad||'') + (a.tipo?' — '+escHtml(a.tipo):'') + (a.incluyeCochera?' + 🚗 Cochera'+(a.cocheraDetalle?' ('+escHtml(a.cocheraDetalle)+')':''):'') + (a.direccion?'<br>'+escHtml(a.direccion):'') + (a.inquilinoDoc?'<br>'+escHtml(a.inquilinoDocTipo||'Doc')+': '+escHtml(a.inquilinoDoc):'') + (a.esSociedad && a.contactoNombre ? '<br>Contacto: '+escHtml(a.contactoNombre)+(a.contactoDato?' — '+escHtml(a.contactoDato):'') : '')
         });
         var _ivaBrk = _alqCalcIVA(a, a.canonActual || a.canon);
         var _filasIva = _ivaBrk.activo
@@ -26256,18 +26390,21 @@
         hist.forEach(function(c, i) {
             var row = document.createElement('div');
             row.style.cssText = 'padding:10px 20px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+            var parteTxt = c.parteIva === 'gravada' ? ' · Parte A (con IVA)' : c.parteIva === 'nograv' ? ' · Parte B (sin IVA)' : '';
             var txt = document.createElement('div');
             txt.innerHTML = '<div style="font-weight:600;font-size:13px;color:#1a1a2e;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR') + '</div>'
-                + '<div style="font-size:11px;color:#777;margin-top:2px;">' + (c.periodo||'') + (c.ref ? ' · Ref: ' + c.ref : '') + '</div>';
+                + '<div style="font-size:11px;color:#777;margin-top:2px;">' + (c.periodo||'') + parteTxt + (c.facturaNro ? ' · Fac: ' + escHtml(c.facturaNro) : '') + (c.ref ? ' · Ref: ' + escHtml(c.ref) : '') + '</div>';
             var btns = document.createElement('div');
             btns.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
             var btnImp = document.createElement('button'); btnImp.className = 'btn btn-outline btn-sm'; btnImp.title = 'Reimprimir'; btnImp.textContent = '🖨️';
-            btnImp.onclick = function(){ overlay.remove(); imprimirComprobanteAlquiler(a, c.monto, c.fecha, c.periodo, c.concepto, c.ref); };
+            btnImp.onclick = function(){ overlay.remove(); imprimirComprobanteAlquiler(a, c.monto, c.fecha, c.periodo, c.concepto, c.ref, c.nroRecibo, c); };
+            btns.appendChild(btnImp);
+            if (c.facturaId) { var btnFac = document.createElement('button'); btnFac.className = 'btn btn-outline btn-sm'; btnFac.title = 'Ver factura emitida'; btnFac.textContent = '📄'; btnFac.onclick = function(){ descargarDoc(c.facturaId, c.facturaNombre||'factura'); }; btns.appendChild(btnFac); }
             var btnEd = document.createElement('button'); btnEd.className = 'btn btn-outline btn-sm'; btnEd.title = 'Editar'; btnEd.textContent = '✏️';
             btnEd.onclick = function(){ overlay.remove(); abrirEditarCobroAlquiler(idx, i); };
             var btnDel = document.createElement('button'); btnDel.className = 'btn btn-danger-sm'; btnDel.title = 'Eliminar'; btnDel.textContent = '✕';
             btnDel.onclick = function(){ overlay.remove(); eliminarCobroAlquiler(idx, i); };
-            btns.appendChild(btnImp); btns.appendChild(btnEd); btns.appendChild(btnDel);
+            btns.appendChild(btnEd); btns.appendChild(btnDel);
             row.appendChild(txt); row.appendChild(btns);
             lista.appendChild(row);
         });
@@ -32729,6 +32866,23 @@
           <input type="text" id="alqInquilinoDoc" placeholder="Solo números (sin guiones)" style="flex:1;" inputmode="numeric" autocomplete="off">
         </div>
       </div>
+      <div class="form-group" style="margin-top:-4px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="alqEsSociedad" onchange="_alqToggleSociedad()"> 🏢 El inquilino es una sociedad / empresa
+        </label>
+      </div>
+      <div id="alqSociedadPanel" style="display:none;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="form-group">
+            <label>Persona de contacto</label>
+            <input type="text" id="alqContactoNombre" placeholder="Nombre de la persona de contacto" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Contacto (email o teléfono)</label>
+            <input type="text" id="alqContactoDato" placeholder="Email o teléfono" autocomplete="off">
+          </div>
+        </div>
+      </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Inicio del contrato</label>
@@ -32970,6 +33124,25 @@
             <option value="B">B — Efectivo</option>
             <option value="A">A — Banco</option>
           </select>
+        </div>
+      </div>
+      <div id="cobroAlqIvaWrap" style="display:none;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:2px 0 8px;">
+          <input type="checkbox" id="cobroAlqDesglose" onchange="_cobroAlqToggleDesglose()"> 🧾 Desglosar IVA — genera dos recibos (Parte A con IVA + Parte B sin IVA)
+        </label>
+        <div id="cobroAlqDesglosePanel" style="display:none;background:var(--surface);border-radius:8px;padding:10px;margin-bottom:10px;">
+          <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Parte A — gravada (con IVA)</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group" style="margin:0;"><label>Neto gravado</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>IVA</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px;">
+            <div class="form-group" style="margin:0;"><label>Nº factura emitida (opcional)</label><input type="text" id="cobroAlqFacturaNro" placeholder="Ej: A 0001-00000123" autocomplete="off"></div>
+            <div class="form-group" style="margin:0;"><label>Factura emitida (archivo)</label><input type="file" id="cobroAlqFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:4px;"></div>
+          </div>
+          <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — no gravada (sin IVA)</div>
+          <div class="form-group" style="margin:0;"><label>Monto no gravado</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+          <div class="form-hint" id="cobroAlqDesglosePreview" style="margin-top:8px;"></div>
         </div>
       </div>
       <div class="modal-footer">
