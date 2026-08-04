@@ -22545,45 +22545,39 @@
     var APORTE_JUBILACION = 0.11, APORTE_LEY19032 = 0.03, APORTE_OBRASOCIAL = 0.03;
     // Monto del/los concepto(s) de SAC (aguinaldo) cargados como haber. El SAC es remunerativo,
     // así que también tributa aportes de ley.
-    function _remMontoSAC(emp) {
-        var s = 0;
+    // Suma de conceptos: haberes remunerativos (en recibo, tributan aportes), descuentos, y
+    // "fuera de recibo" (se pagan y suman al neto, pero NO tributan aportes ni van al recibo oficial).
+    function remTotalesConceptos(emp) {
+        var haberes = 0, descuentos = 0, fuera = 0;
         (emp.conceptos || []).forEach(function(c) {
-            if (c.tipo === 'descuento') return;
-            var n = (c.nombre || '').toLowerCase();
-            if (n.indexOf('sac') !== -1 || n.indexOf('aguinaldo') !== -1) s += (c.monto || 0);
+            var m = c.monto || 0;
+            if (c.tipo === 'descuento') descuentos += m;
+            else if (c.tipo === 'fuera') fuera += m;
+            else haberes += m;
         });
-        return s;
+        return { haberes: haberes, descuentos: descuentos, fuera: fuera };
     }
     function remAportesLey(emp) {
         if ((emp.tipoContrato || 'dependencia') !== 'dependencia') {
-            return { jubilacion: 0, ley19032: 0, obraSocial: 0, total: 0, base: 0, sac: 0 };
+            return { jubilacion: 0, ley19032: 0, obraSocial: 0, total: 0, base: 0 };
         }
-        var sac = _remMontoSAC(emp);
-        var base = (emp.sueldoBasico || 0) + sac;   // aportes sobre el básico + SAC (aguinaldo)
+        // Aportes sobre el básico + los haberes remunerativos en recibo (incluye el SAC, que se carga
+        // como un haber). Los conceptos "fuera de recibo" no tributan.
+        var base = (emp.sueldoBasico || 0) + remTotalesConceptos(emp).haberes;
         var jub = base * APORTE_JUBILACION;
         var ley = base * APORTE_LEY19032;
         var os  = base * APORTE_OBRASOCIAL;
-        return { jubilacion: jub, ley19032: ley, obraSocial: os, total: jub + ley + os, base: base, sac: sac };
-    }
-
-    // Suma de haberes y descuentos de los conceptos adicionales del empleado.
-    function remTotalesConceptos(emp) {
-        var haberes = 0, descuentos = 0;
-        (emp.conceptos || []).forEach(function(c) {
-            var m = c.monto || 0;
-            if (c.tipo === 'descuento') descuentos += m; else haberes += m;
-        });
-        return { haberes: haberes, descuentos: descuentos };
+        return { jubilacion: jub, ley19032: ley, obraSocial: os, total: jub + ley + os, base: base };
     }
 
     // Neto mensual a cobrar:
-    //  - Dependencia: bruto − aportes de ley (17%) − descuentos manuales.
-    //  - Monotributo: bruto − descuentos manuales (sin aportes de ley automáticos).
+    //  - Dependencia: (básico + haberes) − aportes(17% s/ básico+haberes) − descuentos + fuera de recibo.
+    //  - Monotributo: (básico + haberes) − descuentos + fuera de recibo (sin aportes).
     function remNetoEmpleado(emp) {
         var t = remTotalesConceptos(emp);
         var bruto = (emp.sueldoBasico || 0) + t.haberes;
         var aportes = remAportesLey(emp).total;
-        return bruto - aportes - t.descuentos;
+        return bruto - aportes - t.descuentos + t.fuera;
     }
 
     function renderRemuneraciones() {
@@ -23187,8 +23181,9 @@
         return '<div class="emp-concepto-fila" style="display:grid;grid-template-columns:1fr 130px 130px 32px;gap:6px;margin-bottom:6px;align-items:center;">' +
             '<input type="text" class="emp-c-nombre" placeholder="Concepto" value="' + escHtml(c.nombre || '') + '">' +
             '<select class="emp-c-tipo" onchange="renderPreviewLiquidacion()">' +
-                '<option value="haber"' + (c.tipo !== 'descuento' ? ' selected' : '') + '>Haber (+)</option>' +
+                '<option value="haber"' + (c.tipo !== 'descuento' && c.tipo !== 'fuera' ? ' selected' : '') + '>Haber (+)</option>' +
                 '<option value="descuento"' + (c.tipo === 'descuento' ? ' selected' : '') + '>Descuento (−)</option>' +
+                '<option value="fuera"' + (c.tipo === 'fuera' ? ' selected' : '') + '>Fuera de recibo (+)</option>' +
             '</select>' +
             '<input type="number" class="emp-c-monto" step="0.01" min="0" placeholder="0" value="' + (c.monto != null ? c.monto : '') + '" oninput="renderPreviewLiquidacion()">' +
             '<button type="button" onclick="this.closest(\'.emp-concepto-fila\').remove();renderPreviewLiquidacion()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;" title="Quitar">✕</button>' +
@@ -23360,12 +23355,13 @@
             fila('Sueldo básico', fmt(basico)) +
             (t.haberes ? fila('+ Haberes adicionales', fmt(t.haberes), 'var(--success)') : '');
         if (ap.total > 0) {
-            html += fila('Aportes de ley (sobre ' + (ap.sac > 0 ? 'básico + SAC ' : 'el básico ') + fmt(ap.base) + '):', '') +
+            html += fila('Aportes de ley (sobre básico + haberes ' + fmt(ap.base) + '):', '') +
                 fila('− Jubilación (11%)', fmt(ap.jubilacion), 'var(--danger)') +
                 fila('− Ley 19032 / INSSJP (3%)', fmt(ap.ley19032), 'var(--danger)') +
                 fila('− Obra social (3%)', fmt(ap.obraSocial), 'var(--danger)');
         }
         html += (t.descuentos ? fila('− Descuentos', fmt(t.descuentos), 'var(--danger)') : '') +
+            (t.fuera ? fila('+ Fuera de recibo (sin aportes)', fmt(t.fuera), 'var(--warn)') : '') +
             '<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;"><span>Neto a cobrar' + (tipoContrato === 'monotributo' ? ' (monotributo)' : '') + '</span><span>' + fmt(remNetoEmpleado(emp)) + '</span></div>';
         el.innerHTML = html;
     };
@@ -23604,10 +23600,12 @@
         var ap = remAportesLey(emp);
         var totalDesc = t.descuentos + ap.total;
         var totalHab = (emp.sueldoBasico || 0) + t.haberes;
-        var neto = remNetoEmpleado(emp);
+        // Neto OFICIAL del recibo: no incluye lo "fuera de recibo" (ese monto se paga aparte).
+        var neto = totalHab - totalDesc;
         var esMono = emp.tipoContrato === 'monotributo';
         var filas = '<tr><td>Sueldo básico</td><td class="r">' + fmt(emp.sueldoBasico) + '</td><td class="r"></td></tr>';
         (emp.conceptos || []).forEach(function(c) {
+            if (c.tipo === 'fuera') return;   // "fuera de recibo": no va al recibo oficial
             var esDesc = c.tipo === 'descuento';
             filas += '<tr><td>' + escHtml(c.nombre || '') + '</td><td class="r">' + (esDesc ? '' : fmt(c.monto)) + '</td><td class="r">' + (esDesc ? fmt(c.monto) : '') + '</td></tr>';
         });
@@ -23717,7 +23715,8 @@
             obraSocial: emp.obraSocial, convenio: emp.convenio, legajoNro: emp.legajoNro,
             mes: mes, fechaEmision: new Date().toISOString().slice(0, 10),
             basico: emp.sueldoBasico, conceptos: emp.conceptos,
-            aportes: ap, haberes: t.haberes, descuentos: t.descuentos, neto: remNetoEmpleado(emp),
+            aportes: ap, haberes: t.haberes, descuentos: t.descuentos, fueraRecibo: t.fuera,
+            neto: ((emp.sueldoBasico || 0) + t.haberes - ap.total - t.descuentos),   // neto OFICIAL (sin lo fuera de recibo)
             empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
             proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
             empresaNombre: (getEmpresaParaRecibo ? (getEmpresaParaRecibo().nombre || '') : '')
