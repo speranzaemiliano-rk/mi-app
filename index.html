@@ -20572,7 +20572,7 @@
         if (_cobrosIniciales.length && confirm('Venta guardada. El cobro inicial quedó registrado en caja. ¿Emitir comprobante/recibo?')) {
             var _snap = JSON.parse(JSON.stringify(nuevo));
             nuevo.cobrosHistorial.filter(function(c){ return c.inicial; }).forEach(function(c){
-                imprimirReciboCobroVenta(_snap, c.monto, c.fecha, c.comp, c.cac || 0, c.ref, c.nroRecibo, null);
+                imprimirReciboCobroVenta(_snap, c.monto, c.fecha, c.comp, c.cac || 0, c.ref, c.nroRecibo, c.nroCuota || null, c.facturaNro);
             });
         }
     }
@@ -20598,7 +20598,7 @@
         // Reset del canje de m² (por si quedó tildado de un cobro anterior)
         var _cvC = document.getElementById('cobroVentaCanje');
         if (_cvC) { _cvC.checked = false; cvToggleCanje(false); }
-        ['cobroVentaCanjeCant','cobroVentaCanjeValor'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
+        ['cobroVentaCanjeCant','cobroVentaCanjeValor','cobroVentaFacturaNro','cobroVentaFacturaArchivo'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
         // Si tiene un plan de cuotas simples activo, abrimos el selector de cuotas (sin ajuste CAC)
         if (v && v.cuotasSimple && v.cuotasSimple.activo) {
             _abrirCobroVentaCuotasSimple(idx);
@@ -21126,6 +21126,26 @@
             var cuentaCobro = (document.getElementById('cobroVentaCuenta')||{}).value || '';
             if (cuentaCobro) registro.cuentaId = cuentaCobro;
         }
+        // Factura emitida (opcional): número y/o archivo adjunto.
+        var _facNro = (document.getElementById('cobroVentaFacturaNro')||{}).value || '';
+        if (_facNro.trim()) registro.facturaNro = _facNro.trim();
+        var _facFile = (document.getElementById('cobroVentaFacturaArchivo')||{}).files;
+        _facFile = _facFile && _facFile[0];
+        if (_facFile) {
+            if (!_archivoComprimible(_facFile) && _facFile.size > MAX_DOC_MB * 1024 * 1024) { alert('La factura supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            var _btnCV = document.querySelector('#cvPaso2 .modal-footer .btn-gold');
+            if (_btnCV) { _btnCV.disabled = true; _btnCV.textContent = 'Subiendo factura…'; }
+            try {
+                var _facB64 = await leerArchivoBase64(_facFile, function(){});
+                var _facId = 'VTAFAC-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+                await REF_DOCS.child(_facId).set({ nombre: _facFile.name, tipo: _facFile.type, contenido: _facB64 });
+                registro.facturaId = _facId; registro.facturaNombre = _facFile.name; registro.facturaTipo = _facFile.type;
+            } catch (err) {
+                if (_btnCV) { _btnCV.disabled = false; _btnCV.textContent = '💾 Registrar Cobro'; }
+                alert('No se pudo subir la factura: ' + (err.message || err)); return;
+            }
+            if (_btnCV) { _btnCV.disabled = false; _btnCV.textContent = '💾 Registrar Cobro'; }
+        }
         ventas[idx].cobrosHistorial.push(registro);
         // Actualizar acumulados
         const v = ventas[idx];
@@ -21151,7 +21171,7 @@
         persistirVentas();
         // Ningún cobro sin recibo: la Orden de Recibo se imprime siempre (antes preguntaba).
         alert('Cobro registrado. Se imprime la Orden de Recibo.');
-        imprimirReciboCobroVenta(ventaSnap, monto, fecha, comp, cac, ref, nroRecibo, nroCuota);
+        imprimirReciboCobroVenta(ventaSnap, monto, fecha, comp, cac, ref, nroRecibo, nroCuota, registro.facturaNro);
     }
 
     // Recalcula TODOS los acumulados de cobro de una venta a partir de su cobrosHistorial.
@@ -21232,6 +21252,15 @@
             grupoVenc.style.display = 'none';
             document.getElementById('ecvVenc').value = '';
         }
+        // Factura emitida: número + link a la actual (si tiene) + input para adjuntar/reemplazar.
+        document.getElementById('ecvFacturaNro').value = c.facturaNro || '';
+        document.getElementById('ecvFacturaArchivo').value = '';
+        var _facAct = document.getElementById('ecvFacturaActual');
+        if (c.facturaId) {
+            _facAct.innerHTML = '📎 Adjunta: <a href="#" onclick="descargarDoc(\'' + c.facturaId + '\',\'' + escHtml(c.facturaNombre||'factura').replace(/'/g,"\\'") + '\');return false;">' + escHtml(c.facturaNombre||'ver factura') + '</a> <span style="color:var(--text-3);">(subí otra para reemplazarla)</span>';
+        } else {
+            _facAct.innerHTML = '';
+        }
         document.getElementById('modalEditarCobroVenta').classList.add('active');
     };
     window.ecvOnModalidadChange = function() {
@@ -21243,7 +21272,7 @@
         if (typeof cerrarModalCobroVenta === 'function') cerrarModalCobroVenta();
         abrirEditarCobroVenta(idx, cIdx);
     };
-    window.guardarEdicionCobroVenta = function() {
+    window.guardarEdicionCobroVenta = async function() {
         var v = ventas[_editCobroVIdx]; if (!v) return;
         var c = (v.cobrosHistorial||[])[_editCobroCIdx]; if (!c) return;
         var monto = parseFloat(document.getElementById('ecvMonto').value) || 0;
@@ -21268,6 +21297,20 @@
             var venc = document.getElementById('ecvVenc').value;
             if (venc) _setCuotaVencimiento(v, c.comp, c.nroCuota, venc);
         }
+        // Factura emitida: número + adjuntar/reemplazar el archivo.
+        var _facNroE = (document.getElementById('ecvFacturaNro').value||'').trim();
+        if (_facNroE) c.facturaNro = _facNroE; else delete c.facturaNro;
+        var _facFileE = document.getElementById('ecvFacturaArchivo').files[0];
+        if (_facFileE) {
+            if (!_archivoComprimible(_facFileE) && _facFileE.size > MAX_DOC_MB * 1024 * 1024) { alert('La factura supera los ' + MAX_DOC_MB + ' MB.'); return; }
+            try {
+                var _b64E = await leerArchivoBase64(_facFileE, function(){});
+                if (c.facturaId) REF_DOCS.child(c.facturaId).remove();   // reemplaza la anterior
+                var _facIdE = 'VTAFAC-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+                await REF_DOCS.child(_facIdE).set({ nombre: _facFileE.name, tipo: _facFileE.type, contenido: _b64E });
+                c.facturaId = _facIdE; c.facturaNombre = _facFileE.name; c.facturaTipo = _facFileE.type;
+            } catch (err) { alert('No se pudo subir la factura: ' + (err.message || err)); return; }
+        }
         _recalcCobrosVenta(v);
         cerrarEditarCobroVenta();
         persistirVentas();
@@ -21281,6 +21324,7 @@
         var v = ventas[idx]; if (!v) return;
         var c = (v.cobrosHistorial||[])[cIdx]; if (!c) return;
         if (!confirm('¿Eliminar este cobro de ' + (c.monto||0).toLocaleString('es-AR') + '? Se va a recalcular el saldo de la UF.')) return;
+        if (c.facturaId) REF_DOCS.child(c.facturaId).remove();   // borra la factura emitida adjunta, si tenía
         v.cobrosHistorial.splice(cIdx, 1);
         _recalcCobrosVenta(v);
         persistirVentas();
@@ -21288,7 +21332,7 @@
         alert('✅ Cobro eliminado y saldo recalculado.');
     };
 
-    function imprimirReciboCobroVenta(v, monto, fecha, comp, cac, ref, nroRecibo, nroCuota) {
+    function imprimirReciboCobroVenta(v, monto, fecha, comp, cac, ref, nroRecibo, nroCuota, facturaNro) {
         const compLabels = {usd:'USD — Precio/Terreno', ars_construccion:'ARS Construcción (CAC)', cuota:'ARS — Cuota', ars_general:'ARS General', cuota_ars_simple:'ARS — Cuota', cuota_usd_simple:'USD — Cuota', cochera_ars:'🚗 Cochera (ARS)', cochera_usd:'🚗 Cochera (USD)'};
         const fmtM = n => ((comp==='usd'||comp==='cuota_usd_simple'||comp==='cochera_usd')?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
         const fmtARS = n => '$ ' + Number(n||0).toLocaleString('es-AR');
@@ -21307,7 +21351,7 @@
         '<tbody><tr><td><strong>' + (v.uf||'—') + '</strong>' + (v.tipo?'<br><span style="font-size:11px;color:#666;">'+v.tipo+'</span>':'') + '</td>' +
         '<td>' + (compLabels[comp]||comp) + (nroCuota?' · Cuota N°'+nroCuota:'') + (cac>0?'<br><span style="font-size:11px;color:#666;">CAC: '+cac+'</span>':'') + '</td>' +
         '<td class="tr"><strong>' + fmtM(monto) + '</strong></td></tr></tbody>' +
-        '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+ref:'') + '</td><td class="tr">' + fmtM(monto) + '</td></tr></tfoot>' +
+        '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+ref:'') + (facturaNro?' · Factura: '+escHtml(facturaNro):'') + '</td><td class="tr">' + fmtM(monto) + '</td></tr></tfoot>' +
         '</table>' +
         '<div class="bottom">' +
         '<div class="instrucciones"><div class="instr-titulo">Modalidad de venta</div><div class="instr-body">' + ({total_usd:'USD Total',total_ars:'$ ARS Total',mixto:'USD + ARS',cuotas_cac:'Terreno + Cuotas CAC'}[v.modalidad]||v.modalidad) + (v.fecha?'<br>Boleto/Escritura: '+formatearFecha(v.fecha):'') + '</div></div>' +
@@ -21322,7 +21366,10 @@
     }
 
     function eliminarVenta(idx) {
-        if (confirm('¿Eliminar esta UF de ventas?')) { ventas.splice(idx, 1); persistirVentas(); }
+        if (confirm('¿Eliminar esta UF de ventas?')) {
+            ((ventas[idx]||{}).cobrosHistorial||[]).forEach(function(c){ if (c.facturaId) REF_DOCS.child(c.facturaId).remove(); });
+            ventas.splice(idx, 1); persistirVentas();
+        }
     }
 
     // ══════════════════════════════════════════════════════════
@@ -26111,7 +26158,8 @@
                 var estadoHtmlS, trBgS;
                 if (pagadaS) {
                     estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>'
-                        + (_cobroRealS >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealS+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '');
+                        + (_cobroRealS >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealS+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '')
+                        + ((cobroRegS && cobroRegS.facturaId) ? '<button type="button" onclick="descargarDoc(\''+cobroRegS.facturaId+'\',\''+escHtml(cobroRegS.facturaNombre||'factura').replace(/\x27/g,"\\\x27")+'\')" style="display:block;margin-top:4px;background:#188038;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Ver factura emitida">📄 Factura</button>' : '');
                     trBgS = '#F8FFF8';
                 } else if (vencidaS) {
                     estadoHtmlS = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida hace '+Math.abs(diasRestantesS)+' Días</span>';
@@ -26154,7 +26202,8 @@
                 var estadoHtml, trBg;
                 if (pagada) {
                     estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>'
-                        + (_cobroRealEC >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealEC+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '');
+                        + (_cobroRealEC >= 0 ? '<button type="button" onclick="ecEditarCobroCuota('+_cobroRealEC+')" style="display:block;margin-top:4px;background:#1A73E8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Corregir fecha, monto o forma de cobro">✏️ Editar</button>' : '')
+                        + ((cobroReg && cobroReg.facturaId) ? '<button type="button" onclick="descargarDoc(\''+cobroReg.facturaId+'\',\''+escHtml(cobroReg.facturaNombre||'factura').replace(/\x27/g,"\\\x27")+'\')" style="display:block;margin-top:4px;background:#188038;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;padding:2px 7px;" title="Ver factura emitida">📄 Factura</button>' : '');
                     trBg = '#F8FFF8';
                 } else if (vencida) {
                     estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida hace '+Math.abs(diasRestantes)+' Días</span>';
@@ -26199,7 +26248,7 @@
                     '<td style="padding:7px 12px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;">'+fmtF(c.fecha)+'</td>'+
                     '<td style="padding:7px 12px;font-size:12px;">'+compLabel+nroCuotaLabel+'</td>'+
                     '<td style="padding:7px 12px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:600;color:var(--success);">'+monSym+Number(c.monto||0).toLocaleString('es-AR',{maximumFractionDigits:2})+'</td>'+
-                    '<td style="padding:7px 12px;font-size:11px;color:var(--text-3);">'+(c.ref||'—')+'</td>'+
+                    '<td style="padding:7px 12px;font-size:11px;color:var(--text-3);">'+(c.ref||'—')+(c.facturaNro?'<br><span style="color:var(--text-2);">🧾 '+escHtml(c.facturaNro)+'</span>':'')+(c.facturaId?' <a href="#" onclick="descargarDoc(\''+c.facturaId+'\',\''+escHtml(c.facturaNombre||'factura').replace(/\x27/g,"\\\x27")+'\');return false;" title="Ver factura emitida">📄</a>':'')+'</td>'+
                     '<td style="padding:7px 12px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:var(--text-3);">'+(c.nroRecibo||'—')+'</td>';
                 histBody.appendChild(tr);
             });
@@ -26405,7 +26454,7 @@
         if (accion === '2') { abrirEditarCobroVenta(idx, i); return; }
         if (accion === '3') { eliminarCobroVenta(idx, i); return; }
         var c = hist[i];
-        imprimirReciboCobroVenta(v, c.monto, c.fecha, c.comp, c.cac, c.ref, c.nroRecibo || generarNumeroRecibo(), c.nroCuota);
+        imprimirReciboCobroVenta(v, c.monto, c.fecha, c.comp, c.cac, c.ref, c.nroRecibo || generarNumeroRecibo(), c.nroCuota, c.facturaNro);
     }
 
     function abrirHistorialCobrosAlquiler(idx) {
@@ -32254,6 +32303,14 @@
             <select id="cobroVentaCuenta" style="width:100%;"><option value="">— Sin especificar —</option></select>
           </div>
 
+          <!-- Factura emitida por esta cuota (opcional) -->
+          <div class="form-group">
+            <label>🧾 Factura emitida <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+            <input type="text" id="cobroVentaFacturaNro" placeholder="Nº de factura (ej: A 0001-00000123)" autocomplete="off">
+            <input type="file" id="cobroVentaFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:4px;margin-top:6px;">
+            <div class="form-hint">Adjuntá la factura que emitiste por esta cuota. Queda guardada y la podés ver o reemplazar desde el Estado de Cuenta.</div>
+          </div>
+
           <div class="modal-footer">
             <button type="button" class="btn btn-outline" onclick="cvVolverPaso1()">← Volver</button>
             <button type="button" class="btn btn-gold" onclick="guardarCobroVenta()">💾 Registrar Cobro</button>
@@ -32308,6 +32365,13 @@
       <div class="form-group" id="ecvGrupoCuenta" style="display:none;">
         <label>Cuenta bancaria</label>
         <select id="ecvCuenta" style="width:100%;"><option value="">— Sin especificar —</option></select>
+      </div>
+      <div class="form-group" id="ecvGrupoFactura">
+        <label>🧾 Factura emitida <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+        <input type="text" id="ecvFacturaNro" placeholder="Nº de factura (ej: A 0001-00000123)" autocomplete="off">
+        <div class="form-hint" id="ecvFacturaActual" style="margin:4px 0;"></div>
+        <input type="file" id="ecvFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:4px;margin-top:4px;">
+        <div class="form-hint" style="color:var(--text-3);">Adjuntá o reemplazá la factura emitida de esta cuota.</div>
       </div>
       <div class="form-hint" style="color:var(--text-3);margin-bottom:8px;">Al guardar se recalcula el saldo cobrado de la UF automáticamente.</div>
       <div class="modal-footer">
