@@ -21182,6 +21182,28 @@
     // Abre el modal de edición de un cobro puntual (permite corregir monto, CAC, fecha,
     // forma de cobro y referencia sin tener que borrar todo el cobro).
     var _editCobroVIdx = -1, _editCobroCIdx = -1;
+    // ¿El cobro corresponde a una cuota con cronograma de vencimientos editable?
+    function _esCobroCuota(c) {
+        return !!(c && c.nroCuota && (c.comp === 'cuota' || c.comp === 'cuota_ars_simple' || c.comp === 'cuota_usd_simple'));
+    }
+    // Vencimiento vigente de una cuota (fecha guardada, o la autogenerada desde la 1ra + N meses).
+    function _cuotaVencimientoActual(v, comp, nroCuota) {
+        var i = nroCuota - 1, fechas, d0;
+        if (comp === 'cuota') { fechas = v.cuotaFechas || []; d0 = v.cuota1Venc ? new Date(v.cuota1Venc+'T00:00:00') : null; }
+        else { var cs = v.cuotasSimple || {}; fechas = cs.fechas || []; d0 = cs.fecha1 ? new Date(cs.fecha1+'T00:00:00') : null; }
+        if (fechas[i]) return fechas[i];
+        if (d0) { var d = new Date(d0); d.setMonth(d.getMonth() + i); return d.toISOString().slice(0,10); }
+        return '';
+    }
+    // Fija la fecha de vencimiento de una cuota puntual en el cronograma que corresponda a su modalidad.
+    function _setCuotaVencimiento(v, comp, nroCuota, nuevaFecha) {
+        var i = nroCuota - 1;
+        var arr;
+        if (comp === 'cuota') { if (!Array.isArray(v.cuotaFechas)) v.cuotaFechas = []; arr = v.cuotaFechas; }
+        else { if (!v.cuotasSimple) return; if (!Array.isArray(v.cuotasSimple.fechas)) v.cuotasSimple.fechas = []; arr = v.cuotasSimple.fechas; }
+        while (arr.length <= i) arr.push('');
+        arr[i] = nuevaFecha;
+    }
     window.abrirEditarCobroVenta = function(idx, cIdx) {
         var v = ventas[idx]; if (!v) return;
         var c = (v.cobrosHistorial||[])[cIdx]; if (!c) return;
@@ -21200,6 +21222,16 @@
         selC.innerHTML = '<option value="">— Sin especificar —</option>';
         cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; if((cu.id||cu.banco)===c.cuentaId) o.selected=true; selC.appendChild(o); });
         document.getElementById('ecvGrupoCuenta').style.display = (c.tipoAB === 'A') ? '' : 'none';
+        // Fecha de vencimiento de la cuota (solo cobros de cuota): editable desde acá.
+        var grupoVenc = document.getElementById('ecvGrupoVenc');
+        if (_esCobroCuota(c)) {
+            grupoVenc.style.display = '';
+            document.getElementById('ecvVencNro').textContent = 'N°' + c.nroCuota;
+            document.getElementById('ecvVenc').value = _cuotaVencimientoActual(v, c.comp, c.nroCuota) || '';
+        } else {
+            grupoVenc.style.display = 'none';
+            document.getElementById('ecvVenc').value = '';
+        }
         document.getElementById('modalEditarCobroVenta').classList.add('active');
     };
     window.ecvOnModalidadChange = function() {
@@ -21231,10 +21263,18 @@
         } else {
             delete c.cuentaId;
         }
+        // Fecha de vencimiento de la cuota (si se está editando un cobro de cuota).
+        if (_esCobroCuota(c) && document.getElementById('ecvGrupoVenc').style.display !== 'none') {
+            var venc = document.getElementById('ecvVenc').value;
+            if (venc) _setCuotaVencimiento(v, c.comp, c.nroCuota, venc);
+        }
         _recalcCobrosVenta(v);
         cerrarEditarCobroVenta();
         persistirVentas();
         if (typeof renderVentas === 'function') renderVentas();
+        // Si el Estado de Cuenta de esta UF está abierto, refrescarlo para ver el cambio al toque.
+        var mec = document.getElementById('modalEstadoCuenta');
+        if (mec && mec.classList.contains('active') && typeof _renderEstadoCuenta === 'function') _renderEstadoCuenta(v);
         alert('✅ Cobro actualizado.');
     };
     window.eliminarCobroVenta = function(idx, cIdx) {
@@ -32234,13 +32274,18 @@
     <div class="modal-body">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="form-group">
-          <label>Fecha *</label>
+          <label>Fecha de cobro *</label>
           <input type="date" id="ecvFecha">
         </div>
         <div class="form-group">
           <label>Monto *</label>
           <input type="number" id="ecvMonto" step="0.01" min="0" placeholder="0">
         </div>
+      </div>
+      <div class="form-group" id="ecvGrupoVenc" style="display:none;">
+        <label>Fecha de vencimiento de la cuota <span id="ecvVencNro" style="color:var(--text-3);font-weight:400;"></span></label>
+        <input type="date" id="ecvVenc">
+        <div class="form-hint" style="color:var(--text-3);">Cambia cuándo vence esta cuota en el plan (distinta de la fecha en que se cobró).</div>
       </div>
       <div class="form-group" id="ecvGrupoCac">
         <label>Índice CAC aplicado</label>
