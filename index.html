@@ -8312,22 +8312,27 @@
 
     // Devuelve el próximo número correlativo para el tipo A/B (Promise<string>).
     // Primero reutiliza un número liberado (el más chico); si no hay, avanza el contador.
-    function obtenerProximoComprobante(tipoAB) {
+    // serie: '' = recibos de cobro (A/B), 'OP' = órdenes de pago a proveedores. Cada serie lleva su
+    // propio contador y su propio pool de huecos, separado por empresa+proyecto y por tipo A/B.
+    // Formato: <CODEMP>-<CODPROY>-[SERIE-]<A|B>-00001.
+    function obtenerProximoComprobante(tipoAB, serie) {
         var tipo = (tipoAB === 'A') ? 'A' : 'B';
-        var prefijo = codigoEmpresaActual() + '-' + codigoProyectoActual() + '-' + tipo + '-';
+        var ser = serie ? String(serie).toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        var key = ser ? (ser + '_' + tipo) : tipo;   // clave de contador/huecos por serie
+        var prefijo = codigoEmpresaActual() + '-' + codigoProyectoActual() + '-' + (ser ? ser + '-' : '') + tipo + '-';
         var fmt = function(n){ return prefijo + String(n).padStart(5,'0'); };
         return new Promise(function(resolve) {
             if (!db || !getBasePath) { resolve(fmt(Math.floor(Math.random()*9000+1000))); return; }
             var base = getBasePath();
             var _incrementar = function() {
-                var ref = db.ref(base + '/contadoresComprobante/' + tipo);
+                var ref = db.ref(base + '/contadoresComprobante/' + key);
                 ref.transaction(function(n){ return (n||0)+1; })
                 .then(function(r){ var n = (r.snapshot && r.snapshot.val()) || 1; resolve(fmt(n)); })
                 .catch(function(){ resolve(fmt(Math.floor(Math.random()*9000+1000))); });
             };
             try {
                 // 1) Intentar reutilizar el número liberado más chico (llenar huecos)
-                var libresRef = db.ref(base + '/comprobantesLibres/' + tipo);
+                var libresRef = db.ref(base + '/comprobantesLibres/' + key);
                 var reusar = null;
                 libresRef.transaction(function(arr){
                     reusar = null;
@@ -8345,10 +8350,11 @@
     }
 
     // Agrega un número al pool de "libres" (huecos reutilizables) sin duplicar.
-    function _agregarComprobanteLibre(tipo, num) {
+    // key = 'A'|'B' (recibos) o 'OP_A'|'OP_B' (órdenes de pago).
+    function _agregarComprobanteLibre(key, num) {
         if (!db || !getBasePath) return;
         try {
-            var ref = db.ref(getBasePath() + '/comprobantesLibres/' + tipo);
+            var ref = db.ref(getBasePath() + '/comprobantesLibres/' + key);
             ref.transaction(function(arr){
                 var nums = _normLibres(arr);
                 if (nums.indexOf(num) === -1) nums.push(num);
@@ -8357,6 +8363,13 @@
             });
         } catch(e) {}
     }
+    // Detecta la serie ('' recibo | 'OP') a partir del formato del número. El token de serie es
+    // siempre el 3º segmento desde el final (…-OP-A-00001); un recibo tiene un segmento menos
+    // (…-A-00001), así que no colisiona ni aunque un código de proyecto fuese "OP".
+    function _serieDeNro(nro) {
+        var segs = String(nro || '').split('-');
+        return (segs.length >= 5 && segs[segs.length - 3] === 'OP') ? 'OP' : '';
+    }
 
     // Libera el número correlativo de un comprobante que se elimina, para que se reutilice:
     //  - Si era el ÚLTIMO emitido de su tipo → retrocede el contador.
@@ -8364,19 +8377,21 @@
     function _liberarNroComprobante(nro, tipoAB) {
         if (!nro || !db || !getBasePath) return;
         var tipo = (tipoAB === 'A') ? 'A' : 'B';
+        var ser = _serieDeNro(nro);                         // libera al contador de SU serie (recibo u OP)
+        var key = ser ? (ser + '_' + tipo) : tipo;
         var m = String(nro).match(/(\d+)\s*$/);
         if (!m) return;
         var num = parseInt(m[1], 10);
         if (!num) return;
         try {
-            var ref = db.ref(getBasePath() + '/contadoresComprobante/' + tipo);
+            var ref = db.ref(getBasePath() + '/contadoresComprobante/' + key);
             ref.transaction(function(n){
                 if ((n || 0) === num) return num - 1; // era el último → retrocede
                 return; // no era el último → aborta sin escribir
             }).then(function(res){
                 var bajo = res && res.committed && res.snapshot && res.snapshot.val() === (num - 1);
-                if (!bajo) _agregarComprobanteLibre(tipo, num); // era del medio → al pool
-            }).catch(function(){ _agregarComprobanteLibre(tipo, num); });
+                if (!bajo) _agregarComprobanteLibre(key, num); // era del medio → al pool
+            }).catch(function(){ _agregarComprobanteLibre(key, num); });
         } catch(e) { /* silencioso: no bloquea el borrado */ }
     }
 
@@ -8422,7 +8437,7 @@
         for (var i = 0; i < cands.length; i++) {
             var c = cands[i];
             setSt('Numerando… ' + (i+1) + ' de ' + cands.length);
-            var nro = await obtenerProximoComprobante(_tipoDe(c));
+            var nro = await obtenerProximoComprobante(_tipoDe(c), c.tipo === 'emit' ? '' : 'OP');
             if (c.tipo === 'emit') { c.obj.nro = nro; if (!c.obj.tipoAB) c.obj.tipoAB = _tipoDe(c); tocaEmit = true; }
             else {
                 c.p.nroCorrelativo = nro; c.p.tipoAB = _tipoDe(c);
@@ -9757,7 +9772,7 @@
         var nroCbteFD = (document.getElementById('pagoFDNroComprobante')||{}).value || '';
         var _comp = null;
         try { _comp = await _subirComprobantePago('pagoFDComprobante'); } catch(e){ return; }
-        var nroCorr = await obtenerProximoComprobante(mod);   // un solo correlativo para todo el pago
+        var nroCorr = await obtenerProximoComprobante(mod, 'OP');   // un solo correlativo (serie OP) para todo el pago
         var grupoId = 'GP-' + Date.now();
         var provNombre = _pagoFDMulti.prov, facturasPagadas = [], acumRet = 0, tsBase = Date.now();
         sel.forEach(function(x, k){
@@ -9827,9 +9842,9 @@
             var _comp=await _subirComprobantePago('pagoFDComprobante');
             if(_comp){ entry.comprobanteId=_comp.comprobanteId; entry.comprobanteNombre=_comp.comprobanteNombre; entry.comprobanteTipo=_comp.comprobanteTipo; }
         } catch(e){ return; }
-        // Numeración correlativa A/B por empresa+proyecto
+        // Numeración correlativa de la Orden de Pago (serie OP), por empresa+proyecto
         entry.tipoAB = mod;
-        entry.nroCorrelativo = await obtenerProximoComprobante(mod);
+        entry.nroCorrelativo = await obtenerProximoComprobante(mod, 'OP');
         var itemImp=null;
         if(_pagoFDTab==='fact'){
             var idx=parseInt(val),f=facturas[idx]; if(!f) return;
@@ -10578,8 +10593,8 @@
             if (medioBancario) lastPago.medioBancario = medioBancario;
             if (nroCbte)      lastPago.nroComprobante = nroCbte;
         }
-        // Numeración correlativa A/B por empresa+proyecto
-        const nroCorr = await obtenerProximoComprobante(esSinCaja ? 'B' : modalidadPago);
+        // Numeración correlativa de la Orden de Pago (serie OP), por empresa+proyecto
+        const nroCorr = await obtenerProximoComprobante(esSinCaja ? 'B' : modalidadPago, 'OP');
         lastPago.nroCorrelativo = nroCorr;
         lastPago.tipoAB = esSinCaja ? 'B' : modalidadPago;
         datos[i].reciboCorrelativo = nroCorr;
@@ -15488,7 +15503,7 @@
                 nueva.pagado = montoPago;
                 // La retención también cancela deuda: se cuenta junto con el neto pagado.
                 nueva.estado = (montoPago + (totalRet||0)) >= importe ? 'pagada' : 'parcial';
-                var nroCorr = await obtenerProximoComprobante(mod);
+                var nroCorr = await obtenerProximoComprobante(mod, 'OP');
                 var nuevoPago = {
                     pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                     monto: montoPago, baseImponible: baseRet,
@@ -16004,8 +16019,8 @@
             const medioBancario = mod === 'A' ? (document.getElementById('factMedioPago')?.value || '') : '';
             const nroComprobante = mod === 'A' ? (document.getElementById('factNroComprobante')?.value.trim() || '') : '';
             nuevo.pagosHistorial = nuevo.pagosHistorial || [];
-            // Número correlativo propio del recibo de pago (independiente del nº de factura del proveedor)
-            const nroCorr = await obtenerProximoComprobante(mod);
+            // Número correlativo propio de la Orden de Pago (serie OP, independiente del nº de factura del proveedor)
+            const nroCorr = await obtenerProximoComprobante(mod, 'OP');
             const nuevoPago = {
                 pagoId: 'FP-' + Date.now(), fecha: fechaPago, modalidad: mod,
                 monto: montoPago, baseImponible: baseRet,
@@ -16165,8 +16180,8 @@
         f.pagado = (f.pagado || 0) + monto;
         f.estado = _estadoFactDoc(f);
         if (!f.pagosHistorial) f.pagosHistorial = [];
-        // Número correlativo propio del recibo (efectivo → tipo B)
-        const nroCorr = await obtenerProximoComprobante('B');
+        // Número correlativo propio de la Orden de Pago (efectivo → tipo B, serie OP)
+        const nroCorr = await obtenerProximoComprobante('B', 'OP');
         f.pagosHistorial.push({ pagoId: 'FP-'+Date.now(), fecha: new Date().toISOString().substring(0,10), monto, modalidad: 'B', nroCorrelativo: nroCorr, tipoAB: 'B' });
         // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
         REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
