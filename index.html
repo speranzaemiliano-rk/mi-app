@@ -4723,18 +4723,32 @@
                             </div>
                             <div id="remPagoForm" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2);">
                                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; align-items:end;">
-                                    <label style="font-size:11px;">Empleado<br><input list="remPagoEmpleados" id="remPagoNombre" placeholder="Nombre del empleado" style="width:100%; padding:6px; font-size:12px;"><datalist id="remPagoEmpleados"></datalist></label>
-                                    <label style="font-size:11px;">Mes<br><input type="month" id="remPagoMes" style="width:100%; padding:6px; font-size:12px;"></label>
+                                    <label style="font-size:11px;">Empleado<br><input list="remPagoEmpleados" id="remPagoNombre" placeholder="Nombre del empleado" oninput="_remPagoRefrescarPendiente()" onchange="_remPagoRefrescarPendiente()" style="width:100%; padding:6px; font-size:12px;"><datalist id="remPagoEmpleados"></datalist></label>
+                                    <label style="font-size:11px;" title="Mes al que se imputa el pago (aunque lo pagues antes o después)">Mes que se paga<br><input type="month" id="remPagoMes" onchange="_remPagoRefrescarPendiente()" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;">Fecha de pago<br><input type="date" id="remPagoFecha" style="width:100%; padding:6px; font-size:12px;"></label>
+                                    <label style="font-size:11px;" title="Pago normal, entrega parcial (a cuenta) o adelanto de un sueldo que todavía no se liquidó">Tipo<br>
+                                        <select id="remPagoTipo" style="width:100%; padding:6px; font-size:12px;">
+                                            <option value="pago">Pago de sueldo</option>
+                                            <option value="parcial">Pago parcial (a cuenta)</option>
+                                            <option value="adelanto">Adelanto</option>
+                                        </select>
+                                    </label>
+                                    <label style="font-size:11px;" title="Nota opcional: 1ra quincena, adelanto de vacaciones, etc.">Detalle<br><input type="text" id="remPagoDetalle" placeholder="1ra quincena, adelanto…" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;" title="Parte pagada por transferencia (oficial, va en el recibo)">Banco (oficial) $<br><input type="number" id="remPagoBanco" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;" title="Parte pagada en efectivo (incluye lo que se liquidó fuera del recibo)">Efectivo $<br><input type="number" id="remPagoEfectivo" min="0" step="0.01" placeholder="0" style="width:100%; padding:6px; font-size:12px;"></label>
                                     <label style="font-size:11px;">Recibo oficial (PDF)<br><input type="file" id="remPagoAdjunto" accept="application/pdf,image/*" style="width:100%; font-size:11px;"></label>
+                                </div>
+                                <!-- Estado del mes para ese empleado: liquidado, ya pagado y lo que falta -->
+                                <div id="remPagoPendienteBox" style="display:none; margin-top:8px; padding:8px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border); font-size:12px; gap:10px; align-items:center; flex-wrap:wrap;">
+                                    <span id="remPagoPendienteTxt" style="margin-right:auto;"></span>
+                                    <button class="btn btn-outline btn-sm" onclick="remPagoUsarPendiente()" id="btnRemPagoUsarPend" title="Completar el importe con lo que falta pagar de ese mes">↧ Pagar lo que falta</button>
                                 </div>
                                 <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px; align-items:center;">
                                     <span id="remPagoFormEstado" style="font-size:11px; color:var(--text-3); margin-right:auto;"></span>
                                     <button class="btn btn-outline btn-sm" onclick="cerrarFormRemunPago()">Cancelar</button>
                                     <button class="btn btn-gold btn-sm" onclick="guardarRemunPago()" id="btnGuardarRemunPago">💾 Guardar pago</button>
                                 </div>
+                                <div class="form-hint" style="color:var(--text-3);">Podés cargar <strong>varios pagos para el mismo mes</strong>: una parte ahora y el resto después. El recuadro de arriba te dice cuánto falta. Un <strong>adelanto</strong> es plata entregada antes de liquidar: imputalo al mes que va a descontarse y no lo cargues además como descuento en la liquidación, para no contarlo dos veces.</div>
                             </div>
                             <div class="table-wrap">
                                 <table>
@@ -23093,10 +23107,15 @@
             var recibo = (rp.adjunto && rp.adjunto.contenido)
                 ? '<button class="btn btn-outline btn-sm" onclick="descargarReciboRemun(\''+rp.id+'\')" title="Ver recibo oficial">📎 PDF</button>'
                 : '<span style="color:var(--text-3);font-size:11px;">—</span>';
+            var etiqueta = '';
+            if (rp.tipo === 'adelanto') etiqueta += ' <span class="pill badge-warn" style="font-size:10px;">Adelanto</span>';
+            else if (rp.tipo === 'parcial') etiqueta += ' <span class="pill" style="font-size:10px;background:rgba(201,168,76,.18);color:var(--gold);">A cuenta</span>';
+            if (rp.detalle) etiqueta += '<br><span style="font-size:11px;color:var(--text-3);">' + escHtml(rp.detalle) + '</span>';
             var tr = document.createElement('tr');
             tr.innerHTML =
                 '<td>'+chk+'</td>' +
-                '<td><strong>'+escHtml(rp.nombre||'—')+'</strong></td>' +
+                // Bajo el nombre: si es adelanto o pago parcial, se aclara; y el detalle libre.
+                '<td><strong>'+escHtml(rp.nombre||'—')+'</strong>' + etiqueta + '</td>' +
                 '<td>'+escHtml(rp.mes||'—')+'</td>' +
                 '<td>'+(rp.fecha?formatearFecha(rp.fecha):'—')+'</td>' +
                 '<td style="text-align:right;">'+fmt(rp.montoBanco)+'</td>' +
@@ -23105,7 +23124,11 @@
                 '<td style="text-align:right;font-weight:700;">'+fmt(total)+'</td>' +
                 '<td>'+recibo+'</td>' +
                 '<td>'+estado+'</td>' +
-                '<td><div class="action-btns"><button class="btn btn-outline btn-sm" onclick="editarRemunPago(\''+rp.id+'\')" title="Editar: adjuntar comprobante/factura o corregir el reparto banco/efectivo">✏</button><button class="btn btn-danger-sm" onclick="eliminarRemunPago(\''+rp.id+'\')" title="Eliminar">✕</button></div></td>';
+                '<td><div class="action-btns">' +
+                    '<button class="btn btn-outline btn-sm" onclick="editarRemunPago(\''+rp.id+'\')" title="Editar: adjuntar comprobante/factura o corregir el reparto banco/efectivo">✏</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="imprimirConstanciaPago(\''+rp.id+'\')" title="Imprimir constancia de este pago (con el saldo pendiente del mes)">🖨️</button>' +
+                    '<button class="btn btn-danger-sm" onclick="eliminarRemunPago(\''+rp.id+'\')" title="Eliminar">✕</button>' +
+                '</div></td>';
             tbody.appendChild(tr);
         });
         _remPagoActualizarResumen();
@@ -23120,6 +23143,122 @@
             ? (sel.length+' pago(s) · Banco $'+Math.round(banco).toLocaleString('es-AR')+' · Efectivo $'+Math.round(efe).toLocaleString('es-AR'))
             : 'Tildá los pagos que querés consolidar.';
     }
+
+    // ── Pagos parciales y adelantos ───────────────────────────────────────────
+    // Un mes puede tener VARIOS pagos (una parte ahora, el resto después) y también
+    // adelantos entregados antes de liquidar. Todo se imputa al mes que corresponde y
+    // el pendiente es: total liquidado del mes − todo lo ya pagado de ese mes.
+    var REM_PAGO_TIPOS = { pago:'Pago de sueldo', parcial:'Pago parcial (a cuenta)', adelanto:'Adelanto' };
+
+    // Total liquidado de un empleado en un mes (Parte A + Parte B del recibo guardado).
+    function _remLiquidadoDe(nombre, mes) {
+        var n = _remNorm(nombre || '');
+        return (remunRecibos || []).reduce(function(s, r) {
+            if (!r || r.mes !== mes || _remNorm(r.empleadoNombre || '') !== n) return s;
+            return s + ((r.netoTotal != null) ? r.netoTotal : ((r.neto || 0) + (r.fueraRecibo || 0)));
+        }, 0);
+    }
+    // Ya pagado de ese empleado/mes (opcionalmente sin contar un pago que se está editando).
+    function _remPagadoDe(nombre, mes, excluirId) {
+        var n = _remNorm(nombre || '');
+        return (remunPagos || []).reduce(function(s, rp) {
+            if (!rp || rp.mes !== mes || _remNorm(rp.nombre || '') !== n) return s;
+            if (excluirId && rp.id === excluirId) return s;
+            return s + (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+        }, 0);
+    }
+    var _remPagoPendActual = 0;
+    // Recuadro en vivo del formulario: liquidado / ya pagado / falta.
+    window._remPagoRefrescarPendiente = function() {
+        var box = document.getElementById('remPagoPendienteBox');
+        var txt = document.getElementById('remPagoPendienteTxt');
+        var btn = document.getElementById('btnRemPagoUsarPend');
+        if (!box || !txt) return;
+        var nombre = (document.getElementById('remPagoNombre') || {}).value || '';
+        var mes    = (document.getElementById('remPagoMes') || {}).value || '';
+        if (!nombre.trim() || !mes) { box.style.display = 'none'; _remPagoPendActual = 0; return; }
+        var m = function(n){ return '$' + Math.round(n).toLocaleString('es-AR'); };
+        var liq = _remLiquidadoDe(nombre, mes);
+        var pag = _remPagadoDe(nombre, mes, editandoRemunPagoId);
+        var pend = liq - pag;
+        _remPagoPendActual = pend;
+        box.style.display = 'flex';
+        if (!liq) {
+            txt.innerHTML = 'Todavía no hay recibo guardado de <strong>' + escHtml(_mesLabel(mes)) + '</strong> para ' + escHtml(nombre) + '.'
+                + (pag ? ' Ya cargaste ' + m(pag) + ' (adelantos/pagos a cuenta).' : ' Podés cargar igual un adelanto.');
+            if (btn) btn.style.display = 'none';
+        } else {
+            var col = pend > 0.5 ? 'var(--danger)' : (pend < -0.5 ? 'var(--gold)' : 'var(--success)');
+            txt.innerHTML = 'Liquidado ' + m(liq) + ' · Ya pagado ' + m(pag) +
+                ' · <strong style="color:' + col + ';">' + (pend > 0.5 ? 'Falta ' + m(pend) : (pend < -0.5 ? 'Pagado de más ' + m(-pend) : 'Saldado')) + '</strong>';
+            if (btn) btn.style.display = pend > 0.5 ? '' : 'none';
+        }
+    };
+    // Completa el importe con lo que falta pagar de ese mes (va a banco; después se reparte).
+    window.remPagoUsarPendiente = function() {
+        if (_remPagoPendActual <= 0) return;
+        var banco = document.getElementById('remPagoBanco');
+        var efe   = document.getElementById('remPagoEfectivo');
+        if (banco) banco.value = Math.round(_remPagoPendActual);
+        if (efe) efe.value = '';
+    };
+
+    // Constancia de UN pago (lo que se le entrega al empleado cuando se paga de a partes o
+    // se da un adelanto). No reemplaza el recibo de haberes: dice qué se entregó y qué falta.
+    window.imprimirConstanciaPago = function(id) {
+        if (!_esDuenoRemun()) return;
+        var rp = (remunPagos || []).find(function(x){ return x.id === id; });
+        if (!rp) return;
+        var fmt = function(n){ return '$ ' + Math.round(n || 0).toLocaleString('es-AR'); };
+        var e2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
+        var monto = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+        var liq = _remLiquidadoDe(rp.nombre, rp.mes);
+        var pagadoHasta = _remPagadoDe(rp.nombre, rp.mes);   // incluye este pago
+        var saldo = liq - pagadoHasta;
+        var titulo = rp.tipo === 'adelanto' ? 'CONSTANCIA DE ADELANTO'
+                   : (rp.tipo === 'parcial' ? 'CONSTANCIA DE PAGO A CUENTA' : 'CONSTANCIA DE PAGO');
+        var fila = function(k, v, cls) { return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + k + '</td><td class="r">' + v + '</td></tr>'; };
+        var detalleMontos =
+            (rp.montoBanco ? fila('Por transferencia / banco', fmt(rp.montoBanco)) : '') +
+            ((rp.montoEfectivo || rp.montoNoOficial) ? fila('En efectivo', fmt((rp.montoEfectivo||0)+(rp.montoNoOficial||0))) : '') +
+            fila('<strong>Total entregado</strong>', '<strong>' + fmt(monto) + '</strong>', 'tot');
+        var bloqueSaldo = liq > 0
+            ? fila('Total liquidado de ' + escHtml(_mesLabel(rp.mes)), fmt(liq)) +
+              fila('Pagado hasta hoy (incluye este pago)', fmt(pagadoHasta)) +
+              fila('<strong>' + (Math.abs(saldo) < 1 ? 'SALDADO' : (saldo > 0 ? 'SALDO PENDIENTE' : 'PAGADO DE MÁS')) + '</strong>',
+                   '<strong>' + fmt(Math.abs(saldo)) + '</strong>', Math.abs(saldo) < 1 ? 'saldo-ok' : 'saldo-pend')
+            : fila('Sueldo del período', 'Todavía sin liquidar');
+        var css =
+            '*{box-sizing:border-box;} body{font-family:"Segoe UI",Arial,sans-serif;color:#1a1a2e;margin:0;padding:28px;background:#fff;font-size:12.5px;line-height:1.4;}' +
+            '.doc{max-width:620px;margin:0 auto;border:1px solid #d5dae4;border-radius:10px;overflow:hidden;}' +
+            '.head{padding:16px 20px;border-bottom:3px solid #1a3a6b;background:#f7f9fc;display:flex;justify-content:space-between;align-items:flex-start;gap:14px;}' +
+            '.emp-nom{font-size:16px;font-weight:800;color:#1a3a6b;} .emp-sub{font-size:11px;color:#5a6376;margin-top:3px;}' +
+            '.tit{font-size:13px;font-weight:800;text-align:right;} .periodo{display:inline-block;margin-top:6px;padding:3px 9px;background:#1a3a6b;color:#fff;border-radius:5px;font-size:11px;font-weight:700;}' +
+            'table{width:100%;border-collapse:collapse;} td{padding:6px 20px;border-bottom:1px solid #f0f2f7;} td.r{text-align:right;font-variant-numeric:tabular-nums;}' +
+            'tr.tot td{border-top:1px solid #d5dae4;background:#f7f9fc;} tr.saldo-pend td{color:#b3261e;font-size:13.5px;background:#fdf3f2;} tr.saldo-ok td{color:#0a7d33;background:#f0faf3;font-size:13.5px;}' +
+            '.firmas{display:grid;grid-template-columns:1fr 1fr;gap:34px;padding:34px 20px 14px;} .firma{border-top:1px solid #9aa3b5;padding-top:6px;text-align:center;font-size:11px;color:#5a6376;}' +
+            '.pie{padding:10px 20px 14px;font-size:10px;color:#9098a8;border-top:1px solid #eef1f6;}' +
+            '@media print{body{padding:0;} .doc{border:none;border-radius:0;max-width:none;}}';
+        var html = '<html><head><meta charset="UTF-8"><title>' + escHtml(titulo) + ' - ' + escHtml(rp.nombre || '') + '</title><style>' + css + '</style></head><body>' +
+            '<div class="doc">' +
+              '<div class="head"><div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
+                '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div></div>' +
+                '<div><div class="tit">' + escHtml(titulo) + '</div><div class="periodo">' + escHtml(_mesLabel(rp.mes)) + '</div></div>' +
+              '</div>' +
+              '<table><tbody>' +
+                fila('Empleado', '<strong>' + escHtml(rp.nombre || '—') + '</strong>') +
+                fila('Fecha de pago', rp.fecha ? formatearFecha(rp.fecha) : '—') +
+                (rp.detalle ? fila('Detalle', escHtml(rp.detalle)) : '') +
+                detalleMontos + bloqueSaldo +
+              '</tbody></table>' +
+              '<div class="firmas"><div class="firma">Firma y sello del empleador</div><div class="firma">Recibí conforme — Firma del empleado</div></div>' +
+              '<div class="pie">Constancia de entrega generada el ' + new Date().toLocaleDateString('es-AR') + '. No reemplaza el recibo de haberes (Ley 20.744): el recibo del período se emite desde «Liquidar sueldo».</div>' +
+            '</div>' +
+            '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+        var w = window.open('', '_blank', 'width=760,height=900');
+        if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
+        w.document.write(html); w.document.close();
+    };
 
     var editandoRemunPagoId = null;   // id del pago que se está editando (null = alta nueva)
     function abrirFormRemunPago(prefill) {
@@ -23137,9 +23276,12 @@
         var _efe = (prefill.efectivo || 0) + (prefill.fuera || 0);
         document.getElementById('remPagoEfectivo').value = _efe > 0 ? Math.round(_efe) : '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
+        var tipoEl = document.getElementById('remPagoTipo'); if (tipoEl) tipoEl.value = prefill.tipo || 'pago';
+        var detEl = document.getElementById('remPagoDetalle'); if (detEl) detEl.value = prefill.detalle || '';
         document.getElementById('remPagoFormEstado').textContent = prefill.nombre
             ? 'Pre-cargado desde el recibo de ' + prefill.nombre + '.' + ((prefill.fuera > 0) ? ' Lo de la Parte B (fuera del recibo) quedó en efectivo.' : '') + ' Repartí cuánto va por banco y cuánto en efectivo.'
             : '';
+        _remPagoRefrescarPendiente();
     }
     // Editar un pago ya guardado (ej.: adjuntarle la factura/comprobante que faltó, o corregir el reparto).
     window.editarRemunPago = function(id) {
@@ -23158,6 +23300,9 @@
         var _efeEd = (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
         document.getElementById('remPagoEfectivo').value = _efeEd || '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
+        var tipoEl2 = document.getElementById('remPagoTipo'); if (tipoEl2) tipoEl2.value = rp.tipo || 'pago';
+        var detEl2 = document.getElementById('remPagoDetalle'); if (detEl2) detEl2.value = rp.detalle || '';
+        _remPagoRefrescarPendiente();
         document.getElementById('remPagoFormEstado').textContent = 'Editando el pago de ' + (rp.nombre || '') + '. '
             + (rp.adjunto && rp.adjunto.contenido ? 'Ya tiene un comprobante adjunto (subí uno nuevo solo si querés reemplazarlo).' : 'Podés adjuntarle el comprobante/factura acá.')
             + (rp.consolidado ? ' ⚠️ Ya está consolidado en Caja/Banco: evitá cambiar los montos.' : '');
@@ -23170,11 +23315,14 @@
         var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
         var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
         var enProy = function(o){ return (!eId || !o.empresaId || o.empresaId === eId) && (!pId || !o.proyectoId || o.proyectoId === pId); };
-        var pagosMes = {};
-        (remunPagos || []).forEach(function(rp){ if (rp && rp.mes === mes && enProy(rp)) pagosMes[_remNorm(rp.nombre)] = true; });
+        // Con pagos parciales, lo que importa no es "si ya tiene un pago" sino cuánto FALTA.
         return (remunRecibos || []).filter(function(r){ return r && r.mes === mes && enProy(r); })
             .sort(function(a, b){ return (a.empleadoNombre || '').localeCompare(b.empleadoNombre || ''); })
-            .map(function(r){ return { r: r, yaTienePago: !!pagosMes[_remNorm(r.empleadoNombre)] }; });
+            .map(function(r){
+                var liq = (r.netoTotal != null) ? r.netoTotal : ((r.neto || 0) + (r.fueraRecibo || 0));
+                var pagado = _remPagadoDe(r.empleadoNombre, mes);
+                return { r: r, liquidado: liq, pagado: pagado, pendiente: liq - pagado, saldado: (liq - pagado) < 1 };
+            });
     }
     function abrirCargarDesdeRecibos() {
         if (!_esDuenoRemun()) return;
@@ -23190,11 +23338,13 @@
         } else {
             cont.innerHTML = lista.map(function(o){
                 var r = o.r;
-                return '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--border);font-size:12px;' + (o.yaTienePago ? 'opacity:.5;' : '') + '">' +
-                    '<input type="checkbox" class="remDesdeRecChk" data-id="' + r.id + '" ' + (o.yaTienePago ? 'disabled' : 'checked') + '>' +
-                    '<span style="flex:1;"><strong>' + escHtml(r.empleadoNombre || '—') + '</strong></span>' +
-                    '<span style="font-weight:600;">' + fmt(r.neto) + '</span>' +
-                    (o.yaTienePago ? '<span style="font-size:10px;color:var(--text-3);">ya tiene pago</span>' : '') +
+                return '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--border);font-size:12px;' + (o.saldado ? 'opacity:.5;' : '') + '">' +
+                    '<input type="checkbox" class="remDesdeRecChk" data-id="' + r.id + '" ' + (o.saldado ? 'disabled' : 'checked') + '>' +
+                    '<span style="flex:1;"><strong>' + escHtml(r.empleadoNombre || '—') + '</strong>' +
+                        (o.pagado ? '<span style="font-size:10px;color:var(--text-3);"> · liquidado ' + fmt(o.liquidado) + ', ya pagado ' + fmt(o.pagado) + '</span>' : '') +
+                    '</span>' +
+                    '<span style="font-weight:600;">' + fmt(o.saldado ? o.liquidado : o.pendiente) + '</span>' +
+                    (o.saldado ? '<span style="font-size:10px;color:var(--text-3);">saldado</span>' : (o.pagado ? '<span style="font-size:10px;color:var(--gold);">falta</span>' : '')) +
                 '</label>';
             }).join('');
         }
@@ -23212,20 +23362,27 @@
             var id = ch.getAttribute('data-id');
             var r = (remunRecibos || []).find(function(x){ return x.id === id; });
             if (!r) return;
-            var dup = (remunPagos || []).some(function(rp){ return rp && rp.mes === r.mes && _remNorm(rp.nombre) === _remNorm(r.empleadoNombre); });
-            if (dup) return;
+            // Si ya se pagó una parte, este pago cubre solo lo que FALTA (pagos parciales).
+            var liq = (r.netoTotal != null) ? r.netoTotal : ((r.neto || 0) + (r.fueraRecibo || 0));
+            var yaPagado = _remPagadoDe(r.empleadoNombre, r.mes);
+            var pendiente = liq - yaPagado;
+            if (pendiente < 1) return;                       // ya está saldado
+            var _banco = Math.max(0, Math.min(r.neto || 0, pendiente));
+            var _efe   = Math.max(0, pendiente - _banco);    // el resto (Parte B), en efectivo
             var rp = {
                 id: 'RP-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 100000),
                 nombre: r.empleadoNombre, mes: r.mes, fecha: _remHoyISO(),
                 // Neto del recibo por banco; lo liquidado fuera del recibo (Parte B), en efectivo.
-                montoBanco: (r.neto || 0), montoEfectivo: Math.max(0, r.fueraRecibo || 0), adjunto: null,
+                montoBanco: _banco, montoEfectivo: _efe,
+                tipo: (yaPagado > 0 ? 'parcial' : 'pago'),
+                detalle: (yaPagado > 0 ? 'Saldo del mes' : ''), adjunto: null,
                 empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
                 proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
                 consolidado: false, creadoEn: Date.now(), origenReciboId: r.id
             };
             remunPagos.push(rp); nuevosIds.push(rp.id); creados++;
         });
-        if (!creados) { alert('Esos recibos ya tenían pago cargado.'); return; }
+        if (!creados) { alert('Esos recibos ya están saldados: no queda nada por pagar.'); return; }
         persistirRemunPagos();
         nuevosIds.forEach(function(id){ _remPagoSel[id] = true; });   // quedan tildados para consolidar
         cerrarCargarDesdeRecibos();
@@ -23240,24 +23397,23 @@
         var fecha = document.getElementById('remPagoFecha').value||'';
         var banco = parseFloat(document.getElementById('remPagoBanco').value)||0;
         var efe = parseFloat(document.getElementById('remPagoEfectivo').value)||0;
+        var tipo = (document.getElementById('remPagoTipo')||{}).value || 'pago';
+        var detalle = ((document.getElementById('remPagoDetalle')||{}).value || '').trim();
         if (!nombre) { alert('Poné el nombre del empleado.'); return; }
         if (!mes) { alert('Elegí el mes.'); return; }
         if (banco<=0 && efe<=0) { alert('Cargá al menos un monto (banco o efectivo).'); return; }
-        // Chequear que el total (banco + efectivo) coincida con el TOTAL liquidado de ese mes
-        // (neto del recibo + lo que se liquidó por fuera, o sea Parte A + Parte B).
-        var _rec = (typeof remunRecibos !== 'undefined' ? remunRecibos : []).filter(function(r){
-            return r && r.mes === mes && (r.empleadoNombre || '').trim().toLowerCase() === nombre.toLowerCase();
-        }).sort(function(a, b){ return (b.creadoEn || 0) - (a.creadoEn || 0); })[0];
-        if (_rec && _rec.neto != null) {
-            var _netoRec = (_rec.netoTotal != null) ? _rec.netoTotal : ((_rec.neto || 0) + (_rec.fueraRecibo || 0));
+        // Pagar de a partes es normal: solo se avisa si con este pago se PASA del total
+        // liquidado del mes (Parte A + Parte B), contando lo ya cargado antes.
+        var _liq = _remLiquidadoDe(nombre, mes);
+        if (_liq > 0) {
+            var _yaPagado = _remPagadoDe(nombre, mes, editandoRemunPagoId);
             var _totalPago = banco + efe;
-            var _dif = Math.round((_totalPago - _netoRec) * 100) / 100;
-            if (Math.abs(_dif) >= 1) {
+            var _exceso = Math.round((_yaPagado + _totalPago - _liq) * 100) / 100;
+            if (_exceso >= 1) {
                 var _m = function(n){ return '$' + Math.round(n).toLocaleString('es-AR'); };
-                var _msg = '⚠️ El total que estás cargando (banco ' + _m(banco) + ' + efectivo ' + _m(efe) + ' = ' + _m(_totalPago) + ') '
-                    + 'no coincide con el total liquidado de ' + _mesLabel(mes) + ' (' + _m(_netoRec) + ').\n\n'
-                    + (_dif > 0 ? '➕ Estás cargando ' + _m(_dif) + ' de MÁS.' : '➖ Te faltan ' + _m(-_dif) + '.') + '\n\n'
-                    + '¿Guardar igual?';
+                var _msg = '⚠️ Con este pago te pasás del total liquidado de ' + _mesLabel(mes) + '.\n\n'
+                    + 'Liquidado: ' + _m(_liq) + '\nYa pagado: ' + _m(_yaPagado) + '\nEste pago: ' + _m(_totalPago) + '\n'
+                    + '➕ Excedente: ' + _m(_exceso) + '\n\n¿Guardar igual?';
                 if (!confirm(_msg)) return;
             }
         }
@@ -23279,13 +23435,14 @@
                     ex.nombre = nombre; ex.mes = mes; ex.fecha = fecha || ex.fecha || _remHoyISO();
                     // montoNoOficial ya no existe como categoría: al editar se une al efectivo.
                     ex.montoBanco = banco; ex.montoEfectivo = efe; ex.montoNoOficial = 0;
+                    ex.tipo = tipo; ex.detalle = detalle;
                     if (adjunto) ex.adjunto = adjunto;   // solo reemplaza el comprobante si subió uno nuevo
                 }
             } else {
                 remunPagos.push({
                     id: 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000),
                     nombre: nombre, mes: mes, fecha: fecha || _remHoyISO(),
-                    montoBanco: banco, montoEfectivo: efe, adjunto: adjunto,
+                    montoBanco: banco, montoEfectivo: efe, tipo: tipo, detalle: detalle, adjunto: adjunto,
                     empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
                     proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
                     consolidado: false, creadoEn: Date.now()
@@ -23537,13 +23694,14 @@
             var pagado = e.banco + e.efectivo, pend = e.liquidado - pagado;
             tL += e.liquidado; tB += e.banco; tE += e.efectivo;
             var col = pend > 0.5 ? 'var(--danger)' : (pend < -0.5 ? 'var(--gold)' : 'var(--success)');
+            var pendTxt = pend < -0.5 ? (fmt(-pend) + ' a favor') : fmt(pend);
             var tr = document.createElement('tr');
             tr.innerHTML = '<td><strong>' + escHtml(e.nombre) + '</strong></td>' +
                 '<td style="text-align:right;">' + fmt(e.liquidado) + '</td>' +
                 '<td style="text-align:right;">' + fmt(e.banco) + '</td>' +
                 '<td style="text-align:right;">' + fmt(e.efectivo) + '</td>' +
                 '<td style="text-align:right;font-weight:700;">' + fmt(pagado) + '</td>' +
-                '<td style="text-align:right;font-weight:700;color:' + col + ';">' + fmt(pend) + '</td>';
+                '<td style="text-align:right;font-weight:700;color:' + col + ';">' + pendTxt + '</td>';
             tbody.appendChild(tr);
         });
         s('remResTotLiq', fmt(tL)); s('remResTotBanco', fmt(tB)); s('remResTotEfe', fmt(tE)); s('remResTotPagado', fmt(tB + tE)); s('remResTotPend', fmt(tL - (tB + tE)));
@@ -24112,6 +24270,38 @@
                      '<tr><td>Obra social (3%)</td><td class="r"></td><td class="r">' + fmt(ap.obraSocial) + '</td></tr>';
         }
         var emision = new Date().toLocaleDateString('es-AR');
+        // ── Pagos imputados a ese mes ──────────────────────────────────────────
+        // El NETO del recibo es la LIQUIDACIÓN del mes; si se pagó de a partes, se detalla
+        // acá abajo cada entrega y el saldo que queda pendiente (no se toca el neto).
+        var bloquePagos = '';
+        if (mes && emp.nombre && typeof _remPagadoDe === 'function') {
+            var _nEmp = _remNorm(emp.nombre);
+            var _pagos = (typeof remunPagos !== 'undefined' ? remunPagos : []).filter(function(rp){
+                return rp && rp.mes === mes && _remNorm(rp.nombre || '') === _nEmp;
+            }).sort(function(a, b){ return (a.fecha || '').localeCompare(b.fecha || ''); });
+            if (_pagos.length) {
+                var _totalLiq = neto + t.fuera;   // lo que realmente se le debe: Parte A + Parte B
+                var _pagado = 0;
+                var _filasPago = _pagos.map(function(rp){
+                    var m = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+                    _pagado += m;
+                    var et = rp.tipo === 'adelanto' ? 'Adelanto' : (rp.tipo === 'parcial' ? 'Pago a cuenta' : 'Pago');
+                    return '<tr><td>' + (rp.fecha ? formatearFecha(rp.fecha) : '—') + ' · ' + et +
+                        (rp.detalle ? ' <em style="color:#8a92a6;">(' + escHtml(rp.detalle) + ')</em>' : '') +
+                        '</td><td class="r">' + fmt(m) + '</td></tr>';
+                }).join('');
+                var _saldo = _totalLiq - _pagado;
+                bloquePagos = '<div class="pagos-box"><div class="pagos-tit">Pagos imputados a este período</div>' +
+                    '<table class="pagos-tabla"><tbody>' + _filasPago +
+                    '<tr class="tot"><td>Total entregado</td><td class="r">' + fmt(_pagado) + '</td></tr>' +
+                    '<tr class="' + (Math.abs(_saldo) < 1 ? 'saldo-ok' : 'saldo-pend') + '"><td>' +
+                        (Math.abs(_saldo) < 1 ? 'SALDADO' : (_saldo > 0 ? 'SALDO PENDIENTE' : 'PAGADO DE MÁS')) +
+                    '</td><td class="r">' + fmt(Math.abs(_saldo)) + '</td></tr>' +
+                    '</tbody></table>' +
+                    (t.fuera ? '<div class="pagos-nota">El total a cobrar del período es ' + fmt(_totalLiq) + ': ' + fmt(neto) + ' del recibo más ' + fmt(t.fuera) + ' liquidados fuera de él.</div>' : '') +
+                    '</div>';
+            }
+        }
         var info = function(lbl, val) { return '<div class="celda"><span class="k">' + lbl + '</span><span class="v">' + val + '</span></div>'; };
         // Logo del empleador para el encabezado (empresa o, si no hay, el del producto).
         // Se resuelve a URL absoluta para que cargue en la ventana de impresión.
@@ -24147,6 +24337,10 @@
             'tbody tr:nth-child(even){background:#fafbfd;}' +
             '.tot td{font-weight:700;border-top:2px solid #d5dae4;background:#f7f9fc;} .neto td{font-weight:800;font-size:14px;color:#0a7d33;background:#f0faf3;border-top:2px solid #cfe9d8;}' +
             '.letras{padding:10px 22px;font-size:11.5px;color:#3a4256;background:#fafbfd;border-bottom:1px solid #eef1f6;} .letras strong{color:#1a1a2e;}' +
+            '.pagos-box{padding:10px 22px 12px;border-bottom:1px solid #eef1f6;} .pagos-tit{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#8a92a6;font-weight:700;margin-bottom:4px;}' +
+            '.pagos-tabla td{padding:4px 0;font-size:12px;border-bottom:1px solid #f4f6fa;} .pagos-tabla .tot td{font-weight:700;border-top:1px solid #d5dae4;}' +
+            '.pagos-tabla .saldo-pend td{font-weight:800;color:#b3261e;} .pagos-tabla .saldo-ok td{font-weight:800;color:#0a7d33;}' +
+            '.pagos-nota{font-size:10.5px;color:#8a92a6;margin-top:4px;}' +
             '.firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:34px 22px 16px;} .firma{border-top:1px solid #9aa3b5;padding-top:6px;text-align:center;font-size:11px;color:#5a6376;}' +
             '.pie{padding:10px 22px 16px;font-size:10px;color:#9098a8;border-top:1px solid #eef1f6;}' +
             '@media print{body{padding:0;} .doc{border:none;border-radius:0;max-width:none;}}';
@@ -24171,6 +24365,7 @@
                 '<tr class="neto"><td>NETO A COBRAR' + (esMono ? ' (monotributo)' : '') + '</td><td class="r" colspan="2">' + fmt(neto) + '</td></tr>' +
               '</tbody></table>' +
               '<div class="letras">Son <strong>' + escHtml(_montoEnLetras(neto)) + '</strong> ($ ' + Math.round(neto).toLocaleString('es-AR') + ').</div>' +
+              bloquePagos +
               '<div class="firmas">' +
                 '<div class="firma">Firma y sello del empleador</div>' +
                 '<div class="firma">Recibí conforme — Firma del empleado</div>' +
