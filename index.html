@@ -17013,7 +17013,8 @@
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
         ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
-        alquileres.filter(function(a){return (a.moneda||'ARS')!=='USD';}).forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
+        // Se agrupa por la moneda en que ENTRÓ la plata (un alquiler en USD cobrado en pesos suma acá).
+        alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&_alqCobroMoneda(a,c)!=='USD')entradas+=_alqCobroImporte(a,c);});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
         (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
         var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
@@ -17229,11 +17230,12 @@
             });
         });
         // Cobros Alquileres ARS (ídem, excluye los cobrados por banco)
-        alquileres.filter(a => (a.moneda||'ARS') === 'ARS').forEach(a => {
+        alquileres.forEach(a => {
             var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
+                if (_alqCobroMoneda(a, c) !== 'ARS') return;   // se agrupa por la moneda en que entró
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         // Cobros Servicios ARS (ídem)
@@ -17369,11 +17371,12 @@
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
         });
-        alquileres.filter(a => a.moneda === 'USD').forEach(a => {
+        alquileres.forEach(a => {
             var aIdx = alquileres.indexOf(a);
             (a.cobrosHistorial||[]).forEach(c => {
                 if (c.tipoAB === 'A') return;
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
+                if (_alqCobroMoneda(a, c) !== 'USD') return;   // se agrupa por la moneda en que entró
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx });
             });
         });
         facturas.filter(f => f.moneda === 'USD').forEach(f => {
@@ -24987,13 +24990,65 @@
         document.getElementById('cobroAlqPeriodo').value = periodo;
         document.getElementById('cobroAlqConcepto').value = 'alquiler';
         document.getElementById('cobroAlqMonto').disabled = false;
+        // Por defecto, entra en la misma moneda del contrato; si difiere se pide el TC.
+        var monedaC = (a.moneda || 'ARS');
+        var selMon = document.getElementById('cobroAlqMonedaCobro'); if (selMon) selMon.value = monedaC;
+        var tcEl = document.getElementById('cobroAlqTc'); if (tcEl) tcEl.value = (typeof exchangeRate !== 'undefined' && exchangeRate) ? exchangeRate : '';
         _cobroAlqSetupDesglose(a, periodo);
+        _cobroAlqRefrescarMoneda();
         var modalCobro = document.getElementById('modalCobroAlquiler');
         modalCobro.style.zIndex = 600; // por encima del modal de Plan de pagos, si está abierto
         modalCobro.classList.add('active');
     }
 
     function cerrarModalCobroAlquiler() { document.getElementById('modalCobroAlquiler').classList.remove('active'); }
+
+    // ── Moneda del cobro ──────────────────────────────────────────────────────
+    // El "Monto cobrado" siempre está en la moneda DEL CONTRATO (así el plan de pagos
+    // y el estado del período siguen cuadrando). Si la plata entra en otra moneda, se
+    // pide el tipo de cambio y se guarda además el importe realmente recibido.
+    function _alqCobroMoneda(a, c) { return (c && c.monedaCobro) || (a && a.moneda) || 'ARS'; }
+    function _alqCobroImporte(a, c) {
+        if (!c) return 0;
+        return (c.montoCobrado != null && c.montoCobrado > 0) ? c.montoCobrado : (c.monto || 0);
+    }
+
+    window._cobroAlqRefrescarMoneda = function() {
+        var idx = parseInt(document.getElementById('cobroAlqIdx').value);
+        var a = alquileres[idx]; if (!a) return;
+        var monContrato = a.moneda || 'ARS';
+        var monCobro = (document.getElementById('cobroAlqMonedaCobro') || {}).value || monContrato;
+        var difiere = monCobro !== monContrato;
+        var lbl = document.getElementById('cobroAlqMonedaContrato');
+        if (lbl) lbl.textContent = '(en ' + (monContrato === 'USD' ? 'USD' : 'pesos') + ', la moneda del contrato)';
+        var tcWrap = document.getElementById('cobroAlqTcWrap');
+        if (tcWrap) tcWrap.style.display = difiere ? '' : 'none';
+        var box = document.getElementById('cobroAlqConversion');
+        if (!box) return;
+        if (!difiere) { box.style.display = 'none'; return; }
+        var monto = parseFloat((document.getElementById('cobroAlqMonto') || {}).value) || 0;
+        var tc = parseFloat((document.getElementById('cobroAlqTc') || {}).value) || 0;
+        var conv = _cobroAlqConvertir(monto, monContrato, monCobro, tc);
+        var fUSD = function(n){ return 'USD ' + (Math.round(n * 100) / 100).toLocaleString('es-AR'); };
+        var fARS = function(n){ return '$' + Math.round(n).toLocaleString('es-AR'); };
+        box.style.display = '';
+        if (!tc) {
+            box.innerHTML = '⚠️ Cargá el tipo de cambio para convertir.';
+        } else if (monContrato === 'USD') {
+            box.innerHTML = 'Alquiler de <strong>' + fUSD(monto) + '</strong> × TC <strong>$' + tc.toLocaleString('es-AR') +
+                '</strong> → entran <strong style="color:var(--gold);">' + fARS(conv) + '</strong> en pesos. ' +
+                'El período se registra igual por ' + fUSD(monto) + '.';
+        } else {
+            box.innerHTML = 'Alquiler de <strong>' + fARS(monto) + '</strong> ÷ TC <strong>$' + tc.toLocaleString('es-AR') +
+                '</strong> → entran <strong style="color:var(--gold);">' + fUSD(conv) + '</strong> en dólares. ' +
+                'El período se registra igual por ' + fARS(monto) + '.';
+        }
+    };
+    // Convierte el monto del contrato a la moneda en que efectivamente entra la plata.
+    function _cobroAlqConvertir(monto, monContrato, monCobro, tc) {
+        if (!tc || monCobro === monContrato) return monto;
+        return (monContrato === 'USD') ? (monto * tc) : (monto / tc);
+    }
 
     // Prepara el desglose IVA del cobro (Parte A gravada / Parte B no gravada) según el canon del período.
     function _cobroAlqSetupDesglose(a, periodo) {
@@ -25051,6 +25106,21 @@
         if (!a.cobrosHistorial) a.cobrosHistorial = [];
         var tipoAB = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
 
+        // Moneda en la que entra la plata (puede diferir de la del contrato) + tipo de cambio.
+        var monContrato = a.moneda || 'ARS';
+        var monCobro = ((document.getElementById('cobroAlqMonedaCobro')||{}).value) || monContrato;
+        var tcCobro = parseFloat((document.getElementById('cobroAlqTc')||{}).value) || 0;
+        if (monCobro !== monContrato && tcCobro <= 0) { alert('Cargá el tipo de cambio para convertir el cobro.'); return; }
+        // Agrega monedaCobro/tc/montoCobrado al registro solo si la moneda difiere del contrato.
+        var _conMoneda = function(reg) {
+            if (monCobro !== monContrato) {
+                reg.monedaCobro = monCobro;
+                reg.tc = tcCobro;
+                reg.montoCobrado = _r2(_cobroAlqConvertir(reg.monto || 0, monContrato, monCobro, tcCobro));
+            }
+            return reg;
+        };
+
         // ── Desglose IVA: dos recibos separados (Parte A gravada + Parte B no gravada) ──
         if (_cobroAlqDesgloseActivo()) {
             var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
@@ -25074,14 +25144,14 @@
             var recibos = [];
             if (totalA > 0) {
                 var nroA = await obtenerProximoComprobante(tipoAB);
-                var regA = { fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: tipoAB,
-                             parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro };
+                var regA = _conMoneda({ fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: tipoAB,
+                             parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro });
                 if (facturaMeta) { regA.facturaId = facturaMeta.facturaId; regA.facturaNombre = facturaMeta.facturaNombre; regA.facturaTipo = facturaMeta.facturaTipo; }
                 a.cobrosHistorial.push(regA); recibos.push(regA);
             }
             if (nog > 0) {
                 var nroB = await obtenerProximoComprobante(tipoAB);
-                var regB = { fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: tipoAB, parteIva: 'nograv' };
+                var regB = _conMoneda({ fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: tipoAB, parteIva: 'nograv' });
                 a.cobrosHistorial.push(regB); recibos.push(regB);
             }
             cerrarModalCobroAlquiler();
@@ -25096,14 +25166,20 @@
         var montoC = parseFloat(document.getElementById('cobroAlqMonto').value) || 0;
         if (!montoC || montoC <= 0) { alert('Ingresá un monto válido.'); return; }
         var nroReciboAlq = await obtenerProximoComprobante(tipoAB);
-        a.cobrosHistorial.push({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
+        var regCobro = _conMoneda({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
+        a.cobrosHistorial.push(regCobro);
         var alqSnap = a;
         cerrarModalCobroAlquiler();
         persistirAlquileres();
         _refrescarPlanAlquilerSiAbierto(idx);
         // Ningún cobro sin recibo: el comprobante se emite siempre (antes preguntaba).
-        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.');
-        imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq);
+        var _avisoMon = (regCobro.monedaCobro)
+            ? ('\n\nEntró en ' + (regCobro.monedaCobro === 'USD' ? 'dólares' : 'pesos') + ': ' +
+               (regCobro.monedaCobro === 'USD' ? 'USD ' : '$') + Math.round(regCobro.montoCobrado).toLocaleString('es-AR') +
+               ' (TC $' + tcCobro.toLocaleString('es-AR') + ').')
+            : '';
+        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.' + _avisoMon);
+        imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq, regCobro);
     }
 
     function eliminarAlquiler(idx) {
@@ -25414,6 +25490,12 @@
             ? '<tr><td>Neto gravado</td><td></td><td class="tr">'+fmtN(reg.montoGravado,a.moneda)+'</td></tr>'
               + '<tr><td>IVA</td><td></td><td class="tr">'+fmtN(reg.iva,a.moneda)+'</td></tr>'
             : '';
+        // Si la plata entró en otra moneda que la del contrato, se deja constancia del TC usado.
+        if (reg && reg.monedaCobro && reg.monedaCobro !== (a.moneda || 'ARS')) {
+            _filasDesglose += '<tr><td>Cobrado en ' + (reg.monedaCobro === 'USD' ? 'dólares' : 'pesos') +
+                ' · TC $' + Number(reg.tc || 0).toLocaleString('es-AR') + '</td><td></td><td class="tr"><strong>' +
+                fmtN(reg.montoCobrado, reg.monedaCobro) + '</strong></td></tr>';
+        }
         var html = '<html><head><meta charset="UTF-8"><title>Orden de Recibo — Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl"><thead><tr><th>Concepto</th><th>Período</th><th class="tr">Monto</th></tr></thead>' +
         '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,a.moneda) + '</strong></td></tr>' + _filasDesglose + '</tbody>' +
@@ -27481,7 +27563,7 @@
         // Alquileres
         alquileres.forEach(function(a, aIdx) {
             (a.cobrosHistorial||[]).forEach(function(c) {
-                movs.push({ fecha: c.fecha, moneda: a.moneda||'ARS', tipo: 'Alquiler',
+                movs.push({ fecha: c.fecha, moneda: _alqCobroMoneda(a, c), tipo: 'Alquiler',
                     desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''), cliente: a.inquilino || '—', monto: c.monto || 0,
                     srcTipo: 'alquiler', srcRef: aIdx });
             });
@@ -31099,7 +31181,7 @@
             if (c.formaPago==='canje') return; if (c.comp==='usd') return; if (c.tipoAB==='A') return;
             ing += c.monto||0;
         });});
-        col.alquileres.forEach(function(a){ if ((a.moneda||'ARS')!=='ARS') return; (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
+        col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; if (_alqCobroMoneda(a,c)!=='ARS') return; ing += _alqCobroImporte(a,c); });});
         col.servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
         col.datos.forEach(function(d){
             var hist = d.pagosHistorial||[];
@@ -31127,7 +31209,7 @@
             if (c.formaPago==='canje') return; if (c.comp!=='usd') return; if (c.tipoAB==='A') return;
             ing += c.monto||0;
         });});
-        col.alquileres.forEach(function(a){ if (a.moneda!=='USD') return; (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; ing += c.monto||0; });});
+        col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; if (_alqCobroMoneda(a,c)!=='USD') return; ing += _alqCobroImporte(a,c); });});
         col.facturas.forEach(function(f){ if (f.moneda!=='USD') return; (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad!=='B') return; egr += p.monto||0; });});
         return ing - egr;
     }
@@ -33830,9 +33912,25 @@
         <div class="form-group"><label>Período que cubre</label><input type="month" id="cobroAlqPeriodo" placeholder="YYYY-MM"></div>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-        <div class="form-group"><label>Monto cobrado</label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0"></div>
+        <div class="form-group"><label>Monto cobrado <span id="cobroAlqMonedaContrato" style="color:var(--text-3);font-weight:400;"></span></label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqRefrescarMoneda()"></div>
         <div class="form-group"><label>Referencia / Recibo</label><input type="text" id="cobroAlqRef" placeholder="Opcional"></div>
       </div>
+      <!-- Moneda con la que entra la plata: puede diferir de la del contrato
+           (ej. alquiler en USD que el inquilino paga en pesos al tipo de cambio del día). -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="form-group">
+          <label>¿En qué moneda entra?</label>
+          <select id="cobroAlqMonedaCobro" onchange="_cobroAlqRefrescarMoneda()">
+            <option value="ARS">$ Pesos (ARS)</option>
+            <option value="USD">USD Dólares</option>
+          </select>
+        </div>
+        <div class="form-group" id="cobroAlqTcWrap" style="display:none;">
+          <label>Tipo de cambio</label>
+          <input type="number" id="cobroAlqTc" step="0.01" min="0" placeholder="0" oninput="_cobroAlqRefrescarMoneda()">
+        </div>
+      </div>
+      <div id="cobroAlqConversion" class="form-hint" style="display:none; margin:-4px 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border);"></div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Concepto</label>
@@ -37036,7 +37134,7 @@
       var cobradoARS = 0, cobradoUSD = 0;
       var sumCobros = function(arr, filtroUSD){ (arr||[]).forEach(function(x){ (x.cobrosHistorial||[]).forEach(function(c){ if (filtroUSD && filtroUSD(c)) cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); }); };
       if (typeof ventas !== 'undefined') sumCobros(ventas, function(c){ return c.comp==='usd'||c.comp==='cuota_usd_simple'; });
-      if (typeof alquileres !== 'undefined') (alquileres||[]).forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if ((a.moneda||'ARS')==='USD') cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); });
+      if (typeof alquileres !== 'undefined') (alquileres||[]).forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (_alqCobroMoneda(a,c)==='USD') cobradoUSD += _alqCobroImporte(a,c); else cobradoARS += _alqCobroImporte(a,c); }); });
       if (typeof servicios !== 'undefined') sumCobros(servicios, null);
       var finLins = [];
       if (pagadoProv) finLins.push('- Total pagado a proveedores (egresos): ' + monFmt(pagadoProv, 'ARS'));
