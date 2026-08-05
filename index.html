@@ -4625,7 +4625,7 @@
                     <div id="remContenido">
                         <div class="stats-grid" id="remStatsGrid" style="margin-bottom:16px; margin-top:0;">
                             <div class="stat-card"><div class="stat-label">Empleados</div><div class="stat-value" id="remTotalEmpleados">0</div></div>
-                            <div class="stat-card"><div class="stat-label">Masa salarial mensual (neto)</div><div class="stat-value" id="remMasaNeta" style="font-size:18px;">$0</div></div>
+                            <div class="stat-card"><div class="stat-label">Masa salarial mensual (básicos)</div><div class="stat-value" id="remMasaNeta" style="font-size:18px;">$0</div></div>
                             <div class="stat-card"><div class="stat-label">Aguinaldo (SAC) semestral estimado</div><div class="stat-value" id="remSacTotal" style="font-size:18px;">$0</div></div>
                             <div class="stat-card"><div class="stat-label">Vacaciones estimadas (año)</div><div class="stat-value" id="remVacTotal" style="font-size:18px;">$0</div></div>
                         </div>
@@ -4643,16 +4643,19 @@
                                     <thead>
                                         <tr>
                                             <th>Empleado</th><th>CUIL</th><th>Ingreso</th><th>Contrato</th>
-                                            <th style="text-align:right">Sueldo básico</th><th style="text-align:right">Neto a cobrar</th>
+                                            <th style="text-align:right">Sueldo básico</th>
                                             <th style="text-align:right">Vac. (días)</th><th style="text-align:right">SAC sem.</th><th>Acciones</th>
                                         </tr>
                                     </thead>
                                     <tbody id="remBody">
-                                        <tr><td colspan="9" class="empty-msg">No hay empleados cargados.</td></tr>
+                                        <tr><td colspan="8" class="empty-msg">No hay empleados cargados.</td></tr>
                                     </tbody>
                                 </table>
                             </div>
                             <div class="form-hint" style="color:var(--text-3); padding:10px 14px;">
+                                El legajo guarda el <strong>sueldo básico</strong> de cada empleado. Lo que efectivamente cobra sale de la
+                                <strong>liquidación del mes</strong> (💰 Liquidar sueldo), y el recibo se imprime desde ahí o se reimprime
+                                desde «Recibos anteriores» — no desde este listado.
                                 Los cálculos de vacaciones y aguinaldo (SAC) son <strong>estimaciones</strong> según la antigüedad y el sueldo básico
                                 (vacaciones = sueldo/25 × días de ley; SAC semestral = sueldo básico/2). Verificá siempre con tu contador.
                             </div>
@@ -22985,15 +22988,17 @@
         var tbody = document.getElementById('remBody');
         if (!tbody) return;
 
-        var totalNeto = 0, totalSac = 0, totalVac = 0;
+        // El legajo trabaja con SUELDOS BÁSICOS. Lo que se cobra de verdad sale de la
+        // liquidación del mes (Parte A + Parte B), que se ve en el Resumen mensual.
+        var totalBasico = 0, totalSac = 0, totalVac = 0;
         remuneraciones.forEach(function(emp) {
-            totalNeto += remNetoEmpleado(emp);
+            totalBasico += (emp.sueldoBasico || 0);
             totalSac  += remSacSemestral(emp);
             totalVac  += remMontoVacaciones(emp);
         });
         var sEl = function(id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
         sEl('remTotalEmpleados', remuneraciones.length);
-        sEl('remMasaNeta', fmt(totalNeto));
+        sEl('remMasaNeta', fmt(totalBasico));
         sEl('remSacTotal', fmt(totalSac));
         sEl('remVacTotal', fmt(totalVac));
         _renderRemunResumen();        // resumen mensual: liquidado vs pagado vs pendiente
@@ -23005,7 +23010,7 @@
             return !q || ((emp.nombre || '') + ' ' + (emp.cuil || '') + ' ' + (emp.puesto || '')).toLowerCase().indexOf(q) !== -1;
         });
         if (!visibles.length) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">' + (remuneraciones.length ? 'Sin resultados.' : 'No hay empleados cargados.') + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">' + (remuneraciones.length ? 'Sin resultados.' : 'No hay empleados cargados.') + '</td></tr>';
             return;
         }
         tbody.innerHTML = '';
@@ -23018,13 +23023,14 @@
                 '<td>' + escHtml(emp.cuil || '—') + '</td>' +
                 '<td>' + (emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—') + '</td>' +
                 '<td>' + contrato + '</td>' +
-                '<td style="text-align:right;">' + fmt(emp.sueldoBasico) + '</td>' +
-                '<td style="text-align:right;font-weight:700;color:var(--success);">' + fmt(remNetoEmpleado(emp)) + '</td>' +
+                // El legajo muestra el SUELDO BÁSICO. El neto sale de la liquidación del mes
+                // (Parte A + Parte B), no de acá, y el recibo se imprime desde «Liquidar sueldo».
+                '<td style="text-align:right;font-weight:700;">' + fmt(emp.sueldoBasico) + '</td>' +
                 '<td style="text-align:right;">' + remDiasVacaciones(emp.fechaIngreso) + '</td>' +
                 '<td style="text-align:right;">' + fmt(remSacSemestral(emp)) + '</td>' +
                 '<td><div class="action-btns">' +
                     '<button class="btn btn-outline btn-sm" onclick="abrirModalEmpleado(' + idx + ')" title="Ver / editar legajo">📋 Legajo</button>' +
-                    '<button class="btn btn-outline btn-sm" onclick="imprimirReciboSueldo(' + idx + ')" title="Recibo de sueldo">🖨️</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="liquidarSueldoEmpleado(' + idx + ')" title="Liquidar el sueldo de este empleado">💰</button>' +
                     '<button class="btn btn-danger-sm" onclick="eliminarEmpleado(' + idx + ')">✕</button>' +
                 '</div></td>';
             tbody.appendChild(tr);
@@ -24178,11 +24184,9 @@
         w.document.write(html); w.document.close();
     }
 
-    // Impresión rápida desde la lista de empleados (sin período).
-    window.imprimirReciboSueldo = function(idx) {
-        var emp = remuneraciones[idx]; if (!emp) return;
-        _imprimirReciboDe(emp, '');
-    };
+    // El recibo NO se imprime desde el legajo: sale de la liquidación del mes
+    // («Liquidar sueldo» → 🖨️ Imprimir, o reimprimir uno guardado en «Recibos anteriores»),
+    // que es la única foto con período, conceptos y aportes reales.
 
     // Imprime el recibo con la liquidación cargada ahora en el modal, para el mes elegido.
     window.imprimirReciboActual = function() {
