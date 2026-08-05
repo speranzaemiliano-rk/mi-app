@@ -4722,7 +4722,7 @@
                                     <button class="btn btn-outline btn-sm" onclick="cerrarCargarDesdeRecibos()">Cancelar</button>
                                     <button class="btn btn-gold btn-sm" onclick="cargarPagosDesdeRecibos()">💾 Cargar pagos seleccionados</button>
                                 </div>
-                                <div class="form-hint" style="color:var(--text-3);">Cada recibo tildado genera un pago: el neto del recibo por banco y lo de la Parte B (fuera del recibo) en efectivo. Después repartís banco/efectivo en la lista si hace falta. Los recibos que ya tienen pago cargado ese mes aparecen deshabilitados.</div>
+                                <div class="form-hint" style="color:var(--text-3);">Cada recibo tildado genera un pago por lo que falta cobrar de ese mes (recibo + Parte B), todo por banco; después repartís banco/efectivo en la lista si hace falta. Los que ya están saldados aparecen deshabilitados.</div>
                             </div>
                             <div id="remPagoForm" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2);">
                                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; align-items:end;">
@@ -23277,15 +23277,16 @@
         var mes = prefill.mes || _remMesActualISO();
         document.getElementById('remPagoMes').value = mes;
         document.getElementById('remPagoFecha').value = _remHoyISO();
-        document.getElementById('remPagoBanco').value    = (prefill.banco    != null && prefill.banco    > 0) ? Math.round(prefill.banco)    : '';
-        // El efectivo incluye lo que la liquidación dejó fuera del recibo (Parte B).
-        var _efe = (prefill.efectivo || 0) + (prefill.fuera || 0);
-        document.getElementById('remPagoEfectivo').value = _efe > 0 ? Math.round(_efe) : '';
+        // El total a cobrar (Parte A + Parte B) se pre-carga entero en "banco": el reparto
+        // entre banco y efectivo es una decisión del pago, no de la liquidación.
+        var _tot = (prefill.banco || 0) + (prefill.fuera || 0);
+        document.getElementById('remPagoBanco').value    = _tot > 0 ? Math.round(_tot) : '';
+        document.getElementById('remPagoEfectivo').value = (prefill.efectivo > 0) ? Math.round(prefill.efectivo) : '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
         var tipoEl = document.getElementById('remPagoTipo'); if (tipoEl) tipoEl.value = prefill.tipo || 'pago';
         var detEl = document.getElementById('remPagoDetalle'); if (detEl) detEl.value = prefill.detalle || '';
         document.getElementById('remPagoFormEstado').textContent = prefill.nombre
-            ? 'Pre-cargado desde el recibo de ' + prefill.nombre + '.' + ((prefill.fuera > 0) ? ' Lo de la Parte B (fuera del recibo) quedó en efectivo.' : '') + ' Repartí cuánto va por banco y cuánto en efectivo.'
+            ? 'Pre-cargado desde el recibo de ' + prefill.nombre + ' por el total a cobrar' + ((prefill.fuera > 0) ? ' (recibo + Parte B)' : '') + '. Repartí cuánto va por banco y cuánto en efectivo: puede ser todo por uno, o mitad y mitad.'
             : '';
         _remPagoRefrescarPendiente();
     }
@@ -23373,13 +23374,11 @@
             var yaPagado = _remPagadoDe(r.empleadoNombre, r.mes);
             var pendiente = liq - yaPagado;
             if (pendiente < 1) return;                       // ya está saldado
-            var _banco = Math.max(0, Math.min(r.neto || 0, pendiente));
-            var _efe   = Math.max(0, pendiente - _banco);    // el resto (Parte B), en efectivo
             var rp = {
                 id: 'RP-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 100000),
                 nombre: r.empleadoNombre, mes: r.mes, fecha: _remHoyISO(),
-                // Neto del recibo por banco; lo liquidado fuera del recibo (Parte B), en efectivo.
-                montoBanco: _banco, montoEfectivo: _efe,
+                // Se pre-carga el pendiente entero por banco; el reparto banco/efectivo se ajusta después.
+                montoBanco: pendiente, montoEfectivo: 0,
                 tipo: (yaPagado > 0 ? 'parcial' : 'pago'),
                 detalle: (yaPagado > 0 ? 'Saldo del mes' : ''), adjunto: null,
                 empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
@@ -24036,8 +24035,8 @@
             (t.descuentos ? fila('− Descuentos del recibo', fmt(t.descuentos), 'var(--danger)') : '') +
             total('Neto del recibo oficial' + (tipoContrato === 'monotributo' ? ' (monotributo)' : ''), fmt(netoOfi));
         if (t.fueraHab || t.fueraDesc) {
-            html += '<div style="font-weight:700;margin-top:8px;margin-bottom:2px;color:var(--warn);">🅱️ Parte B — Solo efectivo (fuera del recibo)</div>' +
-                (t.fueraHab  ? fila('+ A pagar en efectivo (sin aportes)', fmt(t.fueraHab), 'var(--warn)') : '') +
+            html += '<div style="font-weight:700;margin-top:8px;margin-bottom:2px;color:var(--warn);">🅱️ Parte B — No integra el recibo oficial</div>' +
+                (t.fueraHab  ? fila('+ Conceptos fuera del recibo (sin aportes)', fmt(t.fueraHab), 'var(--warn)') : '') +
                 (t.fueraDesc ? fila('− Descuentos fuera del recibo', fmt(t.fueraDesc), 'var(--warn)') : '') +
                 total('TOTAL A COBRAR (A + B)', fmt(remNetoEmpleado(emp)), 'color:var(--gold);');
         }
@@ -24045,7 +24044,7 @@
         // Subtotales en el encabezado de cada bloque de conceptos.
         var sub = function(id, txt, color) { var e = document.getElementById(id); if (e) { e.textContent = txt; if (color) e.style.color = color; } };
         sub('empParteASub', 'Neto del recibo: ' + fmt(netoOfi), 'var(--gold)');
-        sub('empParteBSub', (t.fueraHab || t.fueraDesc) ? ('En efectivo: ' + fmt(t.fuera)) : 'Sin conceptos', (t.fueraHab || t.fueraDesc) ? 'var(--warn)' : 'var(--text-3)');
+        sub('empParteBSub', (t.fueraHab || t.fueraDesc) ? ('Subtotal: ' + fmt(t.fuera)) : 'Sin conceptos', (t.fueraHab || t.fueraDesc) ? 'var(--warn)' : 'var(--text-3)');
     };
 
     window.abrirModalEmpleado = function(idx, tab) {
@@ -24306,6 +24305,24 @@
                      '<tr><td>Obra social (3%)</td><td class="r"></td><td class="r">' + fmt(ap.obraSocial) + '</td></tr>';
         }
         var emision = new Date().toLocaleDateString('es-AR');
+        var _totalLiq = neto + t.fuera;   // total a cobrar del período: Parte A + Parte B
+        // ── Parte B: conceptos que NO integran el recibo oficial ───────────────
+        // Se imprimen en un bloque aparte (no entran en el NETO de arriba) y se muestra
+        // el TOTAL A COBRAR del período. Cómo se paga (banco/efectivo) se define en el pago.
+        var bloqueExtra = '';
+        if (t.fuera) {
+            var _filasB = (emp.conceptos || []).map(_remNormConcepto).filter(function(c){ return !c.enRecibo && c.monto; })
+                .map(function(c){
+                    var esDesc = c.tipo === 'descuento';
+                    return '<tr><td>' + escHtml(c.nombre || (esDesc ? 'Descuento' : 'Concepto')) + '</td><td class="r">' +
+                        (esDesc ? '− ' : '') + fmt(c.monto) + '</td></tr>';
+                }).join('');
+            bloqueExtra = '<div class="pagos-box"><div class="pagos-tit">No integra el recibo oficial</div>' +
+                '<table class="pagos-tabla"><tbody>' + _filasB +
+                '<tr class="tot"><td>Subtotal</td><td class="r">' + fmt(t.fuera) + '</td></tr>' +
+                '<tr class="total-gral"><td>TOTAL A COBRAR (recibo + esta parte)</td><td class="r">' + fmt(_totalLiq) + '</td></tr>' +
+                '</tbody></table></div>';
+        }
         // ── Pagos imputados a ese mes ──────────────────────────────────────────
         // El NETO del recibo es la LIQUIDACIÓN del mes; si se pagó de a partes, se detalla
         // acá abajo cada entrega y el saldo que queda pendiente (no se toca el neto).
@@ -24316,7 +24333,6 @@
                 return rp && rp.mes === mes && _remNorm(rp.nombre || '') === _nEmp;
             }).sort(function(a, b){ return (a.fecha || '').localeCompare(b.fecha || ''); });
             if (_pagos.length) {
-                var _totalLiq = neto + t.fuera;   // lo que realmente se le debe: Parte A + Parte B
                 var _pagado = 0;
                 var _filasPago = _pagos.map(function(rp){
                     var m = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
@@ -24327,12 +24343,10 @@
                         '</td><td class="r">− ' + fmt(m) + '</td></tr>';
                 }).join('');
                 var _saldo = _totalLiq - _pagado;
-                // La cuenta queda a la vista: se arranca del neto del recibo, se suma/resta lo que
-                // se liquidó fuera de él (si hubo), se restan las entregas y queda el saldo a cobrar.
-                var _cabecera = '<tr><td>Neto del recibo</td><td class="r">' + fmt(neto) + '</td></tr>';
-                if (t.fueraHab) _cabecera += '<tr><td>+ Liquidado fuera del recibo</td><td class="r">+ ' + fmt(t.fueraHab) + '</td></tr>';
-                if (t.fueraDesc) _cabecera += '<tr><td>− Descuentos fuera del recibo</td><td class="r">− ' + fmt(t.fueraDesc) + '</td></tr>';
-                if (t.fuera) _cabecera += '<tr class="tot"><td>Total a cobrar del período</td><td class="r">' + fmt(_totalLiq) + '</td></tr>';
+                // La cuenta queda a la vista: total a cobrar del período (ya calculado arriba,
+                // con la Parte B si la hubo), menos cada entrega, igual saldo a cobrar.
+                var _cabecera = '<tr><td>' + (t.fuera ? 'Total a cobrar del período' : 'Neto del recibo') +
+                    '</td><td class="r">' + fmt(_totalLiq) + '</td></tr>';
                 bloquePagos = '<div class="pagos-box"><div class="pagos-tit">Pagos imputados a este período</div>' +
                     '<table class="pagos-tabla"><tbody>' + _cabecera + _filasPago +
                     '<tr class="tot"><td>Total entregado</td><td class="r">' + fmt(_pagado) + '</td></tr>' +
@@ -24382,6 +24396,7 @@
             '.pagos-box{padding:10px 22px 12px;border-bottom:1px solid #eef1f6;} .pagos-tit{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#8a92a6;font-weight:700;margin-bottom:4px;}' +
             '.pagos-tabla td{padding:4px 0;font-size:12px;border-bottom:1px solid #f4f6fa;} .pagos-tabla .tot td{font-weight:700;border-top:1px solid #d5dae4;}' +
             '.pagos-tabla .saldo-pend td{font-weight:800;color:#b3261e;} .pagos-tabla .saldo-ok td{font-weight:800;color:#0a7d33;}' +
+            '.pagos-tabla .total-gral td{font-weight:800;font-size:13.5px;color:#1a3a6b;border-top:2px solid #d5dae4;background:#f7f9fc;}' +
             '.pagos-nota{font-size:10.5px;color:#8a92a6;margin-top:4px;}' +
             '.firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:34px 22px 16px;} .firma{border-top:1px solid #9aa3b5;padding-top:6px;text-align:center;font-size:11px;color:#5a6376;}' +
             '.pie{padding:10px 22px 16px;font-size:10px;color:#9098a8;border-top:1px solid #eef1f6;}' +
@@ -24407,7 +24422,7 @@
                 '<tr class="neto"><td>NETO A COBRAR' + (esMono ? ' (monotributo)' : '') + '</td><td class="r" colspan="2">' + fmt(neto) + '</td></tr>' +
               '</tbody></table>' +
               '<div class="letras">Son <strong>' + escHtml(_montoEnLetras(neto)) + '</strong> ($ ' + Math.round(neto).toLocaleString('es-AR') + ').</div>' +
-              bloquePagos +
+              bloqueExtra + bloquePagos +
               '<div class="firmas">' +
                 '<div class="firma">Firma y sello del empleador</div>' +
                 '<div class="firma">Recibí conforme — Firma del empleado</div>' +
@@ -34432,7 +34447,7 @@
         <select id="liqEmpSelect" onchange="if(this.value!==''){ liquidarSueldoEmpleado(parseInt(this.value,10)); }" style="width:100%; padding:8px 10px; font-size:14px;"></select>
       </div>
       <div id="liqEmpInfo" style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px; color:var(--text-2);"></div>
-      <div class="form-hint" style="margin-bottom:10px;">La liquidación se arma en dos partes: <strong>🅰️ Parte A</strong>, todo lo que va <strong>por recibo</strong> (se liquida, con o sin aportes de ley), y <strong>🅱️ Parte B</strong>, lo que se paga <strong>solo en efectivo, fuera del recibo</strong> (no se liquida ni tributa nada). Podés agregar todos los conceptos que quieras en cada parte, y pasar uno de una parte a la otra con ⇊ / ⇈. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber remunerativo.</div>
+      <div class="form-hint" style="margin-bottom:10px;">La liquidación se arma en dos partes: <strong>🅰️ Parte A</strong>, todo lo que va <strong>por recibo</strong> (se liquida, con o sin aportes de ley), y <strong>🅱️ Parte B</strong>, lo que <strong>no integra el recibo oficial</strong> (no se liquida ni tributa, pero suma al total a cobrar). Podés agregar todos los conceptos que quieras en cada parte, y pasar uno de una parte a la otra con ⇊ / ⇈. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber remunerativo.</div>
       <!-- ───── PARTE A: todo lo que va POR RECIBO (se liquida, tributa aportes salvo los no remunerativos) ───── -->
       <div class="rem-parte rem-parte-a">
         <div class="rem-parte-head">
@@ -34460,19 +34475,19 @@
       <!-- ───── PARTE B: fuera del recibo, solo efectivo (no se liquida ni tributa nada) ───── -->
       <div class="rem-parte rem-parte-b">
         <div class="rem-parte-head">
-          <strong>🅱️ Parte B — Solo efectivo (fuera del recibo)</strong>
+          <strong>🅱️ Parte B — No integra el recibo oficial</strong>
           <span class="rem-parte-sub" id="empParteBSub">$0</span>
         </div>
-        <div class="form-hint" style="margin:0 0 8px;">Lo que se paga aparte: <strong>no figura en el recibo oficial</strong>, no tributa aportes y no entra en la liquidación. Suma al total a cobrar y se pre-carga como «no oficial» en el pago de sueldo.</div>
+        <div class="form-hint" style="margin:0 0 8px;">Conceptos que <strong>no integran el recibo oficial</strong>: no tributan aportes ni entran en la liquidación, pero <strong>suman al total a cobrar</strong> y se imprimen en un bloque aparte al pie del recibo. Cómo se paga (banco, efectivo o mitad y mitad) se decide después, al cargar el pago.</div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Bono extraordinario','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Bono / Gratificación</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Otro (efectivo)</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','descuento',null,{enRecibo:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que tampoco figura en el recibo. OJO: un adelanto ya entregado NO va acá — se carga una sola vez en «Pagos de sueldo» y el recibo lo resta solo.">+ Descuento (efectivo)</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Otro</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','descuento',null,{enRecibo:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que tampoco figura en el recibo oficial. OJO: un adelanto ya entregado NO va acá — se carga una sola vez en «Pagos de sueldo» y el recibo lo resta solo.">+ Descuento</button>
         </div>
         <div class="emp-concepto-head-b" id="empConceptosHeadB"><span>Concepto</span><span>Signo</span><span>Monto</span><span></span><span></span></div>
         <div id="empConceptosListaB"></div>
-        <div id="empConceptosVacioB" class="rem-vacio">Nada por fuera del recibo este mes.</div>
-        <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto en efectivo</button>
+        <div id="empConceptosVacioB" class="rem-vacio">Sin conceptos fuera del recibo oficial este mes.</div>
+        <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto fuera del recibo</button>
       </div>
       <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
       <!-- Adelantos / pagos ya registrados de ese mes: se restan solos en el recibo -->
