@@ -1104,12 +1104,9 @@
         .rem-parte-b { border-left: 4px solid var(--warn); }
         .rem-parte-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; font-size: 13px; }
         .rem-parte-sub { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .emp-concepto-fila, .emp-concepto-head {
-            display: grid; grid-template-columns: minmax(110px,1fr) 104px 168px 100px 26px 26px;
-            gap: 6px; margin-bottom: 6px; align-items: center;
-        }
+        .emp-concepto-fila, .emp-concepto-head,
         .emp-concepto-fila-b, .emp-concepto-head-b {
-            display: grid; grid-template-columns: minmax(110px,1fr) 104px 100px 26px 26px;
+            display: grid; grid-template-columns: minmax(110px,1fr) 120px 120px 26px 26px;
             gap: 6px; margin-bottom: 6px; align-items: center;
         }
         .emp-concepto-fila select, .emp-concepto-fila input,
@@ -22889,7 +22886,11 @@
             enRecibo = (c.enRecibo !== undefined) ? !!c.enRecibo : true;
         }
         if (tipo === 'descuento') remun = false;        // un descuento nunca genera aportes
-        return { nombre: c.nombre || '', tipo: tipo, remun: remun, enRecibo: enRecibo, monto: c.monto || 0 };
+        // `parte` dice en qué bloque del modal vive la fila ('A' tributa · 'B' no tributa).
+        // Para los descuentos el eje remunerativo no aplica, así que se guarda aparte.
+        var parte = (c.parte === 'A' || c.parte === 'B') ? c.parte
+                  : ((tipo === 'descuento') ? (enRecibo ? 'A' : 'B') : (remun ? 'A' : 'B'));
+        return { nombre: c.nombre || '', tipo: tipo, remun: remun, enRecibo: enRecibo, parte: parte, monto: c.monto || 0 };
     }
 
     // Suma de conceptos, separada por bucket:
@@ -23741,88 +23742,61 @@
     }
 
     // ── Conceptos adicionales (filas dinámicas en el modal) ──
-    // Cada fila define: nombre · haber/descuento · remunerativo o no (aportes) ·
-    // dentro o fuera del recibo oficial · monto. Ver _remNormConcepto().
-    // Fila de la PARTE A (va en el recibo): nombre · signo · con/sin aportes · monto · ⇄ · ✕
-    function _empConceptoHTML(c) {
+    // Las DOS partes van dentro del recibo. Lo que las diferencia es si el concepto entra
+    // en la base de los impuestos/aportes de ley:
+    //   Parte A → remunerativo: tributa (base del 17%)
+    //   Parte B → no remunerativo: figura en el recibo pero no tributa
+    // La fila es igual en las dos: nombre · signo · monto · ⇊/⇈ (pasar de parte) · ✕
+    function _empConceptoFilaHTML(c, esB) {
         // El monto se toma crudo (una fila nueva arranca vacía, no en 0).
         var montoRaw = (c && c.monto != null && c.monto !== '') ? c.monto : '';
         c = _remNormConcepto(c);
         var esDesc = c.tipo === 'descuento';
-        return '<div class="emp-concepto-fila">' +
+        var cls = esB ? 'emp-concepto-fila-b' : 'emp-concepto-fila';
+        return '<div class="' + cls + '">' +
             '<input type="text" class="emp-c-nombre" placeholder="Concepto" value="' + escHtml(c.nombre || '') + '">' +
-            '<select class="emp-c-tipo" onchange="_empConceptoCambioTipo(this)" title="¿Suma o resta del sueldo?">' +
-                '<option value="haber"' + (esDesc ? '' : ' selected') + '>Haber (+)</option>' +
-                '<option value="descuento"' + (esDesc ? ' selected' : '') + '>Descuento (−)</option>' +
-            '</select>' +
-            '<select class="emp-c-remun" onchange="renderPreviewLiquidacion()" title="Remunerativo = tributa aportes de ley (jubilación, INSSJP, obra social). No remunerativo = bono o gratificación extraordinaria, sin aportes, pero igual figura en el recibo."' + (esDesc ? ' disabled' : '') + '>' +
-                '<option value="1"' + (c.remun ? ' selected' : '') + '>Con aportes (remunerativo)</option>' +
-                '<option value="0"' + (c.remun ? '' : ' selected') + '>Sin aportes (bono/extraord.)</option>' +
-            '</select>' +
-            '<input type="number" class="emp-c-monto" step="0.01" min="0" placeholder="0" value="' + montoRaw + '" oninput="renderPreviewLiquidacion()">' +
-            '<button type="button" class="emp-c-mover" onclick="_empMoverConcepto(this)" title="Pasar a la Parte B (solo efectivo, fuera del recibo)">⇊</button>' +
-            '<button type="button" onclick="this.closest(\'.emp-concepto-fila\').remove();renderPreviewLiquidacion()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;" title="Quitar">✕</button>' +
-        '</div>';
-    }
-
-    // Fila de la PARTE B (fuera del recibo): sin selector de aportes, nunca tributa.
-    function _empConceptoBHTML(c) {
-        var montoRaw = (c && c.monto != null && c.monto !== '') ? c.monto : '';
-        c = _remNormConcepto(c);
-        var esDesc = c.tipo === 'descuento';
-        return '<div class="emp-concepto-fila-b">' +
-            '<input type="text" class="emp-c-nombre" placeholder="Concepto" value="' + escHtml(c.nombre || '') + '">' +
-            '<select class="emp-c-tipo" onchange="renderPreviewLiquidacion()" title="¿Suma o resta del total a cobrar?">' +
+            '<select class="emp-c-tipo" onchange="renderPreviewLiquidacion()" title="¿Suma o resta del sueldo?">' +
                 '<option value="haber"' + (esDesc ? '' : ' selected') + '>Haber (+)</option>' +
                 '<option value="descuento"' + (esDesc ? ' selected' : '') + '>Descuento (−)</option>' +
             '</select>' +
             '<input type="number" class="emp-c-monto" step="0.01" min="0" placeholder="0" value="' + montoRaw + '" oninput="renderPreviewLiquidacion()">' +
-            '<button type="button" class="emp-c-mover" onclick="_empMoverConcepto(this)" title="Pasar a la Parte A (va en el recibo oficial)">⇈</button>' +
-            '<button type="button" onclick="this.closest(\'.emp-concepto-fila-b\').remove();renderPreviewLiquidacion()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;" title="Quitar">✕</button>' +
+            '<button type="button" class="emp-c-mover" onclick="_empMoverConcepto(this)" title="' +
+                (esB ? 'Pasar a la Parte A (que tribute impuestos)' : 'Pasar a la Parte B (que no tribute impuestos)') + '">' + (esB ? '⇈' : '⇊') + '</button>' +
+            '<button type="button" onclick="this.closest(\'.' + cls + '\').remove();renderPreviewLiquidacion()" style="background:none;border:none;color:#cc6666;cursor:pointer;font-size:16px;" title="Quitar">✕</button>' +
         '</div>';
     }
+    function _empConceptoHTML(c)  { return _empConceptoFilaHTML(c, false); }
+    function _empConceptoBHTML(c) { return _empConceptoFilaHTML(c, true); }
 
-    // Un descuento nunca genera aportes: al pasar la fila a "Descuento" se bloquea ese selector.
-    window._empConceptoCambioTipo = function(sel) {
-        var fila = sel.closest('.emp-concepto-fila');
-        var rem = fila ? fila.querySelector('.emp-c-remun') : null;
-        if (rem) {
-            rem.disabled = (sel.value === 'descuento');
-            if (rem.disabled) rem.value = '0';
-        }
-        renderPreviewLiquidacion();
-    };
-
-    // Mueve un concepto entre la Parte A (recibo) y la Parte B (efectivo), conservando lo cargado.
+    // Mueve un concepto de la Parte A a la B (o al revés): lo único que cambia es si tributa.
     window._empMoverConcepto = function(btn) {
         var fila = btn.closest('.emp-concepto-fila') || btn.closest('.emp-concepto-fila-b');
         if (!fila) return;
         var enA = fila.classList.contains('emp-concepto-fila');
-        var selR = fila.querySelector('.emp-c-remun');
         var datos = {
             nombre: fila.querySelector('.emp-c-nombre').value || '',
             tipo:   fila.querySelector('.emp-c-tipo').value,
-            monto:  fila.querySelector('.emp-c-monto').value,
-            remun:  enA ? false : (selR ? selR.value === '1' : true)   // al volver a A arranca sin aportes
+            monto:  fila.querySelector('.emp-c-monto').value
         };
         fila.remove();
         empAgregarConcepto(datos.nombre, datos.tipo, (datos.monto === '' ? null : parseFloat(datos.monto)),
-            { remun: datos.remun, enRecibo: !enA });
+            { remun: !enA });   // si estaba en A pasa a no tributar, y al revés
     };
 
-    // opts: { remun:true|false, enRecibo:true|false }. Sin opts, un haber remunerativo en el recibo.
-    // enRecibo=false manda la fila a la Parte B (solo efectivo).
+    // A qué bloque va la fila: Parte A (tributa) o Parte B (no tributa). Las dos van en el recibo.
+    // opts.parte fuerza el bloque; si no, manda opts.remun (false = Parte B). Un descuento
+    // cargado desde los botones de la Parte A se queda en A aunque no genere aportes.
     window.empAgregarConcepto = function(nombre, tipo, monto, opts) {
         opts = opts || {};
-        var enRecibo = (opts.enRecibo !== undefined) ? !!opts.enRecibo : true;
+        var esB = (opts.parte === 'B') || (opts.parte !== 'A' && opts.remun === false);
         var c = {
             nombre: nombre || '', tipo: tipo || 'haber', monto: (monto != null ? monto : ''),
-            remun:    (opts.remun !== undefined) ? opts.remun : (tipo !== 'descuento' && enRecibo),
-            enRecibo: enRecibo
+            remun: !esB && tipo !== 'descuento',
+            enRecibo: true, parte: esB ? 'B' : 'A'
         };
-        var cont = document.getElementById(enRecibo ? 'empConceptosLista' : 'empConceptosListaB');
+        var cont = document.getElementById(esB ? 'empConceptosListaB' : 'empConceptosLista');
         if (!cont) return;
-        cont.insertAdjacentHTML('beforeend', enRecibo ? _empConceptoHTML(c) : _empConceptoBHTML(c));
+        cont.insertAdjacentHTML('beforeend', esB ? _empConceptoBHTML(c) : _empConceptoHTML(c));
         renderPreviewLiquidacion();
     };
 
@@ -23886,20 +23860,19 @@
         empAgregarConcepto('Vacaciones', 'haber', monto);
     };
 
-    // Lee los conceptos cargados en el modal: primero la Parte A (recibo) y después la
-    // Parte B (efectivo, fuera del recibo). El bloque define `enRecibo`.
+    // Lee los conceptos cargados en el modal: primero la Parte A (tributa) y después la
+    // Parte B (no tributa). Las dos van dentro del recibo; el bloque define `remun`.
     function _empLeerConceptos() {
         var out = [];
-        var leer = function(sel, enRecibo) {
+        var leer = function(sel, remunerativo) {
             document.querySelectorAll(sel).forEach(function(f) {
                 var nombre = (f.querySelector('.emp-c-nombre').value || '').trim();
                 var monto = parseFloat(f.querySelector('.emp-c-monto').value) || 0;
                 var tipo = f.querySelector('.emp-c-tipo').value;
-                var selR = f.querySelector('.emp-c-remun');
                 if (nombre || monto) out.push({
                     nombre: nombre, tipo: tipo, monto: monto,
-                    remun: enRecibo && tipo !== 'descuento' && (!selR || selR.value === '1'),
-                    enRecibo: enRecibo
+                    remun: remunerativo && tipo !== 'descuento',
+                    enRecibo: true, parte: remunerativo ? 'A' : 'B'
                 });
             });
         };
@@ -24022,29 +23995,28 @@
         var total = function(lbl, val, extra) { return '<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;' + (extra || '') + '"><span>' + lbl + '</span><span>' + val + '</span></div>'; };
         var netoOfi = remNetoOficial(emp);
         var html =
-            '<div style="font-weight:700;margin-bottom:2px;">🅰️ Parte A — Por recibo</div>' +
+            '<div style="font-weight:700;margin-bottom:2px;">🅰️ Parte A — Remunerativo (base imponible)</div>' +
             fila('Sueldo básico', fmt(basico)) +
             (t.haberes ? fila('+ Haberes remunerativos', fmt(t.haberes), 'var(--success)') : '');
         if (ap.total > 0) {
-            html += fila('Aportes de ley (sobre básico + haberes remunerativos ' + fmt(ap.base) + '):', '') +
+            html += fila('Aportes de ley (sobre la base imponible ' + fmt(ap.base) + '):', '') +
                 fila('− Jubilación (11%)', fmt(ap.jubilacion), 'var(--danger)') +
                 fila('− Ley 19032 / INSSJP (3%)', fmt(ap.ley19032), 'var(--danger)') +
                 fila('− Obra social (3%)', fmt(ap.obraSocial), 'var(--danger)');
         }
-        html += (t.noRemun ? fila('+ No remunerativos (bonos en recibo, sin aportes)', fmt(t.noRemun), 'var(--gold)') : '') +
-            (t.descuentos ? fila('− Descuentos del recibo', fmt(t.descuentos), 'var(--danger)') : '') +
-            total('Neto del recibo oficial' + (tipoContrato === 'monotributo' ? ' (monotributo)' : ''), fmt(netoOfi));
-        if (t.fueraHab || t.fueraDesc) {
-            html += '<div style="font-weight:700;margin-top:8px;margin-bottom:2px;color:var(--warn);">🅱️ Parte B — No integra el recibo oficial</div>' +
-                (t.fueraHab  ? fila('+ Conceptos fuera del recibo (sin aportes)', fmt(t.fueraHab), 'var(--warn)') : '') +
-                (t.fueraDesc ? fila('− Descuentos fuera del recibo', fmt(t.fueraDesc), 'var(--warn)') : '') +
-                total('TOTAL A COBRAR (A + B)', fmt(remNetoEmpleado(emp)), 'color:var(--gold);');
+        if (t.noRemun || t.fueraHab || t.fueraDesc) {
+            html += '<div style="font-weight:700;margin-top:8px;margin-bottom:2px;color:var(--warn);">🅱️ Parte B — No remunerativo (no tributa)</div>' +
+                (t.noRemun  ? fila('+ Bonos / gratificaciones', fmt(t.noRemun), 'var(--gold)') : '') +
+                (t.fueraHab ? fila('+ Conceptos del formato anterior (fuera del recibo)', fmt(t.fueraHab), 'var(--warn)') : '');
         }
+        html += (t.descuentos ? fila('− Descuentos', fmt(t.descuentos), 'var(--danger)') : '') +
+            (t.fueraDesc ? fila('− Descuentos fuera del recibo (formato anterior)', fmt(t.fueraDesc), 'var(--warn)') : '') +
+            total('NETO A COBRAR' + (tipoContrato === 'monotributo' ? ' (monotributo)' : ''), fmt(remNetoEmpleado(emp)), 'color:var(--gold);');
         el.innerHTML = html;
         // Subtotales en el encabezado de cada bloque de conceptos.
         var sub = function(id, txt, color) { var e = document.getElementById(id); if (e) { e.textContent = txt; if (color) e.style.color = color; } };
-        sub('empParteASub', 'Neto del recibo: ' + fmt(netoOfi), 'var(--gold)');
-        sub('empParteBSub', (t.fueraHab || t.fueraDesc) ? ('Subtotal: ' + fmt(t.fuera)) : 'Sin conceptos', (t.fueraHab || t.fueraDesc) ? 'var(--warn)' : 'var(--text-3)');
+        sub('empParteASub', 'Base imponible: ' + fmt(ap.base || (basico + t.haberes)), 'var(--gold)');
+        sub('empParteBSub', (t.noRemun || t.fuera) ? ('Subtotal: ' + fmt(t.noRemun + t.fuera)) : 'Sin conceptos', (t.noRemun || t.fuera) ? 'var(--warn)' : 'var(--text-3)');
     };
 
     window.abrirModalEmpleado = function(idx, tab) {
@@ -24118,13 +24090,13 @@
         setVal('empFechaIngreso', emp.fechaIngreso); setVal('empPuesto', emp.puesto);
         setVal('empTipoContrato', emp.tipoContrato || 'dependencia'); setVal('empSueldo', emp.sueldoBasico);
         setVal('empObraSocial', emp.obraSocial); setVal('empConvenio', emp.convenio); setVal('empLegajoNro', emp.legajoNro);
-        // Los conceptos del legajo se reparten en los dos bloques: los del recibo en la Parte A
-        // y los que se liquidan por fuera en la Parte B.
+        // Los conceptos se reparten según tributen o no: Parte A los remunerativos, Parte B el
+        // resto (incluye los guardados con el formato viejo "fuera de recibo", que no tributaban).
         var contA = document.getElementById('empConceptosLista');
         var contB = document.getElementById('empConceptosListaB');
         var norm = (emp.conceptos || []).map(_remNormConcepto);
-        if (contA) contA.innerHTML = norm.filter(function(c){ return c.enRecibo; }).map(_empConceptoHTML).join('');
-        if (contB) contB.innerHTML = norm.filter(function(c){ return !c.enRecibo; }).map(_empConceptoBHTML).join('');
+        if (contA) contA.innerHTML = norm.filter(function(c){ return c.parte === 'A'; }).map(_empConceptoHTML).join('');
+        if (contB) contB.innerHTML = norm.filter(function(c){ return c.parte !== 'A'; }).map(_empConceptoBHTML).join('');
         document.getElementById('modalLiquidarTitle').textContent = '💰 Liquidar sueldo — ' + (emp.nombre || '');
         var infoEl = document.getElementById('liqEmpInfo');
         if (infoEl) {
@@ -24317,7 +24289,7 @@
                     return '<tr><td>' + escHtml(c.nombre || (esDesc ? 'Descuento' : 'Concepto')) + '</td><td class="r">' +
                         (esDesc ? '− ' : '') + fmt(c.monto) + '</td></tr>';
                 }).join('');
-            bloqueExtra = '<div class="pagos-box"><div class="pagos-tit">No integra el recibo oficial</div>' +
+            bloqueExtra = '<div class="pagos-box"><div class="pagos-tit">Conceptos fuera del recibo (formato anterior)</div>' +
                 '<table class="pagos-tabla"><tbody>' + _filasB +
                 '<tr class="tot"><td>Subtotal</td><td class="r">' + fmt(t.fuera) + '</td></tr>' +
                 '<tr class="total-gral"><td>TOTAL A COBRAR (recibo + esta parte)</td><td class="r">' + fmt(_totalLiq) + '</td></tr>' +
@@ -34447,47 +34419,46 @@
         <select id="liqEmpSelect" onchange="if(this.value!==''){ liquidarSueldoEmpleado(parseInt(this.value,10)); }" style="width:100%; padding:8px 10px; font-size:14px;"></select>
       </div>
       <div id="liqEmpInfo" style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px; color:var(--text-2);"></div>
-      <div class="form-hint" style="margin-bottom:10px;">La liquidación se arma en dos partes: <strong>🅰️ Parte A</strong>, todo lo que va <strong>por recibo</strong> (se liquida, con o sin aportes de ley), y <strong>🅱️ Parte B</strong>, lo que <strong>no integra el recibo oficial</strong> (no se liquida ni tributa, pero suma al total a cobrar). Podés agregar todos los conceptos que quieras en cada parte, y pasar uno de una parte a la otra con ⇊ / ⇈. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber remunerativo.</div>
+      <div class="form-hint" style="margin-bottom:10px;"><strong>Las dos partes se imprimen en el recibo.</strong> La diferencia es impositiva: la <strong>🅰️ Parte A</strong> es <strong>remunerativa</strong> y entra en la base de los aportes de ley (17%); la <strong>🅱️ Parte B</strong> es <strong>no remunerativa</strong> — figura en el recibo y suma al neto, pero <strong>no se tiene en cuenta para los impuestos</strong>. Podés agregar todos los conceptos que quieras en cada parte, y pasar uno de una parte a la otra con ⇊ / ⇈. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber remunerativo.</div>
       <!-- ───── PARTE A: todo lo que va POR RECIBO (se liquida, tributa aportes salvo los no remunerativos) ───── -->
       <div class="rem-parte rem-parte-a">
         <div class="rem-parte-head">
-          <strong>🅰️ Parte A — Por recibo</strong>
+          <strong>🅰️ Parte A — Remunerativo (tributa)</strong>
           <span class="rem-parte-sub" id="empParteASub">$0</span>
         </div>
-        <div class="form-hint" style="margin:0 0 8px;">Todo lo que figura en el <strong>recibo oficial</strong>: el sueldo básico más estos conceptos. Los remunerativos tributan los aportes de ley (17%); los marcados «sin aportes» son no remunerativos, figuran en el recibo pero no tributan.</div>
+        <div class="form-hint" style="margin:0 0 8px;">El sueldo básico más estos conceptos forman la <strong>base imponible</strong>: sobre ese total se calculan los aportes de ley (17%) en relación de dependencia.</div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Recupero Obra Social','descuento')">+ Recupero Obra Social</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo','descuento')">+ Monotributo</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('IIBB Unificado','descuento')">+ IIBB Unificado</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Monotributo e IIBB Unificado','descuento')">+ Monotributo e IIBB Unificado</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Ingresos Brutos','descuento')">+ Ingresos Brutos</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber')">+ Otro (con aportes)</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Bono extraordinario','haber',null,{remun:false,enRecibo:true})" style="border-color:var(--gold);color:var(--gold);" title="Suma no remunerativa: figura en el recibo oficial pero no tributa aportes">+ Bono sin aportes</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber')">+ Otro</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoSAC()" style="border-color:var(--success);color:var(--success);" title="Calcula el aguinaldo proporcional del semestre y lo agrega como haber">+ Aguinaldo (SAC)</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConceptoVacaciones()" style="border-color:var(--success);color:var(--success);" title="Calcula las vacaciones según antigüedad y las agrega como haber">+ Vacaciones</button>
         </div>
-        <div class="emp-concepto-head" id="empConceptosHeadA"><span>Concepto</span><span>Signo</span><span>Aportes de ley</span><span>Monto</span><span></span><span></span></div>
+        <div class="emp-concepto-head" id="empConceptosHeadA"><span>Concepto</span><span>Signo</span><span>Monto</span><span></span><span></span></div>
         <div id="empConceptosLista"></div>
-        <div id="empConceptosVacioA" class="rem-vacio">Todavía no agregaste ningún concepto a esta parte. Se liquida el <strong>sueldo básico</strong> solo.</div>
-        <button type="button" class="btn btn-gold btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber')">➕ Agregar concepto al recibo</button>
+        <div id="empConceptosVacioA" class="rem-vacio">Sin conceptos remunerativos extra: la base imponible es el <strong>sueldo básico</strong> solo.</div>
+        <button type="button" class="btn btn-gold btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber')">➕ Agregar concepto remunerativo</button>
       </div>
 
       <!-- ───── PARTE B: fuera del recibo, solo efectivo (no se liquida ni tributa nada) ───── -->
       <div class="rem-parte rem-parte-b">
         <div class="rem-parte-head">
-          <strong>🅱️ Parte B — No integra el recibo oficial</strong>
+          <strong>🅱️ Parte B — No remunerativo (no tributa)</strong>
           <span class="rem-parte-sub" id="empParteBSub">$0</span>
         </div>
-        <div class="form-hint" style="margin:0 0 8px;">Conceptos que <strong>no integran el recibo oficial</strong>: no tributan aportes ni entran en la liquidación, pero <strong>suman al total a cobrar</strong> y se imprimen en un bloque aparte al pie del recibo. Cómo se paga (banco, efectivo o mitad y mitad) se decide después, al cargar el pago.</div>
+        <div class="form-hint" style="margin:0 0 8px;">Bonos, gratificaciones y demás conceptos que <strong>sí figuran en el recibo</strong> y suman al neto a cobrar, pero <strong>no se tienen en cuenta para los impuestos</strong>: quedan afuera de la base de aportes. Cómo se paga (banco, efectivo o mitad y mitad) se decide después, al cargar el pago.</div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Bono extraordinario','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Bono / Gratificación</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Otro</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','descuento',null,{enRecibo:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que tampoco figura en el recibo oficial. OJO: un adelanto ya entregado NO va acá — se carga una sola vez en «Pagos de sueldo» y el recibo lo resta solo.">+ Descuento</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Bono extraordinario','haber',null,{remun:false})" style="border-color:var(--warn);color:var(--warn);">+ Bono / Gratificación</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber',null,{remun:false})" style="border-color:var(--warn);color:var(--warn);">+ Otro</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','descuento',null,{remun:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que no afecta la base imponible. OJO: un adelanto ya entregado NO va acá — se carga una sola vez en «Pagos de sueldo» y el recibo lo resta solo.">+ Descuento</button>
         </div>
         <div class="emp-concepto-head-b" id="empConceptosHeadB"><span>Concepto</span><span>Signo</span><span>Monto</span><span></span><span></span></div>
         <div id="empConceptosListaB"></div>
-        <div id="empConceptosVacioB" class="rem-vacio">Sin conceptos fuera del recibo oficial este mes.</div>
-        <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto fuera del recibo</button>
+        <div id="empConceptosVacioB" class="rem-vacio">Sin conceptos no remunerativos este mes.</div>
+        <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto no remunerativo</button>
       </div>
       <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
       <!-- Adelantos / pagos ya registrados de ese mes: se restan solos en el recibo -->
