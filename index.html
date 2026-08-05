@@ -23231,7 +23231,7 @@
         var bloqueSaldo = liq > 0
             ? fila('Total liquidado de ' + escHtml(_mesLabel(rp.mes)), fmt(liq)) +
               fila('Pagado hasta hoy (incluye este pago)', fmt(pagadoHasta)) +
-              fila('<strong>' + (Math.abs(saldo) < 1 ? 'SALDADO' : (saldo > 0 ? 'SALDO PENDIENTE' : 'PAGADO DE MÁS')) + '</strong>',
+              fila('<strong>' + (Math.abs(saldo) < 1 ? 'SALDADO' : (saldo > 0 ? 'SALDO A COBRAR' : 'PAGADO DE MÁS')) + '</strong>',
                    '<strong>' + fmt(Math.abs(saldo)) + '</strong>', Math.abs(saldo) < 1 ? 'saldo-ok' : 'saldo-pend')
             : fila('Sueldo del período', 'Todavía sin liquidar');
         var css =
@@ -23990,9 +23990,25 @@
         });
     }
 
+    // Avisa, dentro del modal de liquidación, si ese mes ya tiene adelantos o pagos
+    // registrados: el recibo los resta solo, así que NO hay que cargarlos como descuento.
+    window._empAvisoPagosDelMes = function() {
+        var box = document.getElementById('empAvisoPagos'); if (!box) return;
+        var nombre = (document.getElementById('empleadoNombre') || {}).value || '';
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!nombre.trim() || !mes || typeof _remPagadoDe !== 'function') { box.style.display = 'none'; return; }
+        var ya = _remPagadoDe(nombre, mes);
+        if (!ya) { box.style.display = 'none'; return; }
+        var m = function(n){ return '$' + Math.round(n).toLocaleString('es-AR'); };
+        box.style.display = '';
+        box.innerHTML = '💵 Este mes ya tiene <strong>' + m(ya) + '</strong> registrados como pago/adelanto en «Pagos de sueldo». ' +
+            'El recibo los resta solo y muestra el <strong>saldo a cobrar</strong>: <u>no</u> los cargues también como descuento acá.';
+    };
+
     // Muestra el desglose de la liquidación en vivo dentro del modal.
     window.renderPreviewLiquidacion = function() {
         _empActualizarVacios();
+        if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
         var basico = parseFloat((document.getElementById('empSueldo') || {}).value) || 0;
         var fecha = (document.getElementById('empFechaIngreso') || {}).value || '';
@@ -24305,20 +24321,26 @@
                 var _filasPago = _pagos.map(function(rp){
                     var m = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
                     _pagado += m;
-                    var et = rp.tipo === 'adelanto' ? 'Adelanto' : (rp.tipo === 'parcial' ? 'Pago a cuenta' : 'Pago');
+                    var et = rp.tipo === 'adelanto' ? 'Adelanto entregado' : (rp.tipo === 'parcial' ? 'Pago a cuenta' : 'Pago');
                     return '<tr><td>' + (rp.fecha ? formatearFecha(rp.fecha) : '—') + ' · ' + et +
                         (rp.detalle ? ' <em style="color:#8a92a6;">(' + escHtml(rp.detalle) + ')</em>' : '') +
-                        '</td><td class="r">' + fmt(m) + '</td></tr>';
+                        '</td><td class="r">− ' + fmt(m) + '</td></tr>';
                 }).join('');
                 var _saldo = _totalLiq - _pagado;
+                // La cuenta queda a la vista: se arranca del neto del recibo, se suma/resta lo que
+                // se liquidó fuera de él (si hubo), se restan las entregas y queda el saldo a cobrar.
+                var _cabecera = '<tr><td>Neto del recibo</td><td class="r">' + fmt(neto) + '</td></tr>';
+                if (t.fueraHab) _cabecera += '<tr><td>+ Liquidado fuera del recibo</td><td class="r">+ ' + fmt(t.fueraHab) + '</td></tr>';
+                if (t.fueraDesc) _cabecera += '<tr><td>− Descuentos fuera del recibo</td><td class="r">− ' + fmt(t.fueraDesc) + '</td></tr>';
+                if (t.fuera) _cabecera += '<tr class="tot"><td>Total a cobrar del período</td><td class="r">' + fmt(_totalLiq) + '</td></tr>';
                 bloquePagos = '<div class="pagos-box"><div class="pagos-tit">Pagos imputados a este período</div>' +
-                    '<table class="pagos-tabla"><tbody>' + _filasPago +
+                    '<table class="pagos-tabla"><tbody>' + _cabecera + _filasPago +
                     '<tr class="tot"><td>Total entregado</td><td class="r">' + fmt(_pagado) + '</td></tr>' +
                     '<tr class="' + (Math.abs(_saldo) < 1 ? 'saldo-ok' : 'saldo-pend') + '"><td>' +
-                        (Math.abs(_saldo) < 1 ? 'SALDADO' : (_saldo > 0 ? 'SALDO PENDIENTE' : 'PAGADO DE MÁS')) +
+                        (Math.abs(_saldo) < 1 ? 'SALDADO' : (_saldo > 0 ? 'SALDO A COBRAR' : 'PAGADO DE MÁS')) +
                     '</td><td class="r">' + fmt(Math.abs(_saldo)) + '</td></tr>' +
                     '</tbody></table>' +
-                    (t.fuera ? '<div class="pagos-nota">El total a cobrar del período es ' + fmt(_totalLiq) + ': ' + fmt(neto) + ' del recibo más ' + fmt(t.fuera) + ' liquidados fuera de él.</div>' : '') +
+                    (t.fueraDesc ? '<div class="pagos-nota">⚠️ Este período tiene ' + fmt(t.fueraDesc) + ' cargados como descuento fuera del recibo. Si ese importe es un adelanto que además figura arriba como entregado, está contado dos veces: sacalo de la Parte B de la liquidación.</div>' : '') +
                     '</div>';
             }
         }
@@ -34445,7 +34467,7 @@
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Bono extraordinario','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Bono / Gratificación</button>
           <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn);color:var(--warn);">+ Otro (efectivo)</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('Adelanto','descuento',null,{enRecibo:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que tampoco figura en el recibo (ej. un adelanto en efectivo)">+ Descuento (efectivo)</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="empAgregarConcepto('','descuento',null,{enRecibo:false})" style="border-color:var(--warn);color:var(--warn);" title="Descuento que tampoco figura en el recibo. OJO: un adelanto ya entregado NO va acá — se carga una sola vez en «Pagos de sueldo» y el recibo lo resta solo.">+ Descuento (efectivo)</button>
         </div>
         <div class="emp-concepto-head-b" id="empConceptosHeadB"><span>Concepto</span><span>Signo</span><span>Monto</span><span></span><span></span></div>
         <div id="empConceptosListaB"></div>
@@ -34453,8 +34475,10 @@
         <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false,enRecibo:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto en efectivo</button>
       </div>
       <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
+      <!-- Adelantos / pagos ya registrados de ese mes: se restan solos en el recibo -->
+      <div id="empAvisoPagos" style="display:none; margin:0 0 12px; padding:9px 12px; border-radius:8px; font-size:12px; border:1px solid var(--warn); background:rgba(230,160,60,.08); color:var(--text-2);"></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
-        <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" style="padding:6px 8px; font-size:13px;"></label>
+        <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" onchange="_empAvisoPagosDelMes()" style="padding:6px 8px; font-size:13px;"></label>
         <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()">🖨️ Imprimir</button>
         <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
