@@ -25268,13 +25268,37 @@
     function eliminarCobroAlquiler(idx, cIdx) {
         var a = alquileres[idx]; if (!a) return;
         var c = (a.cobrosHistorial||[])[cIdx]; if (!c) return;
-        if (!confirm('¿Eliminar este cobro de $' + Number(c.monto||0).toLocaleString('es-AR') + '?')) return;
+        if (!confirm('¿Eliminar este cobro de $' + Number(c.monto||0).toLocaleString('es-AR') + '?' + (c.nroRecibo ? '\n\nSe libera el número de recibo ' + c.nroRecibo + ' para reutilizarlo.' : ''))) return;
+        if (c.nroRecibo) _liberarNroComprobante(c.nroRecibo, c.tipoAB);   // libera el correlativo del recibo emitido
         if (c.facturaId) REF_DOCS.child(c.facturaId).remove();   // borra la factura emitida adjunta, si tenía
         a.cobrosHistorial.splice(cIdx, 1);
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
         _refrescarPlanAlquilerSiAbierto(idx);
     }
+
+    // Desaplica el cobro de un período (mes): lo vuelve a dejar IMPAGO. Quita TODOS los cobros de
+    // ese mes (por si hubo desglose IVA en dos recibos), libera sus números de recibo y borra las
+    // facturas adjuntas. Para cuando "al final no me pagaron y ya había emitido el recibo".
+    window.desaplicarCobroAlquiler = function(idx, periodo) {
+        var a = alquileres[idx]; if (!a || !a.cobrosHistorial) return;
+        var _esDelMes = function(c){ return c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto); };
+        var delc = a.cobrosHistorial.filter(_esDelMes);
+        if (!delc.length) return;
+        var total = delc.reduce(function(s,c){ return s + (c.monto||0); }, 0);
+        var monSym = a.moneda === 'USD' ? 'USD ' : '$';
+        if (!confirm('¿Desaplicar el cobro de ' + periodo + ' (total ' + monSym + Math.round(total).toLocaleString('es-AR') + ')?\n\n' +
+            'El mes vuelve a quedar como IMPAGO' + (delc.length > 1 ? ' y se quitan sus ' + delc.length + ' recibos' : '') + '. Se libera' + (delc.length > 1 ? 'n los números' : ' el número') + ' de recibo para reutilizarlo' + (delc.length > 1 ? 's' : '') + '.\n\n' +
+            '(Usalo si al final no te pagaron y ya habías emitido el recibo.)')) return;
+        delc.forEach(function(c){
+            if (c.nroRecibo) _liberarNroComprobante(c.nroRecibo, c.tipoAB);
+            if (c.facturaId) REF_DOCS.child(c.facturaId).remove();
+        });
+        a.cobrosHistorial = a.cobrosHistorial.filter(function(c){ return !_esDelMes(c); });
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+        _refrescarPlanAlquilerSiAbierto(idx);
+    };
 
     // ── Plan de pagos mensual del contrato (como el Estado de Cuenta de Ventas) ──
     var _planAlqIdx = -1;
@@ -25357,6 +25381,7 @@
                 if (estado === 'pagada' || estado === 'parcial') {
                     var cIdx = (a.cobrosHistorial||[]).findIndex(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
                     if (cIdx >= 0) accion += '<button type="button" class="btn btn-outline btn-sm" onclick="abrirEditarCobroAlquiler(' + idx + ',' + cIdx + ')" title="Editar cobro">✏️</button> ';
+                    accion += '<button type="button" class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="desaplicarCobroAlquiler(' + idx + ',\'' + periodo + '\')" title="Desaplicar el cobro: el mes vuelve a impago y se libera el recibo (si al final no te pagaron)">↩️ Desaplicar</button> ';
                 }
                 if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
                     accion += '<button type="button" class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ',\'' + periodo + '\')">💵 ' + (estado==='parcial' ? 'Completar' : 'Cobrar') + '</button> ';
@@ -27216,7 +27241,7 @@
             if (c.facturaId) { var btnFac = document.createElement('button'); btnFac.className = 'btn btn-outline btn-sm'; btnFac.title = 'Ver factura emitida'; btnFac.textContent = '📄'; btnFac.onclick = function(){ descargarDoc(c.facturaId, c.facturaNombre||'factura'); }; btns.appendChild(btnFac); }
             var btnEd = document.createElement('button'); btnEd.className = 'btn btn-outline btn-sm'; btnEd.title = 'Editar'; btnEd.textContent = '✏️';
             btnEd.onclick = function(){ overlay.remove(); abrirEditarCobroAlquiler(idx, i); };
-            var btnDel = document.createElement('button'); btnDel.className = 'btn btn-danger-sm'; btnDel.title = 'Eliminar'; btnDel.textContent = '✕';
+            var btnDel = document.createElement('button'); btnDel.className = 'btn btn-danger-sm'; btnDel.title = 'Desaplicar / eliminar este cobro (libera el número de recibo)'; btnDel.textContent = '✕';
             btnDel.onclick = function(){ overlay.remove(); eliminarCobroAlquiler(idx, i); };
             btns.appendChild(btnEd); btns.appendChild(btnDel);
             row.appendChild(txt); row.appendChild(btns);
@@ -27224,7 +27249,7 @@
         });
         var hint = document.createElement('div');
         hint.style.cssText = 'padding:8px 20px;font-size:11px;color:#777;background:#f8f9fa;border-bottom:1px solid #f0f0f0;';
-        hint.innerHTML = 'Tocá <strong>✏️</strong> para corregir el mes/período, el monto o la fecha de un cobro (por si hubo un error en la actualización), o <strong>✕</strong> para eliminarlo.';
+        hint.innerHTML = 'Tocá <strong>✏️</strong> para corregir el mes/período, el monto o la fecha de un cobro, o <strong>✕</strong> para <strong>desaplicarlo</strong> (lo quita y libera el número de recibo — usalo si al final no te pagaron y ya habías emitido el recibo).';
         box.appendChild(headDiv); box.appendChild(hint); box.appendChild(lista);
         overlay.appendChild(box);
         overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
