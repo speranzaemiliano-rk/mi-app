@@ -6528,6 +6528,9 @@
                         </select>
                         <button type="button" class="btn btn-outline btn-sm" onclick="factCargarPresupuesto()" title="Crear/subir un presupuesto para este proveedor sin salir de la factura" style="white-space:nowrap;">➕ Nuevo presupuesto</button>
                     </div>
+                    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;font-size:12px;color:var(--text-2);cursor:pointer;">
+                        <input type="checkbox" id="factPresupTodos" onchange="poblarPresupuestosFactura()" style="width:auto;margin:0;"> Mostrar presupuestos de <strong>otros proveedores</strong> también
+                    </label>
                     <div class="form-hint" id="factPresupInfo"></div>
                 </div>
 
@@ -15704,6 +15707,9 @@
         } else {
             if (_avisoPagada) _avisoPagada.style.display = 'none';
         }
+        // Si la factura está vinculada a un presupuesto de OTRO proveedor, tildar "todos" para que aparezca.
+        var _todosChk = document.getElementById('factPresupTodos');
+        if (_todosChk) _todosChk.checked = (f.presupuestoIdx !== undefined && datos[f.presupuestoIdx] && datos[f.presupuestoIdx].proveedor !== f.proveedor);
         poblarPresupuestosFactura();
         if (f.presupuestoIdx !== undefined) {
             const sel = document.getElementById('factPresupuesto');
@@ -15965,15 +15971,21 @@
         const prov = document.getElementById('factProveedor').value;
         const sel  = document.getElementById('factPresupuesto');
         if (!sel) return;
+        const prev = sel.value;
+        const todos = !!(document.getElementById('factPresupTodos') || {}).checked;
         sel.innerHTML = '<option value="">— Sin presupuesto vinculado —</option>';
-        datos.filter(d => d.proveedor === prov).forEach((d, globalIdx) => {
-            const realIdx = datos.indexOf(d);
-            const c = calcPresupuesto(d);
+        // Cuando "todos": muestra los del proveedor primero y después el resto (etiquetados con su proveedor).
+        var lista = datos.map(function(d,i){ return { d:d, i:i }; }).filter(function(o){ return todos || o.d.proveedor === prov; });
+        lista.sort(function(a,b){ var pa = (a.d.proveedor===prov)?0:1, pb = (b.d.proveedor===prov)?0:1; return pa - pb; });
+        lista.forEach(function(o){
+            const c = calcPresupuesto(o.d);
             const opt = document.createElement('option');
-            opt.value = realIdx;
-            opt.textContent = `${d.concepto || d.proveedor} — Pend. $${Math.round(c.capitalPend).toLocaleString('es-AR')}`;
+            opt.value = o.i;
+            const otro = (o.d.proveedor !== prov);
+            opt.textContent = (otro ? '⚠ ' + (o.d.proveedor||'—') + ' · ' : '') + (o.d.concepto || o.d.proveedor || '') + ' — Pend. $' + Math.round(c.capitalPend).toLocaleString('es-AR');
             sel.appendChild(opt);
         });
+        if (prev && sel.querySelector('option[value="' + prev + '"]')) sel.value = prev;
     }
 
     // Retenciones para pago directo de factura
@@ -17847,6 +17859,25 @@
         var clienteInp = document.getElementById('emitCliente');
         if (p) { clienteInp.value = p.razonSocial || ''; clienteInp.readOnly = true; clienteInp.style.background = 'var(--surface-2)'; }
         else   { clienteInp.readOnly = false; clienteInp.style.background = ''; }
+        poblarPresupuestosEmit();   // reordena los presupuestos poniendo primero los del proveedor elegido
+    }
+
+    // Llena el selector de presupuestos del modal Emitir (todos los proveedores; primero el del comprobante).
+    function poblarPresupuestosEmit() {
+        var sel = document.getElementById('emitPresupuesto'); if (!sel) return;
+        var prev = sel.value;
+        var provChk = (document.getElementById('emitAsignarProv') || {}).checked;
+        var provNom = provChk ? (function(){ var p = proveedores.find(function(x){ return x.id === (document.getElementById('emitProveedorSel')||{}).value; }); return p ? (p.razonSocial||'') : ''; })() : '';
+        sel.innerHTML = '<option value="">— No aplicar a presupuesto —</option>';
+        var lista = (datos || []).map(function(d,i){ return { d:d, i:i }; });
+        lista.sort(function(a,b){ var pa = (a.d.proveedor===provNom)?0:1, pb = (b.d.proveedor===provNom)?0:1; return pa - pb; });
+        lista.forEach(function(o){
+            var c = calcPresupuesto(o.d);
+            var opt = document.createElement('option'); opt.value = o.i;
+            opt.textContent = (o.d.proveedor || '—') + ' · ' + (o.d.concepto || '') + ' — Pend. $' + Math.round(c.capitalPend).toLocaleString('es-AR');
+            sel.appendChild(opt);
+        });
+        if (prev && sel.querySelector('option[value="' + prev + '"]')) sel.value = prev;
     }
 
     // Alta rápida de proveedor sin perder el comprobante que se está armando
@@ -18023,6 +18054,8 @@
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
         emitToggleTipo();
+        poblarPresupuestosEmit();
+        if (e && e.presupuestoIdx != null) { var _ep = document.getElementById('emitPresupuesto'); if (_ep && _ep.querySelector('option[value="' + e.presupuestoIdx + '"]')) _ep.value = e.presupuestoIdx; }
         document.getElementById('modalEmitir').classList.add('active');
     }
 
@@ -18077,6 +18110,9 @@
             adjuntoNombre: prev ? (prev.adjuntoNombre || '') : '',
             adjuntoTipo:   prev ? (prev.adjuntoTipo || '')   : ''
         };
+        // Presupuesto al que se imputa este comprobante (opcional, de cualquier proveedor).
+        var _emitPresupVal = (document.getElementById('emitPresupuesto') || {}).value || '';
+        reg.presupuestoIdx = (_emitPresupVal !== '') ? parseInt(_emitPresupVal) : null;
         var archivoEmit = document.getElementById('emitArchivo').files[0];
         if (archivoEmit) {
             if (!_archivoComprimible(archivoEmit) && archivoEmit.size > MAX_DOC_MB * 1024 * 1024) { alert('El archivo adjunto supera los ' + MAX_DOC_MB + ' MB.'); return; }
@@ -18102,6 +18138,7 @@
                 adjuntoId: reg.adjuntoId || '', adjuntoNombre: reg.adjuntoNombre || '', adjuntoTipo: reg.adjuntoTipo || '',
                 origenEmitido: true
             };
+            if (reg.presupuestoIdx != null) _docPend.presupuestoIdx = reg.presupuestoIdx;   // queda vinculado al presupuesto
             var _docPendId = 'doc_' + Date.now();
             await REF_DOCS.child(_docPendId).set(Object.assign({}, _docPend, { id: _docPendId }));
             cerrarModalEmitir();
@@ -18115,6 +18152,14 @@
         var idx = comprobantesEmitidos.findIndex(function(x){ return x.id === reg.id; });
         if (idx >= 0) comprobantesEmitidos[idx] = reg; else comprobantesEmitidos.push(reg);
         _emitSincronizarMovCaja(reg);
+        // Imputar/actualizar en el presupuesto elegido (y desaplicar del anterior si cambió).
+        var _prevPI = (prev && prev.presupuestoIdx != null) ? prev.presupuestoIdx : null;
+        if (_prevPI != null && _prevPI !== reg.presupuestoIdx && datos[_prevPI]) {
+            _reconciliarFacturaEnPresupuesto(_prevPI, { id: reg.id, pagado: 0, fecha: reg.fecha, numero: reg.nro });
+        }
+        if (reg.presupuestoIdx != null && datos[reg.presupuestoIdx]) {
+            _reconciliarFacturaEnPresupuesto(reg.presupuestoIdx, { id: reg.id, pagado: (reg.pagado || 0), fecha: reg.fecha, numero: reg.nro });
+        }
         cerrarModalEmitir();
         persistirEmitidos();
         renderEmitidos();
@@ -18132,6 +18177,8 @@
         if (i >= 0) {
             comprobantesEmitidos.splice(i, 1);
             persistirEmitidos();
+            // Desaplicar del presupuesto si estaba imputado a uno.
+            if (e && e.presupuestoIdx != null && datos[e.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(e.presupuestoIdx, { id: e.id, pagado: 0, fecha: e.fecha, numero: e.nro });
             // Liberar el número correlativo si era el último emitido de su tipo
             if (e && e.nro) _liberarNroComprobante(e.nro, e.tipoAB);
             if (e && e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove();
@@ -32131,6 +32178,11 @@
                         <label>Proveedor</label>
                         <select id="emitProveedorSel" onchange="emitOnProveedorChange()" style="width:100%;"></select>
                     </div>
+                </div>
+                <div class="form-group" id="emitPresupWrap">
+                    <label>📋 Aplicar a un presupuesto <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                    <select id="emitPresupuesto" style="width:100%;"></select>
+                    <div class="form-hint" style="color:var(--text-3);">Imputa este comprobante como pago del presupuesto elegido (de cualquier proveedor). El monto se cuenta cuando el comprobante está pagado.</div>
                 </div>
                 <div class="form-group">
                     <label>💰 ¿Cómo se maneja el pago?</label>
