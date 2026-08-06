@@ -2855,6 +2855,7 @@
             <h2 id="authTitle">Iniciar sesión</h2>
             <p class="auth-subtitle" id="authSubtitle">Accedé con tu cuenta habitual</p>
             <div class="auth-error" id="authError"></div>
+            <div id="authFormBloque">
             <div class="form-group">
                 <label>Correo electrónico</label>
                 <input type="email" id="authEmail" placeholder="tu@correo.com" autocomplete="username">
@@ -2877,9 +2878,35 @@
                 </svg>
                 Continuar con Microsoft
             </button>
+            <button class="btn btn-outline" id="btnLoginGoogle" onclick="loginGoogle()"
+                    style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;">
+                <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true" style="flex-shrink:0;">
+                    <path fill="#4285f4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2.1 5-4.4 6.6v5.5h7.1c4.2-3.8 6.6-9.5 6.6-16.1z"/>
+                    <path fill="#34a853" d="M24 46c6 0 11-2 14.6-5.4l-7.1-5.5c-2 1.3-4.5 2.1-7.5 2.1-5.8 0-10.6-3.9-12.4-9.1H4.3v5.7C7.9 41 15.4 46 24 46z"/>
+                    <path fill="#fbbc05" d="M11.6 28.1c-.5-1.3-.7-2.7-.7-4.1s.3-2.8.7-4.1v-5.7H4.3C2.8 17.1 2 20.5 2 24s.8 6.9 2.3 9.8l7.3-5.7z"/>
+                    <path fill="#ea4335" d="M24 10.8c3.3 0 6.2 1.1 8.5 3.3l6.3-6.3C35 4.1 30 2 24 2 15.4 2 7.9 7 4.3 14.2l7.3 5.7c1.8-5.2 6.6-9.1 12.4-9.1z"/>
+                </svg>
+                Continuar con Google
+            </button>
             <div class="auth-toggle">
-                <span id="authToggleText">¿No tenés cuenta?</span>
-                <a id="authToggleLink" onclick="toggleAuthModo()">Crear una</a>
+                <span>¿No tenés cuenta? Pedile el acceso al administrador.</span>
+            </div>
+            </div>
+
+            <!-- Cuenta creada pero sin permisos todavía: no entra a la app -->
+            <div id="authPendiente" style="display:none;">
+                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;">
+                    <div style="font-size:32px;line-height:1;margin-bottom:12px;">⏳</div>
+                    <h3 style="font-size:15px;font-weight:700;color:var(--text-1);margin-bottom:8px;">Tu cuenta está pendiente de aprobación</h3>
+                    <p style="font-size:13px;color:var(--text-3);line-height:1.6;margin-bottom:4px;">
+                        Ingresaste como <strong id="authPendienteEmail" style="color:var(--text-1);"></strong>,
+                        pero todavía no tenés permisos asignados.
+                    </p>
+                    <p style="font-size:13px;color:var(--text-3);line-height:1.6;">
+                        Pedile a un administrador que te habilite desde <strong>Config → Usuarios</strong>.
+                    </p>
+                </div>
+                <button class="btn btn-outline" onclick="cerrarSesion()" style="width:100%;margin-top:14px;">Cerrar sesión</button>
             </div>
         </div>
     </div>
@@ -13379,17 +13406,21 @@
             const uids = Object.keys(usuarios);
             if (!uids.length) { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-3);">Todavía no hay usuarios.</td></tr>'; return; }
 
-            // Ordenar: superadmin primero
-            const orden = ['superadmin','admin','editor','lector'];
+            // Ordenar: los que esperan aprobación primero (hay que resolverlos),
+            // después superadmin y el resto por jerarquía.
+            const orden = ['','superadmin','admin','editor','lector'];
             uids.sort((a,b) => {
-                const ra = roles[a]||'lector', rb = roles[b]||'lector';
+                const ra = roles[a]||'', rb = roles[b]||'';
                 return orden.indexOf(ra) - orden.indexOf(rb);
             });
 
             const miUid = auth.currentUser ? auth.currentUser.uid : null;
             uids.forEach(uid => {
                 const email    = usuarios[uid].email || uid;
-                const rolActual = roles[uid] || 'lector';
+                // Sin rol NO es lo mismo que 'lector': el que no tiene rol no
+                // entra a la app. Antes se mostraban iguales y no había forma de
+                // distinguir a quién todavía falta habilitar.
+                const rolActual = roles[uid] || '';
                 const esMiCuenta = uid === miUid;
                 const tr = document.createElement('tr');
                 const acceso = usuarios[uid].ultimoAcceso
@@ -13397,12 +13428,14 @@
                     : '—';
 
                 if (esMiCuenta) {
-                    tr.innerHTML = `<td>${email}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><span class="badge-rol badge-ok">${ROLES_LABELS[rolActual]||rolActual} <span style="font-size:9px;opacity:.7;">(vos)</span></span></td>`;
+                    tr.innerHTML = `<td>${email}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><span class="badge-rol badge-ok">${ROLES_LABELS[rolActual]||rolActual||'⏳ Sin acceso'} <span style="font-size:9px;opacity:.7;">(vos)</span></span></td>`;
                 } else {
-                    const opts = ['lector','editor','admin','superadmin']
+                    const optPend = rolActual ? '' : '<option value="" selected>⏳ Sin acceso</option>';
+                    const opts = optPend + ['lector','editor','admin','superadmin']
                         .map(v => `<option value="${v}" ${rolActual===v?'selected':''}>${ROLES_LABELS[v]}</option>`)
                         .join('');
-                    tr.innerHTML = `<td>${email}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><select onchange="cambiarRol('${uid}',this.value)" style="width:auto;padding:6px 10px;">${opts}</select></td>`;
+                    const marca = rolActual ? '' : ' <span style="font-size:10px;color:var(--danger);">⏳ pendiente</span>';
+                    tr.innerHTML = `<td>${email}${marca}</td><td style="text-align:center"><span style="font-size:10px;color:var(--text-3);">${acceso}</span></td><td><select onchange="cambiarRol('${uid}',this.value)" style="width:auto;padding:6px 10px;">${opts}</select></td>`;
                 }
                 tbody.appendChild(tr);
             });
@@ -13410,9 +13443,20 @@
     }
 
     function cambiarRol(uid, rol) {
-        REF_ROLES.child(uid).set(rol).then(() => {
+        // "Sin acceso" BORRA el nodo, no guarda cadena vacía: las reglas de
+        // Firebase preguntan si roles/<uid> existe, y un "" existiría igual —
+        // la persona quedaría con acceso real aunque la app la muestre pendiente.
+        const op = rol
+            ? REF_ROLES.child(uid).set(rol)
+            : (confirm('¿Quitarle el acceso a este usuario?\n\nVa a quedar pendiente de aprobación y no va a poder entrar.')
+                ? REF_ROLES.child(uid).remove()
+                : Promise.reject(new Error('cancelado')));
+        op.then(() => {
             cargarListaUsuarios();
-        }).catch(err => { alert('No se pudo cambiar el permiso.\n' + (err&&err.message?err.message:'error desconocido')); });
+        }).catch(err => {
+            if (err && err.message === 'cancelado') { cargarListaUsuarios(); return; }
+            alert('No se pudo cambiar el permiso.\n' + (err&&err.message?err.message:'error desconocido'));
+        });
     }
 
     // ── Listener badge de solicitudes pendientes ──────────────────
@@ -13715,18 +13759,12 @@
     }
 
     // ===================== AUTH =====================
-    let authModo = 'login';
-
-    function toggleAuthModo() {
-        authModo = authModo === 'login' ? 'registro' : 'login';
-        const esLogin = authModo === 'login';
-        document.getElementById('authTitle').textContent    = esLogin ? 'Iniciar sesión' : 'Crear cuenta';
-        document.getElementById('authSubtitle').textContent = esLogin ? 'Accedé con tu cuenta habitual' : 'Registrate para empezar';
-        document.getElementById('authSubmitBtn').textContent= esLogin ? 'Ingresar' : 'Crear cuenta';
-        document.getElementById('authToggleText').textContent = esLogin ? '¿No tenés cuenta?' : '¿Ya tenés cuenta?';
-        document.getElementById('authToggleLink').textContent = esLogin ? 'Crear una' : 'Iniciar sesión';
-        ocultarAuthError();
-    }
+    // No hay alta pública de cuentas: el registro abierto dejaba que cualquiera
+    // que llegara a la URL se creara un usuario. Las altas las hace un
+    // administrador desde Config → Usuarios (o gestión de usuarios del backend).
+    // Ojo: sacar el botón NO alcanza — hay que desactivar el alta también en
+    // Firebase Console → Authentication → Settings → User actions, porque la API
+    // de registro se puede llamar igual con la apiKey pública.
 
     function mostrarAuthError(msg) { const e = document.getElementById('authError'); e.textContent = msg; e.style.display = 'block'; }
     function ocultarAuthError() { document.getElementById('authError').style.display = 'none'; }
@@ -13737,9 +13775,40 @@
         ocultarAuthError();
         if (!email || !pass) { mostrarAuthError('Completá correo y contraseña.'); return; }
         try {
-            if (authModo === 'login') await auth.signInWithEmailAndPassword(email, pass);
-            else await auth.createUserWithEmailAndPassword(email, pass);
+            await auth.signInWithEmailAndPassword(email, pass);
         } catch (err) { mostrarAuthError(traducirError(err.code)); }
+    }
+
+    // Cuenta válida pero todavía sin rol asignado: se queda en la pantalla de
+    // ingreso con el cartel de "pendiente" en vez de entrar a la app. El rol es
+    // lo que habilita el acceso, tanto acá como en las reglas de Firebase.
+    function mostrarPantallaPendiente(user) {
+        const appEl = document.getElementById('app');
+        if (appEl) appEl.classList.add('app-hidden');
+        const ov = document.getElementById('authOverlay');
+        if (ov) ov.classList.remove('app-hidden');
+        const form = document.getElementById('authFormBloque');
+        if (form) form.style.display = 'none';
+        const pend = document.getElementById('authPendiente');
+        if (pend) pend.style.display = 'block';
+        const em = document.getElementById('authPendienteEmail');
+        if (em) em.textContent = (user && user.email) || '';
+        const tit = document.getElementById('authTitle');
+        if (tit) tit.textContent = 'Acceso pendiente';
+        const sub = document.getElementById('authSubtitle');
+        if (sub) sub.textContent = 'Falta que te habiliten';
+        ocultarAuthError();
+    }
+
+    function ocultarPantallaPendiente() {
+        const form = document.getElementById('authFormBloque');
+        if (form) form.style.display = '';
+        const pend = document.getElementById('authPendiente');
+        if (pend) pend.style.display = 'none';
+        const tit = document.getElementById('authTitle');
+        if (tit) tit.textContent = 'Iniciar sesión';
+        const sub = document.getElementById('authSubtitle');
+        if (sub) sub.textContent = 'Accedé con tu cuenta habitual';
     }
 
     // ── Ingreso con Microsoft (Entra ID) ─────────────────────────────────
@@ -13782,19 +13851,33 @@
         return p;
     }
 
-    async function loginMicrosoft() {
+    // ── Ingreso con Google ───────────────────────────────────────────────
+    // Mismo esquema que Microsoft: Firebase hace de cliente confidencial. El
+    // proveedor se activa en Firebase Console → Authentication → Sign-in method
+    // → Google (no hace falta client secret propio para el flujo web).
+    function _googleProvider() {
+        var p = new firebase.auth.GoogleAuthProvider();
+        // Sin scopes extra: sólo identidad. La lectura de Gmail para importar
+        // facturas es OTRO flujo aparte (Google Identity Services), no éste.
+        p.setCustomParameters({ prompt: 'select_account' });
+        return p;
+    }
+
+    // Popup con caída a redirect, más el enganche para vincular cuentas.
+    // Lo comparten los dos proveedores para no repetir el manejo de errores.
+    async function _loginProveedor(hacerProvider, btnId, nombre) {
         ocultarAuthError();
-        var btn = document.getElementById('btnLoginMicrosoft');
+        var btn = document.getElementById(btnId);
         if (btn) btn.disabled = true;
         try {
-            await auth.signInWithPopup(_msProvider());
+            await auth.signInWithPopup(hacerProvider());
         } catch (err) {
             // En la PWA instalada el popup a veces no abre: se cae a redirect.
             if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment') {
-                try { await auth.signInWithRedirect(_msProvider()); return; } catch (e2) { err = e2; }
+                try { await auth.signInWithRedirect(hacerProvider()); return; } catch (e2) { err = e2; }
             }
             if (err.code === 'auth/account-exists-with-different-credential') {
-                await _msVincularCuenta(err);
+                await _vincularCuenta(err, nombre);
             } else if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
                 mostrarAuthError(traducirError(err.code));
             }
@@ -13803,11 +13886,15 @@
         }
     }
 
-    // El correo de Microsoft ya tiene cuenta creada con contraseña. Si no se
+    function loginMicrosoft() { return _loginProveedor(_msProvider, 'btnLoginMicrosoft', 'Microsoft'); }
+    function loginGoogle()    { return _loginProveedor(_googleProvider, 'btnLoginGoogle', 'Google'); }
+
+    // El correo del proveedor ya tiene cuenta creada con contraseña. Si no se
     // vinculan, la misma persona termina con dos usuarios distintos (dos uid) y
     // el rol le queda sólo en uno. Se pide la contraseña UNA vez y se atan las
     // dos credenciales al mismo usuario, así el uid y el rol no cambian.
-    async function _msVincularCuenta(err) {
+    async function _vincularCuenta(err, nombre) {
+        var prov  = nombre || 'ese proveedor';
         var email = (err && err.email) || '';
         var cred  = err && err.credential;
         if (!cred || !email) {
@@ -13815,12 +13902,12 @@
             return;
         }
         var pass = prompt('Ya tenés una cuenta con ' + email + ' y contraseña.\n\n' +
-                          'Escribí esa contraseña una sola vez para vincularle tu cuenta de Microsoft:');
+                          'Escribí esa contraseña una sola vez para vincularle tu cuenta de ' + prov + ':');
         if (!pass) return;
         try {
             var res = await auth.signInWithEmailAndPassword(email, pass);
             await res.user.linkWithCredential(cred);
-            alert('✓ Cuenta de Microsoft vinculada. La próxima vez podés entrar directo con el botón de Microsoft.');
+            alert('✓ Cuenta de ' + prov + ' vinculada. La próxima vez podés entrar directo con ese botón.');
         } catch (e) {
             mostrarAuthError(traducirError(e.code));
         }
@@ -13870,7 +13957,7 @@
         // onAuthStateChanged; acá sólo hay que mostrar el error.
         auth.getRedirectResult().catch(function(err) {
             if (!err || !err.code) return;
-            if (err.code === 'auth/account-exists-with-different-credential') _msVincularCuenta(err);
+            if (err.code === 'auth/account-exists-with-different-credential') _vincularCuenta(err, 'ese proveedor');
             else mostrarAuthError(traducirError(err.code));
         });
 
@@ -13884,7 +13971,48 @@
                 // Evitar reinicio si el usuario ya estaba logueado y la app esta activa
                 const _appActiva = !document.getElementById('app').classList.contains('app-hidden');
                 if (_authYaInicio && _appActiva) return;
-                _authYaInicio = true;
+
+                // ── Portero ──────────────────────────────────────────────
+                // Estar autenticado ya no alcanza para entrar: hace falta un
+                // rol asignado. El rol se consulta ANTES de pintar la app o de
+                // leer un solo dato, y es la misma condición que exigen las
+                // reglas de Firebase, así que una cuenta sin rol no ve nada ni
+                // desde la consola del navegador.
+                const _email = user.email || '';
+                const _adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
+                const _esEmailSuperAdmin = _adminConfigurado && _email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+                REF_ROLES.child(user.uid).once('value').then(snap => {
+                    let rol = snap.val();
+                    // Migración automática: el email superadmin siempre tiene rol 'superadmin'
+                    if (_esEmailSuperAdmin && rol !== 'superadmin') {
+                        rol = 'superadmin';
+                        REF_ROLES.child(user.uid).set('superadmin').catch(()=>{});
+                    }
+                    // Se anota al usuario tenga rol o no: así el administrador lo
+                    // ve en Config → Usuarios y puede habilitarlo.
+                    REF_USUARIOS.child(user.uid).set({ email: _email, ultimoAcceso: Date.now() }).catch(()=>{});
+
+                    if (!rol && _adminConfigurado) { mostrarPantallaPendiente(user); return; }
+                    _authYaInicio = true;
+                    _entrarALaApp(user, rol, _adminConfigurado);
+                }).catch(() => {
+                    // No se pudo leer el rol (sin conexión, o reglas que lo niegan).
+                    // Ante la duda no se entra: antes se entraba igual.
+                    mostrarPantallaPendiente(user);
+                });
+            } else {
+                document.getElementById('app').classList.add('app-hidden');
+                document.getElementById('authOverlay').classList.remove('app-hidden');
+                ocultarPantallaPendiente();
+                document.getElementById('authEmail').value = '';
+                document.getElementById('authPassword').value = '';
+            }
+        });
+
+        // Todo lo que hay que preparar una vez que el acceso ya está aprobado.
+        function _entrarALaApp(user, rol, adminConfigurado) {
+                ocultarPantallaPendiente();
                 document.getElementById('authOverlay').classList.add('app-hidden');
                 // El selector decide si se entra al sistema o a la caja. Muestra el
                 // onboarding sólo si el usuario elige el sistema (o si es lo único que tiene).
@@ -13912,42 +14040,21 @@
                 cargarVisibilidadMenu();
                 cargarIndicesCAC();
 
-                const email = user.email || '';
-                const adminConfigurado = !!ADMIN_EMAIL && ADMIN_EMAIL.indexOf('PEGAR') === -1;
-                const esEmailSuperAdmin = adminConfigurado && email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-
-                REF_USUARIOS.child(user.uid).set({ email, ultimoAcceso: Date.now() }).catch(()=>{});
-
+                // Instalación nueva todavía sin ADMIN_EMAIL configurado: se
+                // mantiene el comportamiento de siempre para no dejar afuera al
+                // primero que entra y no poder configurar nada.
                 if (!adminConfigurado) {
                     esSuperAdmin = false; esAdmin = false; puedeEditar = true;
                     aplicarPermisos(); initEmpresas(); return;
                 }
-                REF_ROLES.child(user.uid).once('value').then(snap => {
-                    let rol = snap.val();
-                    // Migración automática: el email superadmin siempre tiene rol 'superadmin'
-                    if (esEmailSuperAdmin && rol !== 'superadmin') {
-                        rol = 'superadmin';
-                        REF_ROLES.child(user.uid).set('superadmin').catch(()=>{});
-                    }
-                    esSuperAdmin = (rol === 'superadmin');
-                    esAdmin      = esSuperAdmin || (rol === 'admin');
-                    puedeEditar  = esAdmin || (rol === 'editor');
-                    aplicarPermisos();
-                    initEmpresas();
-                    if (esAdmin) escucharSolicitudes();
-                }).catch(() => {
-                    esSuperAdmin = esEmailSuperAdmin;
-                    esAdmin      = esEmailSuperAdmin;
-                    puedeEditar  = esEmailSuperAdmin;
-                    aplicarPermisos(); initEmpresas();
-                });
-            } else {
-                document.getElementById('app').classList.add('app-hidden');
-                document.getElementById('authOverlay').classList.remove('app-hidden');
-                document.getElementById('authEmail').value = '';
-                document.getElementById('authPassword').value = '';
-            }
-        });
+
+                esSuperAdmin = (rol === 'superadmin');
+                esAdmin      = esSuperAdmin || (rol === 'admin');
+                puedeEditar  = esAdmin || (rol === 'editor');
+                aplicarPermisos();
+                initEmpresas();
+                if (esAdmin) escucharSolicitudes();
+        }
     } else {
         // Firebase no configurado: ocultar spinner y mostrar error
         const loadingEl = document.getElementById('authLoading');
