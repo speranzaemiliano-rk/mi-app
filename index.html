@@ -9999,6 +9999,7 @@
             d.pagosHistorial.push(entry);
             d.pagado=(d.pagado||0)+monto;
             REF_DOCS.child(docId).update({pagado:d.pagado,pagosHistorial:d.pagosHistorial});
+            if(d.presupuestoIdx!=null && datos[d.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(d.presupuestoIdx,{id:d.id,pagado:d.pagado,fecha:fecha,numero:d.numero});
             itemImp={tipo:'doc',item:d};
         }
         cerrarPagoFD(); renderFacturas(); renderDocumentos();
@@ -18792,6 +18793,26 @@
 
     function docOnProveedorChange() {
         docOnProveedorInput();
+        poblarPresupuestosDoc();
+    }
+
+    // Llena el selector de presupuestos del modal Documento (por proveedor, o todos si se tilda).
+    function poblarPresupuestosDoc() {
+        var sel = document.getElementById('docPresupuesto'); if (!sel) return;
+        var prev = sel.value;
+        var prov = (document.getElementById('docProveedor') || {}).value || '';
+        var todos = !!(document.getElementById('docPresupTodos') || {}).checked;
+        sel.innerHTML = '<option value="">— Sin presupuesto vinculado —</option>';
+        var lista = (datos || []).map(function(d,i){ return { d:d, i:i }; }).filter(function(o){ return todos || o.d.proveedor === prov; });
+        lista.sort(function(a,b){ var pa = (a.d.proveedor===prov)?0:1, pb = (b.d.proveedor===prov)?0:1; return pa - pb; });
+        lista.forEach(function(o){
+            var c = calcPresupuesto(o.d);
+            var opt = document.createElement('option'); opt.value = o.i;
+            var otro = (o.d.proveedor !== prov);
+            opt.textContent = (otro ? '⚠ ' + (o.d.proveedor||'—') + ' · ' : '') + (o.d.concepto || o.d.proveedor || '') + ' — Pend. $' + Math.round(c.capitalPend).toLocaleString('es-AR');
+            sel.appendChild(opt);
+        });
+        if (prev && sel.querySelector('option[value="' + prev + '"]')) sel.value = prev;
     }
 
     // Alta rápida de proveedor sin perder el comprobante que se está cargando
@@ -18839,6 +18860,9 @@
                 document.getElementById('docNroInterno').textContent = d.nro ? ('N° ' + d.nro) : '(se asigna al guardar)';
                 document.getElementById('docCompArchivo').value = '';
                 _renderEstadoAdjunto('docCompArchivoEstado', d.adjuntoNombre, d.adjuntoId);
+                var _dpt = document.getElementById('docPresupTodos'); if (_dpt) _dpt.checked = (d.presupuestoIdx != null && datos[d.presupuestoIdx] && datos[d.presupuestoIdx].proveedor !== d.proveedor);
+                poblarPresupuestosDoc();
+                var _dps = document.getElementById('docPresupuesto'); if (_dps && d.presupuestoIdx != null && _dps.querySelector('option[value="' + d.presupuestoIdx + '"]')) _dps.value = d.presupuestoIdx;
             } else {
                 document.getElementById('docEgresoSiBtn').disabled = false;
                 document.getElementById('docEgresoNoBtn').disabled = false;
@@ -18862,6 +18886,8 @@
             document.getElementById('docNroInterno').textContent = '(se asigna al guardar)';
             document.getElementById('docCompArchivo').value = '';
             _renderEstadoAdjunto('docCompArchivoEstado', null, null);
+            var _dpt2 = document.getElementById('docPresupTodos'); if (_dpt2) _dpt2.checked = false;
+            poblarPresupuestosDoc();
         }
         document.getElementById('modalDoc').classList.add('active');
     }
@@ -18912,6 +18938,9 @@
             adjuntoNombre: existente ? (existente.adjuntoNombre || '') : '',
             adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : ''
         };
+        // Presupuesto al que se imputa este documento (opcional, cualquier proveedor).
+        var _docPresupVal = (document.getElementById('docPresupuesto') || {}).value || '';
+        doc.presupuestoIdx = (_docPresupVal !== '') ? parseInt(_docPresupVal) : null;
         if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
         const archivoDoc = document.getElementById('docCompArchivo').files[0];
         if (archivoDoc) {
@@ -18944,6 +18973,14 @@
         }
         const _esNuevoDoc = !editandoDocId;
         const docId = editandoDocId || 'doc_' + Date.now();
+        // Imputar/actualizar en el presupuesto elegido (y desaplicar del anterior si cambió).
+        var _prevDocPI = (existente && existente.presupuestoIdx != null) ? existente.presupuestoIdx : null;
+        if (_prevDocPI != null && _prevDocPI !== doc.presupuestoIdx && datos[_prevDocPI]) {
+            _reconciliarFacturaEnPresupuesto(_prevDocPI, { id: docId, pagado: 0, fecha: doc.fecha, numero: doc.numero });
+        }
+        if (doc.presupuestoIdx != null && datos[doc.presupuestoIdx]) {
+            _reconciliarFacturaEnPresupuesto(doc.presupuestoIdx, { id: docId, pagado: (doc.pagado || 0), fecha: doc.fecha, numero: doc.numero });
+        }
         REF_DOCS.child(docId).set({ ...doc, id: docId }).then(() => {
             cerrarModalDoc();
             // Si se marcó como pagado acá mismo (no vía el botón "Pagar", que ya ofrece imprimir
@@ -19267,6 +19304,7 @@
         var tieneMov = d && ((d.pagado||0) > 0 || (d.pagosHistorial||[]).length > 0);
         if (!confirm('¿Eliminar este comprobante?' + (tieneMov ? '\n\nTambién se quitará su movimiento de Caja General (el pago asociado).' : ''))) return;
         if (d && d.nro) _liberarNroComprobante(d.nro, d.modalidad);
+        if (d && d.presupuestoIdx != null && datos[d.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(d.presupuestoIdx, { id: d.id, pagado: 0, fecha: d.fecha, numero: d.numero });
         if (d && d.adjuntoId) REF_DOCS.child(d.adjuntoId).remove();
         REF_DOCS.child(id).remove();
     }
@@ -32631,6 +32669,14 @@
             <div class="form-group">
                 <label>Observaciones</label>
                 <input type="text" id="docObservaciones" placeholder="Notas adicionales">
+            </div>
+            <div class="form-group" id="docPresupGrupo">
+                <label>📋 Aplicar a un presupuesto <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
+                <select id="docPresupuesto" style="width:100%;"><option value="">— Sin presupuesto vinculado —</option></select>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;font-size:12px;color:var(--text-2);cursor:pointer;">
+                    <input type="checkbox" id="docPresupTodos" onchange="poblarPresupuestosDoc()" style="width:auto;margin:0;"> Mostrar presupuestos de <strong>otros proveedores</strong> también
+                </label>
+                <div class="form-hint" style="color:var(--text-3);">Imputa lo pagado de este documento como pago del presupuesto elegido.</div>
             </div>
             <div class="form-group">
                 <label>Comprobante adjunto (foto o PDF) <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
