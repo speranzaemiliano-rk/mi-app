@@ -3122,7 +3122,7 @@
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">folder_open</span> Comprobantes recibidos
                     </button>
                     <button class="nav-item nav-sub" id="btnEmitirComprobanteMenu" data-navkey="emitircomprobante" onclick="mostrarTab('DocumentosEmitidos'); abrirModalEmitir();" title="Emitir un recibo o documento, con opción de asignarlo a un proveedor y afectar caja/banco">
-                        <span class="nav-drag-handle">⠿</span><span class="nav-icon">receipt</span> Emitir Comprobante X o Egreso
+                        <span class="nav-drag-handle">⠿</span><span class="nav-icon">receipt</span> Emitir recibo
                     </button>
                     <div style="height:1px;background:rgba(255,255,255,.08);margin:4px 12px;"></div>
                     <button class="nav-item nav-sub" id="tabBtnPagos" data-navkey="pagosprov" onclick="mostrarTab('Pagos')" title="Todos los pagos a proveedores">
@@ -4195,7 +4195,7 @@
                         <div style="display:flex;gap:8px;flex-wrap:wrap;">
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('ingreso')" title="Reflejar en la caja como INGRESO todos los comprobantes que quedaron sin afectar caja">⬆️💰 Reflejar todos como ingreso</button>
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('egreso')" title="Reflejar en la caja como EGRESO todos los comprobantes que quedaron sin afectar caja">⬇️💰 …como egreso</button>
-                          <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir()">＋ Emitir Comprobante X / Egreso</button>
+                          <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir()">＋ Emitir recibo</button>
                         </div>
                     </div>
                     <div class="search-row">
@@ -8510,6 +8510,24 @@
         });
     }
 
+    // Numeración correlativa PROPIA de cada proveedor para comprobantes NO oficiales (que no
+    // computan ARCA): comprobantes X y facturas marcadas "no computa ARCA". Es automática y por
+    // proveedor, dentro de la empresa+proyecto activos (mismo criterio que el resto de la
+    // numeración interna). Devuelve un entero incremental; se guarda en el campo nroProv del
+    // comprobante y se muestra como "P-0001".
+    function obtenerProximoNroProveedor(provId) {
+        return new Promise(function(resolve){
+            if (!db || !getBasePath || !provId) { resolve(null); return; }
+            try {
+                var ref = db.ref(getBasePath() + '/contadoresProvComp/' + provId);
+                ref.transaction(function(n){ return (n||0)+1; })
+                .then(function(r){ resolve((r.snapshot && r.snapshot.val()) || 1); })
+                .catch(function(){ resolve(null); });
+            } catch(e) { resolve(null); }
+        });
+    }
+    function _fmtNroProv(n) { return (n != null && n !== '') ? ('P-' + String(n).padStart(4,'0')) : ''; }
+
     // Agrega un número al pool de "libres" (huecos reutilizables) sin duplicar.
     // key = 'A'|'B' (recibos) o 'OP_A'|'OP_B' (órdenes de pago).
     function _agregarComprobanteLibre(key, num) {
@@ -10018,6 +10036,9 @@
             // splice), así que el índice en memoria coincide con la clave numérica en Firebase.
             REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({pagosHistorial:f.pagosHistorial,pagado:f.pagado,estado:f.estado});
             sincronizarPagoPlan('factura',idx);
+            // Si la factura está aplicada a un presupuesto, reflejar el pago en el presupuesto
+            // (igual que la rama de documentos). Antes faltaba y el presupuesto no se actualizaba.
+            if(f.presupuestoIdx!=null && datos[f.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(f.presupuestoIdx,{id:f.id,pagado:f.pagado,fecha:f.fecha,numero:f.numero});
             itemImp={tipo:'fact',item:f,idx:idx};
         } else {
             var docId=val,d=documentos.find(function(x){return x.id===docId;}); if(!d) return;
@@ -10935,6 +10956,9 @@
         const recibo = item.reciboCorrelativo || item.recibo || generarNumeroRecibo();
         const emision= new Date().toLocaleDateString('es-AR');
         const hayPago= typeof montoPago === 'number' && montoPago > 0;
+        // La Orden de Pago se fecha con el día del pago (no con el de hoy): al reimprimir un
+        // pago viejo mantiene su fecha original. Sin pago (impresión del presupuesto), usa hoy.
+        const fechaDoc = (hayPago && fechaPago) ? formatearFecha(fechaPago) : emision;
         const mod    = modalidadPago || item.modalidad || '';
         const modLabel = mod==='A' ? 'Bancarizado — Modalidad A' : mod==='B' ? 'Efectivo — Modalidad B' : '—';
         const emp    = getEmpresaParaRecibo();
@@ -10958,7 +10982,7 @@
                 '<div class="tot-row neto"><span>Neto al proveedor</span><span>' + fmt(neto) + '</span></div>';
         }
 
-        var _rh = buildReciboHeader('Orden de Pago',recibo, emision, {
+        var _rh = buildReciboHeader('Orden de Pago',recibo, fechaDoc, {
             nombre: item.proveedor||'—', detalle: item.concepto||''
         });
 
@@ -10984,7 +11008,7 @@
         '<div class="tot-final"><span>Avance</span><span>' + (item.presupuesto ? Math.round((c.pagadoTotal/item.presupuesto)*100) : 0) + '%</span></div>' +
         '</div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (item.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
-        '<div class="pie">Comprobante ' + recibo + ' · Generado el ' + emision + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
+        '<div class="pie">Comprobante ' + recibo + ' · Fecha ' + fechaDoc + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
         '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
 
         _imprimirDocHTML(html);
@@ -12420,7 +12444,7 @@
         {key:'banco',              label:'— Banco'},
         {key:'ingresos',       label:'📈 Ingresos'},
         {key:'comprobantes',       label:'— Comprobantes (ARCA)'},
-        {key:'emitircomprobante',      label:'—— Emitir Comprobante X o Egreso'},
+        {key:'emitircomprobante',      label:'—— Emitir recibo'},
         {key:'comprobantesemitidos',   label:'—— Comprobantes Emitidos'},
         {key:'ventas',             label:'— Ventas UF'},
         {key:'alquileres',         label:'— Alquileres'},
@@ -12434,7 +12458,7 @@
         {key:'nuevopresupuesto',           label:'——— Nuevo presupuesto'},
         {key:'editarpresupuesto',          label:'——— Editar existente'},
         {key:'documentos',             label:'—— Comprobantes recibidos'},
-        {key:'emitircomprobante',      label:'—— Emitir Comprobante X o Egreso'},
+        {key:'emitircomprobante',      label:'—— Emitir recibo'},
         {key:'pagosprov',              label:'—— Pagos a Proveedores'},
         {key:'registrarpago',          label:'—— Registrar Pago'},
         {key:'resumenegresos',     label:'— Resumen Egresos'},
@@ -16276,6 +16300,121 @@
         REF_DATOS.child(pres.id || (pres.id = _colUidItem())).update({ pagosHistorial: pres.pagosHistorial, pagado: pres.pagado, pagadoPresupuesto: pres.pagadoPresupuesto, pagadoMayores: pres.pagadoMayores });
     }
 
+    // ¿Esta entrada de pago del presupuesto es un "pago-espejo" de una factura/documento? Esos
+    // (marcados con origenFacturaId) reflejan un pago que YA se cuenta del lado de la factura/doc.
+    // Sirven para el AVANCE del presupuesto, pero NO deben sumarse en los totales de caja/banco/
+    // egresos, o la misma plata se contaría dos veces.
+    function _esPagoEspejo(p) { return !!(p && p.origenFacturaId); }
+    // Pagado "propio" del presupuesto (pagos directos, SIN los espejos de facturas/documentos).
+    // Es lo que corresponde sumar como egreso del presupuesto en caja/banco.
+    function _presupPagadoPropio(d) {
+        if (!d) return 0;
+        var hist = d.pagosHistorial || [];
+        if (!hist.length) return d.pagado || 0; // legado sin historial detallado
+        return hist.reduce(function(s, p) {
+            if (_esPagoEspejo(p)) return s;
+            return s + (((p.capital||0)+(p.mayores||0)+(p.canjeCapital||0)) || (p.montoPagado||0) || (p.monto||0));
+        }, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Acción DIRECTA "Aplicar a un presupuesto" para un comprobante ya cargado
+    // (factura o documento X), esté pagado o no, sin tener que entrar a editarlo.
+    // Permite elegir un presupuesto del MISMO proveedor o de OTRO. Reusa
+    // _reconciliarFacturaEnPresupuesto (imputa lo pagado; retroactivo si ya se pagó).
+    // ─────────────────────────────────────────────────────────────────────────
+    var _aplicarPresupCtx = null;
+    function abrirAplicarPresup(tipo, id) {
+        var item = (tipo === 'fact') ? facturas[parseInt(id)] : (documentos||[]).find(function(x){ return x.id === id; });
+        if (!item) { alert('No se encontró el comprobante.'); return; }
+        _aplicarPresupCtx = {
+            tipo: tipo, id: id, prov: item.proveedor || '', pagado: item.pagado || 0,
+            numero: item.numero || item.nro || '',
+            actualIdx: (item.presupuestoIdx != null) ? item.presupuestoIdx : null
+        };
+        var ex = document.getElementById('_mAplPresup'); if (ex) ex.remove();
+        var overlay = document.createElement('div');
+        overlay.id = '_mAplPresup';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:var(--surface,#fff);color:var(--text,#111);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid var(--blue,#1a73e8);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3);';
+        var pagTxt = _aplicarPresupCtx.pagado > 0
+            ? ('Pagado: $' + Math.round(_aplicarPresupCtx.pagado).toLocaleString('es-AR'))
+            : 'Sin pagos aún (se imputará $0 hasta que se pague)';
+        box.innerHTML =
+            '<div style="padding:16px 20px;border-bottom:1px solid var(--border,#eee);">'
+            + '<div style="font-weight:700;font-size:15px;">📋 Aplicar a un presupuesto</div>'
+            + '<div style="font-size:12px;color:var(--text-3,#888);margin-top:4px;">' + escHtml(_aplicarPresupCtx.prov || '—') + (_aplicarPresupCtx.numero ? (' · ' + escHtml(String(_aplicarPresupCtx.numero))) : '') + ' · ' + pagTxt + '</div>'
+            + '</div>'
+            + '<div style="padding:16px 20px;overflow-y:auto;">'
+            + '<label style="font-size:12px;font-weight:600;">Presupuesto</label>'
+            + '<select id="_aplPresupSel" style="width:100%;margin-top:6px;"></select>'
+            + '<label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;color:var(--text-2,#666);cursor:pointer;"><input type="checkbox" id="_aplPresupTodos" style="width:auto;margin:0;"> Mostrar presupuestos de <strong>otros proveedores</strong> también</label>'
+            + '<div style="font-size:11px;color:var(--text-3,#888);margin-top:8px;">Lo pagado de este comprobante se imputa al presupuesto elegido (retroactivo si ya estaba pagado). Elegí «— Sin presupuesto —» para desvincular.</div>'
+            + '</div>'
+            + '<div style="padding:14px 20px;border-top:1px solid var(--border,#eee);display:flex;gap:8px;justify-content:flex-end;">'
+            + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'_mAplPresup\').remove();">Cancelar</button>'
+            + '<button class="btn btn-primary btn-sm" onclick="guardarAplicarPresup()">Aplicar</button>'
+            + '</div>';
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+        var chk = document.getElementById('_aplPresupTodos');
+        if (chk) chk.addEventListener('change', _aplicarPresupPoblar);
+        _aplicarPresupPoblar();
+    }
+    function _aplicarPresupPoblar() {
+        var sel = document.getElementById('_aplPresupSel'); if (!sel || !_aplicarPresupCtx) return;
+        var todos = !!(document.getElementById('_aplPresupTodos') || {}).checked;
+        var prov = _aplicarPresupCtx.prov;
+        sel.innerHTML = '<option value="">— Sin presupuesto —</option>';
+        (datos || []).forEach(function(d, i) {
+            var esMismo = (d.proveedor === prov);
+            if (!todos && !esMismo) return;
+            var o = document.createElement('option'); o.value = i;
+            o.textContent = (esMismo ? '' : '⚠ ' + (d.proveedor || '?') + ' · ') + (d.concepto || 'Presupuesto') + ' ($' + Math.round(d.presupuesto || 0).toLocaleString('es-AR') + ')';
+            sel.appendChild(o);
+        });
+        if (_aplicarPresupCtx.actualIdx != null && sel.querySelector('option[value="' + _aplicarPresupCtx.actualIdx + '"]')) {
+            sel.value = _aplicarPresupCtx.actualIdx;
+        } else if (_aplicarPresupCtx.actualIdx != null) {
+            // Ya vinculado a un presupuesto de otro proveedor que no se ve → forzar "otros" una vez.
+            var chk = document.getElementById('_aplPresupTodos');
+            if (chk && !chk.checked) { chk.checked = true; return _aplicarPresupPoblar(); }
+        }
+    }
+    function guardarAplicarPresup() {
+        if (!_aplicarPresupCtx) return;
+        var ctx = _aplicarPresupCtx;
+        var sel = document.getElementById('_aplPresupSel');
+        var val = sel ? sel.value : '';
+        var nuevoIdx = (val !== '') ? parseInt(val) : null;
+        var prevIdx = ctx.actualIdx;
+        if (nuevoIdx != null && !datos[nuevoIdx]) { alert('El presupuesto elegido ya no existe.'); return; }
+        if (ctx.tipo === 'fact') {
+            var f = facturas[parseInt(ctx.id)]; if (!f) { alert('No se encontró la factura.'); return; }
+            f.presupuestoIdx = (nuevoIdx == null) ? null : nuevoIdx;
+            persistirFacturas();
+            if (prevIdx != null && prevIdx !== nuevoIdx && datos[prevIdx]) _reconciliarFacturaEnPresupuesto(prevIdx, { id: f.id, pagado: 0, fecha: f.fecha, numero: f.numero });
+            if (nuevoIdx != null) _reconciliarFacturaEnPresupuesto(nuevoIdx, { id: f.id, pagado: (f.pagado || 0), fecha: f.fecha, numero: f.numero });
+        } else {
+            var d = (documentos || []).find(function(x){ return x.id === ctx.id; }); if (!d) { alert('No se encontró el comprobante.'); return; }
+            d.presupuestoIdx = (nuevoIdx == null) ? null : nuevoIdx;
+            REF_DOCS.child(d.id).update({ presupuestoIdx: (nuevoIdx == null) ? null : nuevoIdx });
+            if (prevIdx != null && prevIdx !== nuevoIdx && datos[prevIdx]) _reconciliarFacturaEnPresupuesto(prevIdx, { id: d.id, pagado: 0, fecha: d.fecha, numero: d.numero });
+            if (nuevoIdx != null) _reconciliarFacturaEnPresupuesto(nuevoIdx, { id: d.id, pagado: (d.pagado || 0), fecha: d.fecha, numero: d.numero });
+        }
+        var m = document.getElementById('_mAplPresup'); if (m) m.remove();
+        if (typeof renderDocumentos === 'function') renderDocumentos();
+        if (typeof renderizar === 'function') renderizar();
+        if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
+        var msg = (nuevoIdx == null)
+            ? 'Comprobante desvinculado del presupuesto.'
+            : ('Comprobante aplicado al presupuesto de ' + (datos[nuevoIdx].proveedor || '—') + (_aplicarPresupCtx.pagado > 0 ? '. Se imputó lo pagado.' : '. Se imputará cuando se pague.'));
+        alert('✓ ' + msg);
+        _aplicarPresupCtx = null;
+    }
+
     function onFactImporteChange() {
         const imp = parseFloat(document.getElementById('factImporte').value) || 0;
         const monto = document.getElementById('factMontoPago');
@@ -16377,7 +16516,8 @@
             estado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].estado || 'pendiente') : 'pendiente',
             tipo:        document.getElementById('factTipo').value || 'presup',
             netoGravado: window._factNetoGravado || 0,
-            computaARCA: (document.getElementById('factComputaARCA')||{}).value !== 'false'
+            computaARCA: (document.getElementById('factComputaARCA')||{}).value !== 'false',
+            nroProv:     editandoFactIndex >= 0 ? (facturas[editandoFactIndex].nroProv || null) : null
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
@@ -16395,6 +16535,13 @@
         if (nuevo.tipo === 'presup') {
             const presupIdx = document.getElementById('factPresupuesto').value;
             if (presupIdx !== '') nuevo.presupuestoIdx = parseInt(presupIdx);
+        }
+
+        // Numeración correlativa PROPIA del proveedor para facturas que NO computan ARCA (comprobante X).
+        // Automática y por proveedor; se asigna una sola vez al cargarla.
+        if (nuevo.computaARCA === false && !nuevo.nroProv && nuevo.proveedor) {
+            var _pFact = buscarProveedorPorNombre(nuevo.proveedor);
+            if (_pFact && _pFact.id) nuevo.nroProv = await obtenerProximoNroProveedor(_pFact.id);
         }
 
         // Conservar doc existente
@@ -16498,6 +16645,9 @@
         var modLabel = mod==='A' ? 'Bancarizado — Modalidad A' : 'Efectivo — Modalidad B';
         var neto  = monto - (totalRet||0);
         var emision = new Date().toLocaleDateString('es-AR');
+        // La Orden de Pago se fecha con el día del pago (no con el de hoy): así, al reimprimir
+        // una OP de un pago viejo, sigue mostrando su fecha original y no la actual.
+        var fechaDoc = fecha ? formatearFecha(fecha) : emision;
         var nroDoc  = nroComprobante || f.numero || f.id || generarNumeroRecibo();
         var emp = getEmpresaParaRecibo();
         var retsBlock = '';
@@ -16507,7 +16657,7 @@
             });
             retsBlock += '<div class="tot-row neto"><span>Neto al proveedor</span><span>' + fmt(neto) + '</span></div>';
         }
-        var _rh = buildReciboHeader('Orden de Pago',nroDoc, emision, {
+        var _rh = buildReciboHeader('Orden de Pago',nroDoc, fechaDoc, {
             nombre: f.proveedor||'—', detalle: (f.descripcion||'')
         });
         var html =
@@ -16528,7 +16678,7 @@
             '<div class="tot-final"><span>Total pagado</span><span>' + fmt(monto) + '</span></div>' +
             '</div></div>' +
             '<div class="firmas"><div class="fi">Recibí conforme — ' + (f.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
-            '<div class="pie">Comprobante ' + nroDoc + ' · Generado el ' + emision + '</div>' +
+            '<div class="pie">Comprobante ' + nroDoc + ' · Fecha ' + fechaDoc + '</div>' +
             '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
         if (retHtml) return html;
         _imprimirDocHTML(html);
@@ -16581,6 +16731,7 @@
             '<div class="instrucciones"><div class="instr-titulo">Datos del comprobante</div><div class="instr-body">' +
             'Tipo: ' + titulo +
             '<br>Fecha: ' + (d.fecha ? formatearFecha(d.fecha) : emision) +
+            (d.nroProv ? '<br>N° proveedor: ' + _fmtNroProv(d.nroProv) : '') +
             '<br>Estado: ' + estado +
             (d.modalidad ? '<br>Modalidad: ' + (d.modalidad === 'A' ? 'Bancarizado (A)' : 'Efectivo (B)') : '') +
             '</div></div>' +
@@ -17148,7 +17299,9 @@
 
     // ===================== EGRESOS =====================
     function renderEgresos() {
-        const totalPagadoPres = datos.reduce((s, i) => s + (i.pagado || 0), 0);
+        // Sólo pagos PROPIOS del presupuesto (sin los espejos de facturas/docs, que se cuentan
+        // aparte más abajo) para no duplicar el egreso cuando un comprobante se aplica a un presupuesto.
+        const totalPagadoPres = datos.reduce((s, i) => s + _presupPagadoPropio(i), 0);
         const totalPagadoFact = facturas.reduce((s, f) => s + (f.pagado || 0), 0);
         const totalPagadoDocs = (documentos||[]).reduce((s, d) => s + (d.pagado || 0), 0);
         // Egresos de Caja/Banco: manuales + los que genera "Emitir Comprobante" con Afecta caja = Sí / Egreso
@@ -17172,9 +17325,10 @@
         if (!tbody) return;
         const provMap = {};
         datos.forEach(d => {
-            if ((d.pagado||0) <= 0) return;
+            const _propio = _presupPagadoPropio(d);
+            if (_propio <= 0) return;
             if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0, otros: 0 };
-            provMap[d.proveedor].presup += d.pagado || 0;
+            provMap[d.proveedor].presup += _propio;
         });
         facturas.forEach(f => {
             if ((f.pagado||0) <= 0) return;
@@ -17216,7 +17370,8 @@
 
     // ===================== CAJA =====================
     function renderCaja() {
-        const totalPagado = datos.reduce((s, i) => s + (i.pagado || 0), 0);
+        // Pagos propios del presupuesto (sin espejos de facturas/docs, que se cuentan por su lado).
+        const totalPagado = datos.reduce((s, i) => s + _presupPagadoPropio(i), 0);
         const totalIngresos = ingresos.reduce((s, i) => s + (i.monto || 0), 0);
         const saldoARS = totalIngresos - totalPagado;
         const el1 = document.getElementById('cajaARS');
@@ -17333,7 +17488,7 @@
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
         sel('cbCuentasTotal',cuentasBancarias.length);
         var entradas=0,salidas=0;
-        datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
+        datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(_esPagoEspejo(p))return;if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
         facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});});
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
@@ -17395,6 +17550,7 @@
         // ── Recolectar TODOS los movimientos (sin filtros) ─────
         var movs = [];
         datos.forEach(function(d, dIdx){ (d.pagosHistorial||[]).forEach(function(p){
+            if (_esPagoEspejo(p)) return; // espejo de factura/doc: ya aparece como su propio "Pago Factura"
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
@@ -18962,11 +19118,18 @@
             observaciones: document.getElementById('docObservaciones').value.trim(),
             adjuntoId:     existente ? (existente.adjuntoId || '')     : '',
             adjuntoNombre: existente ? (existente.adjuntoNombre || '') : '',
-            adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : ''
+            adjuntoTipo:   existente ? (existente.adjuntoTipo || '')   : '',
+            nroProv:       existente ? (existente.nroProv || null)     : null
         };
         // Presupuesto al que se imputa este documento (opcional, cualquier proveedor).
         var _docPresupVal = (document.getElementById('docPresupuesto') || {}).value || '';
         doc.presupuestoIdx = (_docPresupVal !== '') ? parseInt(_docPresupVal) : null;
+        // Numeración correlativa PROPIA del proveedor (los documentos son comprobantes no oficiales/X).
+        // Se asigna una sola vez, automáticamente, al cargarlo por primera vez.
+        if (!doc.nroProv) {
+            var _pDoc = buscarProveedorPorNombre(proveedor);
+            if (_pDoc && _pDoc.id) doc.nroProv = await obtenerProximoNroProveedor(_pDoc.id);
+        }
         if (tieneHistorial) doc.pagosHistorial = existente.pagosHistorial;
         const archivoDoc = document.getElementById('docCompArchivo').files[0];
         if (archivoDoc) {
@@ -19189,7 +19352,7 @@
                 tr.innerHTML = `
                     <td>${d.fecha ? formatearFecha(d.fecha) : '—'}</td>
                     <td><strong>${escHtml(d.proveedor||'—')}</strong>${pillX}</td>
-                    <td>${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : (d.nro ? '' : '—')}</td>
+                    <td>${d.nroProv ? `<span class="pill" style="background:#E8F5E9;color:#2E7D32;font-size:10px;padding:1px 6px;border-radius:8px;" title="Numeración correlativa del proveedor">${_fmtNroProv(d.nroProv)}</span><br>` : ''}${d.nro ? `<strong>${escHtml(d.nro)}</strong><br>` : ''}${d.numero ? `<small style="color:var(--text-3);font-size:10px;">${escHtml(d.numero)}</small>` : ((d.nro||d.nroProv) ? '' : '—')}</td>
                     <td>${escHtml(d.descripcion||'—')}</td>
                     <td><span class="pill pill-${d.modalidad||'B'}">${d.modalidad||'B'}</span></td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
@@ -19201,6 +19364,7 @@
                         ${(((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
                         ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
                         ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
+                        ${editable ? `<button class="btn btn-outline btn-sm" title="Aplicar a un presupuesto (mismo u otro proveedor)" onclick="abrirAplicarPresup('doc','${d.id}')">📋 Presup.</button>` : ''}
                         <button class="btn btn-outline btn-sm" onclick="abrirModalDoc('${d.id}')">✏</button>
                         <button class="btn btn-danger-sm" onclick="eliminarDoc('${d.id}')">✕</button>
                     </div></td>`;
@@ -19260,7 +19424,7 @@
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
                     <td><strong>${f.proveedor||'—'}</strong>${pillFac}</td>
-                    <td>${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : '—'}</td>
+                    <td>${f.nroProv ? `<span class="pill" style="background:#E8F5E9;color:#2E7D32;font-size:10px;padding:1px 6px;border-radius:8px;" title="Numeración correlativa del proveedor">${_fmtNroProv(f.nroProv)}</span><br>` : ''}${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : (f.nroProv ? '' : '—')}</td>
                     <td>${f.descripcion||'—'}</td>
                     <td><span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span></td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
@@ -19276,6 +19440,7 @@
                         ${pagInc ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
                         ${f.docId ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${f.docId}','${(f.docNombre||'factura').replace(/'/g,'')}')" title="Ver PDF adjunto">📎</button>` : ''}
                         ${f.docId && editable ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
+                        ${editable ? `<button class="btn btn-outline btn-sm" title="Aplicar a un presupuesto (mismo u otro proveedor)" onclick="abrirAplicarPresup('fact',${idx})">📋 Presup.</button>` : ''}
                         ${editable ? `<button class="btn btn-outline btn-sm" onclick="editarFactura(${idx})">✏</button>` : ''}
                         ${editable ? btnElim('factura', idx) : ''}
                     </div></td>`;
@@ -28139,6 +28304,7 @@
         datos.forEach(function(d, di) {
             var hist = d.pagosHistorial || [];
             hist.forEach(function(p, pi) {
+                if (_esPagoEspejo(p)) return; // espejo de factura/doc: se lista como su propia factura/doc, no dos veces
                 var capital = (p.capital||0)+(p.mayores||0)||p.montoPagado||0;
                 filas.push({
                     src: 'presup', datoIdx: di, pagoIdx: pi,
@@ -28772,8 +28938,19 @@
                 hist.forEach(function(p){
                     var m = p.monto || 0;
                     if (m > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: (p.nroCorrelativo ? ('OP ' + p.nroCorrelativo) : 'Pago'), debe: 0, haber: m }); totalPagado += m; }
-                    var rt = p.totalRet || 0;
-                    if (rt > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p), debe: 0, haber: rt }); totalRet += rt; }
+                    // Cada impuesto retenido va en SU PROPIA fila (Ganancias, IIBB, SUSS, etc.),
+                    // aunque sean del mismo pago/factura. Si el pago viejo no tiene el detalle
+                    // (solo totalRet), se muestra una sola fila combinada como antes.
+                    var rets = (p.retenciones || []).filter(function(r){ return (r.monto || 0) > 0; });
+                    if (rets.length) {
+                        rets.forEach(function(r){
+                            var rm = r.monto || 0;
+                            movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (r.desc || r.codigo || ''), debe: 0, haber: rm }); totalRet += rm;
+                        });
+                    } else {
+                        var rt = p.totalRet || 0;
+                        if (rt > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p), debe: 0, haber: rt }); totalRet += rt; }
+                    }
                 });
             } else if ((item.pagado || 0) > 0) {
                 movs.push({ fecha: item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: 'Pago', debe: 0, haber: item.pagado }); totalPagado += item.pagado;
@@ -37729,7 +37906,7 @@
     // Totales financieros (egresos pagados y cobros recibidos) para que pueda responder "¿cuánto pagué/cobré?"
     try {
       var pagadoProv = 0;
-      if (typeof datos !== 'undefined') datos.forEach(function(d){ pagadoProv += d.pagado||0; });
+      if (typeof datos !== 'undefined') datos.forEach(function(d){ pagadoProv += (typeof _presupPagadoPropio==='function' ? _presupPagadoPropio(d) : (d.pagado||0)); });
       if (typeof facturas !== 'undefined') facturas.forEach(function(f){ pagadoProv += f.pagado||0; });
       var cobradoARS = 0, cobradoUSD = 0;
       var sumCobros = function(arr, filtroUSD){ (arr||[]).forEach(function(x){ (x.cobrosHistorial||[]).forEach(function(c){ if (filtroUSD && filtroUSD(c)) cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); }); };
