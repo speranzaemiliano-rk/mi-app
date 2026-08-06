@@ -6140,8 +6140,8 @@
                 <div class="form-group">
                     <label>Detalle del presupuesto (opcional)</label>
                     <div class="form-hint" style="margin-bottom:6px;">Cargá ítems con cantidad y precio unitario; el subtotal y el total se calculan solos y completan el presupuesto base.</div>
-                    <div id="presupItemsCabecera" style="display:none; grid-template-columns:minmax(130px,1fr) 68px 110px 110px 30px; gap:6px; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
-                        <span>Detalle</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span></span>
+                    <div id="presupItemsCabecera" style="display:none; grid-template-columns:minmax(120px,1fr) 60px 100px 100px 46px 30px; gap:6px; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
+                        <span>Detalle</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Actualizar este ítem con el índice (CAC/IPC)">🔄</span><span></span>
                     </div>
                     <div id="presupItemsLista"></div>
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; gap:8px; flex-wrap:wrap;">
@@ -7312,6 +7312,22 @@
     // ===================== CÁLCULO CAC =====================
     // Calcula capital, mayores costos y total ajustado para un presupuesto.
     // indiceForzado: el índice del pago en curso (para previsualización).
+    // Fracción del presupuesto que se ACTUALIZA con el índice. Los ítems marcados como "no
+    // actualizar" (noAjustar) quedan con precio fijo y no reciben mayores costos. Si no hay ítems
+    // (o ninguno está marcado), devuelve 1 → comportamiento clásico (se ajusta todo).
+    function _presupFraccionAjustable(item) {
+        var its = (item && item.items) || [];
+        if (!its.length) return 1;
+        var totalSub = 0, ajustSub = 0;
+        its.forEach(function(it){
+            var s = (it.subtotal != null) ? it.subtotal : ((it.cantidad || 0) * (it.precioUnit || 0));
+            totalSub += s;
+            if (!it.noAjustar) ajustSub += s;
+        });
+        if (totalSub <= 0) return 1;
+        return ajustSub / totalSub;
+    }
+
     function calcPresupuesto(item, indiceForzado) {
         const base      = item.presupuesto || 0;
         const pagCap    = (typeof item.pagadoPresupuesto === 'number') ? item.pagadoPresupuesto : (item.pagado || 0);
@@ -7322,17 +7338,20 @@
             ? indiceForzado
             : (item.indiceCACActual || indiceBase);
         const factor  = (indiceBase > 0 && indiceActual > 0) ? (indiceActual / indiceBase) : 1;
-        const mayores = Math.max(capitalPend * (factor - 1), 0);
+        const fracc   = _presupFraccionAjustable(item);   // 1 si se actualiza todo
+        const mayores = Math.max(capitalPend * fracc * (factor - 1), 0);
         const totalAjustado = capitalPend + mayores;
-        return { base, pagCap, pagMay, capitalPend, indiceBase, indiceActual, factor, mayores, totalAjustado, pagadoTotal: pagCap + pagMay };
+        return { base, pagCap, pagMay, capitalPend, indiceBase, indiceActual, factor, fracc, mayores, totalAjustado, pagadoTotal: pagCap + pagMay };
     }
 
-    // Calcula mayores costos sobre un MONTO dado (no sobre el total pendiente)
-    // Formula: monto * (indiceActual/indiceBase - 1)
-    function calcMayoresSobreMonto(monto, indiceBase, indiceActual) {
+    // Calcula mayores costos sobre un MONTO dado (no sobre el total pendiente).
+    // Formula: monto * fracc * (indiceActual/indiceBase - 1). fracc (0..1) = proporción del
+    // presupuesto que se actualiza (ítems no marcados como "no actualizar"); por defecto 1.
+    function calcMayoresSobreMonto(monto, indiceBase, indiceActual, fracc) {
         if (!indiceBase || !indiceActual || indiceBase <= 0 || indiceActual <= 0) return 0;
+        var f = (fracc == null) ? 1 : fracc;
         const factor = indiceActual / indiceBase;
-        return Math.max(monto * (factor - 1), 0);
+        return Math.max(monto * f * (factor - 1), 0);
     }
 
     // ===================== FIREBASE =====================
@@ -7935,11 +7954,14 @@
     // ── Ítems del presupuesto (detalle / cantidad / precio unitario / subtotal) ──
     function _presupItemHTML(it) {
         it = it || {};
-        return '<div class="presup-item-fila" style="display:grid; grid-template-columns:minmax(130px,1fr) 68px 110px 110px 30px; gap:6px; margin-bottom:6px; align-items:center;">' +
+        return '<div class="presup-item-fila" style="display:grid; grid-template-columns:minmax(120px,1fr) 60px 100px 100px 46px 30px; gap:6px; margin-bottom:6px; align-items:center;">' +
             '<input type="text" class="pi-detalle" placeholder="Detalle" value="' + escHtml(it.detalle || '') + '">' +
             '<input type="number" class="pi-cant" min="0" step="0.01" placeholder="Cant." value="' + (it.cantidad != null ? it.cantidad : '') + '" oninput="presupRecalcItems()">' +
             '<input type="number" class="pi-precio" min="0" step="0.01" placeholder="P. unit." value="' + (it.precioUnit != null ? it.precioUnit : '') + '" oninput="presupRecalcItems()">' +
             '<input type="text" class="pi-subtotal" readonly tabindex="-1" style="background:var(--surface-2); text-align:right;" value="">' +
+            '<label style="display:flex;align-items:center;justify-content:center;cursor:pointer;" title="Actualizar este ítem con el índice (CAC/IPC). Destildá para dejarlo con precio fijo.">' +
+                '<input type="checkbox" class="pi-ajustar" ' + (it.noAjustar ? '' : 'checked') + ' style="width:auto;margin:0;">' +
+            '</label>' +
             '<button type="button" class="btn btn-danger-sm" onclick="presupQuitarItem(this)" title="Quitar ítem">✕</button>' +
             '</div>';
     }
@@ -7978,7 +8000,10 @@
             var cant = parseFloat(f.querySelector('.pi-cant').value) || 0;
             var precio = parseFloat(f.querySelector('.pi-precio').value) || 0;
             if (!detalle && !cant && !precio) return;
-            items.push({ detalle: detalle, cantidad: cant, precioUnit: precio, subtotal: Math.round(cant * precio * 100) / 100 });
+            var _aj = f.querySelector('.pi-ajustar');
+            var obj = { detalle: detalle, cantidad: cant, precioUnit: precio, subtotal: Math.round(cant * precio * 100) / 100 };
+            if (_aj && !_aj.checked) obj.noAjustar = true;   // ítem con precio fijo: no lo toca el índice
+            items.push(obj);
         });
         return items;
     }
@@ -10592,7 +10617,7 @@
             ? (parseFloat(inpCap.value) || 0)
             : c.capitalPend;
 
-        const mayoresAbonar = calcMayoresSobreMonto(capitalAbonar, c.indiceBase, idxPago);
+        const mayoresAbonar = calcMayoresSobreMonto(capitalAbonar, c.indiceBase, idxPago, c.fracc);
         const totalAbonar   = capitalAbonar + mayoresAbonar;
 
         dCap.textContent = '$' + Math.round(capitalAbonar).toLocaleString('es-AR');
@@ -10625,7 +10650,7 @@
         const idxPago = indicePagoActual(item);
         const indiceBase = item.indiceCACBase || 0;
         const capitalAbonar = parseFloat(document.getElementById('pagoCapital').value) || 0;
-        const mayores = calcMayoresSobreMonto(capitalAbonar, indiceBase, idxPago);
+        const mayores = calcMayoresSobreMonto(capitalAbonar, indiceBase, idxPago, _presupFraccionAjustable(item));
         document.getElementById('pagoMayores').value = Math.round(mayores);
         recalcularRetenciones();
     }
