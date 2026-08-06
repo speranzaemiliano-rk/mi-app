@@ -2864,6 +2864,19 @@
                 <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password">
             </div>
             <button class="btn btn-primary" id="authSubmitBtn" onclick="enviarAuth()">Ingresar</button>
+            <div style="display:flex;align-items:center;gap:12px;margin:18px 0 14px;">
+                <div style="flex:1;height:1px;background:var(--border);"></div>
+                <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.12em;">o</span>
+                <div style="flex:1;height:1px;background:var(--border);"></div>
+            </div>
+            <button class="btn btn-outline" id="btnLoginMicrosoft" onclick="loginMicrosoft()"
+                    style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;">
+                <svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="true" style="flex-shrink:0;">
+                    <path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/>
+                    <path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/>
+                </svg>
+                Continuar con Microsoft
+            </button>
             <div class="auth-toggle">
                 <span id="authToggleText">¿No tenés cuenta?</span>
                 <a id="authToggleLink" onclick="toggleAuthModo()">Crear una</a>
@@ -5181,6 +5194,32 @@
                       </div>
                       <div id="cfgGmailFacturasStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                     </div>
+                  </div>
+
+                  <!-- ── Ingreso con Microsoft (solo superadmin) ── -->
+                  <div id="secLoginMicrosoft" style="display:none;border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔐 Ingreso con Microsoft</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Controla quién puede usar el botón <strong>"Continuar con Microsoft"</strong> de la pantalla de ingreso.
+                      Pegá el <strong>ID de directorio (tenant)</strong> de tu organización y sólo entrarán las cuentas de esa empresa.
+                      Lo sacás en <a href="https://portal.azure.com" target="_blank" style="color:var(--gold);">Portal de Azure</a>
+                      → Microsoft Entra ID → Información general → "Id. de directorio (inquilino)".
+                      <br><strong>Si lo dejás vacío entra cualquier cuenta de Microsoft, incluidas las personales.</strong>
+                    </p>
+                    <div class="form-group" style="margin-bottom:12px;">
+                      <label>ID de directorio (tenant) de Microsoft Entra</label>
+                      <input type="text" id="cfgMsTenant" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  ·  o  tuempresa.onmicrosoft.com" autocomplete="off" style="font-family:monospace;font-size:13px;">
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                      <button class="btn btn-gold btn-sm" onclick="guardarMsTenant()">💾 Guardar</button>
+                      <button class="btn btn-outline btn-sm" onclick="borrarMsTenant()">🗑️ Borrar</button>
+                    </div>
+                    <div id="cfgMsTenantStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                    <p style="font-size:11px;color:var(--text-3);margin-top:12px;line-height:1.6;">
+                      Recordá que el botón sólo funciona si además activaste <strong>Microsoft</strong> en
+                      Firebase Console → Authentication → Sign-in method, con el ID de aplicación y el secreto
+                      del registro de app de Entra.
+                    </p>
                   </div>
 
                 </div>
@@ -13298,6 +13337,12 @@
             secGU.style.display = esSuperAdmin ? '' : 'none';
             if (esSuperAdmin) cargarUsuariosBackend();
         }
+        // Quién puede entrar con Microsoft: es una config de acceso, solo superadmin
+        var secMS = document.getElementById('secLoginMicrosoft');
+        if (secMS) {
+            secMS.style.display = esSuperAdmin ? '' : 'none';
+            if (esSuperAdmin) cargarMsTenantUI();
+        }
         // Reordenar el menú lateral (drag): solo Super Administrador
         if (typeof actualizarDragSidebarSegunRol === 'function') actualizarDragSidebarSegunRol();
         // Visibilidad del menú lateral: panel de gestión, solo superadmin
@@ -13697,6 +13742,90 @@
         } catch (err) { mostrarAuthError(traducirError(err.code)); }
     }
 
+    // ── Ingreso con Microsoft (Entra ID) ─────────────────────────────────
+    // Firebase hace de cliente confidencial: es él quien canjea el código por
+    // los tokens usando el client secret, así que en Entra la app se registra
+    // como plataforma "Web" con el redirect URI del handler de Firebase
+    // (https://<authDomain>/__/auth/handler). Acá no hay ningún secreto.
+    //
+    // El tenant decide QUIÉN puede entrar: sin tenant queda 'common' y sirve
+    // cualquier cuenta de Microsoft (incluidas las personales); con el ID del
+    // directorio sólo entran las cuentas de esa organización. Se toma de
+    // config.js y se puede cambiar sin publicar el sitio desde Config.
+    var MS_TENANT_LS = 'rk_ms_tenant';
+    var MS_TENANT_DEFAULT = (typeof _APPCFG !== 'undefined' && _APPCFG.msTenant) ? _APPCFG.msTenant : '';
+
+    function getMsTenant() {
+        return (localStorage.getItem(MS_TENANT_LS) || MS_TENANT_DEFAULT || '').trim();
+    }
+
+    // Ojo: global/config sólo se puede leer con sesión abierta, así que esto
+    // corre DESPUÉS del login y deja el tenant cacheado para los ingresos
+    // siguientes. El primer ingreso en un dispositivo nuevo usa config.js.
+    function cargarMsTenantDesdeFirebase() {
+        db.ref('global/config/msTenant').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val) localStorage.setItem(MS_TENANT_LS, val);
+            else localStorage.removeItem(MS_TENANT_LS);
+        }).catch(function(){});
+    }
+
+    function _msProvider() {
+        var p = new firebase.auth.OAuthProvider('microsoft.com');
+        var tenant = getMsTenant();
+        var params = { prompt: 'select_account' };
+        if (tenant) params.tenant = tenant;
+        p.setCustomParameters(params);
+        // Permiso mínimo: identificar a la persona y leer su perfil básico.
+        // Nada de Mail, Files ni Directory — no los necesitamos.
+        p.addScope('openid'); p.addScope('profile'); p.addScope('email'); p.addScope('User.Read');
+        return p;
+    }
+
+    async function loginMicrosoft() {
+        ocultarAuthError();
+        var btn = document.getElementById('btnLoginMicrosoft');
+        if (btn) btn.disabled = true;
+        try {
+            await auth.signInWithPopup(_msProvider());
+        } catch (err) {
+            // En la PWA instalada el popup a veces no abre: se cae a redirect.
+            if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment') {
+                try { await auth.signInWithRedirect(_msProvider()); return; } catch (e2) { err = e2; }
+            }
+            if (err.code === 'auth/account-exists-with-different-credential') {
+                await _msVincularCuenta(err);
+            } else if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+                mostrarAuthError(traducirError(err.code));
+            }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // El correo de Microsoft ya tiene cuenta creada con contraseña. Si no se
+    // vinculan, la misma persona termina con dos usuarios distintos (dos uid) y
+    // el rol le queda sólo en uno. Se pide la contraseña UNA vez y se atan las
+    // dos credenciales al mismo usuario, así el uid y el rol no cambian.
+    async function _msVincularCuenta(err) {
+        var email = (err && err.email) || '';
+        var cred  = err && err.credential;
+        if (!cred || !email) {
+            mostrarAuthError('Ya existe una cuenta con ese correo creada con otro método de acceso.');
+            return;
+        }
+        var pass = prompt('Ya tenés una cuenta con ' + email + ' y contraseña.\n\n' +
+                          'Escribí esa contraseña una sola vez para vincularle tu cuenta de Microsoft:');
+        if (!pass) return;
+        try {
+            var res = await auth.signInWithEmailAndPassword(email, pass);
+            await res.user.linkWithCredential(cred);
+            alert('✓ Cuenta de Microsoft vinculada. La próxima vez podés entrar directo con el botón de Microsoft.');
+        } catch (e) {
+            mostrarAuthError(traducirError(e.code));
+        }
+    }
+
     // Borra del navegador los datos sensibles que son POR-DISPOSITIVO (no por-usuario), para
     // que no se filtren entre usuarios que comparten la misma PC: historial del asistente y la
     // sesión de Spotify (token OAuth de la cuenta personal). Los datos contables viven en
@@ -13724,12 +13853,27 @@
             'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
             'auth/network-request-failed': 'Sin conexión. Revisá tu internet.',
             'auth/too-many-requests': 'Demasiados intentos. Probá más tarde.',
-            'auth/operation-not-allowed': 'Activá el método Email/Contraseña en Firebase Console.'
+            'auth/operation-not-allowed': 'Ese método de acceso no está activado en Firebase Console → Authentication → Sign-in method.',
+            'auth/account-exists-with-different-credential': 'Ya existe una cuenta con ese correo creada con otro método de acceso.',
+            'auth/popup-blocked': 'El navegador bloqueó la ventana de Microsoft. Permití las ventanas emergentes para este sitio.',
+            'auth/popup-closed-by-user': 'Cerraste la ventana de Microsoft antes de terminar.',
+            'auth/unauthorized-domain': 'Este dominio no está habilitado en Firebase → Authentication → Settings → Dominios autorizados.',
+            'auth/invalid-tenant-id': 'El tenant de Microsoft configurado no es válido. Revisalo en Config → 🔐 Ingreso con Microsoft.',
+            'auth/user-disabled': 'Esta cuenta está deshabilitada. Hablá con el administrador.'
         };
         return map[code] || ('No se pudo completar la operación. (' + code + ')');
     }
 
     if (FIREBASE_OK) {
+        // Resultado del ingreso por redirect (el camino alternativo cuando el
+        // popup de Microsoft no puede abrirse). Si salió bien lo toma
+        // onAuthStateChanged; acá sólo hay que mostrar el error.
+        auth.getRedirectResult().catch(function(err) {
+            if (!err || !err.code) return;
+            if (err.code === 'auth/account-exists-with-different-credential') _msVincularCuenta(err);
+            else mostrarAuthError(traducirError(err.code));
+        });
+
         let _authYaInicio = false;
         auth.onAuthStateChanged((user) => {
             // Ocultar spinner de carga en cuanto Firebase responde
@@ -13761,6 +13905,7 @@
                 cargarBrandDesdeFirebase();
                 try { db.ref('global/config/iaCerebro').once('value').then(function(s){ var v=s.val(); if (v) localStorage.setItem('rk_ia_cerebro', v); }).catch(function(){}); } catch(e){}
                 cargarGoogleClientIdDesdeFirebase();
+                cargarMsTenantDesdeFirebase();
                 cargarGmailFacturasDesdeFirebase();
                 cargarEmailJsConfigDesdeFirebase();
                 cargarAppTokenDesdeFirebase();
@@ -14984,6 +15129,43 @@
         db.ref('global/config/googleClientId').remove();
         var el = document.getElementById('cfgGoogleClientId'); if (el) el.value = '';
         document.getElementById('cfgGoogleClientIdStatus').textContent = '⚠️ ID de cliente eliminado.';
+    }
+
+    // ── Tenant de Microsoft Entra para el botón de ingreso ───────────
+    function cargarMsTenantUI() {
+        var el = document.getElementById('cfgMsTenant');
+        var st = document.getElementById('cfgMsTenantStatus');
+        if (!el || !st) return;
+        st.textContent = '🔄 Buscando en la nube…';
+        db.ref('global/config/msTenant').once('value').then(function(snap) {
+            var v = snap.val() || MS_TENANT_DEFAULT || '';
+            el.value = v;
+            if (v) st.textContent = '✅ Sólo entran las cuentas del tenant ' + v + '.';
+            else   st.textContent = '⚠️ Sin tenant: entra cualquier cuenta de Microsoft, incluidas las personales.';
+        }).catch(function() {
+            el.value = getMsTenant();
+            st.textContent = '⚠️ No se pudo leer la configuración de la nube.';
+        });
+    }
+
+    function guardarMsTenant() {
+        var val = (document.getElementById('cfgMsTenant').value || '').trim();
+        var st  = document.getElementById('cfgMsTenantStatus');
+        if (!val) { alert('Pegá el ID de directorio (tenant), o usá 🗑️ Borrar para aceptar cualquier cuenta.'); return; }
+        localStorage.setItem(MS_TENANT_LS, val);
+        db.ref('global/config/msTenant').set(val).then(function() {
+            st.textContent = '✅ Guardado. Sólo entran las cuentas de ese tenant (en cada dispositivo se aplica al próximo ingreso).';
+        }).catch(function() {
+            st.textContent = '✅ Guardado en este dispositivo (sin acceso a la nube).';
+        });
+    }
+
+    function borrarMsTenant() {
+        if (!confirm('¿Borrar el tenant?\n\nSin tenant, el botón de Microsoft acepta CUALQUIER cuenta, incluidas las personales.')) return;
+        localStorage.removeItem(MS_TENANT_LS);
+        db.ref('global/config/msTenant').remove();
+        var el = document.getElementById('cfgMsTenant'); if (el) el.value = '';
+        document.getElementById('cfgMsTenantStatus').textContent = '⚠️ Tenant eliminado: entra cualquier cuenta de Microsoft.';
     }
 
     // ── Cuenta de Gmail fija para leer facturas ──────────────────────
