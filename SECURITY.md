@@ -275,9 +275,28 @@ Con el volumen de features nuevas de esta sesión (CAC, Comprobantes emitidos, A
 
 ---
 
+## 🔴 10. Registro abierto + lectura para cualquier autenticado (corregido 2026-08-06)
+
+**Dónde:** `index.html` — la pantalla de ingreso tenía un botón "Crear cuenta" (`createUserWithEmailAndPassword`), y las reglas daban `".read": "auth != null"` sobre `empresas` y `global`.
+
+**Riesgo:** cualquiera que llegara a la URL se creaba un usuario en segundos y con eso **leía la contabilidad completa de todas las empresas y proyectos**. Peor, la regla de escritura de `global` era `!== 'lector'`: un usuario recién creado no tiene rol, `null !== 'lector'` da verdadero, así que **también podía escribir** `global/proveedores`, `global/config/backendUrl`, `geminiKey`, etc. El punto 2 de este informe daba por bueno el `auth != null` asumiendo cuentas controladas; con el alta abierta ese supuesto no se cumplía.
+
+**Cómo se cerró:**
+- Se eliminó el alta pública. Las cuentas las crea un administrador (Config → Usuarios). ⚠️ Falta además desactivarlo en **Firebase Console → Authentication → Settings → User actions**: sacar el botón no impide llamar a la API de registro con la apiKey pública, que es pública por diseño.
+- **Tener rol pasó a ser el permiso de acceso.** Lectura de `empresas`/`global`/`solicitudesBorrado`/`dashboardPagos`/`cajaDiaria` exige `root.child('roles').child(auth.uid).exists()`. El cliente hace el mismo chequeo antes de pintar nada (`mostrarPantallaPendiente`).
+- `global` y `dashboardPagos`: el `!== 'lector'` se reemplazó por la lista explícita `superadmin`/`admin`/`editor`.
+- `roles` y `usuarios`: la lectura del nodo completo quedó para `admin`/`superadmin`; cada usuario sólo lee lo suyo. El bootstrap del primer superadmin sólo corre si `roles` todavía no existe.
+- `temp-pdf`: la escritura ahora exige rol (la **lectura sigue siendo pública** — ver punto 3, sin resolver: el visor descarga el PDF por `fetch` sin token).
+
+**Lo que NO cubre:** `global` sigue siendo escribible por cualquier `editor`, así que `global/config/msTenant` (quién puede entrar con Microsoft) está protegido sólo por la UI. Las reglas de RTDB cascadean: un `.write` permisivo en el padre no se puede restringir en un hijo, hace falta bajar la regla a nivel `$key`.
+
+---
+
 ## 🧭 Plan de acción sugerido (orden de prioridad)
 
-Ya resuelto: cerrar el backend (punto 1, con retrocompatibilidad por idToken — ver C4), publicar las reglas de Firebase por rol (punto 2), rate limiting (punto 4), y migrar toda la concurrencia (punto 9). Queda pendiente:
+Ya resuelto: cerrar el backend (punto 1, con retrocompatibilidad por idToken — ver C4), publicar las reglas de Firebase por rol (punto 2), rate limiting (punto 4), migrar toda la concurrencia (punto 9), y cerrar el registro abierto exigiendo rol para leer (punto 10). Queda pendiente:
+
+0. **Desactivar el alta de cuentas en Firebase Console** (User actions) y **publicar las reglas nuevas** — sin esto el punto 10 está a medias.
 
 1. **Endurecer `temp-pdf`** (punto 3): expiración + IDs aleatorios.
 2. **Restringir por rol los endpoints sensibles del backend** (`/afip`, `/belvo/*`, `/prometeo/*`, `/gemini`) más allá del gate genérico de auth — hoy cualquier usuario autenticado de la app (incluido `lector`) puede llamarlos (ver C4).

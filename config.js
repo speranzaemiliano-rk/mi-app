@@ -16,6 +16,10 @@
 //                       DEBE tener su PROPIO proyecto de Firebase (base separada).
 //  - adminEmail      → el mail que será Super Administrador la primera vez.
 //  - backendUrl      → la URL del backend en Railway (con o sin /afip al final).
+//  - msTenant        → (opcional) ID del directorio (tenant) de Microsoft Entra,
+//                       para restringir el ingreso con Microsoft a esa organización.
+//                       Portal de Azure → Microsoft Entra ID → Información general.
+//                       No es un secreto. Vacío = acepta cualquier cuenta Microsoft.
 //  - spotifyClientId → (opcional) para el reproductor de Spotify. Es público.
 //  - emailjs         → (opcional) para enviar facturas por mail.
 //  - brand           → marca inicial (después se edita desde Config → 🎨 Marca).
@@ -32,6 +36,12 @@ window.APP_CONFIG = {
   },
   adminEmail: "speranzaemiliano@gmail.com",
   backendUrl: "https://mi-app-production-e1cd.up.railway.app",
+  // Tenant de Microsoft Entra ID para el botón "Continuar con Microsoft".
+  // Vacío = 'common': entra cualquier cuenta de Microsoft (de organización o
+  // personal). Con el ID (o el dominio) del tenant, sólo entran las cuentas de
+  // ESA organización. También se puede cambiar sin publicar el sitio desde
+  // Config → 🔐 Ingreso con Microsoft (se guarda en global/config/msTenant).
+  msTenant: "",
   spotifyClientId: "ea1f2e04bfdc4c8abe4a116023a5f887",
   emailjs: { serviceId: "service_rk", templateId: "template_elux62l", publicKey: "1KBtAzAFvuD2WC9T-" },
   brand: {
