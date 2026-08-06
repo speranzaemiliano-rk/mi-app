@@ -38187,6 +38187,123 @@
 </script>
 <!-- ==================== FIN AGENTE DE AYUDA ==================== -->
 
+<!-- ==================== CALCULADORA FLOTANTE ==================== -->
+<style>
+  #rkCalcFab{position:fixed;right:18px;bottom:18px;z-index:99990;width:48px;height:48px;border-radius:50%;border:none;background:#1a3a6b;color:#fff;font-size:22px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;transition:transform .12s;}
+  #rkCalcFab:hover{transform:scale(1.06);}
+  @media(max-width:820px){ #rkCalcFab{ bottom:calc(76px + env(safe-area-inset-bottom,0px)); } }
+  #rkCalc{position:fixed;right:18px;bottom:78px;z-index:99991;width:252px;background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.32);overflow:hidden;display:none;user-select:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;border:1px solid rgba(0,0,0,.08);}
+  #rkCalc.active{display:block;}
+  @media(max-width:820px){ #rkCalc{ bottom:calc(134px + env(safe-area-inset-bottom,0px)); } }
+  #rkCalcHead{background:#1a3a6b;color:#fff;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;cursor:move;font-size:12px;font-weight:600;}
+  #rkCalcHead button{background:none;border:none;color:rgba(255,255,255,.85);font-size:16px;cursor:pointer;line-height:1;padding:0 2px;}
+  #rkCalcDisp{padding:10px 14px;text-align:right;background:#f7f9fc;}
+  #rkCalcExpr{min-height:15px;font-size:12px;color:#8a94a6;word-break:break-all;height:15px;overflow:hidden;}
+  #rkCalcRes{font-size:26px;font-weight:700;color:#111;word-break:break-all;line-height:1.15;}
+  #rkCalcKeys{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#e6eaf0;}
+  #rkCalcKeys button{border:none;background:#fff;font-size:17px;padding:13px 0;cursor:pointer;color:#111;transition:background .1s;}
+  #rkCalcKeys button:active{background:#dde3ec;}
+  #rkCalcKeys button.op{background:#eef2f8;color:#1a3a6b;font-weight:600;}
+  #rkCalcKeys button.eq{background:#1a3a6b;color:#fff;font-weight:700;}
+  #rkCalcKeys button.fn{background:#f4f6fa;color:#c0392b;font-weight:600;}
+</style>
+<button id="rkCalcFab" title="Calculadora (o tecla)" onclick="rkCalcToggle()">🧮</button>
+<div id="rkCalc">
+  <div id="rkCalcHead"><span>🧮 Calculadora</span><button onclick="rkCalcToggle()" title="Cerrar">✕</button></div>
+  <div id="rkCalcDisp"><div id="rkCalcExpr"></div><div id="rkCalcRes">0</div></div>
+  <div id="rkCalcKeys">
+    <button class="fn" onclick="rkCalcKey('C')">C</button>
+    <button class="fn" onclick="rkCalcKey('back')">⌫</button>
+    <button class="op" onclick="rkCalcKey('%')">%</button>
+    <button class="op" onclick="rkCalcKey('/')">÷</button>
+    <button onclick="rkCalcKey('7')">7</button><button onclick="rkCalcKey('8')">8</button><button onclick="rkCalcKey('9')">9</button>
+    <button class="op" onclick="rkCalcKey('*')">×</button>
+    <button onclick="rkCalcKey('4')">4</button><button onclick="rkCalcKey('5')">5</button><button onclick="rkCalcKey('6')">6</button>
+    <button class="op" onclick="rkCalcKey('-')">−</button>
+    <button onclick="rkCalcKey('1')">1</button><button onclick="rkCalcKey('2')">2</button><button onclick="rkCalcKey('3')">3</button>
+    <button class="op" onclick="rkCalcKey('+')">+</button>
+    <button onclick="rkCalcKey('0')">0</button><button onclick="rkCalcKey('.')">.</button>
+    <button onclick="rkCalcKey('copy')" title="Copiar resultado">📋</button>
+    <button class="eq" onclick="rkCalcKey('=')">=</button>
+  </div>
+</div>
+<script>
+(function(){
+  var expr='', justEq=false;
+  function elExpr(){ return document.getElementById('rkCalcExpr'); }
+  function elRes(){ return document.getElementById('rkCalcRes'); }
+  function fmtNum(n){ if(n==null||!isFinite(n)) return 'Error'; var r=Math.round(n*1e10)/1e10; return r.toLocaleString('es-AR',{maximumFractionDigits:10}); }
+  // Evalúa una expresión con + - * / y precedencia (sin eval). Devuelve null si está incompleta.
+  function evalExpr(e){
+    if(!e) return 0;
+    e = e.replace(/[+\-*/]+$/,''); // ignorar operador colgando al final
+    var toks = e.match(/(\d+\.?\d*|\.\d+|[+\-*/])/g); if(!toks || !toks.length) return null;
+    var arr=[];
+    for(var i=0;i<toks.length;i++){ var t=toks[i];
+      if(/^[+\-*/]$/.test(t)){
+        if((i===0 || /^[+\-*/]$/.test(toks[i-1])) && (t==='-'||t==='+')) arr.push({u:t});
+        else arr.push({op:t});
+      } else arr.push({n:parseFloat(t)});
+    }
+    var a2=[]; for(var j=0;j<arr.length;j++){ if(arr[j].u){ var nx=arr[j+1]; if(nx && nx.n!=null){ a2.push({n: arr[j].u==='-'? -nx.n : nx.n}); j++; } else return null; } else a2.push(arr[j]); }
+    if(!a2.length || a2[0].n==null) return null;
+    var a3=[a2[0]];
+    for(var k=1;k<a2.length;k+=2){ var op=a2[k]&&a2[k].op, rhs=a2[k+1];
+      if(!op || !rhs || rhs.n==null) return null;
+      if(op==='*'||op==='/'){ var pv=a3.pop(); a3.push({n: op==='*'? pv.n*rhs.n : pv.n/rhs.n}); }
+      else { a3.push(a2[k]); a3.push(rhs); } }
+    var res=a3[0].n;
+    for(var m=1;m<a3.length;m+=2){ var o=a3[m].op, r=a3[m+1]; if(!r||r.n==null) return null; res = (o==='+')? res+r.n : res-r.n; }
+    return res;
+  }
+  function render(){
+    elExpr().textContent = expr.replace(/\*/g,'×').replace(/\//g,'÷');
+    var v = evalExpr(expr);
+    elRes().textContent = (expr==='') ? '0' : (v==null ? '…' : fmtNum(v));
+  }
+  window.rkCalcKey=function(k){
+    if(k==='C'){ expr=''; justEq=false; render(); return; }
+    if(k==='back'){ expr=expr.slice(0,-1); justEq=false; render(); return; }
+    if(k==='='){ var v=evalExpr(expr); if(v!=null && isFinite(v)){ expr=String(Math.round(v*1e10)/1e10); justEq=true; } render(); return; }
+    if(k==='%'){ var v2=evalExpr(expr); if(v2!=null){ expr=String((Math.round(v2*1e10)/1e10)/100); justEq=true; render(); } return; }
+    if(k==='copy'){ var el=elRes(); var txt=el.textContent; try{ navigator.clipboard.writeText(txt.replace(/\./g,'').replace(',','.')); el.style.color='#1e8e3e'; setTimeout(function(){ el.style.color='#111'; },450); }catch(err){} return; }
+    if(/[0-9]/.test(k)){ if(justEq){ expr=''; } justEq=false; expr+=k; render(); return; }
+    if(k==='.'){ if(justEq){ expr='0'; } justEq=false; var tail=expr.split(/[+\-*/]/).pop(); if(tail.indexOf('.')>=0) return; if(tail==='') expr+='0'; expr+='.'; render(); return; }
+    if(/^[+\-*/]$/.test(k)){ justEq=false; if(expr==='' && k!=='-') return; if(/[+\-*/]$/.test(expr)) expr=expr.slice(0,-1); expr+=k; render(); return; }
+  };
+  window.rkCalcToggle=function(){ var c=document.getElementById('rkCalc'); if(c) c.classList.toggle('active'); };
+  document.addEventListener('keydown',function(e){
+    var c=document.getElementById('rkCalc'); if(!c || !c.classList.contains('active')) return;
+    var tag=(e.target && e.target.tagName)||''; if(/INPUT|TEXTAREA|SELECT/.test(tag)) return; // no robar teclado a los formularios
+    var k=e.key;
+    if(/^[0-9]$/.test(k)) rkCalcKey(k);
+    else if(k==='.'||k===',') rkCalcKey('.');
+    else if(k==='+'||k==='-'||k==='*'||k==='/') rkCalcKey(k);
+    else if(k==='Enter'||k==='=') rkCalcKey('=');
+    else if(k==='Backspace') rkCalcKey('back');
+    else if(k==='Escape') rkCalcToggle();
+    else if(k==='%') rkCalcKey('%');
+    else return;
+    e.preventDefault();
+  });
+  // Arrastrar la calculadora por su encabezado.
+  (function(){ var head, panel, drag=false, ox=0, oy=0;
+    function start(e){ if(!panel) return; drag=true; var r=panel.getBoundingClientRect(); ox=e.clientX-r.left; oy=e.clientY-r.top; panel.style.right='auto'; panel.style.bottom='auto'; panel.style.left=r.left+'px'; panel.style.top=r.top+'px'; }
+    function move(e){ if(!drag) return; panel.style.left=Math.max(0,Math.min(window.innerWidth-60,e.clientX-ox))+'px'; panel.style.top=Math.max(0,Math.min(window.innerHeight-40,e.clientY-oy))+'px'; }
+    function end(){ drag=false; }
+    function init(){ head=document.getElementById('rkCalcHead'); panel=document.getElementById('rkCalc'); if(!head) return;
+      head.addEventListener('mousedown',start); document.addEventListener('mousemove',move); document.addEventListener('mouseup',end);
+      head.addEventListener('touchstart',function(e){ start(e.touches[0]); },{passive:true});
+      document.addEventListener('touchmove',function(e){ if(drag){ move(e.touches[0]); e.preventDefault(); } },{passive:false});
+      document.addEventListener('touchend',end);
+    }
+    if(document.readyState!=='loading') init(); else document.addEventListener('DOMContentLoaded',init);
+  })();
+  render();
+})();
+</script>
+<!-- ==================== FIN CALCULADORA FLOTANTE ==================== -->
+
 </body>
 </html>
 
