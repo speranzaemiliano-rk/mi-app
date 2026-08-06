@@ -24412,20 +24412,19 @@
     // que es la única foto con período, conceptos y aportes reales.
 
     // Imprime el recibo con la liquidación cargada ahora en el modal, para el mes elegido.
+    // Al imprimirlo/"sacarlo" también lo deja guardado en «Recibos anteriores» (si es nuevo).
     window.imprimirReciboActual = function() {
         var emp = _empDesdeModal();
         if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
-        _imprimirReciboDe(emp, (document.getElementById('empLiqMes') || {}).value || '');
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        _imprimirReciboDe(emp, mes);
+        _autoguardarReciboAlImprimir(emp, mes);
     };
 
-    // Guarda (graba) el recibo de sueldo del mes elegido como una foto de la liquidación actual.
-    window.guardarReciboMes = function() {
-        if (!_esDuenoRemun()) return;
-        var emp = _empDesdeModal();
-        if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
-        if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con "Guardar empleado", y después guardá el recibo del mes.'); return; }
-        var mes = (document.getElementById('empLiqMes') || {}).value || '';
-        if (!mes) { alert('Elegí el mes que estás liquidando.'); return; }
+    // Núcleo del guardado del recibo (foto de la liquidación actual). opts.silencioso omite el
+    // confirm de reemplazo. Devuelve true si guardó, false si se canceló. NO ofrece cargar el pago.
+    function _guardarReciboSnap(emp, mes, opts) {
+        opts = opts || {};
         var t = remTotalesConceptos(emp);
         var ap = remAportesLey(emp);
         var snap = {
@@ -24453,7 +24452,7 @@
         }
         var existente = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
         if (existente) {
-            if (!confirm('Ya hay un recibo guardado de ' + emp.nombre + ' para ' + _mesLabel(mes) + '. ¿Reemplazarlo con la liquidación actual?')) return;
+            if (!opts.silencioso && !confirm('Ya hay un recibo guardado de ' + emp.nombre + ' para ' + _mesLabel(mes) + '. ¿Reemplazarlo con la liquidación actual?')) return false;
             Object.assign(existente, snap);   // conserva el id existente
         } else {
             snap.id = 'REC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -24466,6 +24465,36 @@
             persistirRemuneraciones();
         }
         _renderRecibosEmpleado(emp.id);
+        return true;
+    }
+
+    // Al imprimir/"sacar" el recibo, lo dejamos guardado también para que quede en «Recibos
+    // anteriores» y no se pierda. Solo si hay legajo guardado y mes; si YA existe uno para ese
+    // empleado+mes no lo pisamos (para actualizarlo está «💾 Guardar recibo del mes»).
+    function _autoguardarReciboAlImprimir(emp, mes) {
+        if (!_esDuenoRemun()) return;
+        if (!mes || editandoEmpleadoIdx < 0 || !emp.id) {
+            alert('⚠️ El recibo se imprimió pero NO quedó guardado' +
+                (!mes ? ' porque falta elegir el mes que estás liquidando.'
+                      : ' porque el empleado todavía no está guardado como legajo.') +
+                '\n\nGuardá el legajo (💾 Guardar empleado) y usá «💾 Guardar recibo del mes» para que quede en «Recibos anteriores».');
+            return;
+        }
+        var yaExiste = (remunRecibos || []).some(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
+        if (yaExiste) return;   // ya está guardado; no lo pisamos
+        _guardarReciboSnap(emp, mes, { silencioso: true });
+    }
+
+    // Guarda (graba) el recibo de sueldo del mes elegido como una foto de la liquidación actual.
+    window.guardarReciboMes = function() {
+        if (!_esDuenoRemun()) return;
+        var emp = _empDesdeModal();
+        if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
+        if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con "Guardar empleado", y después guardá el recibo del mes.'); return; }
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!mes) { alert('Elegí el mes que estás liquidando.'); return; }
+        if (!_guardarReciboSnap(emp, mes, {})) return;   // el usuario canceló el reemplazo
+        var t = remTotalesConceptos(emp);
         var _netoOfi = remNetoOficial(emp), _fuera = t.fuera, _neto = _netoOfi + _fuera;
         // Ofrecer cargar el PAGO de sueldo del mes con el neto ya calculado (para consolidarlo
         // después en Caja/Banco). El neto del recibo se pre-carga por banco y la Parte B
@@ -34466,7 +34495,7 @@
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
         <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" onchange="_empAvisoPagosDelMes()" style="padding:6px 8px; font-size:13px;"></label>
         <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
-        <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()">🖨️ Imprimir</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()" title="Imprime el recibo y lo deja guardado en «Recibos anteriores»">🖨️ Imprimir y guardar</button>
         <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
       </div>
       <div id="empRecibosHist" style="margin-top:6px;"></div>
