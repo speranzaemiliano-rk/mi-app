@@ -44,13 +44,13 @@ window.APP_CONFIG = {
   // Para prenderlo: poner true acá, registrar la app en Entra, cargar el ID y
   // el secreto en Firebase Console, y el tenant en Config → 🔐 Ingreso con
   // Microsoft. El código del login ya está hecho y probado.
-  msLogin: false,
+  msLogin: true,
   // Tenant de Microsoft Entra ID para el botón "Continuar con Microsoft".
   // Vacío = 'common': entra cualquier cuenta de Microsoft (de organización o
   // personal). Con el ID (o el dominio) del tenant, sólo entran las cuentas de
   // ESA organización. También se puede cambiar sin publicar el sitio desde
   // Config → 🔐 Ingreso con Microsoft (se guarda en global/config/msTenant).
-  msTenant: "",
+  msTenant: "ec157e74-8ae3-404a-9f98-f413ad1bb3a1",  // ROSEPA (paseolaplaza.com.ar)
   spotifyClientId: "ea1f2e04bfdc4c8abe4a116023a5f887",
   emailjs: { serviceId: "service_rk", templateId: "template_elux62l", publicKey: "1KBtAzAFvuD2WC9T-" },
   brand: {
