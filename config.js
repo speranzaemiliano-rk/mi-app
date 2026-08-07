@@ -36,6 +36,15 @@ window.APP_CONFIG = {
   },
   adminEmail: "speranzaemiliano@gmail.com",
   backendUrl: "https://mi-app-production-e1cd.up.railway.app",
+  // Mostrar el botón "Continuar con Microsoft" en la pantalla de ingreso.
+  // Sólo tiene sentido si la organización usa Microsoft 365 de EMPRESA, que es
+  // el que trae su propio directorio (tenant) de Entra ID. Con una cuenta
+  // personal de Microsoft (@hotmail.com, @outlook.com) no hay tenant: el botón
+  // aceptaría cualquier cuenta del mundo y no aporta nada sobre el de Google.
+  // Para prenderlo: poner true acá, registrar la app en Entra, cargar el ID y
+  // el secreto en Firebase Console, y el tenant en Config → 🔐 Ingreso con
+  // Microsoft. El código del login ya está hecho y probado.
+  msLogin: false,
   // Tenant de Microsoft Entra ID para el botón "Continuar con Microsoft".
   // Vacío = 'common': entra cualquier cuenta de Microsoft (de organización o
   // personal). Con el ID (o el dominio) del tenant, sólo entran las cuentas de
