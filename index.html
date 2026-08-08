@@ -29077,8 +29077,12 @@
                 + '<th>Fecha</th><th>Tipo</th><th>N°</th><th style="text-align:right;">Importe</th><th style="text-align:right;">Pagado</th><th style="text-align:right;">Saldo</th><th>Estado</th><th style="text-align:right;">Acción</th>'
                 + '</tr></thead><tbody>';
             compsF.forEach(function(c){
-                var abrir = (c.o === 'fact') ? ('editarFactura(' + c.ref + ')') : ("abrirModalDoc('" + String(c.ref).replace(/'/g,"\\'") + "')");
-                var pagar = (c.saldo > 0.5 && puedeEd) ? '<button class="btn btn-gold btn-sm" onclick="' + (c.o==='fact' ? ('abrirPagoFD(\'fact\',' + c.ref + ')') : ('abrirPagoFD(\'doc\',\'' + String(c.ref).replace(/'/g,"\\'") + '\')')) + '" title="Registrar pago">💵</button> ' : '';
+                var refA = (c.o === 'fact') ? c.ref : ("'" + String(c.ref).replace(/'/g,"\\'") + "'");
+                var abrir = (c.o === 'fact') ? ('editarFactura(' + c.ref + ')') : ("abrirModalDoc(" + refA + ")");
+                var pagar = (c.saldo > 0.5 && puedeEd) ? '<button class="btn btn-gold btn-sm" onclick="' + (c.o==='fact' ? ('abrirPagoFD(\'fact\',' + c.ref + ')') : ('abrirPagoFD(\'doc\',' + refA + ')')) + '" title="Registrar pago">💵</button> ' : '';
+                var imprimir = '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('imprimirComprobanteFacturaItem(' + c.ref + ')') : ('imprimirDocumento(' + refA + ')')) + '" title="Imprimir el comprobante">🖨️</button>';
+                var op = (c.pag > 0) ? '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('abrirHistorialPagosFactura(' + c.ref + ')') : ('abrirHistorialPagosDoc(' + refA + ')')) + '" title="Reimprimir Orden de Pago / retenciones">🧾</button>' : '';
+                var borrar = puedeEd ? '<button class="btn btn-danger-sm" onclick="' + (c.o==='fact' ? ('eliminarFactura(' + c.ref + ')') : ('eliminarDoc(' + refA + ')')) + '" title="Eliminar">✕</button>' : '';
                 h += '<tr>'
                     + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                     + '<td>' + escHtml(c.tipo) + '</td>'
@@ -29087,7 +29091,7 @@
                     + '<td style="text-align:right;color:var(--success);">' + (c.pag ? fmtA(c.pag) : '—') + '</td>'
                     + '<td style="text-align:right;font-weight:600;' + (c.saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(c.saldo) + '</td>'
                     + '<td><span class="pill ' + badge[c.est] + '">' + lbl[c.est] + '</span></td>'
-                    + '<td style="text-align:right;white-space:nowrap;">' + pagar + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + '</td>'
+                    + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + borrar + '</div></td>'
                     + '</tr>';
             });
             h += '</tbody></table></div>';
@@ -29102,21 +29106,33 @@
             var rows = cc.movs.map(function(m){
                 saldo += (m.debe || 0) - (m.haber || 0);
                 var col = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
+                // Acción: reimprimir la OP (fila de Pago) o el certificado de retención (fila de Retención).
+                var acc = '';
+                if (puedeEd && m._op) {
+                    var opFn = (m._op.t === 'fact') ? ('abrirHistorialPagosFactura(' + m._op.ref + ')') : ("abrirHistorialPagosDoc('" + String(m._op.ref).replace(/'/g,"\\'") + "')");
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + opFn + '" title="Reimprimir Orden de Pago">🧾 OP</button>';
+                } else if (puedeEd && m._ret) {
+                    var rf = (m._ret.t === 'fact') ? 'imprimirRetFact' : 'imprimirRetDoc';
+                    var rref = (m._ret.t === 'fact') ? m._ret.ref : ("'" + String(m._ret.ref).replace(/'/g,"\\'") + "'");
+                    var tipoArg = m._ret.tipo ? (",'" + m._ret.tipo + "'") : '';
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + rf + '(' + rref + ',' + m._ret.pi + tipoArg + ')" title="Imprimir comprobante de retención">🏛️ Ret.</button>';
+                }
                 return '<tr>'
                     + '<td style="white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
                     + '<td><span style="font-size:11px;font-weight:600;color:' + col + ';">' + m.tipo + '</span><br><span style="font-size:12px;">' + escHtml(m.detalle || '') + '</span></td>'
                     + '<td style="text-align:right;color:var(--danger);">' + (m.debe ? fmtA(m.debe) : '') + '</td>'
                     + '<td style="text-align:right;color:var(--success);">' + (m.haber ? fmtA(m.haber) : '') + '</td>'
                     + '<td style="text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(saldo) + '</td>'
+                    + '<td style="text-align:right;white-space:nowrap;">' + acc + '</td>'
                     + '</tr>';
             }).join('');
-            h += '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th style="text-align:right;">Debe</th><th style="text-align:right;">Haber</th><th style="text-align:right;">Saldo</th></tr></thead>'
+            h += '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th style="text-align:right;">Debe</th><th style="text-align:right;">Haber</th><th style="text-align:right;">Saldo</th><th></th></tr></thead>'
                 + '<tbody>' + rows + '</tbody>'
                 + '<tfoot><tr style="font-weight:700;background:var(--surface-2);border-top:2px solid var(--border);">'
                 + '<td colspan="2" style="text-align:right;">Totales</td>'
                 + '<td style="text-align:right;color:var(--danger);">' + fmtA(cc.totalDebe) + '</td>'
                 + '<td style="text-align:right;color:var(--success);">' + fmtA(cc.totalHaber) + '</td>'
-                + '<td style="text-align:right;">' + fmtA(cc.saldoComprob) + '</td></tr></tfoot>'
+                + '<td style="text-align:right;">' + fmtA(cc.saldoComprob) + '</td><td></td></tr></tfoot>'
                 + '</table></div>';
         }
         h += '</div>';
@@ -29179,10 +29195,11 @@
         facts.forEach(function(f){ movs.push({ fecha: f.fecha || '', tipo: 'Factura', clase: 'debe', detalle: (f.numero || f.descripcion || 'Factura'), debe: (f.importe || 0), haber: 0, ref: { t: 'factura', id: facturas.indexOf(f) } }); });
         docs.forEach(function(d){ movs.push({ fecha: d.fecha || '', tipo: 'Comprob. X', clase: 'debe', detalle: (d.numero || d.descripcion || d.concepto || 'Comprobante'), debe: (d.importe || 0), haber: 0, ref: { t: 'documento', id: d.id } }); });
         var totalPagado = 0, totalRet = 0;
-        var _proc = function(item){
+        var _proc = function(item, srcTipo){
+            var srcRef = (srcTipo === 'fact') ? facturas.indexOf(item) : item.id;
             var hist = item.pagosHistorial || [];
             if (hist.length) {
-                hist.forEach(function(p){
+                hist.forEach(function(p, pi){
                     // El Pago figura por el EFECTIVO NETO que salió (monto − retenciones). La parte
                     // retenida se cancela con las líneas de Retención de abajo: el certificado de
                     // retención vale como pago (el proveedor lo usa contra AFIP). Así una factura
@@ -29190,7 +29207,7 @@
                     // retención por separado → la misma plata dos veces → falso saldo a favor).
                     var m = (p.monto || 0) - (p.totalRet || 0);
                     if (m < 0) m = 0;
-                    if (m > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: (p.nroCorrelativo ? ('OP ' + p.nroCorrelativo) : 'Pago') + ' (neto)', debe: 0, haber: m }); totalPagado += m; }
+                    if (m > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: (p.nroCorrelativo ? ('OP ' + p.nroCorrelativo) : 'Pago') + ' (neto)', debe: 0, haber: m, _op: { t: srcTipo, ref: srcRef, pi: pi } }); totalPagado += m; }
                     // Cada impuesto retenido va en SU PROPIA fila (Ganancias, IIBB, SUSS, etc.),
                     // aunque sean del mismo pago/factura. Si el pago viejo no tiene el detalle
                     // (solo totalRet), se muestra una sola fila combinada como antes.
@@ -29198,18 +29215,18 @@
                     if (rets.length) {
                         rets.forEach(function(r){
                             var rm = r.monto || 0;
-                            movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (r.desc || r.codigo || ''), debe: 0, haber: rm }); totalRet += rm;
+                            movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (r.desc || r.codigo || ''), debe: 0, haber: rm, _ret: { t: srcTipo, ref: srcRef, pi: pi, tipo: (_esRetSUSS(r.codigo) ? 'suss' : 'ganancias') } }); totalRet += rm;
                         });
                     } else {
                         var rt = p.totalRet || 0;
-                        if (rt > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p), debe: 0, haber: rt }); totalRet += rt; }
+                        if (rt > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p), debe: 0, haber: rt, _ret: { t: srcTipo, ref: srcRef, pi: pi, tipo: '' } }); totalRet += rt; }
                     }
                 });
             } else if ((item.pagado || 0) > 0) {
                 movs.push({ fecha: item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: 'Pago', debe: 0, haber: item.pagado }); totalPagado += item.pagado;
             }
         };
-        facts.forEach(_proc); docs.forEach(_proc);
+        facts.forEach(function(it){ _proc(it, 'fact'); }); docs.forEach(function(it){ _proc(it, 'doc'); });
         // Cronológico; a igual fecha, el Debe (comprobante) antes que el Haber (pago).
         movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return (a.clase === 'debe' ? 0 : 1) - (b.clase === 'debe' ? 0 : 1); });
         var totalDebe = facts.reduce(function(s,f){ return s + (f.importe || 0); }, 0) + docs.reduce(function(s,d){ return s + (d.importe || 0); }, 0);
