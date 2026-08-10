@@ -21089,11 +21089,34 @@
     }
     var _vpsForzarMontos = false;
     // Lee los montos del plan (todos los que se ven, editados o no) para persistir.
+    // Lee un importe tipeado a mano y lo interpreta bien venga como venga: "1.500" (miles),
+    // "1500,50" (coma decimal AR) o "1500.50" (punto decimal, como suele dar el teclado del
+    // celular). El separador de más a la derecha se toma como decimal SÓLO si tiene 1 o 2
+    // dígitos detrás (centavos); con 3 dígitos es separador de miles. Antes se hacía
+    // replace(/\./g,'') a lo bruto y un "1500.50" se convertía en 150050 (100×), por eso las
+    // cuotas quedaban infladas. (Las cuotas se guardan como número entero: ver _numEnteroAR.)
+    function _numAR(v) {
+        var s = String(v == null ? '' : v).trim().replace(/[^\d.,\-]/g, '');
+        if (!s) return 0;
+        var neg = s.indexOf('-') > -1; s = s.replace(/-/g, '');
+        var dec = Math.max(s.lastIndexOf(','), s.lastIndexOf('.'));
+        var intPart, decPart = '';
+        if (dec > -1) {
+            var after = s.length - dec - 1;
+            if (after >= 1 && after <= 2) { intPart = s.slice(0, dec).replace(/[.,]/g, ''); decPart = s.slice(dec + 1); }
+            else { intPart = s.replace(/[.,]/g, ''); }
+        } else { intPart = s; }
+        var n = parseFloat(intPart + (decPart ? ('.' + decPart) : '')) || 0;
+        return neg ? -n : n;
+    }
+    // Las cuotas van en números enteros (sin centavos ni comas), como pidió el usuario.
+    function _numEnteroAR(v) { return Math.round(_numAR(v)); }
+
     function ventaLeerMontosPlanSimple() {
         var montos = [];
         var tbody = document.getElementById('ventaCuotasSimpleBody');
         if (!tbody) return montos;
-        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montos.push(parseFloat(String(inp.value).replace(/\./g,'').replace(',','.')) || 0); });
+        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montos.push(_numEnteroAR(inp.value)); });
         return montos;
     }
 
@@ -21124,7 +21147,7 @@
         // Preservar lo editado a mano en el DOM
         var fechasDOM = [], montosDOM = [];
         tbody.querySelectorAll('.vps-fecha-input').forEach(function(inp){ fechasDOM.push(inp.dataset.manual === '1' ? (inp.value||'') : ''); });
-        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montosDOM.push(inp.dataset.manual === '1' ? (parseFloat(String(inp.value).replace(/\./g,'').replace(',','.')) || 0) : null); });
+        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montosDOM.push(inp.dataset.manual === '1' ? _numEnteroAR(inp.value) : null); });
 
         // ── Montos fijos (editados a mano en el DOM, o guardados). El resto reparte el remanente. ──
         var fijos = [];
@@ -21135,7 +21158,7 @@
         }
         var sumFijo = 0, libres = 0;
         fijos.forEach(function(x){ if (x != null) sumFijo += x; else libres++; });
-        var montoLibre = libres > 0 ? Math.floor(((total - sumFijo) / libres) * 100) / 100 : 0;
+        var montoLibre = libres > 0 ? Math.round((total - sumFijo) / libres) : 0;
 
         tbody.innerHTML = '';
         var d0 = new Date(venc1 + 'T00:00:00');
@@ -21154,7 +21177,7 @@
             var monto;
             if (fijos[i] != null) { monto = fijos[i]; }
             else { libreAsignados++; monto = (libreAsignados === libres) ? (total - sumFijo - acumLibre) : montoLibre; acumLibre += montoLibre; }
-            monto = Math.round(monto * 100) / 100;
+            monto = Math.round(monto);
             sumaMostrada += monto;
             var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
             var dV = new Date(fechaVal + 'T00:00:00');
@@ -21179,7 +21202,7 @@
                     '<input type="date" class="vps-fecha-input" data-cuota="'+nroCuota+'" value="'+fechaVal+'" style="'+fechaStyle+'" '+(pagada?'disabled':'')+' onchange="'+fechaOnChange+'">' +
                 '</td>' +
                 '<td style="padding:5px 10px;text-align:right;">' +
-                    '<input type="text" inputmode="decimal" class="vps-monto-input" data-cuota="'+nroCuota+'" value="'+Number(monto||0).toLocaleString('es-AR',{maximumFractionDigits:2})+'" style="'+montoStyle+'" '+(pagada?'disabled':'')+' onchange="this.dataset.manual=\'1\';ventaGenerarPlanSimple()">' +
+                    '<input type="text" inputmode="numeric" class="vps-monto-input" data-cuota="'+nroCuota+'" value="'+Number(monto||0).toLocaleString('es-AR',{maximumFractionDigits:0})+'" style="'+montoStyle+'" '+(pagada?'disabled':'')+' onchange="this.dataset.manual=\'1\';ventaGenerarPlanSimple()">' +
                 '</td>' +
                 '<td style="padding:5px 10px;text-align:center;">' + estado + '</td>';
             tbody.appendChild(tr);
