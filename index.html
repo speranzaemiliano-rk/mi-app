@@ -14991,8 +14991,29 @@
     function _borrarMovConPin(kind, a, b) {
         _pedirPinBorrado(function() {
             if (kind === 'movcaja')      { if (typeof pedirEliminar === 'function') pedirEliminar('movcaja', a); }
+            else if (kind === 'movbanco'){ if (typeof borrarMovBanco === 'function') borrarMovBanco(a); }
             else if (kind === 'docpago') { if (typeof eliminarMovPagoDoc === 'function') eliminarMovPagoDoc(a, b); }
         });
+    }
+    // Botones de acción por fila para las pantallas de Caja/Bancos (Caja General, Efectivo,
+    // Banco): 🖨️ imprimir el comprobante · ✏️ editar la operación · 🗑️ eliminar (con PIN).
+    // El borrado se rutea según el tipo de movimiento y sólo aparece donde es seguro
+    // (movimientos manuales de caja/banco y pagos de documentos). Reusa _verOrigenMovimiento /
+    // _editarOrigenMovimiento (ruteados por srcTipo) para no duplicar lógica.
+    function _accionesMovHTML(m) {
+        if (!m || m.srcTipo == null || m.srcRef == null) return '';
+        var refArg = (typeof m.srcRef === 'number') ? m.srcRef : ("'" + String(m.srcRef).replace(/'/g,"\\'") + "'");
+        var puedeVer = ['factura','documento','presupuesto','emitido'].indexOf(m.srcTipo) >= 0;
+        var ed = (typeof puedeEditar === 'undefined') ? true : puedeEditar;
+        var h = '';
+        if (puedeVer) h += '<button class="btn btn-outline btn-sm" onclick="_verOrigenMovimiento(\'' + m.srcTipo + '\',' + refArg + ')" title="Imprimir el comprobante (PDF)">🖨️</button>';
+        if (ed) h += '<button class="btn btn-outline btn-sm" onclick="_editarOrigenMovimiento(\'' + m.srcTipo + '\',' + refArg + ')" title="Editar">✏</button>';
+        if (ed) {
+            if (m.srcTipo === 'movbanco' && m.igIdx != null && m.igIdx >= 0)      h += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movbanco\',' + m.igIdx + ')" title="Eliminar (pide PIN)">🗑️</button>';
+            else if (m.srcTipo === 'movcaja' && m.igIdx != null && m.igIdx >= 0)  h += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movcaja\',' + m.igIdx + ')" title="Eliminar (pide PIN)">🗑️</button>';
+            else if (m.docId)                                                     h += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'docpago\',\'' + String(m.docId).replace(/'/g,"\\'") + '\',\'' + (m.pagoId||'') + '\')" title="Eliminar (pide PIN)">🗑️</button>';
+        }
+        return h;
     }
     // Prueba que el backend responda de verdad. Sin CORS no se puede leer la
     // respuesta de un servicio que no existe, así que distinguimos los casos.
@@ -17866,10 +17887,7 @@
             var s = m.saldoAcum;
             var tipoBadge = m.entrada>0 ? '<span class="badge-rol badge-ok" style="font-size:10px;">Entrada</span>' : '<span class="badge-rol badge-err" style="font-size:10px;">Salida</span>';
             var tr = document.createElement('tr');
-            var acciones = m.igIdx!==undefined
-                ? '<button class="btn-icon" title="Editar" onclick="editarMovBanco('+m.igIdx+')">✏️</button> <button class="btn-icon" title="Borrar" onclick="borrarMovBanco('+m.igIdx+')" style="color:var(--danger);">🗑️</button>'
-                : '';
-            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
+            var acciones = '<div class="action-btns" style="justify-content:flex-end;">'+_accionesMovHTML(m)+'</div>';
             tr.innerHTML = '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
                 '<td>'+tipoBadge+' <span style="font-size:11px;color:var(--text-2);">'+m.tipo+'</span></td>'+
                 '<td>'+m.desc+'</td>'+
@@ -18014,8 +18032,7 @@
         _ordenarParaPintar(filtrados, 'efpOrden').forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
-            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
-            const bEFP=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
+            const bEFP='<div class="action-btns" style="justify-content:flex-end;">'+_accionesMovHTML(m)+'</div>';
             tr.innerHTML = `
                 <td>${m.fecha ? formatearFecha(m.fecha) : '—'}</td>
                 <td><span class="pill ${m.ingreso>0?'badge-ok':'badge-err'}" style="font-size:10px;">${m.tipo}</span></td>
@@ -18127,8 +18144,7 @@
         _ordenarParaPintar(filtrados, 'efuOrden').forEach(m => {
             const saldo = m.saldoAcum;
             const tr = document.createElement('tr');
-            _filaMovClickeable(tr, m.srcTipo, m.srcRef);
-            const bEFU=m.igIdx>=0?'<div class="action-btns"><button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx)+'</div>':'';
+            const bEFU='<div class="action-btns" style="justify-content:flex-end;">'+_accionesMovHTML(m)+'</div>';
             tr.innerHTML =
                 '<td>'+(m.fecha ? formatearFecha(m.fecha) : '—')+'</td>'+
                 '<td><span class="pill '+(m.ingreso>0?'badge-ok':'badge-err')+'" style="font-size:10px;">'+m.tipo+'</span></td>'+
@@ -28349,16 +28365,7 @@
 
                 // Acciones por fila (como en Ingresos): imprimir el comprobante, editar y
                 // eliminar (el borrado pide PIN). Ya no se abre la edición al tocar la fila.
-                var _cgRefArg = (typeof m.srcRef === 'number') ? m.srcRef : ("'" + String(m.srcRef).replace(/'/g,"\\'") + "'");
-                var _cgPuedeVer = ['factura','documento','presupuesto','emitido'].indexOf(m.srcTipo) >= 0;
-                var _cgPuedeEd = (typeof puedeEditar === 'undefined') ? true : puedeEditar;
-                var bAcc='';
-                if (_cgPuedeVer) bAcc += '<button class="btn btn-outline btn-sm" onclick="_verOrigenMovimiento(\''+m.srcTipo+'\','+_cgRefArg+')" title="Imprimir el comprobante (PDF)">🖨️</button>';
-                if (_cgPuedeEd)  bAcc += '<button class="btn btn-outline btn-sm" onclick="_editarOrigenMovimiento(\''+m.srcTipo+'\','+_cgRefArg+')" title="Editar">✏</button>';
-                if (_cgPuedeEd) {
-                    if (m.igIdx >= 0)      bAcc += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movcaja\','+m.igIdx+')" title="Eliminar (pide PIN)">🗑️</button>';
-                    else if (m.docId)      bAcc += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'docpago\',\''+String(m.docId).replace(/'/g,"\\'")+'\',\''+(m.pagoId||'')+'\')" title="Eliminar (pide PIN)">🗑️</button>';
-                }
+                var bAcc = _accionesMovHTML(m);
 
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
