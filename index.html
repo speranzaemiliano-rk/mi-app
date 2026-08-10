@@ -19754,6 +19754,11 @@
             document.getElementById('vencMonto').value = v.monto || '';
             document.getElementById('vencMoneda').value = v.moneda || 'ARS';
             document.getElementById('vencDescripcion').value = v.descripcion || '';
+            document.getElementById('vencComentarios').value = v.comentarios || '';
+            document.getElementById('vencServicioUrl').value = v.servicioUrl || '';
+            document.getElementById('vencServicioUsuario').value = v.servicioUsuario || '';
+            document.getElementById('vencServicioPassword').value = v.servicioPassword || '';
+            document.getElementById('vencServicioPassword').type = 'password';
             document.getElementById('vencAviso10').checked = !v.diasAviso || v.diasAviso.indexOf(10) !== -1;
             document.getElementById('vencAviso5').checked  = !v.diasAviso || v.diasAviso.indexOf(5)  !== -1;
             document.getElementById('vencEmailAlerta').value = v.emailAlerta || '';
@@ -19763,9 +19768,10 @@
             document.getElementById('vencPaso1').style.display = 'none';
             document.getElementById('vencPaso2').style.display = '';
         } else {
-            ['vencAlias','vencEmpresaProveedora','vencCuit','vencFecha','vencMonto','vencDescripcion','vencEmailAlerta'].forEach(function(fid) {
+            ['vencAlias','vencEmpresaProveedora','vencCuit','vencFecha','vencMonto','vencDescripcion','vencEmailAlerta','vencComentarios','vencServicioUrl','vencServicioUsuario','vencServicioPassword'].forEach(function(fid) {
                 var el = document.getElementById(fid); if (el) el.value = '';
             });
+            document.getElementById('vencServicioPassword').type = 'password';
             document.getElementById('vencMoneda').value = 'ARS';
             document.getElementById('vencAviso10').checked = true;
             document.getElementById('vencAviso5').checked = true;
@@ -19787,6 +19793,65 @@
     function _vencIrACargaManual() {
         document.getElementById('vencPaso1').style.display = 'none';
         document.getElementById('vencPaso2').style.display = '';
+    }
+
+    // Aviso flotante breve (la app no tenía "toast"): se usa al copiar credenciales.
+    function _miniToast(msg) {
+        var t = document.getElementById('_miniToast');
+        if (!t) {
+            t = document.createElement('div'); t.id = '_miniToast';
+            t.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:0 6px 24px rgba(0,0,0,.3);z-index:99999;max-width:90vw;text-align:center;opacity:0;transition:opacity .18s;pointer-events:none;';
+            document.body.appendChild(t);
+        }
+        t.textContent = msg;
+        t.style.opacity = '1';
+        clearTimeout(t._to); t._to = setTimeout(function(){ t.style.opacity = '0'; }, 2600);
+    }
+
+    // Copia texto al portapapeles (con respaldo para navegadores viejos) y avisa.
+    function _copiarTexto(txt, okMsg) {
+        if (!txt) return;
+        var done = function(){ _miniToast(okMsg || 'Copiado'); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(String(txt)).then(done).catch(function(){ _copiarFallback(txt, done); });
+        } else { _copiarFallback(txt, done); }
+    }
+    function _copiarFallback(txt, done) {
+        try {
+            var ta = document.createElement('textarea'); ta.value = String(txt);
+            ta.style.cssText = 'position:fixed;top:-1000px;opacity:0;'; document.body.appendChild(ta);
+            ta.focus(); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+            if (done) done();
+        } catch (e) { alert('No se pudo copiar automáticamente. Copialo a mano: ' + txt); }
+    }
+
+    // Mostrar/ocultar la contraseña del servicio en el modal.
+    function _vencTogglePass(btn) {
+        var inp = document.getElementById('vencServicioPassword');
+        if (!inp) return;
+        inp.type = (inp.type === 'password') ? 'text' : 'password';
+        if (btn) btn.textContent = (inp.type === 'password') ? '👁' : '🙈';
+    }
+
+    // Abre la web del servicio en otra pestaña y copia el usuario para pegar.
+    // (El navegador no permite completar solo el login de otra empresa por seguridad.)
+    function vencIngresarServicio(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!v || !v.servicioUrl) { alert('Este vencimiento no tiene cargada la página del servicio.'); return; }
+        var url = v.servicioUrl.trim();
+        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+        window.open(url, '_blank', 'noopener');
+        if (v.servicioUsuario) {
+            _copiarTexto(v.servicioUsuario, '👤 Usuario copiado — pegalo en la web. Después tocá 🔑 para la contraseña.');
+        } else {
+            _miniToast('Abriendo el servicio…');
+        }
+    }
+    // Copia la contraseña del servicio.
+    function vencCopiarPass(id) {
+        var v = (vencimientos||[]).find(function(x){ return x.id === id; });
+        if (!v || !v.servicioPassword) { alert('Este vencimiento no tiene cargada la contraseña.'); return; }
+        _copiarTexto(v.servicioPassword, '🔑 Contraseña copiada — pegala en la web.');
     }
 
     function _setVencRecurrente(si) {
@@ -20001,6 +20066,10 @@
             monto: parseFloat(document.getElementById('vencMonto').value) || 0,
             moneda: document.getElementById('vencMoneda').value || 'ARS',
             descripcion: document.getElementById('vencDescripcion').value.trim(),
+            comentarios: document.getElementById('vencComentarios').value.trim(),
+            servicioUrl: document.getElementById('vencServicioUrl').value.trim(),
+            servicioUsuario: document.getElementById('vencServicioUsuario').value.trim(),
+            servicioPassword: document.getElementById('vencServicioPassword').value,
             diasAviso: diasAviso.length ? diasAviso : [10, 5],
             emailAlerta: document.getElementById('vencEmailAlerta').value.trim(),
             recurrente: document.getElementById('vencRecurrente').value === 'true',
@@ -20069,7 +20138,7 @@
         var filtroEst = document.getElementById('filtroVencEstado')?.value || '';
         var filtroEmp = selEmpFiltro ? selEmpFiltro.value : '';
         var list = vencimientos.filter(function(v) {
-            var txt = ((v.alias||'') + (v.empresaProveedora||'') + (v.descripcion||'')).toLowerCase();
+            var txt = ((v.alias||'') + (v.empresaProveedora||'') + (v.descripcion||'') + (v.comentarios||'')).toLowerCase();
             if (busq && txt.indexOf(busq) === -1) return false;
             if (filtroEst && _vencEstado(v).estado !== filtroEst) return false;
             if (filtroEmp && v.empresaId !== filtroEmp) return false;
@@ -20106,7 +20175,7 @@
             var tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${escHtml(v.alias||'—')}</strong>${v.recurrente ? ' <span title="Se repite todos los meses">🔁</span>' : ''}</td>
-                <td>${v.descripcion ? escHtml(v.descripcion) : '—'}</td>
+                <td>${v.descripcion ? escHtml(v.descripcion) : '—'}${v.comentarios ? ` <span title="${escHtml(v.comentarios)}" style="cursor:help;">💬</span>` : ''}</td>
                 <td>${escHtml(empLabel)}</td>
                 <td>${escHtml(v.empresaProveedora||'—')}</td>
                 <td>${v.fechaVencimiento ? formatearFecha(v.fechaVencimiento) : '—'}</td>
@@ -20117,6 +20186,8 @@
                         ? `<button class="btn btn-outline btn-sm" title="Marcar como adeudado de nuevo" onclick="marcarVencimientoAdeudado('${v.id}')">✓ Sin deuda hasta el próximo</button>`
                         : `<button class="btn btn-gold btn-sm" title="Marcar como pagado" onclick="marcarVencimientoPagado('${v.id}')">💸 Adeudado</button>`}
                     ${v.adjunto ? `<button class="btn btn-outline btn-sm" title="Ver factura" onclick="descargarVencimientoAdjunto('${v.id}')">📎</button>` : ''}
+                    ${v.servicioUrl ? `<button class="btn btn-outline btn-sm" title="Abrir la web del servicio y copiar el usuario" onclick="vencIngresarServicio('${v.id}')">🔓 Ingresar</button>` : ''}
+                    ${(v.servicioUrl && v.servicioPassword) ? `<button class="btn btn-outline btn-sm" title="Copiar la contraseña" onclick="vencCopiarPass('${v.id}')">🔑</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="abrirModalVencimiento('${v.id}')">✏</button>
                     <button class="btn btn-danger-sm" onclick="eliminarVencimiento('${v.id}')">✕</button>
                 </div></td>`;
@@ -20181,6 +20252,10 @@
             monto: v.monto || 0,
             moneda: v.moneda || 'ARS',
             descripcion: v.descripcion || '',
+            comentarios: v.comentarios || '',
+            servicioUrl: v.servicioUrl || '',
+            servicioUsuario: v.servicioUsuario || '',
+            servicioPassword: v.servicioPassword || '',
             diasAviso: v.diasAviso || [10, 5],
             emailAlerta: v.emailAlerta || '',
             recurrente: true,
@@ -33484,6 +33559,22 @@
                 <div class="form-group">
                     <label>Descripción</label>
                     <input type="text" id="vencDescripcion" placeholder="Concepto del servicio (opcional)">
+                </div>
+                <div class="form-group">
+                    <label>Comentarios <span style="color:var(--text-3);font-weight:400;">(notas internas, opcional)</span></label>
+                    <textarea id="vencComentarios" rows="2" placeholder="Ej: se paga con débito automático de la tarjeta X · contacto del proveedor · N° de suministro…" style="width:100%;resize:vertical;"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>🔓 Acceso al servicio <span style="color:var(--text-3);font-weight:400;">(para entrar a bajar la factura del mes)</span></label>
+                    <input type="url" id="vencServicioUrl" placeholder="https://…  (página de login del servicio)" style="margin-bottom:8px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <input type="text" id="vencServicioUsuario" placeholder="Usuario / N° de cliente" autocomplete="off">
+                        <div style="display:flex; gap:6px;">
+                            <input type="password" id="vencServicioPassword" placeholder="Contraseña" autocomplete="new-password" style="flex:1;">
+                            <button type="button" class="btn btn-outline btn-sm" onclick="_vencTogglePass(this)" title="Mostrar / ocultar" style="white-space:nowrap;">👁</button>
+                        </div>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-3);margin-top:5px;">El botón <b>🔓 Ingresar</b> de la lista abre la web del servicio y te copia el usuario y la contraseña para pegar. El navegador no puede completar solo la web de otra empresa. <b>Ojo:</b> la contraseña queda guardada en el sistema (sin cifrar), visible para usuarios con acceso de edición.</div>
                 </div>
                 <div class="form-group">
                     <label>Avisar por mail con</label>
