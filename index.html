@@ -21048,7 +21048,48 @@
         return fechas;
     }
 
-    // Genera el plan de cuotas simples (monto = total / N, sin ajuste por índice)
+    // Estado del plan de cuotas simples: intervalo en días (0 = mensual, el default de
+    // siempre) y una bandera para forzar el recálculo de TODAS las fechas cuando el usuario
+    // cambia el 1° vencimiento y elige un intervalo.
+    var _vpsIntervalo = 0;
+    var _vpsRecalcFechas = false;
+
+    // Al cambiar el 1° vencimiento, preguntar cada cuántos días vencen las siguientes y
+    // recalcular todos los vencimientos (por default cada 30 días).
+    function ventaCuotasSimpleFecha1Cambio() {
+        var chk = document.getElementById('ventaCuotasSimpleChk');
+        var nc = parseInt(document.getElementById('ventaCuotasSimpleNro').value) || 0;
+        var venc1 = document.getElementById('ventaCuotasSimpleFecha1').value || '';
+        if (chk && chk.checked && venc1 && nc > 1) {
+            var def = _vpsIntervalo > 0 ? String(_vpsIntervalo) : '30';
+            var r = prompt('Cambiaste el 1° vencimiento.\n¿Cada cuántos días vencen las cuotas siguientes?\n(Ej: 30 = una por mes. Cancelá para no recalcular.)', def);
+            if (r !== null) {
+                var dias = parseInt(r, 10);
+                if (dias > 0) { _vpsIntervalo = dias; _vpsRecalcFechas = true; }
+            }
+        }
+        ventaGenerarPlanSimple();
+    }
+    // Vuelve a repartir los montos en partes iguales (borra los montos editados a mano).
+    function ventaCuotasSimpleRepartirIgual() {
+        var tbody = document.getElementById('ventaCuotasSimpleBody');
+        if (tbody) tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ inp.dataset.manual = ''; inp.value = ''; });
+        _vpsForzarMontos = true;
+        ventaGenerarPlanSimple();
+    }
+    var _vpsForzarMontos = false;
+    // Lee los montos del plan (todos los que se ven, editados o no) para persistir.
+    function ventaLeerMontosPlanSimple() {
+        var montos = [];
+        var tbody = document.getElementById('ventaCuotasSimpleBody');
+        if (!tbody) return montos;
+        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montos.push(parseFloat(String(inp.value).replace(/\./g,'').replace(',','.')) || 0); });
+        return montos;
+    }
+
+    // Genera el plan de cuotas simples. Fechas: cada N días (si se eligió intervalo) o
+    // mensuales. Montos: total / N por defecto, pero cada cuota se puede editar a mano; los
+    // montos editados quedan fijos y el resto reparte el remanente para que la suma dé el total.
     function ventaGenerarPlanSimple() {
         var wrap  = document.getElementById('ventaCuotasSimplePlanWrap');
         var tbody = document.getElementById('ventaCuotasSimpleBody');
@@ -21062,36 +21103,49 @@
         var esUSD = info.moneda === 'usd';
         if (!nc || !venc1 || !total) { wrap.style.display = 'none'; return; }
         wrap.style.display = '';
-        var prefix = esUSD ? 'USD ' : '$ ';
-        var fmtNum = function(n) { return prefix + Math.round(n).toLocaleString('es-AR'); };
         var compKey = esUSD ? 'cuota_usd_simple' : 'cuota_ars_simple';
-        // Fechas guardadas y cobros ya registrados (si estamos editando)
-        var fechasGuardadas = [];
-        var cobros = [];
+        // Fechas/montos guardados y cobros ya registrados (si estamos editando)
+        var fechasGuardadas = [], montosGuardados = [], cobros = [];
         if (typeof editandoVentaIdx !== 'undefined' && editandoVentaIdx >= 0 && ventas && ventas[editandoVentaIdx]) {
             var vEdit = ventas[editandoVentaIdx];
-            if (vEdit.cuotasSimple) fechasGuardadas = vEdit.cuotasSimple.fechas || [];
+            if (vEdit.cuotasSimple) { fechasGuardadas = vEdit.cuotasSimple.fechas || []; montosGuardados = vEdit.cuotasSimple.montos || []; }
             cobros = (vEdit.cobrosHistorial || []).filter(function(c){ return c.comp === compKey; });
         }
-        // Preservar SOLO las fechas editadas manualmente (data-manual); el resto se recalcula.
-        var fechasDOM = [];
+        // Preservar lo editado a mano en el DOM
+        var fechasDOM = [], montosDOM = [];
         tbody.querySelectorAll('.vps-fecha-input').forEach(function(inp){ fechasDOM.push(inp.dataset.manual === '1' ? (inp.value||'') : ''); });
+        tbody.querySelectorAll('.vps-monto-input').forEach(function(inp){ montosDOM.push(inp.dataset.manual === '1' ? (parseFloat(String(inp.value).replace(/\./g,'').replace(',','.')) || 0) : null); });
+
+        // ── Montos fijos (editados a mano en el DOM, o guardados). El resto reparte el remanente. ──
+        var fijos = [];
+        for (var i = 0; i < nc; i++) {
+            var mdom = (montosDOM[i] != null) ? montosDOM[i] : null;
+            var mg   = (!_vpsForzarMontos && montosGuardados[i] != null && montosGuardados[i] !== '') ? Number(montosGuardados[i]) : null;
+            fijos[i] = (mdom != null) ? mdom : mg;
+        }
+        var sumFijo = 0, libres = 0;
+        fijos.forEach(function(x){ if (x != null) sumFijo += x; else libres++; });
+        var montoLibre = libres > 0 ? Math.floor(((total - sumFijo) / libres) * 100) / 100 : 0;
 
         tbody.innerHTML = '';
         var d0 = new Date(venc1 + 'T00:00:00');
         var hoy = new Date(); hoy.setHours(0,0,0,0);
-        var montoBase = Math.floor((total / nc) * 100) / 100;
-        var acumulado = 0;
+        var libreAsignados = 0, acumLibre = 0, sumaMostrada = 0;
         for (var i = 0; i < nc; i++) {
             var dDefault = new Date(d0);
-            dDefault.setMonth(dDefault.getMonth() + i);
+            if (_vpsIntervalo > 0) dDefault.setDate(dDefault.getDate() + i * _vpsIntervalo);
+            else                   dDefault.setMonth(dDefault.getMonth() + i);
             var defaultISO = dDefault.toISOString().slice(0,10);
-            var fechaVal = (fechasDOM[i] && fechasDOM[i] !== '') ? fechasDOM[i]
+            var fechaVal = _vpsRecalcFechas ? defaultISO
+                         : (fechasDOM[i] && fechasDOM[i] !== '') ? fechasDOM[i]
                          : (fechasGuardadas[i] && fechasGuardadas[i] !== '') ? fechasGuardadas[i]
                          : defaultISO;
             var nroCuota = i + 1;
-            var monto = (i === nc - 1) ? (total - acumulado) : montoBase;
-            acumulado += monto;
+            var monto;
+            if (fijos[i] != null) { monto = fijos[i]; }
+            else { libreAsignados++; monto = (libreAsignados === libres) ? (total - sumFijo - acumLibre) : montoLibre; acumLibre += montoLibre; }
+            monto = Math.round(monto * 100) / 100;
+            sumaMostrada += monto;
             var pagada = cobros.some(function(c){ return c.nroCuota === nroCuota; });
             var dV = new Date(fechaVal + 'T00:00:00');
             var vencida = !pagada && dV < hoy;
@@ -21103,15 +21157,30 @@
             var trStyle = pagada ? 'background:#F0FFF4;' : vencida ? 'background:#FFF5F5;' : '';
             var tr = document.createElement('tr');
             tr.style.cssText = trStyle;
-            var inputStyle = 'padding:4px 6px;border:1px solid '+(vencida?'#FFCDD2':pagada?'#C8E6C9':'#DADCE0')+';border-radius:4px;font-size:11px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;background:transparent;width:118px;'+(pagada?'opacity:.5;':'');
+            var borde = vencida?'#FFCDD2':pagada?'#C8E6C9':'#DADCE0';
+            var fechaStyle = 'padding:4px 6px;border:1px solid '+borde+';border-radius:4px;font-size:11px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;background:transparent;width:118px;'+(pagada?'opacity:.5;':'');
+            var montoStyle = 'padding:4px 6px;border:1px solid '+borde+';border-radius:4px;font-size:11px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;background:transparent;width:110px;text-align:right;'+(pagada?'opacity:.5;':'');
             tr.innerHTML =
                 '<td style="padding:5px 10px;text-align:center;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-2);font-size:12px;">' + nroCuota + '</td>' +
                 '<td style="padding:5px 10px;">' +
-                    '<input type="date" class="vps-fecha-input" data-cuota="'+nroCuota+'" value="'+fechaVal+'" style="'+inputStyle+'" '+(pagada?'disabled':'')+' oninput="this.dataset.manual=\'1\'">' +
+                    '<input type="date" class="vps-fecha-input" data-cuota="'+nroCuota+'" value="'+fechaVal+'" style="'+fechaStyle+'" '+(pagada?'disabled':'')+' onchange="this.dataset.manual=\'1\'">' +
                 '</td>' +
-                '<td style="padding:5px 10px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500;color:var(--text-1);font-size:12px;">' + fmtNum(monto) + '</td>' +
+                '<td style="padding:5px 10px;text-align:right;">' +
+                    '<input type="number" class="vps-monto-input" data-cuota="'+nroCuota+'" value="'+monto+'" step="0.01" min="0" style="'+montoStyle+'" '+(pagada?'disabled':'')+' onchange="this.dataset.manual=\'1\';ventaGenerarPlanSimple()">' +
+                '</td>' +
                 '<td style="padding:5px 10px;text-align:center;">' + estado + '</td>';
             tbody.appendChild(tr);
+        }
+        _vpsRecalcFechas = false;
+        _vpsForzarMontos = false;
+        // Resumen: suma de cuotas vs total (avisa si no cuadran).
+        var resEl = document.getElementById('ventaCuotasSimpleResumen');
+        if (resEl) {
+            var prefix = esUSD ? 'USD ' : '$ ';
+            var difOk = Math.abs(sumaMostrada - total) < 1;
+            resEl.innerHTML = 'Suma de cuotas: <strong style="color:'+(difOk?'var(--success)':'var(--danger)')+';">' + prefix + Math.round(sumaMostrada).toLocaleString('es-AR') + '</strong> · Total: ' + prefix + Math.round(total).toLocaleString('es-AR')
+                + (difOk ? '' : ' <span style="color:var(--danger);">⚠ no coinciden</span>')
+                + ' · <a href="javascript:void(0)" onclick="ventaCuotasSimpleRepartirIgual()" style="color:var(--blue);">repartir en partes iguales</a>';
         }
     }
 
@@ -21207,6 +21276,8 @@
         ventaToggleCochera();
         // Plan de cuotas simples (total_usd / total_ars / mixto)
         var cs = v && v.cuotasSimple;
+        _vpsIntervalo = (cs && cs.intervaloDias) || 0;   // restaurar el intervalo en días del plan guardado
+        _vpsRecalcFechas = false; _vpsForzarMontos = false;
         document.getElementById('ventaCuotasSimpleChk').checked = !!(cs && cs.activo);
         document.getElementById('ventaCuotasSimpleNro').value = (cs && cs.nro) || '';
         document.getElementById('ventaCuotasSimpleFecha1').value = (cs && cs.fecha1) || '';
@@ -21487,7 +21558,9 @@
                         moneda: monedaCuotas,
                         nro: ncSimple,
                         fecha1: venc1Simple,
-                        fechas: ventaLeerFechasPlanSimple()
+                        fechas: ventaLeerFechasPlanSimple(),
+                        montos: ventaLeerMontosPlanSimple(),
+                        intervaloDias: _vpsIntervalo || 0
                     };
                 }
             }
@@ -33784,7 +33857,7 @@
                 </div>
                 <div class="form-group" style="margin:0;">
                   <label>Fecha 1° vencimiento</label>
-                  <input type="date" id="ventaCuotasSimpleFecha1" oninput="ventaGenerarPlanSimple()">
+                  <input type="date" id="ventaCuotasSimpleFecha1" onchange="ventaCuotasSimpleFecha1Cambio()">
                 </div>
               </div>
               <div id="ventaCuotasSimplePlanWrap" style="display:none;">
@@ -33802,6 +33875,8 @@
                     <tbody id="ventaCuotasSimpleBody"></tbody>
                   </table>
                 </div>
+                <div id="ventaCuotasSimpleResumen" style="font-size:11px;color:var(--text-3);margin-top:6px;"></div>
+                <div style="font-size:11px;color:var(--text-3);margin-top:2px;">💡 Podés editar el <strong>monto</strong> de cada cuota; el resto se reparte solo. Y si cambiás el 1° vencimiento te pregunta cada cuántos días vencen las siguientes.</div>
               </div>
             </div>
           </div>
