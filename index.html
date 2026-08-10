@@ -13692,12 +13692,24 @@
         });
     }
     function abrirOrigenMovimiento(tipo, ref) {
+        // En las pantallas de Caja y Bancos, al tocar un movimiento NO se edita directo (para no
+        // modificar la plata por accidente): se ofrece elegir entre VER el comprobante en PDF
+        // (la OP/recibo que salió) o EDITAR. En el resto de las pantallas se mantiene el
+        // comportamiento de siempre (confirmar y abrir para editar).
+        var CAJA_BANCO = ['CajaGeneral','EfectivoPesos','EfectivoUSD','CuentasBancarias'];
+        if (typeof _tabActivo !== 'undefined' && CAJA_BANCO.indexOf(_tabActivo) >= 0) {
+            _elegirVerEditarMov(tipo, ref);
+            return;
+        }
         var labels = {
             presupuesto: 'este presupuesto', factura: 'esta factura', documento: 'este documento',
             emitido: 'este comprobante emitido', venta: 'esta venta UF', alquiler: 'este alquiler',
             servicio: 'este servicio', movcaja: 'este movimiento de caja', movbanco: 'este movimiento bancario'
         };
         if (!confirm('¿Abrir ' + (labels[tipo] || 'esta operación') + '?')) return;
+        _editarOrigenMovimiento(tipo, ref);
+    }
+    function _editarOrigenMovimiento(tipo, ref) {
         switch (tipo) {
             case 'presupuesto': editarFila(ref); break;
             case 'factura':     editarFactura(ref); break;
@@ -13710,6 +13722,39 @@
             case 'movbanco':    editarMovBanco(ref); break;
             default: alert('No se pudo determinar el origen de este movimiento.');
         }
+    }
+    // Imprime el comprobante/OP que corresponde al movimiento (lo que "salió"). Devuelve true si pudo.
+    function _verOrigenMovimiento(tipo, ref) {
+        try {
+            if (tipo === 'factura'   && typeof abrirHistorialPagosFactura === 'function') { abrirHistorialPagosFactura(ref); return true; }
+            if (tipo === 'documento' && typeof abrirHistorialPagosDoc === 'function')     { abrirHistorialPagosDoc(ref); return true; }
+            if (tipo === 'presupuesto' && typeof imprimirRecibo === 'function')           { imprimirRecibo(ref); return true; }
+            if (tipo === 'emitido'   && typeof imprimirComprobanteEmitido === 'function') { imprimirComprobanteEmitido(ref); return true; }
+        } catch (e) {}
+        return false;
+    }
+    // Diálogo "Ver comprobante (PDF) / Editar" para un movimiento de Caja o Bancos.
+    function _elegirVerEditarMov(tipo, ref) {
+        var labels = { presupuesto:'Presupuesto / Orden de Pago', factura:'Factura', documento:'Comprobante', emitido:'Comprobante emitido', venta:'Venta UF', alquiler:'Alquiler', servicio:'Servicio', movcaja:'Movimiento de caja', movbanco:'Movimiento bancario' };
+        var puedeVer = ['factura','documento','presupuesto','emitido'].indexOf(tipo) >= 0;
+        var puedeEd = (typeof puedeEditar === 'undefined') ? true : puedeEditar;
+        var ex = document.getElementById('_mVerEd'); if (ex) ex.remove();
+        var ov = document.createElement('div'); ov.id = '_mVerEd';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100001;display:flex;align-items:center;justify-content:center;padding:16px;';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:var(--surface,#fff);color:var(--text,#111);border-radius:14px;width:100%;max-width:380px;overflow:hidden;box-shadow:0 20px 55px rgba(0,0,0,.35);';
+        box.innerHTML = '<div style="padding:16px 20px;border-bottom:1px solid var(--border,#eee);font-weight:700;font-size:15px;">' + (labels[tipo] || 'Movimiento') + '</div>'
+            + '<div style="padding:18px 20px;display:flex;flex-direction:column;gap:10px;">'
+            + (puedeVer ? '<button id="_veBtnVer" class="btn btn-primary" style="width:100%;padding:12px;font-size:15px;">👁️ Ver comprobante (PDF)</button>' : '<div style="font-size:12px;color:var(--text-3);text-align:center;padding:4px 0;">Este movimiento no tiene un comprobante para ver.</div>')
+            + (puedeEd ? '<button id="_veBtnEd" class="btn btn-outline" style="width:100%;padding:12px;font-size:15px;">✏️ Editar</button>' : '')
+            + '<button id="_veBtnX" class="btn btn-outline" style="width:100%;padding:10px;color:var(--text-3);border:none;">Cancelar</button>'
+            + '</div>';
+        ov.appendChild(box);
+        ov.addEventListener('click', function(e){ if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        var bVer = document.getElementById('_veBtnVer'); if (bVer) bVer.onclick = function(){ ov.remove(); if (!_verOrigenMovimiento(tipo, ref)) alert('No se pudo abrir el comprobante de este movimiento.'); };
+        var bEd = document.getElementById('_veBtnEd'); if (bEd) bEd.onclick = function(){ ov.remove(); _editarOrigenMovimiento(tipo, ref); };
+        var bX = document.getElementById('_veBtnX'); if (bX) bX.onclick = function(){ ov.remove(); };
     }
 
     // ── Botón eliminar dinámico según rol ─────────────────────────
