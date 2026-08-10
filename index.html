@@ -4973,6 +4973,24 @@
                     <div id="cfgBackendUrlStatus" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;word-break:break-all;"></div>
                   </div>
 
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;display:none;" id="cfgPinBorradoCard">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔒 Clave para eliminar movimientos</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      PIN que se pide al <strong>eliminar</strong> un movimiento en Caja General, Efectivo y Banco,
+                      para que no se borre plata por accidente. Se guarda <strong>en la nube</strong> (vale para todos
+                      los dispositivos). Dejalo vacío para quitarlo. Es un control de uso diario, no un secreto
+                      criptográfico. Solo el superadmin lo configura.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                      <div class="form-group" style="flex:1;min-width:180px;margin:0;">
+                        <label>PIN (4 a 8 dígitos)</label>
+                        <input type="password" id="cfgPinBorrado" inputmode="numeric" autocomplete="new-password" placeholder="Vacío = sin PIN" style="font-family:monospace;font-size:13px;letter-spacing:.2em;">
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarPinBorrado()" style="margin-bottom:1px;">💾 Guardar</button>
+                    </div>
+                    <div id="cfgPinBorradoStatus" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;"></div>
+                  </div>
+
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;" id="cfgAsistenteCard">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🤖 Asistente</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
@@ -7039,6 +7057,7 @@
         // el Asistente/ARCA/IA apunten al servidor correcto aunque este dispositivo
         // nunca la haya tenido (o el backend se haya mudado desde otra máquina).
         if (typeof _hidratarBackendUrl === 'function') _hidratarBackendUrl();
+        if (typeof _hidratarPinBorrado === 'function') _hidratarPinBorrado();
         if (!REF_EMPRESAS) {
             console.error('REF_EMPRESAS no está definido. Firebase no se inició.');
             usarEmpresaLocal(true);
@@ -14655,6 +14674,7 @@
         cargarGmailFacturasUI();
         cargarAppTokenUI();
         if (typeof cargarBackendUrlUI === 'function') cargarBackendUrlUI();
+        if (typeof cargarPinBorradoUI === 'function') cargarPinBorradoUI();
         if (typeof cfgAsistenteEstadoUI === 'function') cfgAsistenteEstadoUI();
     }
 
@@ -14924,6 +14944,54 @@
             if (st) st.innerHTML = '✅ Guardada en la nube: <code>' + escHtml(val) + '</code>. Vale para todos los dispositivos.';
         }).catch(function() {
             if (st) st.innerHTML = '✅ Guardada en este dispositivo: <code>' + escHtml(val) + '</code> (sin acceso a la nube).';
+        });
+    }
+
+    // ── PIN para eliminar movimientos de Caja/Bancos ──────────────────────────
+    // Control de uso diario (no un secreto criptográfico): se guarda en global/config
+    // y se pide al eliminar un movimiento, para no borrar plata por accidente.
+    var _cfgPinBorrado = null;
+    function _hidratarPinBorrado() {
+        try {
+            if (typeof db === 'undefined' || !db) return;
+            db.ref('global/config/pinBorrado').once('value').then(function(snap) {
+                var v = snap.val(); _cfgPinBorrado = v ? String(v) : null; cargarPinBorradoUI();
+            }).catch(function(){});
+        } catch (e) {}
+    }
+    function cargarPinBorradoUI() {
+        var card = document.getElementById('cfgPinBorradoCard');
+        if (card) card.style.display = (typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? '' : 'none';
+        var st = document.getElementById('cfgPinBorradoStatus');
+        if (st) st.innerHTML = _cfgPinBorrado
+            ? '🔒 Hay un PIN configurado — se pide al eliminar movimientos en Caja/Bancos.'
+            : 'ℹ️ Sin PIN configurado: al eliminar sólo se pide una confirmación. Cargá uno para exigir clave.';
+    }
+    function guardarPinBorrado() {
+        if (!(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) { alert('Sólo el superadmin puede configurar el PIN.'); return; }
+        var el = document.getElementById('cfgPinBorrado');
+        var val = String((el || {}).value || '').trim();
+        var st = document.getElementById('cfgPinBorradoStatus');
+        if (val && !/^\d{4,8}$/.test(val)) { alert('El PIN tiene que ser de 4 a 8 dígitos (o vacío para quitarlo).'); return; }
+        db.ref('global/config/pinBorrado').set(val || null).then(function() {
+            _cfgPinBorrado = val || null;
+            if (el) el.value = '';
+            if (st) st.innerHTML = val ? '✅ PIN guardado. Se pedirá al eliminar movimientos.' : '✅ PIN quitado.';
+        }).catch(function() { if (st) st.innerHTML = 'No se pudo guardar (sin acceso a la nube).'; });
+    }
+    // Pide el PIN (si hay) y, si es correcto, ejecuta el borrado.
+    function _pedirPinBorrado(onOk) {
+        var pin = _cfgPinBorrado;
+        if (!pin) { if (confirm('¿Eliminar este movimiento?\n\n(No hay PIN configurado. El superadmin puede exigir uno desde Config → 🔒 Clave para eliminar.)')) onOk(); return; }
+        var ingr = prompt('🔒 Ingresá el PIN para eliminar este movimiento:');
+        if (ingr === null) return;
+        if (String(ingr).trim() === String(pin)) onOk();
+        else alert('PIN incorrecto. No se eliminó nada.');
+    }
+    function _borrarMovConPin(kind, a, b) {
+        _pedirPinBorrado(function() {
+            if (kind === 'movcaja')      { if (typeof pedirEliminar === 'function') pedirEliminar('movcaja', a); }
+            else if (kind === 'docpago') { if (typeof eliminarMovPagoDoc === 'function') eliminarMovPagoDoc(a, b); }
         });
     }
     // Prueba que el backend responda de verdad. Sin CORS no se puede leer la
@@ -28279,13 +28347,18 @@
                     sldARS = '<td style="text-align:right;font-weight:700;color:'+(sc>=0?'var(--success)':'var(--danger)')+';">'+fmtA(sc)+'</td>';
                 }
 
+                // Acciones por fila (como en Ingresos): imprimir el comprobante, editar y
+                // eliminar (el borrado pide PIN). Ya no se abre la edición al tocar la fila.
+                var _cgRefArg = (typeof m.srcRef === 'number') ? m.srcRef : ("'" + String(m.srcRef).replace(/'/g,"\\'") + "'");
+                var _cgPuedeVer = ['factura','documento','presupuesto','emitido'].indexOf(m.srcTipo) >= 0;
+                var _cgPuedeEd = (typeof puedeEditar === 'undefined') ? true : puedeEditar;
                 var bAcc='';
-                if(m.igIdx>=0){
-                    bAcc='<button class="btn-sm" onclick="editarMovCaja('+m.igIdx+')">&#9998;</button>'+btnElim('movcaja',m.igIdx);
-                } else if(m.docId){
-                    bAcc='<button class="btn btn-danger-sm" onclick="eliminarMovPagoDoc(\''+m.docId+'\',\''+(m.pagoId||'')+'\')" title="Eliminar">✕</button>';
+                if (_cgPuedeVer) bAcc += '<button class="btn btn-outline btn-sm" onclick="_verOrigenMovimiento(\''+m.srcTipo+'\','+_cgRefArg+')" title="Imprimir el comprobante (PDF)">🖨️</button>';
+                if (_cgPuedeEd)  bAcc += '<button class="btn btn-outline btn-sm" onclick="_editarOrigenMovimiento(\''+m.srcTipo+'\','+_cgRefArg+')" title="Editar">✏</button>';
+                if (_cgPuedeEd) {
+                    if (m.igIdx >= 0)      bAcc += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movcaja\','+m.igIdx+')" title="Eliminar (pide PIN)">🗑️</button>';
+                    else if (m.docId)      bAcc += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'docpago\',\''+String(m.docId).replace(/'/g,"\\'")+'\',\''+(m.pagoId||'')+'\')" title="Eliminar (pide PIN)">🗑️</button>';
                 }
-                _filaMovClickeable(tr, m.srcTipo, m.srcRef);
 
                 tr.innerHTML =
                     '<td>'+(m.fecha?formatearFecha(m.fecha):'—')+'</td>'+
