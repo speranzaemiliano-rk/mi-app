@@ -21041,6 +21041,24 @@
         return { moneda: 'ars', total: 0 };
     }
 
+    // Montos por cuota del plan simple. Usa los importes GUARDADOS (cs.montos, que pueden
+    // ser distintos entre sí: 1ª cuota distinta, etc.) y SÓLO cae al reparto en partes
+    // iguales si la venta no tiene montos guardados (ventas viejas). Sin esto, al pagar o
+    // ver/imprimir el plan se recalculaba total/N y se perdía la cuota editada a mano.
+    function _cuotasSimpleMontos(cs, total) {
+        var nc = (cs && cs.nro) || 0;
+        var guard = (cs && Array.isArray(cs.montos)) ? cs.montos : [];
+        var base = nc > 0 ? Math.floor((total / nc) * 100) / 100 : 0;
+        var montos = [], acum = 0;
+        for (var k = 0; k < nc; k++) {
+            var g = guard[k];
+            var m = (g != null && g !== '' && !isNaN(Number(g))) ? Number(g)
+                  : (k === nc - 1 ? (total - acum) : base);
+            montos.push(m); acum += m;
+        }
+        return montos;
+    }
+
     // Leer fechas personalizadas del DOM del plan de cuotas simples
     function ventaLeerFechasPlanSimple() {
         var fechas = [];
@@ -21831,10 +21849,9 @@
         var sel = document.getElementById('cobroVentaNroCuota');
         sel.innerHTML = '';
 
-        // Montos por cuota: iguales, con la última ajustando el redondeo para cerrar el total exacto
-        var montos = [];
-        var acumulado = 0;
-        for (var k = 0; k < nc; k++) { var m = (k === nc-1) ? (total - acumulado) : montoBase; montos.push(m); acumulado += m; }
+        // Montos por cuota: usa los importes guardados (permite cuotas distintas entre sí);
+        // si la venta no tiene montos guardados, reparte en partes iguales.
+        var montos = _cuotasSimpleMontos(cs, total);
 
         var hayPendientes = false;
         for (var i = 0; i < nc; i++) {
@@ -27797,13 +27814,11 @@
             var cobrosSimple = (v.cobrosHistorial||[]).filter(function(c){ return c.comp === compKeySimple; });
             var d0Simple = csEC.fecha1 ? new Date(csEC.fecha1+'T00:00:00') : null;
             var fechasSimple = csEC.fechas || [];
-            var montoBaseSimple = ncSimple > 0 ? Math.floor((totalSimple / ncSimple) * 100) / 100 : 0;
-            var acumSimple = 0;
+            var montosSimpleArr = _cuotasSimpleMontos(csEC, totalSimple);
             tbody.innerHTML = '';
             for (var j = 0; j < ncSimple; j++) {
                 var nroCuotaS = j + 1;
-                var montoS = (j === ncSimple - 1) ? (totalSimple - acumSimple) : montoBaseSimple;
-                acumSimple += montoS;
+                var montoS = montosSimpleArr[j];
                 var fechaISOS = fechasSimple[j] || (d0Simple ? (function(j2){ var d=new Date(d0Simple); d.setMonth(d.getMonth()+j2); return d.toISOString().slice(0,10); })(j) : '');
                 var pagadaS = cobrosSimple.some(function(c){ return c.nroCuota === nroCuotaS; });
                 var cobroRegS = cobrosSimple.find(function(c){ return c.nroCuota === nroCuotaS; });
@@ -27967,12 +27982,10 @@
             var cobrosImp = cobrosAll.filter(function(c){ return c.comp === compKeyImp; });
             var d0Imp = csImp.fecha1 ? new Date(csImp.fecha1+'T00:00:00') : null;
             var fechasImp = csImp.fechas || [];
-            var montoBaseImp = ncPlanImp > 0 ? Math.floor((totalImp / ncPlanImp) * 100) / 100 : 0;
-            var acumImp = 0;
+            var montosImpArr = _cuotasSimpleMontos(csImp, totalImp);
             for (var k = 0; k < ncPlanImp; k++) {
                 var nroCuotaImp = k + 1;
-                var montoImp = (k === ncPlanImp - 1) ? (totalImp - acumImp) : montoBaseImp;
-                acumImp += montoImp;
+                var montoImp = montosImpArr[k];
                 var fechaISOImp = fechasImp[k] || (d0Imp ? (function(k2){ var d=new Date(d0Imp); d.setMonth(d.getMonth()+k2); return d.toISOString().slice(0,10); })(k) : '');
                 var pagadaImp = cobrosImp.some(function(c){ return c.nroCuota === nroCuotaImp; });
                 var cobroRegImp = cobrosImp.find(function(c){ return c.nroCuota === nroCuotaImp; });
