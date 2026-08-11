@@ -6616,8 +6616,22 @@
                     </div>
                 </div>
 
+                <!-- ¿Es una Nota de Crédito? -->
+                <div class="form-group" style="padding:12px 14px;background:var(--bg-2);border:1px solid var(--danger);border-radius:10px;">
+                    <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;margin:0;color:var(--danger);">
+                        <input type="checkbox" id="factEsNC" onchange="factToggleNC()" style="width:auto;"> 🧾 Este comprobante es una NOTA DE CRÉDITO (anula una factura)
+                    </label>
+                    <div id="factNCGrupo" style="display:none;margin-top:10px;">
+                        <div style="display:grid;grid-template-columns:120px 1fr;gap:10px;">
+                            <div><label style="font-weight:400;">Tipo</label><select id="factNCLetra"><option value="A">NC A</option><option value="B">NC B</option><option value="C">NC C</option><option value="X">NC X</option></select></div>
+                            <div><label style="font-weight:400;">Factura que anula</label><select id="factNCFactura" style="width:100%;"></select></div>
+                        </div>
+                        <div style="font-size:11px;color:var(--text-3);margin-top:4px;">En la cuenta corriente baja el saldo del proveedor, como un pago. Si el importe supera el saldo de la factura, el resto queda como crédito a favor.</div>
+                    </div>
+                </div>
+
                 <!-- Opción: vincular a presupuesto existente o pago directo -->
-                <div class="form-group">
+                <div class="form-group" id="factTipoCargaGrupo">
                     <label>Tipo de carga</label>
                     <div class="modalidad-toggle" style="margin-bottom:0;">
                         <button type="button" class="modalidad-btn selected-A" id="factTipoPresupBtn" onclick="selFactTipo('presup')">📋 Aplicar a Presupuesto</button>
@@ -6669,7 +6683,7 @@
                         <option value="USD">USD — Dólares</option>
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="factComputaGrupo">
                     <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(factura a nombre de la empresa — Factura A o B)</span></label>
                     <div class="modalidad-toggle" style="margin-bottom:0;">
                         <button type="button" class="modalidad-btn selected-A" id="factComputaSiBtn" onclick="selFactComputaARCA(true)">✓ Sí, computa ARCA</button>
@@ -16322,6 +16336,8 @@
         selFactPagoInmediato(true);
         selFactModalidad('A');
         selFactComputaARCA(true);
+        var _ncc = document.getElementById('factEsNC'); if (_ncc) _ncc.checked = false;
+        factToggleNC();
         renderCheckboxesCompartir('checkboxesCompartirFact', 'panelCompartirFact');
         document.getElementById('modalFact').classList.add('active');
     }
@@ -16332,6 +16348,8 @@
         const f = facturas[index];
         window._factNetoGravado = f.netoGravado || 0;
         document.getElementById('modalFactTitle').textContent = '🧾 Editar Factura';
+        var _nccE = document.getElementById('factEsNC'); if (_nccE) _nccE.checked = false;
+        factToggleNC();
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
         document.getElementById('factNumero').value       = f.numero || '';
@@ -16696,6 +16714,38 @@
         if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
     }
 
+    // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
+    // de carga/pago normales y muestra el selector de factura que anula. Al guardar, el submit de
+    // formFact deriva a _aplicarNotaCredito en vez de crear una factura de deuda.
+    function factToggleNC() {
+        var on = (document.getElementById('factEsNC') || {}).checked;
+        var show = function(id, v){ var e = document.getElementById(id); if (e) e.style.display = v; };
+        show('factNCGrupo', on ? '' : 'none');
+        show('factTipoCargaGrupo', on ? 'none' : '');
+        show('factPresupGrupo', on ? 'none' : '');
+        show('factComputaGrupo', on ? 'none' : '');
+        show('factPagoInmediatoPanel', on ? 'none' : '');
+        if (on) _factPoblarNCFacturas();
+        else if (typeof selFactTipo === 'function') selFactTipo((document.getElementById('factTipo') || {}).value || 'presup');
+    }
+    function _factPoblarNCFacturas() {
+        var sel = document.getElementById('factNCFactura'); if (!sel) return;
+        var nombre = (document.getElementById('factProveedor') || {}).value || '';
+        var fmtMon = function(m, mon){ return (mon === 'USD' ? 'USD ' : '$ ') + Math.round(m||0).toLocaleString('es-AR'); };
+        var opts = '<option value="__credito__">— Crédito a favor (sin factura) —</option>';
+        (facturas || []).forEach(function(f, i){
+            if (f.proveedor !== nombre || f.esNotaCredito) return;
+            var saldo = _saldoFactDoc(f); if (saldo <= 0) return;
+            opts += '<option value="fact:' + f.id + '">Factura ' + escHtml(f.numero || ('#'+(i+1))) + ' · saldo ' + fmtMon(saldo, f.moneda) + '</option>';
+        });
+        (typeof documentos !== 'undefined' ? documentos : []).forEach(function(d){
+            if (d.proveedor !== nombre || !(d.importe > 0)) return;
+            var saldo = _saldoFactDoc(d); if (saldo <= 0) return;
+            opts += '<option value="doc:' + d.id + '">Comprob. X ' + escHtml(d.numero || d.concepto || d.id) + ' · saldo ' + fmtMon(saldo, d.moneda) + '</option>';
+        });
+        sel.innerHTML = opts;
+    }
+
     // ===================== FACTURAS ENHANCED =====================
 
     // Toggle tipo de factura: aplicar a presupuesto o pago directo.
@@ -16776,6 +16826,8 @@
     function onFactProveedorChange() {
         poblarPresupuestosFactura();
         recalcularRetencionesFactura();
+        var _ncc = document.getElementById('factEsNC');
+        if (_ncc && _ncc.checked) _factPoblarNCFacturas();
     }
 
     function onFactPresupChange() {
@@ -17042,6 +17094,28 @@
 
     document.getElementById('formFact').addEventListener('submit', async function(e) {
         e.preventDefault();
+        // ── Nota de Crédito: no crea una factura de deuda; se aplica como crédito ──
+        if (document.getElementById('factEsNC') && document.getElementById('factEsNC').checked) {
+            var _fncProv = document.getElementById('factProveedor').value;
+            var _fncFecha = document.getElementById('factFecha').value;
+            var _fncImporte = parseFloat(document.getElementById('factImporte').value) || 0;
+            var _fncMoneda = document.getElementById('factMoneda').value;
+            var _fncNumero = document.getElementById('factNumero').value.trim();
+            var _fncLetra = (document.getElementById('factNCLetra') || {}).value || 'A';
+            var _fncTarget = (document.getElementById('factNCFactura') || {}).value || '__credito__';
+            if (!_fncProv) { alert('Elegí el proveedor.'); return; }
+            if (!_fncFecha) { alert('La fecha es obligatoria.'); return; }
+            if (_fncImporte <= 0) { alert('El importe debe ser mayor a cero.'); return; }
+            var _fncAdj = null;
+            try { _fncAdj = await _subirComprobantePago('factArchivo'); } catch (e2) { return; }
+            _aplicarNotaCredito({ nombre: _fncProv, target: _fncTarget, letra: _fncLetra, numero: _fncNumero, fecha: _fncFecha, importe: _fncImporte, moneda: _fncMoneda, adj: _fncAdj });
+            cerrarFactura();
+            if (typeof renderFacturas === 'function') renderFacturas();
+            if (typeof renderDocumentos === 'function') renderDocumentos();
+            if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
+            alert('✅ Nota de crédito cargada' + ((_fncTarget && _fncTarget !== '__credito__') ? ' (anula la factura elegida).' : ' como crédito a favor de ' + _fncProv + '.'));
+            return;
+        }
         // Reapuntar por id (por si otro usuario reordenó la lista de facturas mientras editabas)
         if (editandoFactIndex >= 0 && _edicionEnCurso.factura && _edicionEnCurso.factura.id) {
             var _rzf = facturas.findIndex(function(x){ return x && x.id === _edicionEnCurso.factura.id; });
