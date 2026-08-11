@@ -18278,14 +18278,14 @@
         sel('cbCuentasTotal',cuentasBancarias.length);
         var entradas=0,salidas=0;
         datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(_esPagoEspejo(p))return;if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
-        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});});
+        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=(p.monto||0)-(p.totalRet||0);});});
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
         ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
         // Se agrupa por la moneda en que ENTRÓ la plata (un alquiler en USD cobrado en pesos suma acá).
         alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&_alqCobroMoneda(a,c)!=='USD')entradas+=_alqCobroImporte(a,c);});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
-        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=p.monto||0;});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
+        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=(p.monto||0)-(p.totalRet||0);});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
         var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
         var saldoNeto=saldoIni+entradas-salidas;
         if(document.getElementById('cbIngresosBancarios'))document.getElementById('cbIngresosBancarios').textContent=fmt(entradas);
@@ -18301,8 +18301,8 @@
             var _porCta={};
             var _acu=function(cId,ent,sal){ if(!cId)return; var a=_porCta[cId]||(_porCta[cId]={ent:0,sal:0}); a.ent+=ent||0; a.sal+=sal||0; };
             datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.capital||0)+(p.mayores||0)||p.montoPagado||0);});});
-            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,p.monto||0);});});
-            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,p.monto||0);});});
+            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.monto||0)-(p.totalRet||0));});});
+            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.monto||0)-(p.totalRet||0));});});
             ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,esS?0:ig.monto||0,esS?ig.monto||0:0);});
             ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
             alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
@@ -18349,7 +18349,7 @@
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero?'N°'+f.numero:(f.descripcion||'—'), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+Math.round(p.totalRet).toLocaleString('es-AR')+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: (p.monto||0)-(p.totalRet||0), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
         }); });
         (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
             if (hist.length) {
@@ -18357,7 +18357,7 @@
                     if (p.modalidad !== 'A') return;
                     var cId = p.cuentaId||'';
                     var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: p.monto||0, srcTipo:'documento', srcRef:d.id });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+Math.round(p.totalRet).toLocaleString('es-AR')+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: (p.monto||0)-(p.totalRet||0), srcTipo:'documento', srcRef:d.id });
                 });
             } else if ((d.pagado||0) > 0 && d.modalidad === 'A') {
                 movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id });
@@ -29056,10 +29056,10 @@
             (f.pagosHistorial||[]).forEach(function(p) {
                 movs.push({
                     fecha: p.fecha, moneda: f.moneda||'ARS',
-                    tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero+' — ':'') + (f.descripcion||'—'),
+                    tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero+' — ':'') + (f.descripcion||'—') + ((p.totalRet||0)>0 ? ' · neto (ret. $'+Math.round(p.totalRet).toLocaleString('es-AR')+')' : ''),
                     origen: f.proveedor||'—',
                     medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
-                    monto: p.monto||0, esIngreso: false,
+                    monto: (p.monto||0)-(p.totalRet||0), esIngreso: false,
                     srcTipo: 'factura', srcRef: fIdx, grupoPagoId: p.grupoPagoId||''
                 });
             });
@@ -29072,11 +29072,11 @@
                 hist.forEach(function(p) {
                     movs.push({
                         fecha: p.fecha, moneda: d.moneda||'ARS',
-                        tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—'),
+                        tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—') + ((p.totalRet||0)>0 ? ' · neto (ret. $'+Math.round(p.totalRet).toLocaleString('es-AR')+')' : ''),
                         origen: d.proveedor||'—',
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
                         srcTipo: 'documento', srcRef: d.id,
-                        monto: p.monto||0, esIngreso: false,
+                        monto: (p.monto||0)-(p.totalRet||0), esIngreso: false,
                         docId: d.id, pagoId: p.pagoId||''
                     });
                 });
@@ -33239,8 +33239,8 @@
             var ent = 0, sal = 0;
             var cid = cb.id || cb.banco;
             col.datos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.capital||0)+(p.mayores||0)||p.montoPagado||0; });});
-            col.facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += p.monto||0; });});
-            col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += p.monto||0; });});
+            col.facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.monto||0)-(p.totalRet||0); });});
+            col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.monto||0)-(p.totalRet||0); });});
             col.ingGeneral.forEach(function(ig){ if (!ig.esBancario || ig.cuentaId!==cid) return; if (ig.esEgreso||ig.tipo==='mov_banco_salida') sal += ig.monto||0; else ent += ig.monto||0; });
             col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
             col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
