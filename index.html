@@ -16716,6 +16716,50 @@
         if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
     }
 
+    // MIGRACIÓN: notas de crédito viejas quedaron como asientos "esNC" DENTRO del pagosHistorial de
+    // una factura/documento (modelo anterior). Las convierte a comprobante propio en facturas[]
+    // (esNotaCredito) para que se listen, editen y eliminen igual que una factura. El saldo NO cambia:
+    // el registro toma el importe que el asiento aplicaba y se le resta del "pagado" de la factura
+    // (el excedente que hubiera ido a crédito a favor se conserva tal cual). Idempotente: no hace nada
+    // si ya no quedan asientos viejos.
+    var _ncMigrado = false;
+    function _migrarNotasCreditoViejas() {
+        var _tieneVieja = function(item){ return item && Array.isArray(item.pagosHistorial) && item.pagosHistorial.some(function(p){ return p && p.esNC; }); };
+        var hay = (facturas || []).some(function(f){ return !f.esNotaCredito && _tieneVieja(f); })
+               || (typeof documentos !== 'undefined' && documentos.some(_tieneVieja));
+        if (!hay) return false;
+        var cambiaronFact = false, docsCambiados = [];
+        var _proc = function(item, kind) {
+            if (!item || item.esNotaCredito || !Array.isArray(item.pagosHistorial)) return;
+            var quedan = [], viejas = [];
+            item.pagosHistorial.forEach(function(p){ (p && p.esNC) ? viejas.push(p) : quedan.push(p); });
+            if (!viejas.length) return;
+            viejas.forEach(function(p){
+                var letra = p.ncLetra || p.modalidad || 'A';
+                var rec = { id: 'NC-' + Date.now() + '-' + Math.floor(Math.random()*1000000),
+                    esNotaCredito: true, notaCreditoDe: item.id, notaCreditoKind: kind,
+                    proveedor: item.proveedor, numero: p.ncNumero || '', fecha: p.fecha || item.fecha || '',
+                    importe: (p.monto || 0), moneda: item.moneda || 'ARS', tipoComprobante: letra,
+                    computaARCA: (letra !== 'X'), pagado: 0, estado: 'pagada', tipo: 'directo' };
+                if (p.comprobanteId) { rec.docId = p.comprobanteId; rec.docNombre = p.comprobanteNombre; rec.docTipo = p.comprobanteTipo; }
+                facturas.push(rec);
+                item.pagado = Math.round(((item.pagado || 0) - (p.monto || 0)) * 100) / 100;
+                if (item.pagado < 0) item.pagado = 0;
+            });
+            item.pagosHistorial = quedan;
+            if (kind === 'fact') { item.estado = _estadoFactDoc(item); cambiaronFact = true; }
+            else { docsCambiados.push(item); }
+        };
+        (facturas || []).slice().forEach(function(f){ _proc(f, 'fact'); });
+        (typeof documentos !== 'undefined' ? documentos : []).slice().forEach(function(d){ _proc(d, 'doc'); });
+        if (cambiaronFact || docsCambiados.length) {
+            if (typeof persistirFacturas === 'function') persistirFacturas();
+            docsCambiados.forEach(function(d){ try { REF_DOCS.child(d.id).update({ pagosHistorial: d.pagosHistorial, pagado: d.pagado }); } catch(e){} });
+            return true;
+        }
+        return false;
+    }
+
     // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
     // de carga/pago normales y muestra el selector de factura que anula. Al guardar, el submit de
     // formFact deriva a _aplicarNotaCredito en vez de crear una factura de deuda.
@@ -17421,6 +17465,7 @@
     }
 
     function renderFacturas() {
+        if (!_ncMigrado && typeof _migrarNotasCreditoViejas === 'function') { _ncMigrado = true; try { _migrarNotasCreditoViejas(); } catch(e){} }
         if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs();
         const tbody = document.getElementById('facturasBody');
         if (!tbody) return;
