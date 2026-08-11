@@ -26089,6 +26089,16 @@
         var ipcSec = document.getElementById('alqIPCSector');
         if (cacSec) cacSec.style.display = (indice === 'CAC') ? 'grid' : 'none';
         if (ipcSec) ipcSec.style.display = (indice === 'IPC') ? '' : 'none';
+        // "Sin actualización" (FIJO): no hay período de actualización → se anula el selector.
+        var esFijo = (indice === 'FIJO');
+        var freq = document.getElementById('alqFrecuencia');
+        if (freq) {
+            freq.disabled = esFijo;
+            freq.style.opacity = esFijo ? '0.5' : '';
+            freq.title = esFijo ? 'Sin actualización: no aplica frecuencia' : '';
+        }
+        var freqLbl = freq && freq.closest('.form-group') ? freq.closest('.form-group').querySelector('label') : null;
+        if (freqLbl) freqLbl.textContent = esFijo ? 'Frecuencia (sin actualización)' : 'Frecuencia de actualización';
     }
 
     // ── IVA sobre el canon (parte gravada / no gravada) ──
@@ -26368,7 +26378,7 @@
             ajustesCanon: _alqAjustesCanonWorking.slice(),
             depMoneda:   document.getElementById('alqDepMoneda').value,
             deposito:    parseFloat(document.getElementById('alqDeposito').value) || 0,
-            depMeses:    parseInt(document.getElementById('alqDepMeses').value) || 1,
+            depMeses:    parseFloat(document.getElementById('alqDepMeses').value) || 1,
             obs:         document.getElementById('alqObs').value.trim(),
             ivaActivo:     document.getElementById('alqIvaActivo').checked,
             ivaAlicuota:   parseFloat(document.getElementById('alqIvaAlicuota').value) || 0,
@@ -26832,6 +26842,8 @@
         var hoy = new Date(); hoy.setHours(0,0,0,0);
         // Si el contrato terminó, no avisamos
         if (a.fin) { var _f = new Date(a.fin+'T00:00:00'); if (_f < hoy) return null; }
+        // Si el contrato TODAVÍA NO EMPEZÓ (inicio a futuro), no hay cuota que cobrar: no está vencido.
+        if (a.inicio) { var _ini = new Date(a.inicio+'T00:00:00'); if (_ini > hoy) return { estado:'poriniciar', label:'Inicia el ' + formatearFecha(a.inicio), cls:'badge-warn', icon:'🕒' }; }
         var periodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
         if ((a.mesesBonificados||[]).indexOf(periodo) !== -1) return { estado:'bonificada', label:'Mes bonificado', cls:'badge-ok', icon:'🎁' };
         var cobrada = (a.cobrosHistorial||[]).some(function(c){ return (c.concepto==='alquiler'||!c.concepto) && c.periodo === periodo; });
@@ -26881,7 +26893,7 @@
                 var cobTotal = (a.cobrosHistorial||[]).filter(function(c){ return c.concepto==='alquiler'||!c.concepto; }).reduce(function(s,c){ return s+(c.monto||0); }, 0);
                 var canonMostrar = a.canonActual || a.canon || 0;
                 var monSym = a.moneda === 'USD' ? 'USD ' : '$';
-                var depStr = a.deposito ? ((a.depMoneda==='USD'?'USD ':'$') + Math.round(a.deposito).toLocaleString('es-AR') + ' (' + (a.depMeses||1) + ' mes/es)') : '—';
+                var depStr = a.deposito ? ((a.depMoneda==='USD'?'USD ':'$') + Math.round(a.deposito).toLocaleString('es-AR') + ' (' + (a.depMeses!=null?a.depMeses:1).toLocaleString('es-AR') + ' mes/es)') : '—';
                 var cobStr = monSym + Math.round(cobTotal).toLocaleString('es-AR');
                 var fin2 = a.fin ? new Date(a.fin+'T00:00:00') : null;
                 var activo = !fin2 || fin2 >= hoy;
@@ -26890,7 +26902,7 @@
                     : (activo ? '<span class="badge-rol badge-ok">✓ Activo</span>' : '<span class="badge-rol badge-err">⏹ Vencido</span>');
                 var _pe = _alqEstadoPago(a);
                 if (_pe) estadoBadge += '<br><span class="badge-rol ' + _pe.cls + '" style="margin-top:4px;" title="Cuota del mes en curso">' + _pe.icon + ' ' + _pe.label + '</span>';
-                if (a.inicio && a.frecuencia && activo) {
+                if (a.inicio && a.frecuencia && activo && a.indice !== 'FIJO') {
                     var baseDate = new Date(a.inicio+'T00:00:00');
                     while (baseDate <= hoy) baseDate.setMonth(baseDate.getMonth() + parseInt(a.frecuencia));
                     if (!proxFecha || baseDate < proxFecha) proxFecha = baseDate;
@@ -26912,7 +26924,7 @@
                     '<td>' + escHtml(tipos[a.tipo]||a.tipo||'—') + '</td>' +
                     '<td>' + escHtml(a.inquilino||'—') + '</td>' +
                     '<td style="font-size:12px;">' + (a.inicio ? formatearFecha(a.inicio) : '—') + '<br>' + (a.fin ? formatearFecha(a.fin) : 'sin vto.') + '</td>' +
-                    '<td><span class="pill pill-A" style="font-size:11px;">' + escHtml(indices[a.indice]||a.indice||'—') + ' / ' + freqLabel + '</span></td>' +
+                    '<td><span class="pill pill-A" style="font-size:11px;">' + escHtml(indices[a.indice]||a.indice||'—') + (a.indice === 'FIJO' ? '' : ' / ' + freqLabel) + '</span></td>' +
                     '<td style="text-align:right;"><strong>' + monSym + Math.round(canonMostrar).toLocaleString('es-AR') + '</strong></td>' +
                     '<td style="text-align:right; font-size:12px;">' + depStr + '</td>' +
                     '<td style="text-align:right; color:var(--success);">' + cobStr + '</td>' +
@@ -35672,7 +35684,7 @@
           </div>
           <div class="form-group" style="margin:0;">
             <label>Equivale a (meses)</label>
-            <input type="number" id="alqDepMeses" min="0" step="1" placeholder="Ej: 2" value="1">
+            <input type="number" id="alqDepMeses" min="0" step="0.5" placeholder="Ej: 1,5" value="1">
           </div>
         </div>
       </div>
