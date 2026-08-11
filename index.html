@@ -6637,18 +6637,39 @@
                     </div>
                 </div>
 
-                <!-- ¿Es una Nota de Crédito? -->
-                <div class="form-group" style="padding:12px 14px;background:var(--bg-2);border:1px solid var(--danger);border-radius:10px;">
-                    <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;margin:0;color:var(--danger);">
-                        <input type="checkbox" id="factEsNC" onchange="factToggleNC()" style="width:auto;"> 🧾 Este comprobante es una NOTA DE CRÉDITO (anula una factura)
-                    </label>
-                    <div id="factNCGrupo" style="display:none;margin-top:10px;">
-                        <div style="display:grid;grid-template-columns:120px 1fr;gap:10px;">
-                            <div><label style="font-weight:400;">Tipo</label><select id="factNCLetra"><option value="A">NC A</option><option value="B">NC B</option><option value="C">NC C</option><option value="X">NC X</option></select></div>
-                            <div><label style="font-weight:400;">Factura que anula</label><select id="factNCFactura" style="width:100%;"></select></div>
-                        </div>
-                        <div style="font-size:11px;color:var(--text-3);margin-top:4px;">En la cuenta corriente baja el saldo del proveedor, como un pago. Si el importe supera el saldo de la factura, el resto queda como crédito a favor.</div>
-                    </div>
+                <!-- Tipo de comprobante recibido (agrupado: Factura / Nota de Crédito / Nota de Débito) -->
+                <div class="form-group">
+                    <label>Tipo de comprobante *</label>
+                    <select id="factClase" onchange="factClaseChange()" style="width:100%;">
+                        <optgroup label="Facturas">
+                            <option value="fact|A">Factura A</option>
+                            <option value="fact|B">Factura B</option>
+                            <option value="fact|C">Factura C</option>
+                        </optgroup>
+                        <optgroup label="Notas de Crédito (restan de la cuenta corriente)">
+                            <option value="nc|A">Nota de Crédito A</option>
+                            <option value="nc|B">Nota de Crédito B</option>
+                            <option value="nc|C">Nota de Crédito C</option>
+                        </optgroup>
+                        <optgroup label="Notas de Débito (suman a la cuenta corriente)">
+                            <option value="nd|A">Nota de Débito A</option>
+                            <option value="nd|B">Nota de Débito B</option>
+                            <option value="nd|C">Nota de Débito C</option>
+                        </optgroup>
+                    </select>
+                    <!-- drivers internos: factEsNC dispara el circuito de nota de crédito en el submit -->
+                    <input type="checkbox" id="factEsNC" style="display:none;">
+                    <input type="hidden" id="factClaseVal" value="fact">
+                    <input type="hidden" id="factLetraVal" value="A">
+                    <div class="form-hint" id="factClaseHint"></div>
+                </div>
+
+                <!-- Selector de factura que anula (solo Nota de Crédito) -->
+                <div class="form-group" id="factNCGrupo" style="display:none;padding:12px 14px;background:var(--bg-2);border:1px solid #1e8e3e;border-radius:10px;">
+                    <label style="font-weight:700;color:#1e8e3e;margin-top:0;">🧾 Factura que anula esta nota de crédito</label>
+                    <select id="factNCFactura" style="width:100%;"></select>
+                    <input type="hidden" id="factNCLetra" value="A">
+                    <div style="font-size:11px;color:var(--text-3);margin-top:4px;">En la cuenta corriente baja el saldo del proveedor, como un pago. Si el importe supera el saldo de la factura, el resto queda como crédito a favor.</div>
                 </div>
 
                 <!-- Opción: vincular a presupuesto existente o pago directo -->
@@ -15833,6 +15854,32 @@
 
     // Asistente IA: marcar el comprobante leído como Nota de Crédito. Oculta los controles de
     // carga/pago normales y muestra el selector de factura que anula.
+    // Deduce clase (fact/nc/nd) + letra (A/B/C) desde el texto de tipo que extrae la IA.
+    function _claseDeTipoTexto(txt) {
+        var s = (txt || '').toString().toLowerCase();
+        var letra = 'A';
+        var mL = s.match(/\b([abc])\b/);
+        if (mL) letra = mL[1].toUpperCase();
+        var clase = 'fact';
+        if (s.indexOf('cr') !== -1 && s.indexOf('nota') !== -1) clase = 'nc';       // nota de crédito
+        else if (s.indexOf('déb') !== -1 || s.indexOf('deb') !== -1) { if (s.indexOf('nota') !== -1) clase = 'nd'; } // nota de débito
+        return clase + '|' + letra;
+    }
+    // Selector agrupado de tipo de comprobante en el flujo "Leer factura con IA".
+    function lfClaseChange() {
+        var v = (document.getElementById('leerFactClase') || {}).value || 'fact|A';
+        var p = v.split('|'), clase = p[0] || 'fact', letra = p[1] || 'A';
+        var cv = document.getElementById('leerFactClaseVal'); if (cv) cv.value = clase;
+        var lv = document.getElementById('leerFactLetraVal'); if (lv) lv.value = letra;
+        var chk = document.getElementById('leerFactEsNC'); if (chk) chk.checked = (clase === 'nc');
+        var hint = document.getElementById('leerFactClaseHint');
+        if (hint) hint.textContent = (clase === 'nc')
+            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).'
+            : (clase === 'nd')
+                ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
+                : '';
+        lfToggleNC();
+    }
     function lfToggleNC() {
         var chk = document.getElementById('leerFactEsNC');
         var on = chk && chk.checked;
@@ -16103,9 +16150,13 @@
         document.getElementById('leerFactPaso1').style.display = 'none';
         document.getElementById('leerFactPaso2').style.display = '';
         document.getElementById('leerFactTitle').textContent = '✅ Confirmá los datos extraídos';
-        // La Nota de Crédito arranca desmarcada en cada lectura nueva.
-        var _ncChk = document.getElementById('leerFactEsNC');
-        if (_ncChk) { _ncChk.checked = false; if (typeof lfToggleNC === 'function') lfToggleNC(); }
+        // Inicializar el selector de tipo de comprobante según lo que detectó la IA.
+        var _lfClaseSel = document.getElementById('leerFactClase');
+        if (_lfClaseSel) {
+            _lfClaseSel.value = _claseDeTipoTexto(datos.tipoComprobante || '');
+            if (!_lfClaseSel.value) _lfClaseSel.value = 'fact|A';
+            if (typeof lfClaseChange === 'function') lfClaseChange();
+        }
         // Inicializar controles de tipo de carga / pago
         var provSel = document.getElementById('leerFactProv').value.trim();
         lfInicializarPaso2(provSel);
@@ -16220,7 +16271,7 @@
                 var _ncProvObj = (typeof buscarProveedorPorNombre === 'function') ? buscarProveedorPorNombre(prov) : null;
                 var _ncNombre = _ncProvObj ? _ncProvObj.razonSocial : prov;
                 var _ncTarget = (document.getElementById('leerFactNCFactura') || {}).value || '__credito__';
-                var _ncLetra = (tipoComp && ['A','B','C','X'].indexOf(tipoComp.toUpperCase()) !== -1) ? tipoComp.toUpperCase() : 'A';
+                var _ncLetra = (document.getElementById('leerFactLetraVal') || {}).value || 'A';
                 _aplicarNotaCredito({ nombre: _ncNombre, target: _ncTarget, letra: _ncLetra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: _ncAdj });
                 cerrarLeerFactPDF();
                 if (typeof renderFacturas === 'function') renderFacturas();
@@ -16255,7 +16306,10 @@
             cuit:             cuit || '',
             condicionIva:     condIva || '',
             direccionEmisor:  dir || '',
-            tipoComprobante:  tipoComp || '',
+            tipoComprobante:  ((document.getElementById('leerFactClaseVal')||{}).value === 'nd')
+                                  ? ((document.getElementById('leerFactLetraVal')||{}).value || 'A')
+                                  : (tipoComp || ''),
+            esNotaDebito:     (document.getElementById('leerFactClaseVal')||{}).value === 'nd',
             cae:              cae || '',
             vencimientoCae:   vencCae || '',
             netoGravado:      window._lfNetoGravado || 0,
@@ -16359,8 +16413,8 @@
         selFactPagoInmediato(true);
         selFactModalidad('A');
         selFactComputaARCA(true);
-        var _ncc = document.getElementById('factEsNC'); if (_ncc) _ncc.checked = false;
-        factToggleNC();
+        var _fc = document.getElementById('factClase'); if (_fc) _fc.value = 'fact|A';
+        factClaseChange();
         renderCheckboxesCompartir('checkboxesCompartirFact', 'panelCompartirFact');
         document.getElementById('modalFact').classList.add('active');
     }
@@ -16370,9 +16424,10 @@
         _marcarEdicion('factura', editandoFactIndex >= 0 ? facturas[editandoFactIndex] : null);
         const f = facturas[index];
         window._factNetoGravado = f.netoGravado || 0;
-        document.getElementById('modalFactTitle').textContent = '🧾 Editar Factura';
-        var _nccE = document.getElementById('factEsNC'); if (_nccE) _nccE.checked = false;
-        factToggleNC();
+        document.getElementById('modalFactTitle').textContent = f.esNotaDebito ? '🧾 Editar Nota de Débito' : '🧾 Editar Factura';
+        var _fcE = document.getElementById('factClase');
+        if (_fcE) _fcE.value = (f.esNotaDebito ? 'nd' : 'fact') + '|' + (f.tipoComprobante || 'A');
+        factClaseChange();
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
         document.getElementById('factNumero').value       = f.numero || '';
@@ -16780,6 +16835,28 @@
             return true;
         }
         return false;
+    }
+
+    // Selector agrupado de tipo de comprobante recibido (Factura A/B/C · Nota de Crédito A/B/C ·
+    // Nota de Débito A/B/C). Define la clase (fact/nc/nd) y la letra, y ajusta el formulario:
+    //  - Factura y Nota de Débito: circuito normal de deuda (la ND suma a la cuenta corriente igual
+    //    que una factura; sólo cambia la etiqueta). Guardan tipoComprobante = letra.
+    //  - Nota de Crédito: dispara factEsNC → el submit deriva a _aplicarNotaCredito (resta de la cta cte).
+    function factClaseChange() {
+        var v = (document.getElementById('factClase') || {}).value || 'fact|A';
+        var parts = v.split('|');
+        var clase = parts[0] || 'fact', letra = parts[1] || 'A';
+        var cv = document.getElementById('factClaseVal'); if (cv) cv.value = clase;
+        var lv = document.getElementById('factLetraVal'); if (lv) lv.value = letra;
+        var ncl = document.getElementById('factNCLetra'); if (ncl) ncl.value = letra;
+        var chk = document.getElementById('factEsNC'); if (chk) chk.checked = (clase === 'nc');
+        var hint = document.getElementById('factClaseHint');
+        if (hint) hint.textContent = (clase === 'nc')
+            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).'
+            : (clase === 'nd')
+                ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
+                : '';
+        factToggleNC();
     }
 
     // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
@@ -17202,6 +17279,8 @@
             tipo:        document.getElementById('factTipo').value || 'presup',
             netoGravado: window._factNetoGravado || 0,
             computaARCA: (document.getElementById('factComputaARCA')||{}).value !== 'false',
+            tipoComprobante: (document.getElementById('factLetraVal')||{}).value || 'A',
+            esNotaDebito: (document.getElementById('factClaseVal')||{}).value === 'nd',
             nroProv:     editandoFactIndex >= 0 ? (facturas[editandoFactIndex].nroProv || null) : null
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
@@ -17554,7 +17633,7 @@
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>'}</td>
+                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>'}</td>
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR')}</strong></td>
@@ -20157,7 +20236,7 @@
                     <td><strong>${f.proveedor||'—'}</strong>${pillFac}</td>
                     <td>${f.nroProv ? `<span class="pill" style="background:#E8F5E9;color:#2E7D32;font-size:10px;padding:1px 6px;border-radius:8px;" title="Numeración correlativa del proveedor">${_fmtNroProv(f.nroProv)}</span><br>` : ''}${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : (f.nroProv ? '' : '—')}</td>
                     <td>${f.descripcion||'—'}</td>
-                    <td><span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span></td>
+                    <td>${f.esNotaDebito ? `<span class="pill" style="background:#fdecea;color:#b3261e;">Nota de Déb. ${escHtml(f.tipoComprobante||'')}</span>` : '<span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span>'}</td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
                     <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
                     <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
@@ -37113,13 +37192,32 @@
         <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;">
           Gemini extrajo estos datos. Revisá y corregí antes de guardar.
         </p>
-        <!-- ¿Es una Nota de Crédito? — arriba de todo para que se vea apenas se abre -->
-        <div style="margin-bottom:16px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--danger);border-radius:10px;">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;margin:0;color:var(--danger);">
-            <input type="checkbox" id="leerFactEsNC" onchange="lfToggleNC()" style="width:auto;"> 🧾 Este comprobante es una NOTA DE CRÉDITO (anula una factura)
-          </label>
-          <div id="lfNCGrupo" style="display:none;margin-top:10px;">
-            <label style="font-weight:400;">Factura que anula</label>
+        <!-- Tipo de comprobante recibido (agrupado) — arriba de todo -->
+        <div class="form-group" style="margin-bottom:16px;">
+          <label>Tipo de comprobante *</label>
+          <select id="leerFactClase" onchange="lfClaseChange()" style="width:100%;">
+            <optgroup label="Facturas">
+              <option value="fact|A">Factura A</option>
+              <option value="fact|B">Factura B</option>
+              <option value="fact|C">Factura C</option>
+            </optgroup>
+            <optgroup label="Notas de Crédito (restan de la cuenta corriente)">
+              <option value="nc|A">Nota de Crédito A</option>
+              <option value="nc|B">Nota de Crédito B</option>
+              <option value="nc|C">Nota de Crédito C</option>
+            </optgroup>
+            <optgroup label="Notas de Débito (suman a la cuenta corriente)">
+              <option value="nd|A">Nota de Débito A</option>
+              <option value="nd|B">Nota de Débito B</option>
+              <option value="nd|C">Nota de Débito C</option>
+            </optgroup>
+          </select>
+          <input type="checkbox" id="leerFactEsNC" style="display:none;">
+          <input type="hidden" id="leerFactClaseVal" value="fact">
+          <input type="hidden" id="leerFactLetraVal" value="A">
+          <div class="form-hint" id="leerFactClaseHint"></div>
+          <div id="lfNCGrupo" style="display:none;margin-top:10px;padding:12px 14px;background:var(--bg-2);border:1px solid #1e8e3e;border-radius:10px;">
+            <label style="font-weight:700;color:#1e8e3e;margin-top:0;">🧾 Factura que anula esta nota de crédito</label>
             <select id="leerFactNCFactura" style="width:100%;"></select>
             <div style="font-size:11px;color:var(--text-3);margin-top:4px;">En la cuenta corriente baja el saldo del proveedor, como un pago. Si el importe supera el saldo de la factura, el resto queda como crédito a favor.</div>
           </div>
