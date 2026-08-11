@@ -9662,8 +9662,20 @@
     // que se le retuvo al proveedor y se deposita a AFIP por su cuenta: cancela esa parte de la
     // factura igual que el neto transferido. Por eso cuenta como pago que salda la deuda.
     function _totalRetenidoHist(hist) { return (hist||[]).reduce(function(s,p){ return s + (p.totalRet||0); }, 0); }
-    // Saldo pendiente REAL de una factura/documento: importe - pagado(neto) - retenido. Nunca negativo.
-    function _saldoFactDoc(item) { return Math.max(0, (item.importe||0) - (item.pagado||0) - _totalRetenidoHist(item.pagosHistorial)); }
+    // Suma de notas de crédito (registros propios en facturas[], esNotaCredito) aplicadas a un
+    // comprobante puntual (factura o documento) por su id. Bajan su saldo pendiente.
+    function _ncAplicadasA(itemId) {
+        if (!itemId) return 0;
+        return (facturas || []).reduce(function(s, f) {
+            return s + ((f && f.esNotaCredito && f.notaCreditoDe === itemId) ? (f.importe || 0) : 0);
+        }, 0);
+    }
+    // Saldo pendiente REAL de una factura/documento: importe - pagado(neto) - retenido - notas de
+    // crédito aplicadas. Nunca negativo. Una nota de crédito NO es deuda: su saldo es 0.
+    function _saldoFactDoc(item) {
+        if (item && item.esNotaCredito) return 0;
+        return Math.max(0, (item.importe||0) - (item.pagado||0) - _totalRetenidoHist(item.pagosHistorial) - _ncAplicadasA(item.id));
+    }
     // ¿Está totalmente saldada? (importe > 0 y saldo 0)
     function _estaSaldada(item) { return (item.importe||0) > 0 && _saldoFactDoc(item) <= 0; }
     // Estado a guardar teniendo en cuenta la retención como parte del pago.
@@ -16172,15 +16184,12 @@
                 var _ncNombre = _ncProvObj ? _ncProvObj.razonSocial : prov;
                 var _ncTarget = (document.getElementById('leerFactNCFactura') || {}).value || '__credito__';
                 var _ncLetra = (tipoComp && ['A','B','C','X'].indexOf(tipoComp.toUpperCase()) !== -1) ? tipoComp.toUpperCase() : 'A';
-                var _ncR = await _aplicarNotaCredito({ nombre: _ncNombre, target: _ncTarget, letra: _ncLetra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: _ncAdj });
+                _aplicarNotaCredito({ nombre: _ncNombre, target: _ncTarget, letra: _ncLetra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: _ncAdj });
                 cerrarLeerFactPDF();
                 if (typeof renderFacturas === 'function') renderFacturas();
                 if (typeof renderDocumentos === 'function') renderDocumentos();
                 if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
-                var _ncMsg = (_ncTarget && _ncTarget !== '__credito__')
-                    ? ('✅ Nota de crédito aplicada.' + (_ncR.restanteCredito > 0.005 ? ' El excedente de ' + (moneda === 'USD' ? 'USD ' : '$ ') + Math.round(_ncR.restanteCredito).toLocaleString('es-AR') + ' quedó como crédito a favor.' : ''))
-                    : ('✅ Nota de crédito cargada como crédito a favor de ' + _ncNombre + '.');
-                alert(_ncMsg);
+                alert('✅ Nota de crédito cargada' + ((_ncTarget && _ncTarget !== '__credito__') ? ' (anula la factura elegida).' : ' como crédito a favor de ' + _ncNombre + '.'));
             } catch (err) {
                 alert('Error al guardar la nota de crédito: ' + (err.message || err));
             } finally {
@@ -16473,19 +16482,26 @@
     // sin generar Orden de Pago. Si el importe supera el saldo de la factura, el excedente
     // queda como crédito a favor del proveedor (creditosProveedor). También se puede cargar
     // sin factura puntual: en ese caso todo el importe va como crédito a favor.
-    function abrirNotaCredito(provNombre) {
-        _ncPoblarProveedores(provNombre || '');
-        document.getElementById('ncLetra').value = 'A';
-        document.getElementById('ncNumero').value = '';
-        document.getElementById('ncImporte').value = '';
-        document.getElementById('ncMoneda').value = 'ARS';
+    var _ncEditId = null;
+    function abrirNotaCredito(provNombre, editId) {
+        _ncEditId = editId || null;
+        var nc = editId ? (facturas || []).find(function(f){ return f.id === editId; }) : null;
+        _ncPoblarProveedores(nc ? nc.proveedor : (provNombre || ''));
+        document.getElementById('ncLetra').value = nc ? (nc.tipoComprobante || 'A') : 'A';
+        document.getElementById('ncNumero').value = nc ? (nc.numero || '') : '';
+        document.getElementById('ncImporte').value = nc ? (nc.importe || '') : '';
+        document.getElementById('ncMoneda').value = nc ? (nc.moneda || 'ARS') : 'ARS';
         var fa = document.getElementById('ncArchivo'); if (fa) fa.value = '';
-        document.getElementById('ncEstado').textContent = '';
-        var f = document.getElementById('ncFecha'); if (f) f.value = new Date().toISOString().slice(0,10);
-        _ncPoblarFacturas();
+        document.getElementById('ncEstado').textContent = (nc && nc.docId) ? 'Ya tiene un PDF adjunto. Subí otro solo si querés reemplazarlo.' : '';
+        var f = document.getElementById('ncFecha'); if (f) f.value = nc ? (nc.fecha || new Date().toISOString().slice(0,10)) : new Date().toISOString().slice(0,10);
+        var preTarget = nc ? (nc.notaCreditoDe ? ((nc.notaCreditoKind || 'fact') + ':' + nc.notaCreditoDe) : '__credito__') : null;
+        _ncPoblarFacturas(preTarget, editId);
+        var gb = document.getElementById('ncGuardarBtn'); if (gb) gb.textContent = nc ? 'Guardar cambios' : 'Guardar nota de crédito';
+        var h2 = document.querySelector('#modalNotaCredito h2'); if (h2) h2.textContent = nc ? '🧾 Editar Nota de Crédito' : '🧾 Nota de Crédito';
         document.getElementById('modalNotaCredito').classList.add('active');
     }
     function cerrarNotaCredito() {
+        _ncEditId = null;
         document.getElementById('modalNotaCredito').classList.remove('active');
     }
     function _ncPoblarProveedores(prefill) {
@@ -16498,27 +16514,32 @@
         }).join('');
         if (prefill) sel.value = prefill;
     }
-    function _ncPoblarFacturas() {
+    function _ncPoblarFacturas(preTarget, editId) {
         var sel = document.getElementById('ncFactura');
         if (!sel) return;
         var nombre = document.getElementById('ncProveedor').value;
+        var editNc = editId ? (facturas || []).find(function(f){ return f.id === editId; }) : null;
+        // En edición, al saldo del item destino se le suma de vuelta lo que ESTA nota de crédito
+        // le aplica, para que la factura anulada siga apareciendo (si no, mostraría saldo 0).
+        var saldoDe = function(item){ var s = _saldoFactDoc(item); if (editNc && editNc.notaCreditoDe === item.id) s += (editNc.importe || 0); return s; };
         var opts = '<option value="__credito__">— Crédito a favor (sin factura) —</option>';
         if (nombre) {
             var fmtMon = function(m, mon){ return (mon === 'USD' ? 'USD ' : '$ ') + Math.round(m||0).toLocaleString('es-AR'); };
             (facturas || []).forEach(function(f, i){
                 if (f.proveedor !== nombre || f.esNotaCredito) return;
-                var saldo = _saldoFactDoc(f);
+                var saldo = saldoDe(f);
                 if (saldo <= 0) return;
                 opts += '<option value="fact:' + f.id + '">Factura ' + escHtml(f.numero || ('#' + (i+1))) + ' · saldo ' + fmtMon(saldo, f.moneda) + '</option>';
             });
             (typeof documentos !== 'undefined' ? documentos : []).forEach(function(d){
                 if (d.proveedor !== nombre || !(d.importe > 0)) return;
-                var saldo = _saldoFactDoc(d);
+                var saldo = saldoDe(d);
                 if (saldo <= 0) return;
                 opts += '<option value="doc:' + d.id + '">Comprob. X ' + escHtml(d.numero || d.concepto || d.id) + ' · saldo ' + fmtMon(saldo, d.moneda) + '</option>';
             });
         }
         sel.innerHTML = opts;
+        if (preTarget) sel.value = preTarget;
     }
 
     // Lee un PDF/imagen de la nota de crédito y completa número, fecha, importe y tipo con IA.
@@ -16579,41 +16600,39 @@
     // pagosHistorial) y/o genera crédito a favor del proveedor por el excedente (o por el
     // total si no se eligió factura). Reutilizado por el modal de NC y por el asistente IA.
     // o = { nombre, target ('fact:id'|'doc:id'|'__credito__'), letra, numero, fecha, importe, moneda, adj }
-    async function _aplicarNotaCredito(o) {
-        var restanteCredito = o.importe;
+    // Crea (o edita, si o.editId) una NOTA DE CRÉDITO como comprobante propio en facturas[]
+    // (esNotaCredito:true). No es deuda: su saldo es 0 y baja el saldo de la factura/doc que anula
+    // (via _ncAplicadasA dentro de _saldoFactDoc) y figura como HABER en la cuenta corriente.
+    // o = { nombre, target ('fact:id'|'doc:id'|'__credito__'), letra, numero, fecha, importe, moneda, adj, editId }
+    function _aplicarNotaCredito(o) {
+        var targetId = null, targetKind = null;
         if (o.target && o.target !== '__credito__') {
-            var kind = o.target.slice(0, o.target.indexOf(':'));
-            var refId = o.target.slice(o.target.indexOf(':') + 1);
-            var item = (kind === 'fact')
-                ? (facturas || []).find(function(f){ return f.id === refId; })
-                : (typeof documentos !== 'undefined' ? documentos : []).find(function(d){ return d.id === refId; });
-            if (!item) throw new Error('No se encontró la factura seleccionada.');
-            var saldo = _saldoFactDoc(item);
-            var aplicado = Math.min(o.importe, saldo);
-            restanteCredito = Math.round((o.importe - aplicado) * 100) / 100;
-            if (aplicado > 0) {
-                var entry = { pagoId: 'NC-' + Date.now(), fecha: o.fecha, modalidad: o.letra, monto: aplicado,
-                    baseImponible: 0, retenciones: [], totalRet: 0,
-                    esNC: true, ncNumero: o.numero, ncLetra: o.letra, ncImporteTotal: o.importe };
-                if (o.adj) { entry.comprobanteId = o.adj.comprobanteId; entry.comprobanteNombre = o.adj.comprobanteNombre; entry.comprobanteTipo = o.adj.comprobanteTipo; }
-                if (!item.pagosHistorial) item.pagosHistorial = [];
-                item.pagosHistorial.push(entry);
-                item.pagado = Math.round(((item.pagado || 0) + aplicado) * 100) / 100;
-                item.estado = _estadoFactDoc(item);
-                if (kind === 'fact') REF_FACTURAS.child(item.id).update({ pagosHistorial: item.pagosHistorial, pagado: item.pagado, estado: item.estado });
-                else REF_DOCS.child(item.id).update({ pagosHistorial: item.pagosHistorial, pagado: item.pagado });
-            }
+            targetKind = o.target.slice(0, o.target.indexOf(':'));
+            targetId   = o.target.slice(o.target.indexOf(':') + 1);
         }
-        if (restanteCredito > 0.005) {
-            var cr = { id: 'CR-' + Date.now() + '-' + Math.floor(Math.random()*1000), proveedor: o.nombre,
-                monto: restanteCredito, usado: 0, moneda: o.moneda, fecha: o.fecha,
-                origen: 'nota_credito', ref: 'NC ' + o.letra + ' ' + (o.numero || '') };
-            if (o.adj && !(o.target && o.target !== '__credito__')) { cr.comprobanteId = o.adj.comprobanteId; cr.comprobanteNombre = o.adj.comprobanteNombre; }
-            if (typeof creditosProveedor === 'undefined') window.creditosProveedor = [];
-            creditosProveedor.push(cr);
-            if (typeof persistirCreditos === 'function') persistirCreditos();
+        var rec = {
+            esNotaCredito: true,
+            notaCreditoDe: targetId,
+            notaCreditoKind: targetKind,
+            proveedor: o.nombre, numero: o.numero, fecha: o.fecha,
+            importe: o.importe, moneda: o.moneda,
+            tipoComprobante: o.letra, computaARCA: (o.letra !== 'X'),
+            pagado: 0, estado: 'pagada', tipo: 'directo'
+        };
+        if (o.adj) { rec.docId = o.adj.comprobanteId; rec.docNombre = o.adj.comprobanteNombre; rec.docTipo = o.adj.comprobanteTipo; }
+        if (o.editId) {
+            var idx = (facturas || []).findIndex(function(f){ return f.id === o.editId; });
+            if (idx >= 0) {
+                if (!o.adj && facturas[idx].docId) { rec.docId = facturas[idx].docId; rec.docNombre = facturas[idx].docNombre; rec.docTipo = facturas[idx].docTipo; }
+                rec.id = o.editId;
+                facturas[idx] = Object.assign({}, facturas[idx], rec);
+            } else { rec.id = o.editId; facturas.push(rec); }
+        } else {
+            rec.id = 'NC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            facturas.push(rec);
         }
-        return { restanteCredito: restanteCredito };
+        persistirFacturas();
+        return { rec: rec };
     }
 
     async function guardarNotaCredito() {
@@ -16630,27 +16649,51 @@
         if (importe <= 0) { alert('Ingresá un importe válido.'); return; }
 
         var btn = document.getElementById('ncGuardarBtn');
+        var _lbl = _ncEditId ? 'Guardar cambios' : 'Guardar nota de crédito';
         if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
         try {
             // Adjunto (opcional): sube el PDF/imagen a REF_DOCS y devuelve la referencia.
             var adj = null;
             try { adj = await _subirComprobantePago('ncArchivo'); }
-            catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Guardar nota de crédito'; } return; }
+            catch (e) { if (btn) { btn.disabled = false; btn.textContent = _lbl; } return; }
 
-            var _r = await _aplicarNotaCredito({ nombre: nombre, target: target, letra: letra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: adj });
-            var restanteCredito = _r.restanteCredito;
+            _aplicarNotaCredito({ nombre: nombre, target: target, letra: letra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: adj, editId: _ncEditId });
 
+            var _fueEdit = !!_ncEditId;
             cerrarNotaCredito();
             if (typeof renderFacturas === 'function') renderFacturas();
             if (typeof renderDocumentos === 'function') renderDocumentos();
             if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
-            var msg = (target && target !== '__credito__')
-                ? ('Nota de crédito aplicada.' + (restanteCredito > 0.005 ? ' El excedente de ' + (moneda==='USD'?'USD ':'$ ') + Math.round(restanteCredito).toLocaleString('es-AR') + ' quedó como crédito a favor.' : ''))
-                : ('Nota de crédito cargada como crédito a favor de ' + nombre + '.');
-            alert(msg);
+            alert(_fueEdit ? '✅ Nota de crédito actualizada.' : '✅ Nota de crédito cargada.');
         } finally {
+            _ncEditId = null;
             if (btn) { btn.disabled = false; btn.textContent = 'Guardar nota de crédito'; }
         }
+    }
+
+    // Texto del comprobante que anula una nota de crédito (para la lista de facturas).
+    function _ncDescTarget(nc) {
+        if (!nc || !nc.notaCreditoDe) return 'Crédito a favor (sin factura)';
+        var t = (nc.notaCreditoKind === 'doc')
+            ? (typeof documentos !== 'undefined' ? documentos : []).find(function(d){ return d.id === nc.notaCreditoDe; })
+            : (facturas || []).find(function(f){ return f.id === nc.notaCreditoDe; });
+        return t ? ((nc.notaCreditoKind === 'doc' ? 'Comprob. X ' : 'Factura ') + (t.numero || t.id)) : '(comprobante eliminado)';
+    }
+    // Editar / eliminar una nota de crédito (comprobante propio en facturas[]).
+    function editarNotaCredito(id) {
+        var nc = (facturas || []).find(function(f){ return f.id === id && f.esNotaCredito; });
+        if (!nc) { alert('No se encontró la nota de crédito.'); return; }
+        abrirNotaCredito(nc.proveedor, id);
+    }
+    function eliminarNotaCredito(id) {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos.'); return; }
+        var idx = (facturas || []).findIndex(function(f){ return f.id === id && f.esNotaCredito; });
+        if (idx < 0) return;
+        if (!confirm('¿Eliminar esta nota de crédito? La deuda de la factura que anulaba vuelve a su saldo original.')) return;
+        facturas.splice(idx, 1);
+        persistirFacturas();
+        if (typeof renderFacturas === 'function') renderFacturas();
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
     }
 
     // ===================== FACTURAS ENHANCED =====================
@@ -17319,6 +17362,30 @@
         } else {
             visibles.forEach(f => {
                 const idx = facturas.indexOf(f);
+                if (f.esNotaCredito) {
+                    const tgt = _ncDescTarget(f);
+                    const docBtnNC = f.docId
+                        ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${f.docId}','${(f.docNombre||'nota-credito').replace(/'/g,'')}')" title="Ver PDF">📎 PDF</button>`
+                        : '<span style="color:var(--text-3); font-size:12px;">—</span>';
+                    const accNC = puedeEditar
+                        ? `<button class="btn btn-outline btn-sm" title="Editar nota de crédito" onclick="editarNotaCredito('${f.id}')">✏</button>
+                           <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="Eliminar nota de crédito" onclick="eliminarNotaCredito('${f.id}')">✕</button>`
+                        : '—';
+                    const trNC = document.createElement('tr');
+                    trNC.style.background = 'rgba(30,142,62,.06)';
+                    trNC.innerHTML = `
+                        <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
+                        <td><strong>${escHtml(f.proveedor||'—')}</strong> <span class="pill" style="background:#e6f4ea;color:#1e8e3e;">🧾 Nota de Crédito ${escHtml(f.tipoComprobante||'')}</span></td>
+                        <td>${escHtml(f.numero||'—')}</td>
+                        <td style="font-size:12px;color:var(--text-3);">anula: ${escHtml(tgt)}</td>
+                        <td style="text-align:right;color:#1e8e3e;"><strong>− ${f.moneda==='USD'?'USD ':'$'}${(f.importe||0).toLocaleString('es-AR')}</strong></td>
+                        <td style="text-align:right;color:#1e8e3e;">crédito</td>
+                        <td><span class="pill" style="background:#e6f4ea;color:#1e8e3e;">Crédito</span></td>
+                        <td>${docBtnNC}</td>
+                        <td><div class="action-btns">${accNC}</div></td>`;
+                    tbody.appendChild(trNC);
+                    return;
+                }
                 const pendiente = _saldoFactDoc(f);
                 const estado = f.estado || 'pendiente';
                 const estadoBadge = estado === 'pagada'
@@ -19811,7 +19878,7 @@
         const nDocs = documentos.length, nFacs = (facturas||[]).length;
         const nArca = (compRecibidos||[]).length;
         const nEmit = (comprobantesEmitidos||[]).filter(e => e && e.movTipo === 'egreso').length;
-        const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0) + (facturas||[]).reduce((s,f) => s + (f.importe||0), 0);
+        const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0) + (facturas||[]).reduce((s,f) => s + (f.esNotaCredito ? 0 : (f.importe||0)), 0);
         const pendientes = documentos.filter(d => _saldoFactDoc(d) > 0).length + (facturas||[]).filter(f => _saldoFactDoc(f) > 0).length;
         const el = id => document.getElementById(id);
         if (el('totalDocs')) el('totalDocs').textContent = nDocs + nFacs + nArca + nEmit;
@@ -29369,7 +29436,7 @@
         // Facturas del proveedor (para no tener que ir a la pestaña Facturas a buscarlas)
         var facturasHtml = '';
         if (!omitirFacturas) {
-            var factsDelProv = facturas.filter(function(f){ return f.proveedor === nombre; });
+            var factsDelProv = facturas.filter(function(f){ return f.proveedor === nombre && !f.esNotaCredito; });
             var filasFact = factsDelProv.slice().sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); }).map(function(f) {
                 var saldo = _saldoFactDoc(f);
                 var estadoBadge = f.estado === 'pagada'
@@ -29637,6 +29704,7 @@
         // Comprobantes del proveedor (facturas + comprobantes X)
         var comps = [];
         (facturas || []).forEach(function(f){ if (f.proveedor !== nombre) return;
+            if (f.esNotaCredito) { comps.push({ o:'nc', id: f.id, tipo: 'Nota de Créd. ' + (f.tipoComprobante||''), num: (f.numero || '—'), fecha: f.fecha, imp: -(f.importe || 0), pag: 0, est: 'nc', saldo: 0, esNC: true }); return; }
             comps.push({ o:'fact', ref: facturas.indexOf(f), tipo: (f.computaARCA === false ? 'Comprobante X' : 'Factura'), num: (f.numero || _fmtNroProv(f.nroProv) || '—'), fecha: f.fecha, imp: f.importe || 0, pag: f.pagado || 0, est: _ccEstadoItem(f), saldo: _saldoFactDoc(f) }); });
         (documentos || []).forEach(function(d){ if (d.proveedor !== nombre) return;
             comps.push({ o:'doc', ref: d.id, tipo: 'Comprobante X', num: (d.numero || _fmtNroProv(d.nroProv) || d.nro || '—'), fecha: d.fecha, imp: d.importe || 0, pag: d.pagado || 0, est: _ccEstadoItem(d), saldo: _saldoFactDoc(d) }); });
@@ -29666,12 +29734,28 @@
         if (!compsF.length) {
             h += '<div style="padding:22px;text-align:center;color:var(--text-3);">No hay comprobantes' + (filtro ? ' con ese filtro' : '') + '.</div>';
         } else {
-            var badge = { pagado:'badge-ok', parcial:'badge-warn', pendiente:'badge-err' };
-            var lbl = { pagado:'Pagado', parcial:'Parcial', pendiente:'A pagar' };
+            var badge = { pagado:'badge-ok', parcial:'badge-warn', pendiente:'badge-err', nc:'badge-ok' };
+            var lbl = { pagado:'Pagado', parcial:'Parcial', pendiente:'A pagar', nc:'Crédito' };
             h += '<div class="table-wrap"><table><thead><tr>'
                 + '<th>Fecha</th><th>Tipo</th><th>N°</th><th style="text-align:right;">Importe</th><th style="text-align:right;">Pagado</th><th style="text-align:right;">Saldo</th><th>Estado</th><th style="text-align:right;">Acción</th>'
                 + '</tr></thead><tbody>';
             compsF.forEach(function(c){
+                if (c.esNC) {
+                    var _ncId = String(c.id).replace(/'/g,"\\'");
+                    var abrirNCx = puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNotaCredito(\'' + _ncId + '\')" title="Editar nota de crédito">✏</button>' : '';
+                    var borrarNCx = puedeEd ? '<button class="btn btn-danger-sm" onclick="eliminarNotaCredito(\'' + _ncId + '\')" title="Eliminar nota de crédito">✕</button>' : '';
+                    h += '<tr style="background:rgba(30,142,62,.05);">'
+                        + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
+                        + '<td><span style="color:#1e8e3e;font-weight:600;">🧾 ' + escHtml(c.tipo) + '</span></td>'
+                        + '<td>' + escHtml(String(c.num)) + '</td>'
+                        + '<td style="text-align:right;color:#1e8e3e;font-weight:600;">' + fmtA(c.imp) + '</td>'
+                        + '<td style="text-align:right;">—</td>'
+                        + '<td style="text-align:right;">—</td>'
+                        + '<td><span class="pill badge-ok">Crédito</span></td>'
+                        + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + abrirNCx + borrarNCx + '</div></td>'
+                        + '</tr>';
+                    return;
+                }
                 var refA = (c.o === 'fact') ? c.ref : ("'" + String(c.ref).replace(/'/g,"\\'") + "'");
                 var abrir = (c.o === 'fact') ? ('editarFactura(' + c.ref + ')') : ("abrirModalDoc(" + refA + ")");
                 var pagar = (c.saldo > 0.5 && puedeEd) ? '<button class="btn btn-gold btn-sm" onclick="' + (c.o==='fact' ? ('abrirPagoFD(\'fact\',' + c.ref + ')') : ('abrirPagoFD(\'doc\',' + refA + ')')) + '" title="Registrar pago">💵</button> ' : '';
@@ -29784,12 +29868,16 @@
         return 'Retención' + (rs.length ? ' (' + rs.join(', ') + ')' : '');
     }
     function _ctaCteProvMovs(nombre) {
-        var facts = (facturas || []).filter(function(f){ return f.proveedor === nombre; });
+        var factsTodas = (facturas || []).filter(function(f){ return f.proveedor === nombre; });
+        var facts = factsTodas.filter(function(f){ return !f.esNotaCredito; });   // deuda
+        var notasCred = factsTodas.filter(function(f){ return f.esNotaCredito; }); // haberes
         var docs  = (typeof documentos !== 'undefined' ? documentos : []).filter(function(d){ return d.proveedor === nombre; });
         var movs = [];
         facts.forEach(function(f){ movs.push({ fecha: f.fecha || '', tipo: 'Factura', clase: 'debe', detalle: (f.numero || f.descripcion || 'Factura'), debe: (f.importe || 0), haber: 0, ref: { t: 'factura', id: facturas.indexOf(f) } }); });
         docs.forEach(function(d){ movs.push({ fecha: d.fecha || '', tipo: 'Comprob. X', clase: 'debe', detalle: (d.numero || d.descripcion || d.concepto || 'Comprobante'), debe: (d.importe || 0), haber: 0, ref: { t: 'documento', id: d.id } }); });
-        var totalPagado = 0, totalRet = 0;
+        var totalPagado = 0, totalRet = 0, totalNC = 0;
+        // Notas de crédito: son HABER (bajan la deuda del proveedor, como un pago).
+        notasCred.forEach(function(n){ movs.push({ fecha: n.fecha || '', tipo: 'Nota de Créd.', clase: 'haber', detalle: ('NC ' + (n.tipoComprobante || '') + ' ' + (n.numero || '')).trim(), debe: 0, haber: (n.importe || 0), ref: { t: 'factura', id: facturas.indexOf(n) } }); totalNC += (n.importe || 0); });
         var _proc = function(item, srcTipo){
             var srcRef = (srcTipo === 'fact') ? facturas.indexOf(item) : item.id;
             var hist = item.pagosHistorial || [];
@@ -29825,7 +29913,7 @@
         // Cronológico; a igual fecha, el Debe (comprobante) antes que el Haber (pago).
         movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return (a.clase === 'debe' ? 0 : 1) - (b.clase === 'debe' ? 0 : 1); });
         var totalDebe = facts.reduce(function(s,f){ return s + (f.importe || 0); }, 0) + docs.reduce(function(s,d){ return s + (d.importe || 0); }, 0);
-        var totalHaber = totalPagado + totalRet;
+        var totalHaber = totalPagado + totalRet + totalNC;   // las notas de crédito bajan la deuda como un pago
         var saldoComprob = totalDebe - totalHaber;
         var creditos = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre) || 0) : 0;
         return { movs: movs, totalDebe: totalDebe, totalHaber: totalHaber, totalPagado: totalPagado, totalRet: totalRet, creditos: creditos, saldoComprob: saldoComprob, saldoNeto: saldoComprob - creditos, nFact: facts.length, nDoc: docs.length };
@@ -29952,14 +30040,15 @@
             totalAjustado += c.totalAjustado;
             totalPagadoPresup += (d.pagado||0);
         });
-        var totalFacturado = 0, totalPagadoFact = 0, totalPendienteFact = 0;
+        var totalFacturado = 0, totalPagadoFact = 0, totalPendienteFact = 0, totalNCSinFactura = 0;
         factsDelProv.forEach(function(f) {
+            if (f.esNotaCredito) { if (!f.notaCreditoDe) totalNCSinFactura += (f.importe||0); return; } // NC linkeada ya baja el saldo de su factura; la sin-factura se resta abajo
             totalFacturado += (f.importe||0);
             totalPagadoFact += (f.pagado||0);
             if (f.estado !== 'pagada') totalPendienteFact += _saldoFactDoc(f);
         });
-        var factsPagadas = factsDelProv.filter(function(f){ return f.estado === 'pagada'; });
-        var factsPendientes = factsDelProv.filter(function(f){ return f.estado !== 'pagada'; });
+        var factsPagadas = factsDelProv.filter(function(f){ return f.estado === 'pagada' && !f.esNotaCredito; });
+        var factsPendientes = factsDelProv.filter(function(f){ return f.estado !== 'pagada' && !f.esNotaCredito; });
         var docsDelProv = (typeof documentos !== 'undefined' ? documentos : []).filter(function(d){ return d.proveedor === nombre; });
         var totalDocs = 0, totalPagadoDoc = 0, totalPendienteDoc = 0;
         docsDelProv.forEach(function(d){ totalDocs += (d.importe||0); totalPagadoDoc += (d.pagado||0); if (d.estado !== 'pagada') totalPendienteDoc += _saldoFactDoc(d); });
@@ -30023,7 +30112,7 @@
         // --- Saldo de cuenta corriente + acceso al extracto (lo primero después de los datos) ---
         var _ccRet = 0; factsDelProv.concat(docsDelProv).forEach(function(x){ _ccRet += _totalRetenidoHist(x.pagosHistorial); });
         var _ccCred = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre) || 0) : 0;
-        var _ccDeuda = totalPendienteFact + totalPendienteDoc;
+        var _ccDeuda = totalPendienteFact + totalPendienteDoc - totalNCSinFactura;
         var _ccNeto = _ccDeuda - _ccCred;
         h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;">'
             + _ccKpiHTML('Adeudado (deuda)', fmtA(_ccDeuda), 'var(--danger)')
@@ -30054,7 +30143,7 @@
             + '<div style="font-size:15px;font-weight:700;color:var(--success);">' + fmtA(totalPagadoPresup + totalPagadoFact + totalPagadoDoc) + '</div></div>'
             + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:8px;padding:12px;text-align:center;">'
             + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Pendiente</div>'
-            + '<div style="font-size:15px;font-weight:700;color:var(--danger);">' + fmtA(totalPendienteFact + totalPendienteDoc) + '</div></div>'
+            + '<div style="font-size:15px;font-weight:700;color:var(--danger);">' + fmtA(_ccDeuda) + '</div></div>'
             + '</div>';
 
         // Solapas internas de la ficha: separan Presupuestos / Facturas / Documentos / Pagos.
