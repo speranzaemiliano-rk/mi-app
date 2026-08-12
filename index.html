@@ -8044,7 +8044,7 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 1024 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
@@ -10003,7 +10003,7 @@
             if(!rets.length){
                 desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'
                     +(prov?'Este proveedor no tiene retenciones automáticas configuradas.':'Seleccioná un ítem para ver retenciones automáticas.')
-                    +' Podés agregar una retención manual con el botón de abajo.</div>';
+                    +' Con el botón de abajo podés elegir un régimen (se calcula solo) o cargar una retención a mano.</div>';
             } else {
                 desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
                     return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
@@ -10044,15 +10044,58 @@
                 +'</div>';
         }).join('');
     }
+    // Catálogo de regímenes elegibles al pagar (mismos que se configuran en el proveedor).
+    var _RET_REGIMENES = [
+        { key:'ret78',        label:'Ganancias Reg.78 — Bienes muebles/cambio (2% s/exc. $224.000)' },
+        { key:'ret94',        label:'Ganancias Reg.94 — Locaciones de obra/servicios (2% s/exc. $67.170)' },
+        { key:'ret119',       label:'Ganancias Reg.119 — Honorarios (escala 5%–31% s/exc. $160.000)' },
+        { key:'ret30',        label:'Ganancias Reg.30/31/32 — Alquileres (6% s/exc. $11.200, mín $240)' },
+        { key:'retSUSSIng',   label:'SUSS Obras de ingeniería (1,2% s/pago)' },
+        { key:'retSUSSConst', label:'SUSS Obras de construcción (2,5% s/pago)' },
+        { key:'retSUSSLimp',  label:'SUSS Empresa de limpieza (6% s/pago)' }
+    ];
+    // Nombre del proveedor del pago FD en curso (para calcular con acumulado mensual).
+    function _pagoFDProvNombre() {
+        if (_pagoFDModo === 'varias') return _pagoFDMulti.prov || '';
+        var sel = document.getElementById('pagoFDItem'), val = sel ? sel.value : '';
+        if (!val) return '';
+        if (_pagoFDTab === 'fact') { var f = facturas[parseInt(val)]; return f ? (f.proveedor || '') : ''; }
+        var d = documentos.find(function(x){ return x.id === val; }); return d ? (d.proveedor || '') : '';
+    }
     window.pagoFDAgregarRetManual = function() {
-        var desc=window.prompt('¿Qué retención querés aplicar? (ej: IIBB CABA, Ganancias, SUSS, IVA…)', '');
-        if(desc==null) return;
-        desc=(desc||'').trim(); if(!desc){ alert('Poné una descripción para la retención.'); return; }
-        var mStr=window.prompt('Monto a retener ($) para "'+desc+'":', '');
-        if(mStr==null) return;
-        var monto=parseFloat(String(mStr).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,''))||0;
-        if(monto<=0){ alert('Ingresá un monto válido mayor a cero.'); return; }
-        _pagoFDRetsManuales.push({codigo:desc,desc:desc,monto:monto,activa:true,manual:true});
+        var base = parseFloat(document.getElementById('pagoFDBase').value) || parseFloat(document.getElementById('pagoFDMonto').value) || 0;
+        var provNombre = _pagoFDProvNombre();
+        var fecha = document.getElementById('pagoFDFecha').value || '';
+        var mesAno = fecha.substring(0, 7);
+        var menu = '¿Qué régimen de retención querés aplicar?\n\n';
+        _RET_REGIMENES.forEach(function(r, i){ menu += (i+1) + ') ' + r.label + '\n'; });
+        var manualOpt = _RET_REGIMENES.length + 1;
+        menu += manualOpt + ') Otra retención (a mano)\n\nIngresá el número:';
+        var sel = window.prompt(menu, '');
+        if (sel == null) return;
+        var n = parseInt(String(sel).trim(), 10);
+        if (n === manualOpt) {
+            var desc = window.prompt('Descripción de la retención (ej: IIBB CABA, IVA…):', '');
+            if (desc == null) return;
+            desc = (desc || '').trim(); if (!desc) { alert('Poné una descripción para la retención.'); return; }
+            var mStr0 = window.prompt('Monto a retener ($) para "' + desc + '":', '');
+            if (mStr0 == null) return;
+            var m0 = parseFloat(String(mStr0).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,'')) || 0;
+            if (m0 <= 0) { alert('Ingresá un monto válido mayor a cero.'); return; }
+            _pagoFDRetsManuales.push({ codigo:desc, desc:desc, monto:m0, activa:true, manual:true });
+            pagoFDRecalcRet(); return;
+        }
+        var reg = _RET_REGIMENES[n - 1];
+        if (!reg) { alert('Opción inválida.'); return; }
+        // Calcular el monto del régimen elegido sobre la base (respetando acumulado mensual del proveedor).
+        var synth = {}; synth[reg.key] = true;
+        var calc = calcularRetenciones(base, synth, provNombre, mesAno);
+        var montoCalc = (calc && calc[0]) ? Math.round(calc[0].monto) : 0;
+        var mStr = window.prompt(reg.label + '\n\nBase: $' + Math.round(base).toLocaleString('es-AR') + '\nMonto calculado (podés ajustarlo):', String(montoCalc));
+        if (mStr == null) return;
+        var monto = parseFloat(String(mStr).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,'')) || 0;
+        if (monto <= 0) { alert('Ingresá un monto válido mayor a cero.'); return; }
+        _pagoFDRetsManuales.push({ codigo:reg.label.split(' — ')[0], desc:reg.label, monto:monto, activa:true, manual:true, regKey:reg.key });
         pagoFDRecalcRet();
     };
     window.pagoFDQuitarRetManual = function(i) { _pagoFDRetsManuales.splice(i,1); pagoFDRecalcRet(); };
@@ -16091,7 +16134,7 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 2048 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, data, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
@@ -16721,7 +16764,7 @@
                 '  "moneda": "ARS o USD"\n' +
                 '}\nSi algún dato no está, usá null. Respondé SOLO el JSON.';
             var body = { contents: [{ parts: [ { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } }, { text: prompt } ] }], generationConfig: { temperature: 0, maxOutputTokens: 1024 } };
-            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, lastErr = null;
             for (var i = 0; i < MODELOS.length; i++) {
                 if (i > 0) { est.textContent = '⚠️ Reintentando con ' + MODELOS[i] + '…'; await new Promise(function(r){ setTimeout(r, 3000); }); }
@@ -18012,7 +18055,7 @@
                 ]}],
                 generationConfig: { temperature: 0, maxOutputTokens: 2048 }
             };
-            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, errData, lastErr;
             for (var mi = 0; mi < MODELOS.length; mi++) {
                 if (mi > 0) {
@@ -20646,7 +20689,7 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 1024 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
@@ -36999,7 +37042,7 @@
           </div>
           <div id="pagoFDRetDesglose"></div>
           <div id="pagoFDRetManualLista"></div>
-          <button type="button" class="btn btn-outline btn-sm" onclick="pagoFDAgregarRetManual()" style="margin:8px 0;">➕ Agregar retención manual</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="pagoFDAgregarRetManual()" style="margin:8px 0;">➕ Agregar retención / elegir régimen</button>
           <div class="ret-total-row"><span>Retención total</span><strong id="pagoFDRetTotal" style="color:var(--danger);">$0</strong></div>
           <div class="ret-total-row" style="margin-top:4px;"><span>Neto a pagar al proveedor</span><strong id="pagoFDRetNeto" class="neto-val">$0</strong></div>
         </div>
@@ -40058,7 +40101,7 @@
     // Cerebro elegido: Groq (gratis) solo para texto; PDF/audio siguen con Gemini (multimodal).
     var _cerebro = (typeof _iaCerebro === 'function') ? _iaCerebro() : 'gemini';
     var _usarGroq = (_cerebro === 'groq') && !esPdf && !esAudio;
-    var MODELOS = _usarGroq ? ['groq'] : ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+    var MODELOS = _usarGroq ? ['groq'] : ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
     var mi = 0;
 
     // Si es PDF, primero extraemos datos estructurados de factura (o constancia AFIP) en paralelo
