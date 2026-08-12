@@ -1,5 +1,5 @@
 // Service Worker — Gestión PWA
-const CACHE = 'rk-v388';
+const CACHE = 'rk-v389';
 // La ruta base se deriva de dónde está servido el propio sw.js (ej. /mi-app/sw.js → /mi-app/).
 // Así, al clonar el sistema en otra ruta/repo, no hace falta editar el service worker.
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
@@ -46,11 +46,22 @@ self.addEventListener('fetch', function(e) {
       url.includes('gstatic.com') || url.includes('emailjs.com')) {
     return;
   }
+  // Para el HTML/shell (index.html y navegaciones): red primero con cache:'no-store'.
+  // Sin esto, la caché HTTP del navegador (GitHub Pages manda cache-control: max-age=600)
+  // puede seguir devolviendo una copia VIEJA de index.html hasta 10 min después de un
+  // deploy, aunque el fetch() ya "pidiera red primero" — por eso los cambios no se veían
+  // al recargar. Cache solo como respaldo offline.
+  var isHTML = e.request.mode === 'navigate' ||
+               (e.request.headers.get('accept') || '').includes('text/html') ||
+               /\/(index\.html)?(\?.*)?$/.test(url);
+  var fetchOpts = isHTML ? { cache: 'no-store' } : undefined;
   e.respondWith(
-    fetch(e.request).then(function(resp) {
+    fetch(e.request, fetchOpts).then(function(resp) {
       // Actualizar cache con respuesta fresca
-      var copy = resp.clone();
-      caches.open(CACHE).then(function(c) { c.put(e.request, copy); });
+      if (resp && resp.status === 200) {
+        var copy = resp.clone();
+        caches.open(CACHE).then(function(c) { c.put(e.request, copy); });
+      }
       return resp;
     }).catch(function() {
       // Sin red: servir desde cache
