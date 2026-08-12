@@ -10251,7 +10251,7 @@
         cerrarPagoFD(); renderFacturas(); renderDocumentos();
         // Ningún pago sale sin OP: se imprime SIEMPRE la factura/comprobante + la Orden de Pago.
         // (Tanto facturas como documentos-proveedor emiten Orden de Pago con el número A/B.)
-        imprimirFacturaMasOP(itemImp.item,monto,fecha,mod,rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet,entry.nroCorrelativo,entry.nroComprobante,itemImp.tipo==='fact'?'Factura':null);
+        imprimirFacturaMasOP(itemImp.item,monto,fecha,mod,rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet,entry.nroCorrelativo,entry.nroComprobante,itemImp.tipo==='fact'?((itemImp.item.computaARCA===false)?'Documento no válido como factura':'Factura'):null);
         // Ofrecer también ver/imprimir el comprobante ORIGINAL cargado (PDF/imagen del documento o factura)
         var _origId, _origNom;
         if(itemImp.tipo==='fact'){ _origId=itemImp.item.docId; _origNom=itemImp.item.docNombre; }
@@ -17539,8 +17539,10 @@
     // recibo de pago. Usa el encabezado compartido (empresa + proyecto).
     function _imprimirComprobanteItem(d, tituloForzado, retHtml) {
         if (!d) return;
-        var tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Comprobante X', factura:'Factura', otro:'Comprobante' };
+        var tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Documento no válido como factura', factura:'Factura', otro:'Comprobante' };
         var titulo = tituloForzado || tipoLabels[d.tipo] || 'Comprobante';
+        // Comprobantes NO oficiales (no computan ARCA) no pueden salir como "Factura".
+        if (d.computaARCA === false && (titulo === 'Factura' || titulo === 'Comprobante X')) titulo = 'Documento no válido como factura';
         var mon = d.moneda === 'USD' ? 'USD ' : '$ ';
         var fmt = function(n){ return mon + Number(n||0).toLocaleString('es-AR'); };
         var emision = new Date().toLocaleDateString('es-AR');
@@ -17580,10 +17582,12 @@
     }
     function imprimirDocumento(docId) {
         var d = (documentos || []).find(function(x){ return x.id === docId; });
-        _imprimirComprobanteItem(d, null);
+        // Los documentos (comprobantes recibidos que no son de ARCA) nunca salen como "Factura".
+        _imprimirComprobanteItem(d, 'Documento no válido como factura');
     }
     function imprimirComprobanteFacturaItem(idx) {
-        _imprimirComprobanteItem(facturas[idx], 'Factura');
+        var f = facturas[idx];
+        _imprimirComprobanteItem(f, (f && f.computaARCA === false) ? 'Documento no válido como factura' : 'Factura');
     }
 
     async function pagarFactura(index) {
@@ -19771,7 +19775,7 @@
         var emision = new Date().toLocaleDateString('es-AR');
         var moneda = e.moneda;
         var fmtM = function(n){ return (moneda==='USD'?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
-        var titulo = e.tipoDoc === 'factura' ? 'Documento (formato factura)' : 'Recibo de Cobro';
+        var titulo = e.tipoDoc === 'factura' ? 'Documento no válido como factura' : 'Recibo de Cobro';
         var _rh = buildReciboHeader(titulo, e.nro || null, e.fecha ? formatearFecha(e.fecha) : emision, {
             label: 'Cliente', nombre: e.cliente || '—', detalle: e.clienteDetalle || ''
         });
@@ -20328,7 +20332,7 @@
                     <td><strong>${f.proveedor||'—'}</strong>${pillFac}</td>
                     <td>${f.nroProv ? `<span class="pill" style="background:#E8F5E9;color:#2E7D32;font-size:10px;padding:1px 6px;border-radius:8px;" title="Numeración correlativa del proveedor">${_fmtNroProv(f.nroProv)}</span><br>` : ''}${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : (f.nroProv ? '' : '—')}</td>
                     <td>${f.descripcion||'—'}</td>
-                    <td>${f.esNotaDebito ? `<span class="pill" style="background:#fdecea;color:#b3261e;">Nota de Déb. ${escHtml(f.tipoComprobante||'')}</span>` : '<span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span>'}</td>
+                    <td>${f.esNotaDebito ? `<span class="pill" style="background:#fdecea;color:#b3261e;">Nota de Déb. ${escHtml(f.tipoComprobante||'')}</span>` : (f.computaARCA===false ? '<span class="pill" style="background:#FFF3E0;color:#E65100;" title="Comprobante no oficial — no válido como factura">Doc. no válido s/factura</span>' : '<span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span>')}</td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR')}</td>
                     <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR')}</td>
                     <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
