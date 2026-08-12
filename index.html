@@ -10187,9 +10187,40 @@
                 + '<strong style="white-space:nowrap;">$'+Math.round(pend).toLocaleString('es-AR')+'</strong>'
                 + '</label>';
         });
+        // Notas de crédito a favor (sin factura asignada) de este proveedor: se pueden APLICAR a
+        // una de las facturas seleccionadas para descontarlas.
+        _pagoFDMulti.ncs = (facturas||[]).filter(function(f){ return f.esNotaCredito && (f.proveedor||'')===prov && !f.notaCreditoDe && (f.importe||0)>0; });
+        if (_pagoFDMulti.ncs.length) {
+            rows += '<div style="margin-top:10px;font-size:11px;font-weight:700;color:#1e8e3e;text-transform:uppercase;letter-spacing:.04em;">Notas de crédito a favor (aplicá para descontar)</div>';
+            _pagoFDMulti.ncs.forEach(function(nc){
+                rows += '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft);font-size:13px;background:rgba(30,142,62,.05);">'
+                    + '<span style="flex:1;color:#1e8e3e;">🧾 NC ' + escHtml(nc.numero || (nc.tipoComprobante||'')) + ' — a favor</span>'
+                    + '<strong style="color:#1e8e3e;white-space:nowrap;">− $' + Math.round(nc.importe).toLocaleString('es-AR') + '</strong>'
+                    + '<button type="button" class="btn btn-outline btn-sm" onclick="pagoFDAplicarNCMulti(\'' + String(nc.id).replace(/'/g,"\\'") + '\')" title="Descontar esta nota de crédito de una de las facturas seleccionadas">Aplicar</button>'
+                    + '</div>';
+            });
+        }
         cont.innerHTML = rows || '<div style="color:var(--text-3);font-size:12px;padding:6px 0;">Este proveedor no tiene facturas pendientes.</div>';
         _pagoFDMultiRecalc();
     }
+    // Aplica una nota de crédito a favor a la factura seleccionada que mejor la absorba (menor saldo
+    // que la cubra; si ninguna la cubre, la de mayor saldo). La deja linkeada, baja el saldo de esa
+    // factura y re-dibuja para que el total a pagar ya venga descontado.
+    window.pagoFDAplicarNCMulti = function(ncId) {
+        var nc = (facturas||[]).find(function(f){ return f.id === ncId && f.esNotaCredito; });
+        if (!nc) return;
+        var cands = (_pagoFDMulti.items||[]).filter(function(x){ return x.checked && _saldoFactDoc(x.f) > 0.5; });
+        if (!cands.length) { alert('Seleccioná al menos una factura pendiente para aplicarle la nota de crédito.'); return; }
+        cands.sort(function(a,b){ return _saldoFactDoc(a.f) - _saldoFactDoc(b.f); });
+        var target = cands.find(function(x){ return _saldoFactDoc(x.f) >= (nc.importe||0); }) || cands[cands.length-1];
+        var tf = target.f;
+        if (!confirm('¿Aplicar la nota de crédito de $' + Math.round(nc.importe).toLocaleString('es-AR') + ' a la factura ' + (tf.numero || tf.descripcion || '—') + '?\n\nBaja el saldo de esa factura; el total a pagar se descuenta.')) return;
+        nc.notaCreditoDe = tf.id; nc.notaCreditoKind = 'fact';
+        if (typeof persistirFacturas === 'function') persistirFacturas();
+        pagoFDProvChange(); // re-dibuja con el saldo actualizado
+        if (typeof renderFacturas === 'function') renderFacturas();
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
+    };
     function pagoFDMultiToggle(idx, checked) {
         var it = _pagoFDMulti.items.find(function(x){ return x.idx === idx; });
         if (it) it.checked = checked;
