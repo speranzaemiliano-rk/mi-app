@@ -6704,6 +6704,10 @@
                             <option value="nd|B">Nota de Débito B</option>
                             <option value="nd|C">Nota de Débito C</option>
                         </optgroup>
+                        <optgroup label="Comprobantes X (no oficiales · no ARCA)">
+                            <option value="factx|X">Comprobante X</option>
+                            <option value="ncx|X">Nota de Crédito X</option>
+                        </optgroup>
                     </select>
                     <!-- drivers internos: factEsNC dispara el circuito de nota de crédito en el submit -->
                     <input type="checkbox" id="factEsNC" style="display:none;">
@@ -15919,13 +15923,18 @@
         var p = v.split('|'), clase = p[0] || 'fact', letra = p[1] || 'A';
         var cv = document.getElementById('leerFactClaseVal'); if (cv) cv.value = clase;
         var lv = document.getElementById('leerFactLetraVal'); if (lv) lv.value = letra;
-        var chk = document.getElementById('leerFactEsNC'); if (chk) chk.checked = (clase === 'nc');
+        var esNC = (clase === 'nc' || clase === 'ncx');
+        var chk = document.getElementById('leerFactEsNC'); if (chk) chk.checked = esNC;
         var hint = document.getElementById('leerFactClaseHint');
-        if (hint) hint.textContent = (clase === 'nc')
-            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).'
+        if (hint) hint.textContent = esNC
+            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).' + (clase === 'ncx' ? ' Comprobante X (no oficial, no ARCA).' : '')
             : (clase === 'nd')
                 ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
-                : '';
+                : (clase === 'factx')
+                    ? 'Comprobante X: como una factura pero NO se registra en ARCA (no oficial).'
+                    : '';
+        // Comprobante X → forzar "no computa ARCA".
+        if (clase === 'factx') { var cs = document.getElementById('leerFactComputaARCA'); if (cs) cs.value = 'false'; }
         lfToggleNC();
     }
     function lfToggleNC() {
@@ -16354,7 +16363,7 @@
             cuit:             cuit || '',
             condicionIva:     condIva || '',
             direccionEmisor:  dir || '',
-            tipoComprobante:  ((document.getElementById('leerFactClaseVal')||{}).value === 'nd')
+            tipoComprobante:  (['nd','factx'].indexOf((document.getElementById('leerFactClaseVal')||{}).value) !== -1)
                                   ? ((document.getElementById('leerFactLetraVal')||{}).value || 'A')
                                   : (tipoComp || ''),
             esNotaDebito:     (document.getElementById('leerFactClaseVal')||{}).value === 'nd',
@@ -16472,9 +16481,10 @@
         _marcarEdicion('factura', editandoFactIndex >= 0 ? facturas[editandoFactIndex] : null);
         const f = facturas[index];
         window._factNetoGravado = f.netoGravado || 0;
-        document.getElementById('modalFactTitle').textContent = f.esNotaDebito ? '🧾 Editar Nota de Débito' : '🧾 Editar Factura';
+        var _esX = (f.computaARCA === false);
+        document.getElementById('modalFactTitle').textContent = f.esNotaDebito ? '🧾 Editar Nota de Débito' : (_esX ? '🧾 Editar Comprobante X' : '🧾 Editar Factura');
         var _fcE = document.getElementById('factClase');
-        if (_fcE) _fcE.value = (f.esNotaDebito ? 'nd' : 'fact') + '|' + (f.tipoComprobante || 'A');
+        if (_fcE) _fcE.value = f.esNotaDebito ? ('nd|' + (f.tipoComprobante || 'A')) : (_esX ? 'factx|X' : ('fact|' + (f.tipoComprobante || 'A')));
         factClaseChange();
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
@@ -16897,14 +16907,23 @@
         var cv = document.getElementById('factClaseVal'); if (cv) cv.value = clase;
         var lv = document.getElementById('factLetraVal'); if (lv) lv.value = letra;
         var ncl = document.getElementById('factNCLetra'); if (ncl) ncl.value = letra;
-        var chk = document.getElementById('factEsNC'); if (chk) chk.checked = (clase === 'nc');
+        var esNC = (clase === 'nc' || clase === 'ncx');
+        var chk = document.getElementById('factEsNC'); if (chk) chk.checked = esNC;
         var hint = document.getElementById('factClaseHint');
-        if (hint) hint.textContent = (clase === 'nc')
-            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).'
+        if (hint) hint.textContent = esNC
+            ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).' + (clase === 'ncx' ? ' Comprobante X (no oficial, no ARCA).' : '')
             : (clase === 'nd')
                 ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
-                : '';
+                : (clase === 'factx')
+                    ? 'Comprobante X: como una factura pero NO se registra en ARCA (no oficial).'
+                    : '';
         factToggleNC();
+        // Comprobante X: es una factura no oficial → forzar "no computa ARCA" y ocultar ese toggle.
+        if (!esNC) {
+            var esX = (clase === 'factx');
+            if (typeof selFactComputaARCA === 'function') selFactComputaARCA(!esX);
+            var cg = document.getElementById('factComputaGrupo'); if (cg) cg.style.display = esX ? 'none' : '';
+        }
     }
 
     // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
@@ -37263,6 +37282,10 @@
               <option value="nd|A">Nota de Débito A</option>
               <option value="nd|B">Nota de Débito B</option>
               <option value="nd|C">Nota de Débito C</option>
+            </optgroup>
+            <optgroup label="Comprobantes X (no oficiales · no ARCA)">
+              <option value="factx|X">Comprobante X</option>
+              <option value="ncx|X">Nota de Crédito X</option>
             </optgroup>
           </select>
           <input type="checkbox" id="leerFactEsNC" style="display:none;">
