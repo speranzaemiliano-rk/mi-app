@@ -3171,7 +3171,7 @@
                     <button class="nav-item nav-sub" id="tabBtnDocumentos" data-navkey="documentos" onclick="elegirVerProvDocs()" title="Ver documentos y facturas recibidas: ARCA (oficiales) o comprobantes X">
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">folder_open</span> Comprobantes recibidos
                     </button>
-                    <button class="nav-item nav-sub" id="btnEmitirComprobanteMenu" data-navkey="emitircomprobante" onclick="mostrarTab('DocumentosEmitidos'); abrirModalEmitir();" title="Emitir un recibo o documento, con opción de asignarlo a un proveedor y afectar caja/banco">
+                    <button class="nav-item nav-sub" id="btnEmitirComprobanteMenu" data-navkey="emitircomprobante" onclick="mostrarTab('DocumentosEmitidos'); abrirModalEmitir(null,'recibo');" title="Emitir un recibo por dinero recibido">
                         <span class="nav-drag-handle">⠿</span><span class="nav-icon">receipt</span> Emitir recibo
                     </button>
                     <div style="height:1px;background:rgba(255,255,255,.08);margin:4px 12px;"></div>
@@ -4249,7 +4249,7 @@
                         <div style="display:flex;gap:8px;flex-wrap:wrap;">
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('ingreso')" title="Reflejar en la caja como INGRESO todos los comprobantes que quedaron sin afectar caja">⬆️💰 Reflejar todos como ingreso</button>
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('egreso')" title="Reflejar en la caja como EGRESO todos los comprobantes que quedaron sin afectar caja">⬇️💰 …como egreso</button>
-                          <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir()">＋ Emitir recibo</button>
+                          <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir(null,'recibo')">＋ Emitir recibo</button>
                         </div>
                     </div>
                     <div class="search-row">
@@ -19093,6 +19093,29 @@
         emitActualizarTotal();
     }
 
+    // Modo "recibo puro": el flujo de Emitir recibo es SOLO un recibo por dinero RECIBIDO.
+    // Oculta el tipo Comprobante X y el selector de Egreso/Ingreso (queda fijo en Ingreso).
+    function _emitConfigRecibo(on) {
+        var optFact = document.querySelector('#emitTipo option[value="factura"]');
+        var optRec  = document.querySelector('#emitTipo option[value="recibo"]');
+        if (optRec) optRec.hidden = false;
+        var tipoGrp = (document.getElementById('emitTipo') || {}).closest ? document.getElementById('emitTipo').closest('.form-group') : null;
+        var mt = document.getElementById('emitMovTipo');
+        var mtGrp = (mt && mt.closest) ? mt.closest('.form-group') : null;
+        if (on) {
+            if (optFact) optFact.hidden = true;
+            var t = document.getElementById('emitTipo'); if (t) t.value = 'recibo';
+            if (mt) mt.value = 'ingreso';
+            if (mtGrp) mtGrp.style.display = 'none';
+            if (tipoGrp) tipoGrp.style.display = 'none';
+            var af = document.getElementById('emitAfectaCaja'); if (af && af.value === 'pend') af.value = 'si';
+        } else {
+            if (optFact) optFact.hidden = false;
+            if (mtGrp) mtGrp.style.display = '';
+            if (tipoGrp) tipoGrp.style.display = '';
+        }
+    }
+
     function emitAgregarItem() { _emitItems.push({ desc:'', cant:1, precio:0 }); emitRenderItems(); }
     function emitQuitarItem(i) { _emitItems.splice(i, 1); emitRenderItems(); }
     function emitItemInput(i, campo, val) {
@@ -19327,7 +19350,7 @@
         // El "recibo" solo se ofrece del lado de INGRESOS (o al editar uno viejo que ya era recibo).
         // Del lado de egresos/proveedores queda oculto (solo Comprobante X con conceptos).
         var _optRec = document.querySelector('#emitTipo option[value="recibo"]');
-        if (_optRec) _optRec.hidden = !(contexto === 'ingreso' || (e && e.tipoDoc === 'recibo'));
+        if (_optRec) _optRec.hidden = !(contexto === 'ingreso' || contexto === 'recibo' || (e && e.tipoDoc === 'recibo'));
         if (e) {
             document.getElementById('emitConfidencial').checked = !!e.confidencial;
             document.getElementById('emitTipo').value      = e.tipoDoc || 'recibo';
@@ -19357,7 +19380,7 @@
             _renderEstadoAdjunto('emitArchivoEstado', e.adjuntoNombre, e.adjuntoId);
         } else {
             document.getElementById('emitConfidencial').checked = false;
-            document.getElementById('emitTipo').value      = (contexto === 'ingreso') ? 'recibo' : 'factura';
+            document.getElementById('emitTipo').value      = (contexto === 'ingreso' || contexto === 'recibo') ? 'recibo' : 'factura';
             document.getElementById('emitFecha').valueAsDate = new Date();
             document.getElementById('emitMoneda').value    = 'ARS';
             document.getElementById('emitModalidad').value = 'B';
@@ -19368,12 +19391,14 @@
             // Contexto egreso/proveedor (Comprobante X que emitimos por un proveedor que no factura)
             // → "Pendiente de pago" por defecto: queda como un DOCUMENTO A PAGAR en "Comprobantes
             // recibidos" (con botón 💵 Pagar), igual que una factura de proveedor. Se puede cambiar.
-            document.getElementById('emitAfectaCaja').value = (contexto === 'ingreso') ? 'si' : 'pend';
+            document.getElementById('emitAfectaCaja').value = (contexto === 'ingreso' || contexto === 'recibo') ? 'si' : 'pend';
             emitToggleAfectaCaja();
-            var _emitMT = document.getElementById('emitMovTipo'); if (_emitMT) _emitMT.value = (contexto === 'ingreso') ? 'ingreso' : 'egreso';
+            var _emitMT = document.getElementById('emitMovTipo'); if (_emitMT) _emitMT.value = (contexto === 'ingreso' || contexto === 'recibo') ? 'ingreso' : 'egreso';
             document.getElementById('emitArchivo').value = '';
             _renderEstadoAdjunto('emitArchivoEstado', null, null);
         }
+        // "Emitir recibo" (alta nueva): recibo puro por dinero recibido (sin Comprobante X ni egreso).
+        _emitConfigRecibo(contexto === 'recibo' && !e);
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
         emitToggleTipo();
