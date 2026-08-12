@@ -17864,6 +17864,38 @@
         REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial: f.pagosHistorial || [], pagado: f.pagado, estado: f.estado });
         if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', index);
         renderFacturas();
+        if (typeof renderDocumentos === 'function') renderDocumentos();
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
+        if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
+        if (typeof renderBanco === 'function') renderBanco();
+    }
+
+    // Igual que desaplicarPagoFactura, pero para un comprobante X / documento (REF_DOCS).
+    function desaplicarPagoDoc(docId) {
+        var d = (documentos || []).find(function(x){ return x.id === docId; });
+        if (!d) return;
+        var hist = d.pagosHistorial || [];
+        if (!hist.length && !(d.pagado > 0)) { alert('Este comprobante no tiene pagos para desaplicar.'); return; }
+        var p = hist.length ? hist[hist.length - 1] : null;
+        var monto = p ? (p.monto || 0) : (d.pagado || 0);
+        var detalle = '$' + Math.round(monto).toLocaleString('es-AR') + (p && p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '');
+        if (!confirm('¿Desaplicar el último pago de este comprobante (' + detalle + ')?\n\nVuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
+        if (p) {
+            if (p.nroCorrelativo && typeof _liberarNroComprobante === 'function') _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
+            d.pagosHistorial = hist.filter(function(x){ return x !== p; });
+            d.pagado = Math.max(0, (d.pagado || 0) - monto);
+        } else {
+            d.pagado = 0;
+        }
+        try { REF_DOCS.child(d.id).update({ pagosHistorial: d.pagosHistorial || [], pagado: d.pagado }); } catch(e){}
+        if (d.presupuestoIdx != null && datos[d.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
+            _reconciliarFacturaEnPresupuesto(d.presupuestoIdx, { id: d.id, pagado: d.pagado, fecha: d.fecha, numero: d.numero });
+        }
+        if (typeof renderDocumentos === 'function') renderDocumentos();
+        if (typeof renderFacturas === 'function') renderFacturas();
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
         if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
@@ -20479,6 +20511,7 @@
                         ${_saldoFactDoc(d)>0?`<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('doc','${d.id}')">💵 Pagar</button>`:''}
                         <button class="btn btn-outline btn-sm" onclick="imprimirDocumento('${d.id}')" title="Imprimir este comprobante">📄</button>
                         ${(((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0)?`<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosDoc('${d.id}')" title="Imprimir Orden de Pago">🖨️ OP</button>`:''}
+                        ${(editable && (((d.pagosHistorial||[]).length>0)||(d.pagado||0)>0))?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="Desaplicar el último pago (vuelve a Pendiente/Parcial y saca el movimiento)" onclick="desaplicarPagoDoc('${d.id}')">↩️ Desaplicar</button>`:''}
                         ${pagadoIncons?`<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHistDoc).toLocaleString('es-AR')})" onclick="corregirPagadoDoc('${d.id}')">⚠️ Corregir pagado</button>`:''}
                         ${d.adjuntoId ? `<button class="btn btn-outline btn-sm" title="Ver adjunto" onclick="descargarDoc('${d.adjuntoId}','${escHtml(d.adjuntoNombre||'').replace(/'/g,"\\'")}')">📎</button>` : ''}
                         ${editable ? `<button class="btn btn-outline btn-sm" title="Aplicar a un presupuesto (mismo u otro proveedor)" onclick="abrirAplicarPresup('doc','${d.id}')">📋 Presup.</button>` : ''}
@@ -20579,6 +20612,7 @@
                         ${editable && estado!=='pagada' ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoFD('fact',${idx})">💵 Pagar</button>` : ''}
                         <button class="btn btn-outline btn-sm" onclick="imprimirComprobanteFacturaItem(${idx})" title="Imprimir esta factura como comprobante">📄</button>
                         ${((f.pagosHistorial&&f.pagosHistorial.length)||pag>0) ? `<button class="btn btn-outline btn-sm" title="Imprimir Orden de Pago" onclick="abrirHistorialPagosFactura(${idx})">🖨️ OP</button>` : ''}
+                        ${(editable && ((f.pagosHistorial&&f.pagosHistorial.length)||pag>0)) ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="Desaplicar el último pago (vuelve a Pendiente/Parcial y saca el movimiento)" onclick="desaplicarPagoFactura(${idx})">↩️ Desaplicar</button>` : ''}
                         ${pagInc ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" title="El monto pagado ($${Math.round(pag).toLocaleString('es-AR')}) no coincide con la suma del historial de pagos ($${Math.round(sumHist).toLocaleString('es-AR')})" onclick="corregirPagadoFactura(${idx})">⚠️ Corregir pagado</button>` : ''}
                         ${f.docId ? `<button class="btn btn-outline btn-sm" onclick="descargarDoc('${f.docId}','${(f.docNombre||'factura').replace(/'/g,'')}')" title="Ver PDF adjunto">📎</button>` : ''}
                         ${f.docId && editable ? `<button class="btn btn-outline btn-sm" title="Enviar por mail" onclick="abrirEnviarFacturaMail(${idx})">📧</button>` : ''}
@@ -30399,6 +30433,7 @@
                 var pagar = (c.saldo > 0.5 && puedeEd) ? '<button class="btn btn-gold btn-sm" onclick="' + (c.o==='fact' ? ('abrirPagoFD(\'fact\',' + c.ref + ')') : ('abrirPagoFD(\'doc\',' + refA + ')')) + '" title="Registrar pago">💵</button> ' : '';
                 var imprimir = '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('imprimirComprobanteFacturaItem(' + c.ref + ')') : ('imprimirDocumento(' + refA + ')')) + '" title="Imprimir el comprobante">🖨️</button>';
                 var op = (c.pag > 0) ? '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('abrirHistorialPagosFactura(' + c.ref + ')') : ('abrirHistorialPagosDoc(' + refA + ')')) + '" title="Reimprimir Orden de Pago / retenciones">🧾</button>' : '';
+                var desap = (c.pag > 0 && puedeEd) ? '<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="' + (c.o==='fact' ? ('desaplicarPagoFactura(' + c.ref + ')') : ('desaplicarPagoDoc(' + refA + ')')) + '" title="Desaplicar el último pago (vuelve a Pendiente/Parcial y saca el movimiento)">↩️</button>' : '';
                 var borrar = puedeEd ? '<button class="btn btn-danger-sm" onclick="' + (c.o==='fact' ? ('eliminarFactura(' + c.ref + ')') : ('eliminarDoc(' + refA + ')')) + '" title="Eliminar">✕</button>' : '';
                 h += '<tr>'
                     + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
@@ -30408,7 +30443,7 @@
                     + '<td style="text-align:right;color:var(--success);">' + (c.pag ? fmtA(c.pag) : '—') + '</td>'
                     + '<td style="text-align:right;font-weight:600;' + (c.saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(c.saldo) + '</td>'
                     + '<td><span class="pill ' + badge[c.est] + '">' + lbl[c.est] + '</span></td>'
-                    + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + borrar + '</div></td>'
+                    + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + desap + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + borrar + '</div></td>'
                     + '</tr>';
             });
             h += '</tbody></table></div>';
