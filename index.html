@@ -6527,6 +6527,13 @@
         </div>
         <div class="modal-body">
             <form id="formProv">
+                <!-- Leer constancia de inscripción de ARCA y autocompletar los datos fiscales -->
+                <div class="form-group" style="background:var(--gold-pale);border:1px solid var(--gold);border-radius:12px;padding:12px 14px;">
+                    <label style="font-weight:700;color:var(--gold);margin:0;">🤖 Autocompletar desde constancia de ARCA</label>
+                    <div style="font-size:12px;color:var(--text-2);margin:4px 0 8px;">Subí la constancia de inscripción (PDF o foto) y la IA carga razón social, CUIT, condición IVA, domicilio y actividad.</div>
+                    <input type="file" id="provConstanciaFile" accept="application/pdf,image/*" onchange="provLeerConstancia(this)" style="font-size:13px;">
+                    <div id="provConstanciaEstado" style="font-size:12px;color:var(--text-3);margin-top:6px;"></div>
+                </div>
                 <div class="form-group">
                     <label>Grupo (rubro grande)</label>
                     <div style="display:flex; gap:8px;">
@@ -13311,6 +13318,106 @@
         document.getElementById('modalProv').style.zIndex = '';
     }
 
+    // Selecciona en el <select> de IVA la opción que mejor matchea el texto de la constancia.
+    function _provMatchIva(texto) {
+        var t = (texto || '').toLowerCase();
+        if (t.indexOf('monotrib') !== -1) return 'Monotributista';
+        if (t.indexOf('exent') !== -1) return 'Exento';
+        if (t.indexOf('no responsable') !== -1) return 'No Responsable';
+        if (t.indexOf('consumidor') !== -1) return 'Consumidor Final';
+        if (t.indexOf('responsable') !== -1 || t.indexOf('inscript') !== -1 || t.indexOf('iva') !== -1) return 'Responsable Inscripto';
+        return '';
+    }
+    // Rellena el formulario de proveedor con los datos de la constancia.
+    // forzar=true (proveedor nuevo) pisa todo; forzar=false sólo completa los campos vacíos.
+    function _provRellenarDesdeConstancia(d, forzar) {
+        var setIf = function(id, val){ var e=document.getElementById(id); if (e && val && (forzar || !String(e.value||'').trim())) e.value = val; };
+        setIf('provRazon', d.razonSocial);
+        setIf('provCuit', d.cuit);
+        setIf('provDir', d.calle);
+        setIf('provLocalidad', d.localidad);
+        setIf('provProvincia', d.provincia);
+        setIf('provCP', d.codigoPostal);
+        setIf('provRubro', d.actividad);
+        var iva = document.getElementById('provIva');
+        var ivaVal = _provMatchIva(d.condicionIva);
+        if (iva && ivaVal && (forzar || !iva.value || iva.value === 'Responsable Inscripto')) iva.value = ivaVal;
+    }
+    async function provLeerConstancia(input) {
+        var file = input && input.files && input.files[0];
+        if (!file) return;
+        var estado = document.getElementById('provConstanciaEstado');
+        var setSt = function(t){ if (estado) estado.textContent = t; };
+        setSt('🤖 Leyendo la constancia con IA…');
+        try {
+            var b64 = await new Promise(function(res, rej){
+                var r = new FileReader();
+                r.onload = function(){ res(String(r.result).split(',')[1]); };
+                r.onerror = function(){ rej(new Error('No se pudo leer el archivo.')); };
+                r.readAsDataURL(file);
+            });
+            var prompt = 'Analizá esta CONSTANCIA DE INSCRIPCIÓN de ARCA/AFIP (Argentina) de un contribuyente y devolvé SOLO un objeto JSON puro (sin markdown, sin texto extra):\n' +
+                '{\n' +
+                '  "razonSocial": "apellido y nombre o razón social del contribuyente",\n' +
+                '  "cuit": "CUIT con guiones (ej: 20-12345678-9)",\n' +
+                '  "condicionIva": "Responsable Inscripto si está inscripto en IVA, Monotributista si es Monotributo, Exento si figura exento, si no null",\n' +
+                '  "calle": "domicilio fiscal: sólo calle y número (sin localidad ni provincia)",\n' +
+                '  "localidad": "localidad del domicilio fiscal, o null",\n' +
+                '  "provincia": "provincia del domicilio fiscal, o null",\n' +
+                '  "codigoPostal": "código postal, o null",\n' +
+                '  "actividad": "descripción de la actividad principal, o null"\n' +
+                '}\n' +
+                'Si algún dato no está, usá null. Respondé SOLO el JSON.';
+            var body = { contents:[{ parts:[ { inline_data:{ mime_type:(file.type||'application/pdf'), data:b64 } }, { text:prompt } ] }], generationConfig:{ temperature:0, maxOutputTokens:1024 } };
+            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var resp, lastErr = null;
+            for (var i=0;i<MODELOS_PDF.length;i++){
+                if (i>0){ setSt('⚠️ Reintentando con ' + MODELOS_PDF[i] + '…'); await new Promise(function(r){ setTimeout(r,3000); }); }
+                body.generationConfig = { temperature:0, maxOutputTokens:1024 };
+                if (MODELOS_PDF[i].indexOf('gemini-2.5')===0) body.generationConfig.thinkingConfig = { thinkingBudget:0 };
+                resp = await _geminiProxy(MODELOS_PDF[i], body);
+                if (resp.ok){ lastErr = null; break; }
+                var ed = await resp.json().catch(function(){ return {}; });
+                lastErr = (ed.error && ed.error.message) || ('Error ' + resp.status);
+                if (typeof geminiEsErrorAuth === 'function' && geminiEsErrorAuth(lastErr)) break;
+            }
+            if (lastErr) throw new Error(lastErr);
+            var data = await resp.json();
+            var cand = ((data.candidates||[])[0]||{});
+            var texto = ((cand.content||{}).parts||[]).map(function(p){ return p.text||''; }).join('').replace(/```json/gi,'').replace(/```/g,'').trim();
+            var d = _parseJsonIA(texto);
+            if (!d) throw new Error('No se pudo interpretar la constancia. Probá con una foto/PDF más nítido.');
+            if (input) input.value = '';
+            // ¿El proveedor ya está cargado? (por CUIT, o por razón social)
+            var cuitNorm = String(d.cuit||'').replace(/\D/g,'');
+            var existente = null, existIdx = -1;
+            if (cuitNorm) { existIdx = (proveedores||[]).findIndex(function(p){ return String(p.cuit||'').replace(/\D/g,'') === cuitNorm; }); }
+            if (existIdx < 0 && d.razonSocial && typeof buscarProveedorPorNombre === 'function') {
+                var pm = buscarProveedorPorNombre(d.razonSocial);
+                if (pm) existIdx = (proveedores||[]).indexOf(pm);
+            }
+            if (existIdx >= 0) existente = proveedores[existIdx];
+            // Si ya estoy editando ese mismo proveedor, no es "otro existente".
+            if (existente && editandoProvIndex >= 0 && existIdx === editandoProvIndex) existente = null;
+            if (existente) {
+                setSt('');
+                if (confirm('El proveedor "' + (existente.razonSocial||'') + '"' + (existente.cuit ? ' (CUIT ' + existente.cuit + ')' : '') + ' ya está cargado.\n\n¿Querés abrirlo y completar los datos que le falten con esta constancia?')) {
+                    editarProveedor(existIdx);
+                    _provRellenarDesdeConstancia(d, false); // sólo completa lo vacío
+                    setSt('✅ Se completaron los datos faltantes. Revisá y guardá.');
+                }
+                return;
+            }
+            // Proveedor nuevo → cargar todo en el formulario abierto.
+            _provRellenarDesdeConstancia(d, true);
+            setSt('✅ Datos cargados desde la constancia. Revisá y guardá.');
+        } catch(err) {
+            setSt('');
+            alert('No se pudo leer la constancia: ' + (err.message || err));
+            if (input) input.value = '';
+        }
+    }
+
     document.getElementById('formProv').addEventListener('submit', async function(e) {
         e.preventDefault();
         const anteriorProv = editandoProvIndex >= 0 ? proveedores[editandoProvIndex] : null;
@@ -19549,8 +19656,10 @@
                 reg.adjuntoId = adjIdEmit; reg.adjuntoNombre = archivoEmit.name; reg.adjuntoTipo = archivoEmit.type;
             } catch (err) { alert('No se pudo subir el adjunto: ' + (err.message || err)); return; }
         }
-        // Asignar número correlativo solo si es nuevo (al editar se conserva el existente)
-        if (!reg.nro) { reg.nro = await obtenerProximoComprobante(tipoAB); }
+        // Asignar número correlativo solo si es nuevo (al editar se conserva el existente).
+        // Serie separada por tipo: 'DOC' para Comprobante X / Documento, '' (recibo) para el recibo.
+        // Así el documento no válido como factura no comparte el contador con los recibos.
+        if (!reg.nro) { reg.nro = await obtenerProximoComprobante(tipoAB, reg.tipoDoc === 'factura' ? 'DOC' : ''); }
         // "Pendiente de pago": se registra como un comprobante RECIBIDO (documento) pendiente, para
         // que aparezca en "Comprobantes recibidos" con estado Pendiente y botón Pagar (mismo circuito
         // que un comprobante X normal). Así queda como una deuda a pagar, no como un emitido suelto.
