@@ -30475,13 +30475,23 @@
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="editarNotaCredito(\'' + _ncIdE + '\')" title="Editar nota de crédito">✏</button> '
                         + '<button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="eliminarNotaCredito(\'' + _ncIdE + '\')" title="Eliminar nota de crédito">✕</button>';
                 } else if (puedeEd && m._op) {
-                    var opFn = (m._op.t === 'fact') ? ('abrirHistorialPagosFactura(' + m._op.ref + ')') : ("abrirHistorialPagosDoc('" + String(m._op.ref).replace(/'/g,"\\'") + "')");
+                    // Si el pago fue de varias facturas (grupo), reimprime la ÚNICA OP combinada.
+                    var opFn = m._op.grupo
+                        ? ("imprimirPagoGrupoFact('" + String(m._op.grupo).replace(/'/g,"\\'") + "')")
+                        : ((m._op.t === 'fact') ? ('abrirHistorialPagosFactura(' + m._op.ref + ')') : ("abrirHistorialPagosDoc('" + String(m._op.ref).replace(/'/g,"\\'") + "')"));
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + opFn + '" title="Reimprimir Orden de Pago">🧾 OP</button>';
                 } else if (puedeEd && m._ret) {
-                    var rf = (m._ret.t === 'fact') ? 'imprimirRetFact' : 'imprimirRetDoc';
-                    var rref = (m._ret.t === 'fact') ? m._ret.ref : ("'" + String(m._ret.ref).replace(/'/g,"\\'") + "'");
                     var tipoArg = m._ret.tipo ? (",'" + m._ret.tipo + "'") : '';
-                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + rf + '(' + rref + ',' + m._ret.pi + tipoArg + ')" title="Imprimir comprobante de retención">🏛️ Ret.</button>';
+                    var retFn;
+                    if (m._ret.grupo) {
+                        // Retención combinada del pago de varias facturas.
+                        retFn = "imprimirRetGrupoFact('" + String(m._ret.grupo).replace(/'/g,"\\'") + "',0" + tipoArg + ")";
+                    } else {
+                        var rf = (m._ret.t === 'fact') ? 'imprimirRetFact' : 'imprimirRetDoc';
+                        var rref = (m._ret.t === 'fact') ? m._ret.ref : ("'" + String(m._ret.ref).replace(/'/g,"\\'") + "'");
+                        retFn = rf + '(' + rref + ',' + m._ret.pi + tipoArg + ')';
+                    }
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + retFn + '" title="Imprimir comprobante de retención">🏛️ Ret.</button>';
                 }
                 return '<tr>'
                     + '<td style="white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
@@ -30565,40 +30575,72 @@
         var totalPagado = 0, totalRet = 0, totalNC = 0;
         // Notas de crédito: son HABER (bajan la deuda del proveedor, como un pago).
         notasCred.forEach(function(n){ movs.push({ fecha: n.fecha || '', tipo: 'Nota de Créd.', clase: 'haber', detalle: ('NC ' + (n.tipoComprobante || '') + ' ' + (n.numero || '')).trim(), debe: 0, haber: (n.importe || 0), ref: { t: 'factura', id: facturas.indexOf(n) }, _nc: n.id }); totalNC += (n.importe || 0); });
-        var _proc = function(item, srcTipo){
+        // Recolectar TODOS los pagos (entries) de facturas + documentos. Se agrupan por grupoPagoId
+        // (un pago de varias facturas), porque la retención se hace POR PAGO, no por factura: el Pago
+        // y cada retención tienen que salir UNA sola vez, no una por factura.
+        var pagoEntries = [];
+        var _collect = function(item, srcTipo){
             var srcRef = (srcTipo === 'fact') ? facturas.indexOf(item) : item.id;
             var hist = item.pagosHistorial || [];
             if (hist.length) {
-                hist.forEach(function(p, pi){
-                    // El Pago figura por el EFECTIVO NETO que salió (monto − retenciones). La parte
-                    // retenida se cancela con las líneas de Retención de abajo: el certificado de
-                    // retención vale como pago (el proveedor lo usa contra AFIP). Así una factura
-                    // pagada con retención deja la cuenta en 0 (antes se contaba el bruto Y la
-                    // retención por separado → la misma plata dos veces → falso saldo a favor).
-                    var m = (p.monto || 0) - (p.totalRet || 0);
-                    if (m < 0) m = 0;
-                    if (m > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: p.esNC ? 'Nota de Créd.' : 'Pago', clase: 'haber', detalle: p.esNC ? (('NC ' + (p.ncLetra || '') + ' ' + (p.ncNumero || '')).trim()) : ((p.nroCorrelativo ? ('OP ' + p.nroCorrelativo) : 'Pago') + ' (neto)'), debe: 0, haber: m, _op: { t: srcTipo, ref: srcRef, pi: pi } }); totalPagado += m; }
-                    // Cada impuesto retenido va en SU PROPIA fila (Ganancias, IIBB, SUSS, etc.),
-                    // aunque sean del mismo pago/factura. Si el pago viejo no tiene el detalle
-                    // (solo totalRet), se muestra una sola fila combinada como antes.
-                    var rets = (p.retenciones || []).filter(function(r){ return (r.monto || 0) > 0; });
-                    if (rets.length) {
-                        rets.forEach(function(r){
-                            var rm = r.monto || 0;
-                            movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (r.desc || r.codigo || ''), debe: 0, haber: rm, _ret: { t: srcTipo, ref: srcRef, pi: pi, tipo: (_esRetSUSS(r.codigo) ? 'suss' : 'ganancias') } }); totalRet += rm;
-                        });
-                    } else {
-                        var rt = p.totalRet || 0;
-                        if (rt > 0) { movs.push({ fecha: p.fecha || item.fecha || '', tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p), debe: 0, haber: rt, _ret: { t: srcTipo, ref: srcRef, pi: pi, tipo: '' } }); totalRet += rt; }
-                    }
-                });
+                hist.forEach(function(p, pi){ pagoEntries.push({ p: p, item: item, srcTipo: srcTipo, srcRef: srcRef, pi: pi }); });
             } else if ((item.pagado || 0) > 0) {
                 movs.push({ fecha: item.fecha || '', tipo: 'Pago', clase: 'haber', detalle: 'Pago', debe: 0, haber: item.pagado }); totalPagado += item.pagado;
             }
         };
-        facts.forEach(function(it){ _proc(it, 'fact'); }); docs.forEach(function(it){ _proc(it, 'doc'); });
-        // Cronológico; a igual fecha, el Debe (comprobante) antes que el Haber (pago).
-        movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return (a.clase === 'debe' ? 0 : 1) - (b.clase === 'debe' ? 0 : 1); });
+        facts.forEach(function(it){ _collect(it, 'fact'); }); docs.forEach(function(it){ _collect(it, 'doc'); });
+        var grupos = {}, ordenGrupos = [];
+        pagoEntries.forEach(function(e, i){
+            var key = e.p.grupoPagoId ? ('G:' + e.p.grupoPagoId) : ('U:' + (e.p.pagoId || (e.srcRef + '-' + e.pi + '-' + i)));
+            if (!grupos[key]) { grupos[key] = []; ordenGrupos.push(key); }
+            grupos[key].push(e);
+        });
+        ordenGrupos.forEach(function(key){
+            var es = grupos[key], first = es[0], p0 = first.p;
+            var fecha = p0.fecha || first.item.fecha || '';
+            // Pago neto combinado (efectivo neto = monto − retenciones, sumado en todo el grupo).
+            var netoTotal = 0;
+            es.forEach(function(e){ var m = (e.p.monto || 0) - (e.p.totalRet || 0); if (m > 0) netoTotal += m; });
+            var esNCviejo = !!p0.esNC;
+            var grupoId = p0.grupoPagoId || '';
+            if (netoTotal > 0) {
+                movs.push({ fecha: fecha, tipo: esNCviejo ? 'Nota de Créd.' : 'Pago', clase: 'haber',
+                    detalle: esNCviejo ? (('NC ' + (p0.ncLetra || '') + ' ' + (p0.ncNumero || '')).trim()) : ((p0.nroCorrelativo ? ('OP ' + p0.nroCorrelativo) : 'Pago') + ' (neto)'),
+                    debe: 0, haber: netoTotal, _op: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, grupo: grupoId } });
+                totalPagado += netoTotal;
+            }
+            // Retenciones combinadas por régimen (mismo código sumado): una fila por régimen, no por factura.
+            var retByCod = {}, ordenRet = [], conDetalle = false;
+            es.forEach(function(e){
+                (e.p.retenciones || []).forEach(function(r){
+                    if ((r.monto || 0) <= 0) return;
+                    conDetalle = true;
+                    var cod = r.codigo || r.desc || '';
+                    if (!retByCod[cod]) { retByCod[cod] = { monto: 0, desc: (r.desc || r.codigo || ''), codigo: cod }; ordenRet.push(cod); }
+                    retByCod[cod].monto += (r.monto || 0);
+                });
+            });
+            if (conDetalle) {
+                ordenRet.sort(function(a, b){ return (_esRetSUSS(a) ? 1 : 0) - (_esRetSUSS(b) ? 1 : 0); }); // ganancias antes que SUSS
+                ordenRet.forEach(function(cod){
+                    var rr = retByCod[cod];
+                    movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (rr.desc || rr.codigo || ''), debe: 0, haber: rr.monto, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: (_esRetSUSS(cod) ? 'suss' : 'ganancias'), grupo: grupoId } });
+                    totalRet += rr.monto;
+                });
+            } else {
+                var rt = 0; es.forEach(function(e){ rt += (e.p.totalRet || 0); });
+                if (rt > 0) { movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p0), debe: 0, haber: rt, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: '', grupo: grupoId } }); totalRet += rt; }
+            }
+        });
+        // Orden: por fecha y, a igual fecha, Debe (comprobantes) → Nota de Crédito → Pago → Ret. Ganancias → Ret. SUSS.
+        var _rank = function(m){
+            if (m.clase === 'debe') return 0;
+            if (m.tipo === 'Nota de Créd.') return 1;
+            if (m.tipo === 'Pago') return 2;
+            if (m.tipo === 'Retención') return (m._ret && m._ret.tipo === 'suss') ? 4 : 3;
+            return 2.5;
+        };
+        movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return _rank(a) - _rank(b); });
         var totalDebe = facts.reduce(function(s,f){ return s + (f.importe || 0); }, 0) + docs.reduce(function(s,d){ return s + (d.importe || 0); }, 0);
         var totalHaber = totalPagado + totalRet + totalNC;   // las notas de crédito bajan la deuda como un pago
         var saldoComprob = totalDebe - totalHaber;
