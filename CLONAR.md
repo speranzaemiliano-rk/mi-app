@@ -87,6 +87,11 @@ Marcá cada punto en el Firebase **del cliente** (no en el de RK):
 - [ ] **Alta pública de cuentas desactivada.** Authentication → Settings → *User actions* → desmarcar "Enable create (sign-up)". Si no, cualquiera puede crear una cuenta con la apiKey pública (aunque sin rol no vea nada).
 - [ ] **`config.js` completo y correcto.** Sobre todo `firebaseConfig.databaseURL` y `adminEmail`. Si `config.js` falta, la app cae en la base de RK por respaldo → el cliente escribiría en RK. **Verificá que la app conecta a la base del cliente** (entrá, creá una empresa de prueba y confirmá que aparece en *su* Firebase).
 - [ ] **Backend cerrado** (si usa Railway): `APP_API_TOKEN` seteado y, para ARCA/usuarios, `FIREBASE_SERVICE_ACCOUNT` del proyecto del cliente. Ver `SECURITY.md`.
+- [ ] **Respaldo automático** (recomendado): en el repo del cliente → *Settings → Secrets and variables → Actions*:
+  - **Secret** `FIREBASE_SERVICE_ACCOUNT` = el JSON del service account del proyecto del cliente (Firebase → ⚙️ → Cuentas de servicio → Generar nueva clave privada).
+  - **Variable** `FIREBASE_DATABASE_URL` = la `databaseURL` del cliente. (Si no la ponés, respalda la base de RK por defecto — ⚠️ no la del cliente.)
+  - Opcional: variable `BRAND_NOMBRE` (para el asunto del mail) y secrets `BACKUP_MAIL_USERNAME` / `BACKUP_MAIL_PASSWORD` / `BACKUP_MAIL_TO` para recibir el backup por mail.
+  - El workflow (`.github/workflows/backup-firebase.yml`) ya corre solo cada 24 hs; se puede disparar a mano desde *GitHub → Actions → Backup Firebase*.
 - [ ] **Primer login del admin** con el `adminEmail` → se auto-asigna Super Administrador. Confirmá que entra y ve todo.
 
 ## Importante
