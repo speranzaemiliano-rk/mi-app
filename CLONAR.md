@@ -32,6 +32,8 @@ Cada cliente necesita su **propio proyecto de Firebase** (así los datos quedan 
 - Si el cliente **no** usa ARCA/bancos al principio, podés dejar el backend por defecto: el asistente y lo demás funcionan igual.
 
 ### 4) Editar `config.js` (lo único que se cambia)
+> 💡 Lo más cómodo: copiá **`config.ejemplo.js`** (una plantilla en blanco, sin datos de RK) a `config.js` y completá los campos marcados con `⬅ COMPLETAR`.
+
 Abrí `config.js` en el repo del cliente y reemplazá:
 - `firebaseConfig` → el que copiaste en el paso 2.5 (⚠️ **este es el más importante**: define la base del cliente).
 - `adminEmail` → el mail del dueño/administrador del cliente (será Super Administrador la primera vez que entre).
@@ -76,6 +78,16 @@ cp assets/mess-icon.svg     icons/icon.svg
 **Asistente/mails del backend:** el nombre del asistente y de las alertas se configura en Railway con las variables `BRAND_NOMBRE`, `BRAND_ASISTENTE`, `BRAND_ALERTAS` (con RK por defecto).
 
 ---
+
+## ✅ Checklist de seguridad antes de entregar a un cliente
+
+Marcá cada punto en el Firebase **del cliente** (no en el de RK):
+
+- [ ] **Reglas publicadas.** Realtime Database → Reglas → pegar `database.rules.json` → **Publicar**. (No se aplican solas: el archivo del repo no es la regla vigente hasta que la publicás.) Las reglas ya son **genéricas por rol** — no hay que editar ningún mail.
+- [ ] **Alta pública de cuentas desactivada.** Authentication → Settings → *User actions* → desmarcar "Enable create (sign-up)". Si no, cualquiera puede crear una cuenta con la apiKey pública (aunque sin rol no vea nada).
+- [ ] **`config.js` completo y correcto.** Sobre todo `firebaseConfig.databaseURL` y `adminEmail`. Si `config.js` falta, la app cae en la base de RK por respaldo → el cliente escribiría en RK. **Verificá que la app conecta a la base del cliente** (entrá, creá una empresa de prueba y confirmá que aparece en *su* Firebase).
+- [ ] **Backend cerrado** (si usa Railway): `APP_API_TOKEN` seteado y, para ARCA/usuarios, `FIREBASE_SERVICE_ACCOUNT` del proyecto del cliente. Ver `SECURITY.md`.
+- [ ] **Primer login del admin** con el `adminEmail` → se auto-asigna Super Administrador. Confirmá que entra y ve todo.
 
 ## Importante
 
