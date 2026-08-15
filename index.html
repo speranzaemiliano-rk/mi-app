@@ -24400,14 +24400,31 @@
     // Suscripción idempotente a los 3 nodos privados. Se llama desde cargarDatos y también al abrir
     // Remuneraciones, por si al arrancar la sesión la auth (dueño) todavía no estaba lista.
     var _remunPrivadoSub = false;
+    // Un error de LECTURA en estos nodos (típicamente PERMISSION_DENIED por reglas de Firebase sin
+    // publicar para 'cajaDiaria') dejaba la pantalla vacía SIN decir nada: se veía igual que
+    // "todavía no cargaste nada". Ahora avisa una vez, así se distingue "no hay datos" de
+    // "la base no me dejó leerlos".
+    var _remunErrLeerAvisado = false;
+    function _errorLecturaRemun(que) {
+        return function(e) {
+            console.error('Remuneraciones — no se pudo leer ' + que + ':', e);
+            if (_remunErrLeerAvisado) return;
+            _remunErrLeerAvisado = true;
+            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+            alert('⚠️ No se pudieron leer los datos de Remuneraciones (' + que + ') desde la nube.\n\n' +
+                'Detalle: ' + msg + '\n\nOJO: lo que veas en pantalla está incompleto. NO es que no haya ' +
+                'datos, es que la base no los dejó leer. Si dice PERMISSION_DENIED, hay que publicar las ' +
+                'reglas de Firebase del nodo «cajaDiaria».');
+        };
+    }
     function _suscribirRemunPrivado() {
         if (_remunPrivadoSub || !_esDuenoRemun() || typeof db === 'undefined' || !db) return;
         _asegurarRefsRemun();
         if (!REF_REMUN_RECIBOS) return;   // uid todavía no listo → se reintenta al abrir la pestaña
         _remunPrivadoSub = true;
-        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
-        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); }, function(){});
-        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
+        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, _errorLecturaRemun('pagos de sueldo'));
+        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); }, _errorLecturaRemun('recibos'));
+        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, _errorLecturaRemun('consolidaciones'));
     }
     // El dueño (Super Administrador) ve Remuneraciones, además del gate de reglas en la base.
     // Genérico por instalación: vale el rol superadmin o el adminEmail configurado (config.js),
@@ -26055,8 +26072,16 @@
             'El recibo los resta solo y muestra el <strong>saldo a cobrar</strong>: <u>no</u> los cargues también como descuento acá.';
     };
 
+    // El modal de liquidación NO persiste solo: la liquidación existe únicamente en pantalla hasta
+    // que se aprieta «💾 Guardar recibo del mes» o «🖨️ Imprimir y guardar». Esta bandera marca que
+    // hay algo cargado a mano sin guardar, para poder avisar antes de cerrar y perderlo.
+    // Se pone en false al abrir el modal y al guardar; en true en cada refresco del preview, que es
+    // por donde pasan TODAS las ediciones (monto, tipo, alta/baja de concepto, ⇊/⇈, sueldo básico).
+    var _remLiqTocado = false;
+
     // Muestra el desglose de la liquidación en vivo dentro del modal.
     window.renderPreviewLiquidacion = function() {
+        _remLiqTocado = true;
         _empActualizarVacios();
         if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
         var fmt = function(n) { return '$' + Math.round(n || 0).toLocaleString('es-AR'); };
@@ -26151,6 +26176,7 @@
         ['empConceptosLista','empConceptosListaB','empPreviewLiquidacion','empRecibosHist'].forEach(function(id){ var el = document.getElementById(id); if (el) el.innerHTML = ''; });
         _empActualizarVacios();
         var mes = document.getElementById('empLiqMes'); if (mes) mes.value = '';
+        _remLiqTocado = false;
         document.getElementById('modalLiquidar').classList.add('active');
         if (!remuneraciones.length) alert('Todavía no cargaste empleados. Creá primero el legajo con «➕ Nuevo empleado».');
     };
@@ -26188,9 +26214,47 @@
         if (mesEl) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
         renderPreviewLiquidacion();
         _renderRecibosEmpleadoActivo();
+        _remLiqTocado = false;   // recién abierto: todavía no se editó nada
         document.getElementById('modalLiquidar').classList.add('active');
     };
-    window.cerrarModalLiquidar = function() { document.getElementById('modalLiquidar').classList.remove('active'); };
+
+    // Firma comparable de una liquidación, para saber si lo que está en el modal ya quedó
+    // guardado como recibo de ese mes (o si se le hicieron cambios encima).
+    function _remFirmaLiq(basico, conceptos, neto, netoTotal) {
+        var cs = (conceptos || []).map(_remNormConcepto).map(function(c) {
+            return [(c.nombre || '').trim(), c.tipo, c.parte, c.remun ? 1 : 0,
+                    Math.round((parseFloat(c.monto) || 0) * 100)].join('|');
+        }).join(';');
+        return [Math.round((basico || 0) * 100), Math.round((neto || 0) * 100),
+                Math.round((netoTotal || 0) * 100), cs].join('#');
+    }
+    // ¿Hay una liquidación cargada en el modal que NO está guardada como recibo?
+    function _remLiquidacionSinGuardar() {
+        if (!_remLiqTocado || !_esDuenoRemun()) return false;
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!mes || editandoEmpleadoIdx < 0) return false;
+        var emp = _empDesdeModal();
+        if (!emp.id || !emp.nombre) return false;
+        var actual = _remFirmaLiq(emp.sueldoBasico, emp.conceptos, remNetoOficial(emp), remNetoEmpleado(emp));
+        var r = (remunRecibos || []).find(function(x) { return x && x.empleadoId === emp.id && x.mes === mes; });
+        if (!r) return true;   // liquidado pero nunca guardado → es justo el caso que se perdía
+        var guardada = _remFirmaLiq(r.basico, r.conceptos, r.neto,
+            (r.netoTotal != null) ? r.netoTotal : ((r.neto || 0) + (r.fueraRecibo || 0)));
+        return actual !== guardada;
+    }
+    // Cerrar sin guardar descartaba la liquidación en silencio y el mes no aparecía después en
+    // «Recibos anteriores». Ahora se avisa. opts.forzar = cerrar sin preguntar (se usa después de guardar).
+    window.cerrarModalLiquidar = function(opts) {
+        if (!(opts && opts.forzar) && _remLiquidacionSinGuardar()) {
+            var mesTxt = _mesLabel((document.getElementById('empLiqMes') || {}).value || '');
+            if (!confirm('⚠️ La liquidación de ' + mesTxt + ' TODAVÍA NO está guardada como recibo.\n\n' +
+                'Si cerrás ahora se pierde, y ese mes no va a aparecer en «Recibos anteriores» ' +
+                'ni en el Resumen mensual.\n\n' +
+                'Aceptar = cerrar y descartar\nCancelar = volver y guardar con «💾 Guardar recibo del mes»')) return;
+        }
+        _remLiqTocado = false;
+        document.getElementById('modalLiquidar').classList.remove('active');
+    };
     window.cerrarModalEmpleado = function() { document.getElementById('modalEmpleado').classList.remove('active'); };
 
     window.guardarEmpleado = function() {
@@ -26543,6 +26607,7 @@
             persistirRemuneraciones();
         }
         _renderRecibosEmpleado(emp.id);
+        _remLiqTocado = false;   // lo que hay en el modal ya quedó guardado
         return true;
     }
 
@@ -26580,7 +26645,7 @@
         var _detalle = _fuera ? ('\n\nRecibo oficial: $' + Math.round(_netoOfi).toLocaleString('es-AR') +
             ' · Fuera del recibo: $' + Math.round(_fuera).toLocaleString('es-AR')) : '';
         if (confirm('✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\n¿Cargar también el PAGO de sueldo de este mes (total $' + Math.round(_neto).toLocaleString('es-AR') + ') en «Pagos de sueldo»? Después lo consolidás en Caja/Banco.' + _detalle)) {
-            cerrarModalLiquidar();
+            cerrarModalLiquidar({ forzar: true });
             remVista('pagos');   // la vista de pagos es la que muestra esa tarjeta
             abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: _netoOfi, efectivo: 0, fuera: _fuera > 0 ? _fuera : 0 });
             var card = document.getElementById('remPagosCard');
