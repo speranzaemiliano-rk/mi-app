@@ -4717,6 +4717,10 @@
                         🔒 Esta sección es confidencial y solo la puede ver el <strong>Super Administrador</strong>.
                     </div>
                     <div id="remContenido">
+                        <!-- Recibos, pagos y consolidaciones son PRIVADOS POR CUENTA (cajaDiaria/<uid>).
+                             Entrar con otra cuenta muestra la pantalla vacía sin que nada esté borrado,
+                             así que la cuenta en uso y los totales cargados se muestran siempre. -->
+                        <div id="remCuentaAviso" style="margin:0 0 14px; padding:9px 12px; border-radius:8px; font-size:12px; border:1px solid var(--border); background:var(--surface-2); color:var(--text-2);"></div>
                         <div class="stats-grid" id="remStatsGrid" style="margin-bottom:16px; margin-top:0;">
                             <div class="stat-card"><div class="stat-label">Empleados</div><div class="stat-value" id="remTotalEmpleados">0</div></div>
                             <div class="stat-card"><div class="stat-label">Masa salarial mensual (básicos)</div><div class="stat-value" id="remMasaNeta" style="font-size:18px;">$0</div></div>
@@ -9296,10 +9300,13 @@
         return '';
     }
 
-    function impExtLeerGmail(){
+    // Pide el token de Gmail y corre el lector que se le pase. Lo comparten los TRES lectores
+    // (transferencias enviadas, recibidas y consumos de tarjeta): antes cada uno tenía su copia
+    // textual de este bloque.
+    function _impExtConGmail(msgBuscando, fn, avisoCuenta){
         var cuentaId=document.getElementById('impExtCuenta').value;
         var estado=document.getElementById('impExtGmailEstado');
-        if(!cuentaId){ alert('Primero elegí la cuenta destino.'); return; }
+        if(!cuentaId){ alert(avisoCuenta||'Primero elegí la cuenta destino.'); return; }
         var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
         if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
         if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
@@ -9311,8 +9318,8 @@
                 callback:function(resp){
                     if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
                     _gmailToken=resp.access_token;
-                    estado.textContent='Buscando avisos de transferencia…';
-                    _impExtBuscarTransferenciasGmail(cuentaId, estado).catch(function(e){
+                    estado.textContent=msgBuscando;
+                    fn(cuentaId, estado).catch(function(e){
                         estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
                     });
                 }
@@ -9322,6 +9329,52 @@
             estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
         }
     }
+
+    // Busca los mails que matchean la query de Gmail y devuelve los mensajes ya con cuerpo completo.
+    async function _impExtGmailMensajes(q, estado){
+        var url='https://gmail.googleapis.com/gmail/v1/users/me/messages?q='+encodeURIComponent(q)+'&maxResults=50';
+        var resp=await fetch(url,{headers:{Authorization:'Bearer '+_gmailToken}});
+        if(!resp.ok){
+            var err=await resp.json().catch(function(){return {};});
+            throw new Error('Gmail API: '+((err.error&&err.error.message)||resp.status));
+        }
+        var data=await resp.json();
+        var messages=data.messages||[];
+        if(!messages.length) return [];
+        estado.textContent='Leyendo '+messages.length+' mail(s)…';
+        var detalles=await Promise.all(messages.map(function(m){
+            return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+m.id+'?format=full',
+                {headers:{Authorization:'Bearer '+_gmailToken}})
+                .then(function(r){return r.json();})
+                .catch(function(){return null;});
+        }));
+        return detalles.filter(Boolean);
+    }
+
+    // Movimientos bancarios ya importados, para no duplicar (clave cuenta+fecha+monto+concepto).
+    function _impExtClavesExistentes(){
+        var existentes={};
+        ingGeneral.forEach(function(g){
+            if(!g.esBancario) return;
+            existentes[impExtClave(g.cuentaId,g.fecha,(g.esEgreso?-1:1)*(g.monto||0),g.origen||'')]=true;
+        });
+        return existentes;
+    }
+
+    // Lee el valor de una etiqueta del cuerpo del mail. El cuerpo llega de DOS formas según el mail
+    // traiga o no una parte text/plain: con separadores de celda («Etiqueta | Valor |») o con todo
+    // colapsado en una línea al desarmar el HTML («Etiqueta Valor EtiquetaSiguiente …»). Por eso el
+    // valor se corta en el '|', en un salto de línea O en la etiqueta siguiente: con un simple
+    // [^|]+ el campo se comía el resto del mail en la segunda forma.
+    var _IMP_FIN_CAMPO='\\||Concepto|Informaci[oó]n adicional|Cuenta de origen|Cuenta de destino|' +
+        'CBU del beneficiario|CBU de Destino|Destinatario|Importe|N[uú]mero de comprobante|' +
+        'Se acreditar|Para m[aá]s informaci|$';
+    function impExtCampo(texto, etiqueta){
+        var m=texto.match(new RegExp(etiqueta+'\\s*[:\\|]?\\s*(.*?)\\s*(?:'+_IMP_FIN_CAMPO+')','i'));
+        return m?m[1].trim():'';
+    }
+
+    function impExtLeerGmail(){ _impExtConGmail('Buscando avisos de transferencia…', _impExtBuscarTransferenciasGmail); }
 
     async function _impExtBuscarTransferenciasGmail(cuentaId, estado){
         var q='subject:"Aviso de transferencia" from:santander newer_than:90d';
@@ -9351,7 +9404,7 @@
                 .catch(function(){return null;});
         }));
 
-        var candidatos=[];
+        var candidatos=[], origenes={};
         detalles.forEach(function(msg){
             if(!msg||!msg.payload) return;
             var texto=impExtExtraerTextoPlano(msg.payload);
@@ -9363,14 +9416,20 @@
             // internalDate (epoch ms) es más confiable que parsear el header Date.
             var fecha=msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'';
             if(!fecha) return;
-            var mDest=texto.match(/Destinatario\s*[:\|]?\s*(\S+)/i);
+            var _tail=impExtCampo(texto,'Cuenta de origen').replace(/\D/g,'').slice(-4);
+            if(_tail) origenes[_tail]=true;
+            var destinatario=impExtCampo(texto,'Destinatario');
             var mComp=texto.match(/N[uú]mero de comprobante\s*[:\|]?\s*(\S+)/i);
-            var destinatario=mDest?mDest[1].trim():'';
             var nroComprobante=mComp?mComp[1].trim():'';
             var concepto='Transferencia'+(destinatario?' a '+destinatario:'')+(nroComprobante?' · Comp. '+nroComprobante:'');
             var esEgreso=true; // confirmado con el usuario: este aviso es de transferencias salientes
             var clave=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,concepto);
-            var dup=!!existentes[clave];
+            // Hasta ahora el destinatario se cortaba en la primera palabra ('ANTOGNOZZI' por
+            // 'ANTOGNOZZI MORENA LUCIA'), así que los movimientos ya importados quedaron con ese
+            // texto. Se chequea también esa clave vieja para no volver a importarlos.
+            var claveVieja=impExtClave(cuentaId,fecha,(esEgreso?-1:1)*monto,
+                'Transferencia'+(destinatario?' a '+destinatario.split(/\s+/)[0]:'')+(nroComprobante?' · Comp. '+nroComprobante:''));
+            var dup=!!existentes[clave]||!!existentes[claveVieja];
             var dupManual=!dup&&_impEsPosibleDupManual(manualClaves,cuentaId,fecha,monto,esEgreso);
             existentes[clave]=true;
             candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:esEgreso,ref:nroComprobante,cuentaId:cuentaId,
@@ -9380,38 +9439,84 @@
         if(!candidatos.length){ estado.textContent='⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).'; return; }
         _impExtCandidatos=candidatos;
         impExtRenderPreview();
-        estado.textContent='✓ '+candidatos.length+' transferencia'+(candidatos.length===1?'':'s')+' encontrada'+(candidatos.length===1?'':'s')+' en Gmail.';
+        // Los avisos de TODAS tus cuentas llegan a la misma casilla y acá van todos a la cuenta
+        // elegida. Si aparece más de una «Cuenta de origen», hay movimientos de otra cuenta mezclados.
+        var _nOrig=Object.keys(origenes).length;
+        estado.textContent='✓ '+candidatos.length+' transferencia'+(candidatos.length===1?'':'s')+' encontrada'+(candidatos.length===1?'':'s')+' en Gmail.'+
+            (_nOrig>1?' ⚠️ Ojo: vienen de '+_nOrig+' cuentas distintas ('+Object.keys(origenes).map(function(t){return '…'+t;}).join(', ')+') y todas se importarían a la cuenta elegida. Revisá antes de guardar.':'');
     }
+
+    // ── Transferencias RECIBIDAS (acreditaciones) desde Gmail ────────────
+    // Santander manda un mail DISTINTO al de las salientes: asunto «Aviso al Destinatario de
+    // Transferencia» y cuerpo «Recibiste una transferencia». No trae Destinatario ni Número de
+    // comprobante; trae quién te transfirió y el CBU (enmascarado) de la cuenta que cobra:
+    //   <TITULAR>, <ORDENANTE> te hizo una transferencia.
+    //   Concepto | VAR · Información adicional | Varios
+    //   Cuenta de origen | XXXX-XXX0806          ← la cuenta del que PAGA, no la tuya
+    //   CBU del beneficiario | XXXXXXXXXXXXXXXXXX2857   ← ésta sí es tuya
+    //   Importe | $ 50.000,00
+    async function _impExtBuscarRecibidasGmail(cuentaId, estado){
+        var msgs=await _impExtGmailMensajes('subject:"Aviso al Destinatario de Transferencia" from:santander newer_than:90d', estado);
+        if(!msgs.length){ estado.textContent='🔍 No encontré avisos de transferencias recibidas de Santander en los últimos 90 días.'; return; }
+
+        // Todos los avisos (de todas tus cuentas) caen en la misma casilla. Si la cuenta elegida
+        // tiene el CBU cargado, se comparan los últimos 4 dígitos para quedarse sólo con las
+        // acreditaciones de ESA cuenta; sin CBU cargado no se puede filtrar y se avisa.
+        var cb=cuentasBancarias.find(function(cu){return (cu.id||cu.banco)===cuentaId;})||{};
+        var cbuCola=String(cb.cbu||'').replace(/\D/g,'').slice(-4);
+
+        var existentes=_impExtClavesExistentes();
+        var candidatos=[], otraCuenta=0, diferidas=0;
+        msgs.forEach(function(msg){
+            if(!msg.payload) return;
+            var texto=impExtExtraerTextoPlano(msg.payload);
+            if(!texto) return;
+            var mImporte=texto.match(/Importe\s*[:\|]?\s*\$?\s*([\d.,]+)/i);
+            if(!mImporte) return;
+            var monto=impExtParseNum(mImporte[1]);
+            if(!monto) return;
+            var colaMail=impExtCampo(texto,'CBU del beneficiario').replace(/\D/g,'').slice(-4);
+            if(cbuCola && colaMail && cbuCola!==colaMail){ otraCuenta++; return; }
+            var fecha=msg.internalDate?new Date(parseInt(msg.internalDate,10)).toISOString().substring(0,10):'';
+            if(!fecha) return;
+            var mOrd=texto.match(/,\s*([^|]+?)\s+te hizo una transferencia/i);
+            var ordenante=mOrd?mOrd[1].trim():'';
+            var info=impExtCampo(texto,'Informaci[oó]n adicional');
+            if(/^varios$/i.test(info)) info='';
+            // «Se acreditará dentro de 72hs» → la fecha del mail NO es la de acreditación.
+            if(/dentro de\s*\d+\s*hs/i.test(texto)) diferidas++;
+            var concepto='Transferencia recibida'+(ordenante?' de '+ordenante:'')+(info?' · '+info:'');
+            var clave=impExtClave(cuentaId,fecha,monto,concepto);
+            var dup=!!existentes[clave];
+            existentes[clave]=true;
+            // dupManual sólo aplica a egresos (pagos cargados a mano), así que acá va siempre false.
+            candidatos.push({fecha:fecha,concepto:concepto,monto:monto,esEgreso:false,
+                ref:colaMail?('CBU …'+colaMail):'',cuentaId:cuentaId,dup:dup,dupManual:false,usar:!dup});
+        });
+
+        if(!candidatos.length){
+            estado.textContent=otraCuenta
+                ? '⚠️ Los '+otraCuenta+' aviso(s) encontrados son de otra cuenta: ninguno coincide con el CBU de la cuenta elegida.'
+                : '⚠️ Encontré mails pero no pude extraer los datos de ninguno (formato inesperado).';
+            return;
+        }
+        _impExtCandidatos=candidatos;
+        impExtRenderPreview();
+        estado.textContent='✓ '+candidatos.length+' acreditación'+(candidatos.length===1?'':'es')+' encontrada'+(candidatos.length===1?'':'s')+
+            (otraCuenta?' · '+otraCuenta+' de otra cuenta, omitida'+(otraCuenta===1?'':'s'):'')+
+            (diferidas?' · ⚠️ '+diferidas+' con acreditación diferida (72hs): revisá la fecha':'')+
+            (cbuCola?'':' · ⚠️ cargá el CBU de la cuenta para no mezclar acreditaciones de otras cuentas');
+    }
+
+    function impExtLeerGmailRecibidas(){ _impExtConGmail('Buscando transferencias recibidas…', _impExtBuscarRecibidasGmail); }
 
     // ── Leer consumos de tarjeta de crédito de Santander desde Gmail ─────
     // Misma idea que las transferencias: se cargan como movimientos de la cuenta
     // "Tarjeta de Crédito" elegida (tipo nuevo en Cuentas Bancarias). Cada consumo
     // es un "egreso" que va restando el saldo de esa cuenta (representa lo adeudado).
     function impExtLeerGmailTarjeta(){
-        var cuentaId=document.getElementById('impExtCuenta').value;
-        var estado=document.getElementById('impExtGmailEstado');
-        if(!cuentaId){ alert('Primero elegí la cuenta destino (la tarjeta de crédito).'); return; }
-        var clientId=(typeof getGoogleClientId==='function')?getGoogleClientId():'';
-        if(!clientId){ alert('Falta el ID de cliente de Google. Configuralo en ⚙️ Ajustes → "Lectura automática de Gmail".'); return; }
-        if(!window.google || !google.accounts || !google.accounts.oauth2){ alert('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'); return; }
-        estado.textContent='Esperando autorización de Google…';
-        try{
-            var tokenClient=google.accounts.oauth2.initTokenClient({
-                client_id:clientId,
-                scope:'https://www.googleapis.com/auth/gmail.readonly',
-                callback:function(resp){
-                    if(!resp||resp.error){ estado.textContent='❌ Autorización rechazada o cancelada'+(resp&&resp.error?': '+resp.error:'.'); return; }
-                    _gmailToken=resp.access_token;
-                    estado.textContent='Buscando consumos de tarjeta…';
-                    _impExtBuscarConsumosTarjetaGmail(cuentaId, estado).catch(function(e){
-                        estado.textContent='❌ Error al leer Gmail: '+(e.message||e);
-                    });
-                }
-            });
-            tokenClient.requestAccessToken({prompt:'select_account'});
-        }catch(e){
-            estado.textContent='❌ No se pudo iniciar la autorización: '+(e.message||e);
-        }
+        _impExtConGmail('Buscando consumos de tarjeta…', _impExtBuscarConsumosTarjetaGmail,
+            'Primero elegí la cuenta destino (la tarjeta de crédito).');
     }
 
     async function _impExtBuscarConsumosTarjetaGmail(cuentaId, estado){
@@ -24365,6 +24470,9 @@
     // ── Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte. ──
     let REF_REMUN_RECIBOS = null;
     let remunRecibos = [];
+    // Igual que _docsCargados/_vencCargados: distingue "todavía no llegó" de "llegó y está vacío",
+    // para no mostrar un "no hay recibos" que es mentira.
+    var _remunRecibosCargado = false;
     function persistirRemunRecibos() { _asegurarRefsRemun(); return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(_avisarErrorRemun); }
     // ── Consolidaciones de pagos (batch): entidad editable para adjuntarle después el
     //    comprobante de transferencia / factura / recibo. Nodo privado aparte. ──
@@ -24376,8 +24484,12 @@
     // 'cajaDiaria/<uid>/...' porque ese nodo tiene reglas de Firebase PRIVADAS (solo ese uid lee
     // y escribe) que YA ESTÁN DESPLEGADAS — así los recibos/pagos persisten sin depender de
     // desplegar reglas nuevas para los nodos remuneraciones* de nivel raíz (que la base rechaza
-    // con el '.write': false por defecto si esas reglas no se publicaron). Las dos variantes del
-    // mail del dueño son la misma cuenta de Gmail (los puntos no cuentan) → mismo uid siempre.
+    // con el '.write': false por defecto si esas reglas no se publicaron).
+    // ⚠️ OJO: al ser por uid, estos datos NO se comparten entre cuentas. Gmail ignora los puntos
+    // para ENTREGAR el mail, pero Firebase Auth NO los normaliza: 'a.b@gmail.com' y 'ab@gmail.com'
+    // son DOS usuarios con uid distinto, y lo mismo pasa entre «Continuar con Google» y
+    // usuario+contraseña. Entrar con la otra cuenta deja Remuneraciones vacía sin que nada se haya
+    // borrado — por eso el cartel de _renderRemunCuentaAviso() muestra siempre con cuál se entró.
     function _asegurarRefsRemun() {
         if (typeof db === 'undefined' || !db) return;
         var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
@@ -24423,7 +24535,7 @@
         if (!REF_REMUN_RECIBOS) return;   // uid todavía no listo → se reintenta al abrir la pestaña
         _remunPrivadoSub = true;
         REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, _errorLecturaRemun('pagos de sueldo'));
-        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); }, _errorLecturaRemun('recibos'));
+        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); _remunRecibosCargado = true; if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); if (typeof _renderRemunCuentaAviso === 'function') _renderRemunCuentaAviso(); }, _errorLecturaRemun('recibos'));
         REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, _errorLecturaRemun('consolidaciones'));
     }
     // El dueño (Super Administrador) ve Remuneraciones, además del gate de reglas en la base.
@@ -25118,6 +25230,7 @@
         _renderRemunPagos();   // sección de pagos de sueldo del mes (aunque no haya legajos)
         _renderRemunConsolidados();   // consolidaciones hechas (con adjuntos de comprobantes)
         _renderRemunRecibosLista();   // listado global de recibos emitidos
+        _renderRemunCuentaAviso();    // con qué cuenta se está mirando y cuántos datos privados hay
 
         var visibles = remuneraciones.filter(function(emp) {
             return !q || ((emp.nombre || '') + ' ' + (emp.cuil || '') + ' ' + (emp.puesto || '')).toLowerCase().indexOf(q) !== -1;
@@ -25806,6 +25919,36 @@
             tbody.appendChild(tr);
         });
         s('remResTotLiq', fmt(tL)); s('remResTotBanco', fmt(tB)); s('remResTotEfe', fmt(tE)); s('remResTotPagado', fmt(tB + tE)); s('remResTotPend', fmt(tL - (tB + tE)));
+    }
+
+    // Los tres nodos privados viven en cajaDiaria/<uid>: son POR CUENTA, no por empresa ni por
+    // proyecto. Si se entra con otra cuenta (típico: el mismo Gmail con y sin puntos son DOS
+    // usuarios distintos en Firebase Auth, aunque los mails lleguen a la misma casilla), la
+    // pantalla se ve vacía y parece que los recibos se borraron. Este cartel dice siempre con qué
+    // cuenta se está mirando y cuántos registros llegaron.
+    function _renderRemunCuentaAviso() {
+        var el = document.getElementById('remCuentaAviso'); if (!el) return;
+        var mail = (typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.email) || '(sin sesión)';
+        var uid  = (typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.uid) || '—';
+        if (!_remunRecibosCargado) {
+            el.innerHTML = '⏳ Cargando los datos privados de <strong>' + escHtml(mail) + '</strong>…';
+            el.style.borderColor = 'var(--border)';
+            return;
+        }
+        var nR = (remunRecibos || []).length, nP = (remunPagos || []).length, nC = (remunConsolidados || []).length;
+        var base = 'Datos privados de <strong>' + escHtml(mail) + '</strong> · ' +
+            nR + ' recibo' + (nR === 1 ? '' : 's') + ' · ' + nP + ' pago' + (nP === 1 ? '' : 's') +
+            ' · ' + nC + ' consolidación' + (nC === 1 ? '' : 'es');
+        if (nR + nP + nC === 0) {
+            el.innerHTML = '⚠️ ' + base + '.<br>Recibos, pagos y consolidaciones se guardan <strong>por cuenta</strong> ' +
+                '(<code>cajaDiaria/' + escHtml(uid) + '</code>), no por empresa ni por proyecto. Si antes veías datos acá, ' +
+                'no se borraron: estás entrando con <strong>otra cuenta</strong>. Ojo con el mismo Gmail escrito con y sin ' +
+                'puntos, o con «Continuar con Google» vs. usuario y contraseña: para Firebase son usuarios distintos.';
+            el.style.borderColor = 'var(--warn, #c78a1e)';
+        } else {
+            el.innerHTML = '📌 ' + base + '.';
+            el.style.borderColor = 'var(--border)';
+        }
     }
 
     function _renderRemunRecibosLista() {
@@ -37664,7 +37807,8 @@
         o bien exportá a Excel/CSV. Se detectan automáticamente débitos, créditos y concepto. Los movimientos ya importados no se duplican.
       </div>
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmail()">📧 Leer avisos de transferencia (Gmail)</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmail()" title="Transferencias que SALIERON de tu cuenta">📧 Leer transferencias enviadas (Gmail)</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmailRecibidas()" title="Acreditaciones: transferencias que te hicieron">📨 Leer transferencias recibidas (Gmail)</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="impExtLeerGmailTarjeta()">💳 Leer consumos de tarjeta (Gmail)</button>
         <span id="impExtGmailEstado" style="font-size:12px;color:var(--text-3);"></span>
       </div>
