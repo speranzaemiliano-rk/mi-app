@@ -104,6 +104,11 @@ const BRAND_ALERTAS   = process.env.BRAND_ALERTAS   || 'RK Alertas';
 // El webhook de WhatsApp queda afuera porque lo llama Meta directamente (no
 // puede mandar nuestro header) y ya se valida con WHATSAPP_VERIFY_TOKEN aparte.
 const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook'];
+// Modo estricto (opt-in): con REQUIRE_AUTH=true el backend NUNCA cae en modo
+// compatibilidad — si no hay token compartido ni idToken válido, rechaza (fail-closed).
+// Recomendado para un despliegue de cliente. Por defecto apagado para no cambiar el
+// comportamiento actual de RK.
+const _AUTH_ESTRICTA = /^(1|true|yes|si|sí)$/i.test(process.env.REQUIRE_AUTH || '');
 app.use(function(req, res, next) {
     if (_RUTAS_SIN_TOKEN.indexOf(req.path) !== -1) return next();
     const esperado = process.env.APP_API_TOKEN;
@@ -119,14 +124,14 @@ app.use(function(req, res, next) {
         admin.auth().verifyIdToken(m[1])
             .then(function() { next(); })
             .catch(function() {
-                if (!esperado) return next(); // sin token compartido configurado → modo compat
+                if (!esperado && !_AUTH_ESTRICTA) return next(); // sin token compartido → modo compat (salvo estricto)
                 return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
             });
         return;
     }
-    // 3) Sin idToken verificable: modo compatibilidad si no hay APP_API_TOKEN; si hay, rechazar.
-    if (!esperado) {
-        console.warn('[seguridad] APP_API_TOKEN no configurado — ' + req.method + ' ' + req.path + ' se aceptó SIN autenticar. Configurá APP_API_TOKEN o usá la sesión de la app (idToken).');
+    // 3) Sin idToken verificable: modo compatibilidad si no hay APP_API_TOKEN y no es estricto; si no, rechazar.
+    if (!esperado && !_AUTH_ESTRICTA) {
+        console.warn('[seguridad] APP_API_TOKEN no configurado — ' + req.method + ' ' + req.path + ' se aceptó SIN autenticar. Configurá APP_API_TOKEN (o REQUIRE_AUTH=true) o usá la sesión de la app (idToken).');
         return next();
     }
     return res.status(401).json({ error: 'No autorizado. Falta o es inválido el header X-App-Token.' });
@@ -172,6 +177,9 @@ if (_rlCleanup.unref) _rlCleanup.unref();
 //   AFIP_KEY        → contenido del archivo .key (con \n reales)
 //   AFIP_ENV        → "production" o "testing" (default: testing)
 //   APP_API_TOKEN   → token secreto que debe mandar el frontend (X-App-Token) en cada request
+//   REQUIRE_AUTH    → "true" para modo estricto (fail-closed): rechaza todo lo no autenticado
+//                     aunque falte APP_API_TOKEN. Recomendado en un despliegue de cliente.
+//                     Verificá el estado con GET /diag/seguridad.
 //   ALLOWED_ORIGINS → orígenes permitidos para CORS, separados por comas (opcional)
 //   PORT            → puerto (Railway/Render lo inyectan automático)
 
@@ -243,6 +251,33 @@ app.get('/diag/firebase', (req, res) => {
         privateKeyTerminaBien: !!_fbInit.privateKeyTerminaBien,
         privateKeyLargo: _fbInit.privateKeyLargo || 0,
         error: _fbInit.error || null
+    });
+});
+
+// Diagnóstico de SEGURIDAD del backend. Solo devuelve booleanos / config no sensible
+// (nunca el valor de los tokens ni claves). Sirve para verificar de un vistazo si el
+// despliegue quedó CERRADO antes de entregarlo a un cliente.
+app.get('/diag/seguridad', (req, res) => {
+    const tieneToken   = !!process.env.APP_API_TOKEN;
+    const tieneAdmin   = !!(admin && admin.apps && admin.apps.length);
+    const corsRestrict = _allowedOrigins.length > 0;
+    // El backend está "cerrado" a pedidos sin autenticar si hay token compartido, o si
+    // está el modo estricto (que exige token o idToken válido siempre).
+    const cerrado = tieneToken || _AUTH_ESTRICTA;
+    const advertencias = [];
+    if (!cerrado) advertencias.push('El backend acepta pedidos SIN autenticar (modo compatibilidad). Configurá APP_API_TOKEN o REQUIRE_AUTH=true para cerrarlo.');
+    if (_AUTH_ESTRICTA && !tieneToken && !tieneAdmin) advertencias.push('Modo estricto activo pero no hay forma de autenticar (falta APP_API_TOKEN y el service account de Firebase): el backend rechazará todo.');
+    if (!corsRestrict) advertencias.push('CORS abierto a cualquier origen. Definí ALLOWED_ORIGINS con el/los dominios del cliente.');
+    if ((process.env.AFIP_ENV || 'testing') !== 'production') advertencias.push('ARCA en modo TESTING (las facturas no van a AFIP real).');
+    res.json({
+        cerrado,
+        appApiTokenConfigurado:   tieneToken,
+        modoEstricto:             _AUTH_ESTRICTA,
+        firebaseAdminConfigurado: tieneAdmin,     // permite validar la sesión (idToken) de la app
+        corsRestringido:          corsRestrict,
+        rateLimit:                { max: _RL_MAX, ventanaMs: _RL_WINDOW },
+        afipEnv:                  process.env.AFIP_ENV || 'testing',
+        advertencias
     });
 });
 
