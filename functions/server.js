@@ -103,7 +103,10 @@ const BRAND_ALERTAS   = process.env.BRAND_ALERTAS   || 'RK Alertas';
 // en el log en cada request para que no pase desapercibido antes de producción.
 // El webhook de WhatsApp queda afuera porque lo llama Meta directamente (no
 // puede mandar nuestro header) y ya se valida con WHATSAPP_VERIFY_TOKEN aparte.
-const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook'];
+// /diag/seguridad es público a propósito: sólo devuelve booleanos de configuración
+// (nunca secretos) y sirve para verificar el estado del backend desde el navegador,
+// incluso después de cerrarlo con APP_API_TOKEN.
+const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook', '/diag/seguridad'];
 // Modo estricto (opt-in): con REQUIRE_AUTH=true el backend NUNCA cae en modo
 // compatibilidad — si no hay token compartido ni idToken válido, rechaza (fail-closed).
 // Recomendado para un despliegue de cliente. Por defecto apagado para no cambiar el
