@@ -16543,17 +16543,23 @@
         return partes.map(function(p) { return p.replace(/^0+/, '') || '0'; }).join('-');
     }
     function _normTexto(s) { return String(s || '').trim().toLowerCase(); }
+    // Normaliza el nombre de proveedor SOLO para comparar duplicados: saca acentos,
+    // puntos, espacios y símbolos, así "Fekomp S.A." == "Fekomp SA" == "fekomp s a".
+    function _normProvDup(s) {
+        return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+    }
 
     // Busca un comprobante ya cargado que probablemente sea el mismo. Mira TANTO
     // facturas (ARCA) como documentos (comprobantes X): la misma factura de papel se
     // puede haber cargado de las dos formas.
     // excluirId evita que un registro se detecte a sí mismo al editarlo.
     function buscarComprobanteDuplicado(nuevo, excluirId) {
-        var prov = _normTexto(nuevo.proveedor);
-        if (!prov) return null;
+        var prov = _normProvDup(nuevo.proveedor);
         var num  = _normNumComp(nuevo.numero);
         var cola = num ? num.split('-').pop() : '';
         var imp  = Math.round(Number(nuevo.importe) || 0);
+        // Sin número ni importe no hay con qué comparar.
+        if (!num && !imp) return null;
         var candidatos = [];
         (facturas || []).forEach(function(f) { if (f) candidatos.push({ item: f, donde: 'Facturas' }); });
         (documentos || []).forEach(function(d) { if (d) candidatos.push({ item: d, donde: 'Comprobantes' }); });
@@ -16561,18 +16567,28 @@
         for (var i = 0; i < candidatos.length; i++) {
             var c = candidatos[i], x = c.item;
             if (excluirId && x.id === excluirId) continue;
-            if (_normTexto(x.proveedor) !== prov) continue;
             var xnum  = _normNumComp(x.numero);
             var ximp  = Math.round(Number(x.importe) || 0);
             var xcola = xnum ? xnum.split('-').pop() : '';
+            var mismoProv = prov && _normProvDup(x.proveedor) === prov;
 
-            // 1. Mismo proveedor y mismo número normalizado: es el caso claro.
+            // ── Criterios que valen AUNQUE el nombre del proveedor haya quedado distinto
+            //    (típico cuando se lee el PDF con IA: "S.A." vs "SA", con/sin acento, etc.) ──
+            // A. Mismo número completo + mismo importe.
+            if (num && xnum && num === xnum && imp && imp === ximp)
+                return { item: x, donde: c.donde, motivo: 'mismo número e importe' };
+            // B. Mismo número (sin punto de venta) + mismo importe + misma fecha.
+            if (cola && xcola && cola === xcola && imp && imp === ximp && nuevo.fecha && nuevo.fecha === x.fecha)
+                return { item: x, donde: c.donde, motivo: 'mismo número, importe y fecha' };
+
+            // ── Criterios que exigen además el mismo proveedor ──
+            if (!mismoProv) continue;
+            // 1. Mismo número normalizado: caso claro (dos veces la misma factura del proveedor).
             if (num && xnum && num === xnum) return { item: x, donde: c.donde, motivo: 'mismo número' };
-            // 2. Coincide el número de comprobante pero no el punto de venta (uno lo
-            //    trae y el otro no). Pedimos que además coincida el importe.
+            // 2. Coincide el número pero no el punto de venta; pedimos también el importe.
             if (cola && xcola && cola === xcola && imp && imp === ximp)
                 return { item: x, donde: c.donde, motivo: 'mismo número e importe' };
-            // 3. Sin número en alguno de los dos: mismo proveedor, importe y fecha.
+            // 3. Sin número en alguno: mismo proveedor, importe y fecha.
             if ((!num || !xnum) && imp && imp === ximp && nuevo.fecha && nuevo.fecha === x.fecha)
                 return { item: x, donde: c.donde, motivo: 'mismo importe y fecha' };
         }
