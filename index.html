@@ -4862,11 +4862,11 @@
                             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; padding:12px 14px; border-top:1px solid var(--border);">
                                 <span id="remPagoSelResumen" style="font-size:12px; color:var(--text-3); margin-right:auto;">Tildá los pagos que querés consolidar.</span>
                                 <label style="font-size:12px;">Fecha del mov.: <input type="date" id="remConsolFecha" style="padding:6px 8px; font-size:12px;"></label>
-                                <label style="font-size:12px;">Cuenta banco: <select id="remConsolCuenta" style="padding:6px 8px; font-size:12px;"></select></label>
-                                <button class="btn btn-gold btn-sm" onclick="consolidarRemunPagos()">📊 Consolidar en Caja/Banco</button>
+                                <label id="remConsolCuentaLabel" style="font-size:12px;">Cuenta banco: <select id="remConsolCuenta" style="padding:6px 8px; font-size:12px;"></select></label>
+                                <button class="btn btn-gold btn-sm" id="btnConsolidarRemun" onclick="consolidarRemunPagos()">📊 Consolidar en Caja/Banco</button>
                             </div>
                             <div class="form-hint" style="color:var(--text-3); padding:8px 14px;">
-                                Al consolidar se generan DOS movimientos con la fecha elegida, etiquetados solo <strong>«Remuneraciones»</strong>: uno en <strong>Caja</strong> (suma del efectivo) y uno en <strong>Banco</strong> (suma de la parte banco). El detalle por empleado queda solo acá (privado); en Caja/Banco nadie ve nombres ni montos individuales.
+                                Al consolidar se genera un movimiento por la fecha elegida según cómo se pagó, etiquetado solo <strong>«Remuneraciones»</strong>: la parte en <strong>efectivo</strong> va a <strong>Caja</strong> y la parte por transferencia a <strong>Banco</strong> (si un pago es todo efectivo, solo se genera el de Caja; si es todo banco, solo el de Banco). Usá <strong>💵/🏦</strong> en cada fila para pasar un pago de banco a efectivo o al revés. El detalle por empleado queda solo acá (privado); en Caja/Banco nadie ve nombres ni montos individuales.
                             </div>
                         </div>
 
@@ -25248,6 +25248,16 @@
                 '<td>'+recibo+'</td>' +
                 '<td>'+estado+'</td>' +
                 '<td><div class="action-btns">' +
+                    // Pasar el pago de banco↔efectivo con un clic (mientras no esté consolidado).
+                    // Útil cuando el sueldo se paga en efectivo pero quedó cargado por banco.
+                    (cons ? '' : (
+                        ((rp.montoBanco||0) > 0
+                            ? '<button class="btn btn-outline btn-sm" onclick="remPagoPasarEfectivo(\''+rp.id+'\')" title="Pasar este pago a efectivo (irá a Caja al consolidar)">💵 A efectivo</button>'
+                            : '') +
+                        (((rp.montoEfectivo||0) + (rp.montoNoOficial||0)) > 0
+                            ? '<button class="btn btn-outline btn-sm" onclick="remPagoPasarBanco(\''+rp.id+'\')" title="Pasar este pago a banco (irá a Banco al consolidar)">🏦 A banco</button>'
+                            : '')
+                    )) +
                     '<button class="btn btn-outline btn-sm" onclick="editarRemunPago(\''+rp.id+'\')" title="Editar: adjuntar comprobante/factura o corregir el reparto banco/efectivo">✏</button>' +
                     '<button class="btn btn-outline btn-sm" onclick="imprimirConstanciaPago(\''+rp.id+'\')" title="Imprimir constancia de este pago (con el saldo pendiente del mes)">🖨️</button>' +
                     '<button class="btn btn-danger-sm" onclick="eliminarRemunPago(\''+rp.id+'\')" title="Eliminar">✕</button>' +
@@ -25265,7 +25275,38 @@
         if (el) el.textContent = sel.length
             ? (sel.length+' pago(s) · Banco $'+(banco).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+' · Efectivo $'+(efe).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}))
             : 'Tildá los pagos que querés consolidar.';
+        // El botón dice a dónde va la plata según lo tildado: solo efectivo → Caja, solo banco →
+        // Banco, mezcla → ambos. Así, cuando el sueldo es en efectivo, dice «Consolidar en Caja (efectivo)».
+        var btn = document.getElementById('btnConsolidarRemun');
+        if (btn) {
+            if (sel.length && efe > 0 && banco <= 0)      btn.textContent = '📊 Consolidar en Caja (efectivo)';
+            else if (sel.length && banco > 0 && efe <= 0) btn.textContent = '📊 Consolidar en Banco';
+            else                                          btn.textContent = '📊 Consolidar en Caja/Banco';
+        }
+        // La cuenta bancaria solo hace falta si hay parte por banco.
+        var lblCta = document.getElementById('remConsolCuentaLabel');
+        if (lblCta) lblCta.style.display = (sel.length && banco <= 0) ? 'none' : '';
     }
+    // Pasa TODO el importe de un pago no consolidado a efectivo (a Caja) o a banco. Suma el
+    // 'no oficial' viejo al efectivo. Reescribe el reparto banco/efectivo del pago y persiste.
+    window.remPagoPasarEfectivo = function(id) {
+        if (!_esDuenoRemun()) return;
+        var rp = (remunPagos||[]).find(function(x){ return x.id===id; });
+        if (!rp || rp.consolidado) return;
+        var total = (rp.montoBanco||0) + (rp.montoEfectivo||0) + (rp.montoNoOficial||0);
+        rp.montoEfectivo = total; rp.montoBanco = 0; rp.montoNoOficial = 0;
+        persistirRemunPagos();
+        renderRemuneraciones();
+    };
+    window.remPagoPasarBanco = function(id) {
+        if (!_esDuenoRemun()) return;
+        var rp = (remunPagos||[]).find(function(x){ return x.id===id; });
+        if (!rp || rp.consolidado) return;
+        var total = (rp.montoBanco||0) + (rp.montoEfectivo||0) + (rp.montoNoOficial||0);
+        rp.montoBanco = total; rp.montoEfectivo = 0; rp.montoNoOficial = 0;
+        persistirRemunPagos();
+        renderRemuneraciones();
+    };
 
     // ── Pagos parciales y adelantos ───────────────────────────────────────────
     // Un mes puede tener VARIOS pagos (una parte ahora, el resto después) y también
@@ -25650,7 +25691,8 @@
         if (typeof renderCajaGeneral==='function') renderCajaGeneral();
         if (typeof renderEfectivoPesos==='function') renderEfectivoPesos();
         if (typeof renderIngGeneral==='function') renderIngGeneral();
-        alert('✅ Consolidado. Se generaron los movimientos «Remuneraciones» en Caja'+(banco>0?' y Banco':'')+'.');
+        var _dest = (efe>0 && banco>0) ? 'Caja y Banco' : (banco>0 ? 'Banco' : 'Caja (efectivo)');
+        alert('✅ Consolidado. Se generó el movimiento «Remuneraciones» en '+_dest+'.');
     }
 
     function descargarReciboRemun(id) {
