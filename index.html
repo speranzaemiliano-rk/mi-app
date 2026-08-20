@@ -4759,7 +4759,10 @@
                         <div class="table-card" id="remResumenCard" style="margin-top:16px;">
                             <div class="table-card-head">
                                 <h3>📅 Resumen mensual</h3>
-                                <input type="month" id="remResumenMes" onchange="renderRemuneraciones()" title="Mes a resumir" style="padding:6px 8px; font-size:12px;">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="month" id="remResumenMes" onchange="renderRemuneraciones()" title="Mes a resumir" style="padding:6px 8px; font-size:12px;">
+                                    <button class="btn btn-outline btn-sm" onclick="imprimirResumenRemun()" title="Imprimir / guardar PDF del detalle de sueldos pagados del mes, por empleado">🖨️ Imprimir / PDF</button>
+                                </div>
                             </div>
                             <div class="table-wrap">
                                 <table>
@@ -25163,13 +25166,67 @@
                 '<td style="text-align:right;">' + remDiasVacaciones(emp.fechaIngreso) + '</td>' +
                 '<td style="text-align:right;">' + fmt(remSacSemestral(emp)) + '</td>' +
                 '<td><div class="action-btns">' +
-                    '<button class="btn btn-outline btn-sm" onclick="abrirModalEmpleado(' + idx + ')" title="Ver / editar legajo">📋 Legajo</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="imprimirLegajo(' + idx + ')" title="Imprimir / guardar PDF del legajo">🖨️ PDF</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="abrirModalEmpleado(' + idx + ')" title="Ver / editar legajo">✏️ Editar</button>' +
                     '<button class="btn btn-outline btn-sm" onclick="liquidarSueldoEmpleado(' + idx + ')" title="Liquidar el sueldo de este empleado">💰</button>' +
                     '<button class="btn btn-danger-sm" onclick="eliminarEmpleado(' + idx + ')">✕</button>' +
                 '</div></td>';
             tbody.appendChild(tr);
         });
     }
+
+    // Imprime / PDF del legajo de un empleado (ficha con sus datos). Desde acá se puede editar
+    // con el botón «✏️ Editar» de la fila; este botón solo saca la ficha.
+    window.imprimirLegajo = function(idx) {
+        if (!_esDuenoRemun()) { alert('Solo el Super Administrador puede acceder a Remuneraciones.'); return; }
+        var emp = remuneraciones[idx];
+        if (!emp) { alert('No se encontró el empleado.'); return; }
+        var fmt = function(n){ return '$ ' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var e2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
+        var logo = '';
+        try { var _lg = (typeof getBrand === 'function' ? getBrand().logoEmpresa : '') || ''; if (_lg) logo = (_lg.indexOf('data:') === 0) ? _lg : new URL(_lg, location.href).href; } catch (e) { logo = ''; }
+        var info = function(lbl, val){ return '<div class="celda"><span class="k">' + lbl + '</span><span class="v">' + val + '</span></div>'; };
+        var celdas = [ info('Empleado', escHtml(emp.nombre || '—')), info('CUIL', escHtml(emp.cuil || '—')) ];
+        if (emp.dni)       celdas.push(info('DNI', escHtml(emp.dni)));
+        if (emp.legajoNro) celdas.push(info('Legajo N°', escHtml(emp.legajoNro)));
+        celdas.push(info('Fecha de ingreso', emp.fechaIngreso ? formatearFecha(emp.fechaIngreso) : '—'));
+        celdas.push(info('Puesto / Categoría', escHtml(emp.puesto || '—')));
+        celdas.push(info('Condición', emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia'));
+        if (emp.obraSocial) celdas.push(info('Obra social', escHtml(emp.obraSocial)));
+        if (emp.convenio)   celdas.push(info('Convenio', escHtml(emp.convenio)));
+        celdas.push(info('Sueldo básico', fmt(emp.sueldoBasico)));
+        celdas.push(info('Días de vacaciones', String(remDiasVacaciones(emp.fechaIngreso))));
+        celdas.push(info('SAC semestral estimado', fmt(remSacSemestral(emp))));
+        var css =
+            '*{box-sizing:border-box;} body{font-family:"Segoe UI",Arial,sans-serif;color:#1a1a2e;margin:0;padding:28px;background:#fff;font-size:12.5px;line-height:1.35;}' +
+            '.doc{max-width:760px;margin:0 auto;border:1px solid #d5dae4;border-radius:10px;overflow:hidden;}' +
+            '.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:18px 22px;border-bottom:3px solid #1a3a6b;background:#f7f9fc;}' +
+            '.emp-nom{font-size:17px;font-weight:800;color:#1a3a6b;} .emp-sub{font-size:11px;color:#5a6376;margin-top:3px;}' +
+            '.tit{font-size:15px;font-weight:800;text-align:right;letter-spacing:.5px;}' +
+            '.datos{display:grid;grid-template-columns:1fr 1fr;}' +
+            '.celda{padding:9px 22px;border-top:1px solid #eef1f6;} .celda:nth-child(-n+2){border-top:none;}' +
+            '.k{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:#8a92a6;font-weight:700;} .v{font-size:13px;font-weight:600;}' +
+            '.firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:40px 22px 16px;} .firma{border-top:1px solid #9aa3b5;padding-top:6px;text-align:center;font-size:11px;color:#5a6376;}' +
+            '.pie{padding:10px 22px 16px;font-size:10px;color:#9098a8;border-top:1px solid #eef1f6;}' +
+            '@media print{body{padding:0;} .doc{border:none;border-radius:0;max-width:none;}}';
+        var html = '<html><head><meta charset="UTF-8"><title>Legajo ' + escHtml(emp.nombre || '') + '</title><style>' + css + '</style></head><body>' +
+            '<div class="doc"><div class="head">' +
+                '<div style="display:flex;gap:14px;align-items:center;">' +
+                    (logo ? '<img src="' + escHtml(logo) + '" alt="" style="height:46px;width:auto;max-width:130px;object-fit:contain;">' : '') +
+                    '<div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
+                        '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div></div>' +
+                '</div>' +
+                '<div class="tit">LEGAJO DE EMPLEADO</div>' +
+            '</div>' +
+            '<div class="datos">' + celdas.join('') + '</div>' +
+            '<div class="firmas"><div class="firma">Firma y sello del empleador</div><div class="firma">Firma del empleado</div></div>' +
+            '<div class="pie">Ficha de legajo generada el ' + new Date().toLocaleDateString('es-AR') + '. Documento interno de gestión.</div>' +
+            '</div>' +
+            '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+        var w = window.open('', '_blank', 'width=820,height=1000');
+        if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
+        w.document.write(html); w.document.close();
+    };
 
     // ═══════════════ Pagos de sueldo — carga, listado y consolidación ═══════════════
     function _remMesActualISO() { var d = new Date(); return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2); }
@@ -25877,6 +25934,96 @@
         s('remResTotLiq', fmt(tL)); s('remResTotBanco', fmt(tB)); s('remResTotEfe', fmt(tE)); s('remResTotPagado', fmt(tB + tE)); s('remResTotPend', fmt(tL - (tB + tE)));
     }
 
+    // Imprime / PDF: detalle de sueldos del mes por empleado (liquidado, cada pago con su fecha
+    // y forma —banco/efectivo—, total pagado y saldo). Toma el mes elegido en «Resumen mensual».
+    window.imprimirResumenRemun = function() {
+        if (!_esDuenoRemun()) { alert('Solo el Super Administrador puede acceder a Remuneraciones.'); return; }
+        var mes = (document.getElementById('remResumenMes') || {}).value || _remMesActualISO();
+        var fmt = function(n){ return '$ ' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var eId = (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null;
+        var pId = (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null;
+        var enProy = function(o){ return (!eId || !o.empresaId || o.empresaId === eId) && (!pId || !o.proyectoId || o.proyectoId === pId); };
+        // Junta por empleado: liquidado (recibos del mes) + lista de pagos del mes.
+        var map = {};
+        var ent = function(nom){ var k = _remNorm(nom); if (!map[k]) map[k] = { nombre: nom || '—', liquidado: 0, pagos: [] }; return map[k]; };
+        (remunRecibos || []).forEach(function(r){
+            if (!r || r.mes !== mes || !enProy(r)) return;
+            ent(r.empleadoNombre).liquidado += (r.netoTotal != null) ? r.netoTotal : ((r.neto || 0) + (r.fueraRecibo || 0));
+        });
+        (remunPagos || []).forEach(function(rp){
+            if (!rp || rp.mes !== mes || !enProy(rp)) return;
+            ent(rp.nombre).pagos.push(rp);
+        });
+        var emps = Object.keys(map).map(function(k){ return map[k]; }).sort(function(a, b){ return a.nombre.localeCompare(b.nombre); });
+        if (!emps.length) { alert('No hay datos para ' + _mesLabel(mes) + '.'); return; }
+        var e2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
+        var logo = '';
+        try { var _lg = (typeof getBrand === 'function' ? getBrand().logoEmpresa : '') || ''; if (_lg) logo = (_lg.indexOf('data:') === 0) ? _lg : new URL(_lg, location.href).href; } catch (e) { logo = ''; }
+        var totLiq = 0, totBanco = 0, totEfe = 0;
+        var filas = emps.map(function(e){
+            var pB = 0, pE = 0;
+            var detalle = e.pagos.sort(function(a, b){ return (a.fecha || '').localeCompare(b.fecha || ''); }).map(function(rp){
+                var b = rp.montoBanco || 0, ef = (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+                pB += b; pE += ef;
+                var forma = (b > 0 && ef > 0) ? 'Banco + efectivo' : (b > 0 ? 'Banco' : 'Efectivo');
+                var et = rp.tipo === 'adelanto' ? 'Adelanto' : (rp.tipo === 'parcial' ? 'A cuenta' : 'Pago');
+                return '<tr class="det"><td>' + (rp.fecha ? formatearFecha(rp.fecha) : '—') + '</td>' +
+                    '<td>' + et + (rp.detalle ? ' · <em style="color:#8a92a6;">' + escHtml(rp.detalle) + '</em>' : '') + '</td>' +
+                    '<td>' + forma + '</td><td class="r">' + fmt(b + ef) + '</td></tr>';
+            }).join('') || '<tr class="det"><td colspan="4" style="color:#8a92a6;">Sin pagos cargados este mes.</td></tr>';
+            var pagado = pB + pE, saldo = e.liquidado - pagado;
+            totLiq += e.liquidado; totBanco += pB; totEfe += pE;
+            var saldoTxt = Math.abs(saldo) < 1 ? '<span style="color:#0a7d33;font-weight:800;">SALDADO</span>'
+                : (saldo > 0 ? '<span style="color:#b3261e;font-weight:800;">Saldo ' + fmt(saldo) + '</span>'
+                             : '<span style="color:#1a3a6b;font-weight:800;">A favor ' + fmt(-saldo) + '</span>');
+            return '<div class="emp-bloque">' +
+                '<div class="emp-cab"><span class="emp-n">' + escHtml(e.nombre) + '</span>' +
+                    '<span class="emp-liq">Liquidado: <strong>' + fmt(e.liquidado) + '</strong></span></div>' +
+                '<table class="tabla-det"><thead><tr><th>Fecha</th><th>Tipo</th><th>Forma</th><th class="r">Importe</th></tr></thead>' +
+                '<tbody>' + detalle +
+                    '<tr class="sub"><td colspan="3">Pagado (banco ' + fmt(pB) + ' · efectivo ' + fmt(pE) + ')</td><td class="r">' + fmt(pagado) + '</td></tr>' +
+                    '<tr class="sal"><td colspan="3">Saldo</td><td class="r">' + saldoTxt + '</td></tr>' +
+                '</tbody></table></div>';
+        }).join('');
+        var css =
+            '*{box-sizing:border-box;} body{font-family:"Segoe UI",Arial,sans-serif;color:#1a1a2e;margin:0;padding:28px;background:#fff;font-size:12.5px;line-height:1.35;}' +
+            '.doc{max-width:820px;margin:0 auto;}' +
+            '.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:0 0 14px;border-bottom:3px solid #1a3a6b;margin-bottom:16px;}' +
+            '.emp-nom{font-size:17px;font-weight:800;color:#1a3a6b;} .emp-sub{font-size:11px;color:#5a6376;margin-top:3px;}' +
+            '.tit{font-size:15px;font-weight:800;text-align:right;} .periodo{display:inline-block;margin-top:6px;padding:4px 10px;background:#1a3a6b;color:#fff;border-radius:5px;font-size:12px;font-weight:700;}' +
+            '.emp-bloque{border:1px solid #d5dae4;border-radius:8px;overflow:hidden;margin-bottom:14px;page-break-inside:avoid;}' +
+            '.emp-cab{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#f7f9fc;border-bottom:1px solid #e3e8f0;}' +
+            '.emp-n{font-size:14px;font-weight:800;color:#1a3a6b;} .emp-liq{font-size:12px;color:#3a4256;}' +
+            'table.tabla-det{width:100%;border-collapse:collapse;} .tabla-det th{background:#eef2f8;color:#1a3a6b;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;padding:6px 14px;text-align:left;} .tabla-det th.r{text-align:right;}' +
+            '.tabla-det td{padding:5px 14px;font-size:12px;border-bottom:1px solid #f0f2f7;} .tabla-det td.r{text-align:right;font-variant-numeric:tabular-nums;}' +
+            '.tabla-det .sub td{font-weight:700;background:#fafbfd;border-top:1px solid #d5dae4;} .tabla-det .sal td{font-weight:700;background:#fafbfd;}' +
+            '.totales{margin-top:6px;border:2px solid #1a3a6b;border-radius:8px;padding:10px 14px;background:#f7f9fc;display:flex;justify-content:space-between;font-weight:800;color:#1a3a6b;font-size:13px;flex-wrap:wrap;gap:8px;}' +
+            '.pie{margin-top:14px;font-size:10px;color:#9098a8;}' +
+            '@media print{body{padding:0;}}';
+        var html = '<html><head><meta charset="UTF-8"><title>Sueldos ' + escHtml(_mesLabel(mes)) + '</title><style>' + css + '</style></head><body>' +
+            '<div class="doc"><div class="head">' +
+                '<div style="display:flex;gap:14px;align-items:center;">' +
+                    (logo ? '<img src="' + escHtml(logo) + '" alt="" style="height:46px;width:auto;max-width:130px;object-fit:contain;">' : '') +
+                    '<div><div class="emp-nom">' + escHtml(e2.nombre || 'Empresa') + '</div>' +
+                        '<div class="emp-sub">' + [ (e2.cuit ? 'CUIT ' + escHtml(e2.cuit) : ''), escHtml(e2.direccion || '') ].filter(Boolean).join(' · ') + '</div></div>' +
+                '</div>' +
+                '<div><div class="tit">DETALLE DE SUELDOS</div><div style="text-align:right;"><span class="periodo">' + escHtml(_mesLabel(mes)) + '</span></div></div>' +
+            '</div>' +
+            filas +
+            '<div class="totales"><span>Totales del mes</span>' +
+                '<span>Liquidado ' + fmt(totLiq) + '</span>' +
+                '<span>Banco ' + fmt(totBanco) + '</span>' +
+                '<span>Efectivo ' + fmt(totEfe) + '</span>' +
+                '<span>Pagado ' + fmt(totBanco + totEfe) + '</span>' +
+                '<span>Pendiente ' + fmt(totLiq - (totBanco + totEfe)) + '</span></div>' +
+            '<div class="pie">Documento interno de gestión generado el ' + new Date().toLocaleDateString('es-AR') + '. Detalle privado por empleado; no reemplaza los recibos oficiales de sueldo.</div>' +
+            '</div>' +
+            '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
+        var w = window.open('', '_blank', 'width=880,height=1000');
+        if (!w) { alert('Permití las ventanas emergentes para imprimir.'); return; }
+        w.document.write(html); w.document.close();
+    };
+
     function _renderRemunRecibosLista() {
         var tbody = document.getElementById('remRecibosBody'); if (!tbody) return;
         var fmt = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
@@ -26237,6 +26384,7 @@
         ['empConceptosLista','empConceptosListaB','empPreviewLiquidacion','empRecibosHist'].forEach(function(id){ var el = document.getElementById(id); if (el) el.innerHTML = ''; });
         _empActualizarVacios();
         var mes = document.getElementById('empLiqMes'); if (mes) mes.value = '';
+        var fEmi = document.getElementById('empLiqFecha'); if (fEmi) fEmi.value = new Date().toISOString().slice(0, 10);
         document.getElementById('modalLiquidar').classList.add('active');
         if (!remuneraciones.length) alert('Todavía no cargaste empleados. Creá primero el legajo con «➕ Nuevo empleado».');
     };
@@ -26272,6 +26420,8 @@
         }
         var mesEl = document.getElementById('empLiqMes');
         if (mesEl) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+        var fEmiEl = document.getElementById('empLiqFecha');
+        if (fEmiEl) fEmiEl.value = new Date().toISOString().slice(0, 10);   // por defecto hoy; se puede cambiar
         renderPreviewLiquidacion();
         _renderRecibosEmpleadoActivo();
         document.getElementById('modalLiquidar').classList.add('active');
@@ -26415,7 +26565,7 @@
         return txt.charAt(0).toUpperCase() + txt.slice(1) + ' pesos';
     }
 
-    function _imprimirReciboDe(emp, mes) {
+    function _imprimirReciboDe(emp, mes, fechaEmisionISO) {
         if (!emp) return;
         var fmt = function(n) { return '$ ' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var e2 = getEmpresaParaRecibo ? getEmpresaParaRecibo() : { nombre: '' };
@@ -26440,7 +26590,8 @@
                      '<tr><td>Ley 19032 / INSSJP (3%)</td><td class="r"></td><td class="r">' + fmt(ap.ley19032) + '</td></tr>' +
                      '<tr><td>Obra social (3%)</td><td class="r"></td><td class="r">' + fmt(ap.obraSocial) + '</td></tr>';
         }
-        var emision = new Date().toLocaleDateString('es-AR');
+        // Fecha «emitido»: la que se pasa (fecha de emisión elegida / la del recibo guardado); si no, hoy.
+        var emision = fechaEmisionISO ? formatearFecha(fechaEmisionISO) : new Date().toLocaleDateString('es-AR');
         var _totalLiq = neto + t.fuera;   // total a cobrar del período: Parte A + Parte B
         // ── Parte B: conceptos que NO integran el recibo oficial ───────────────
         // Se imprimen en un bloque aparte (no entran en el NETO de arriba) y se muestra
@@ -26581,7 +26732,8 @@
         var emp = _empDesdeModal();
         if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
         var mes = (document.getElementById('empLiqMes') || {}).value || '';
-        _imprimirReciboDe(emp, mes);
+        var fEmi = (document.getElementById('empLiqFecha') || {}).value || '';
+        _imprimirReciboDe(emp, mes, fEmi);
         _autoguardarReciboAlImprimir(emp, mes);
     };
 
@@ -26595,7 +26747,7 @@
             empleadoId: emp.id, empleadoNombre: emp.nombre, cuil: emp.cuil, dni: emp.dni,
             fechaIngreso: emp.fechaIngreso, puesto: emp.puesto, tipoContrato: emp.tipoContrato,
             obraSocial: emp.obraSocial, convenio: emp.convenio, legajoNro: emp.legajoNro,
-            mes: mes, fechaEmision: new Date().toISOString().slice(0, 10),
+            mes: mes, fechaEmision: (((document.getElementById('empLiqFecha') || {}).value) || new Date().toISOString().slice(0, 10)),
             basico: emp.sueldoBasico, conceptos: emp.conceptos,
             aportes: ap, haberes: t.haberes, noRemun: t.noRemun, descuentos: t.descuentos,
             fueraRecibo: t.fuera, fueraHaberes: t.fueraHab, fueraDescuentos: t.fueraDesc,
@@ -26697,7 +26849,7 @@
     window.imprimirReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
         if (!r) return;
-        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, dni: r.dni, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [], obraSocial: r.obraSocial, convenio: r.convenio, legajoNro: r.legajoNro, nroRecibo: r.nroRecibo }, r.mes);
+        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, dni: r.dni, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [], obraSocial: r.obraSocial, convenio: r.convenio, legajoNro: r.legajoNro, nroRecibo: r.nroRecibo }, r.mes, r.fechaEmision);
     };
     window.eliminarReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
@@ -37168,6 +37320,7 @@
       <div id="empAvisoPagos" style="display:none; margin:0 0 12px; padding:9px 12px; border-radius:8px; font-size:12px; border:1px solid var(--warn); background:rgba(230,160,60,.08); color:var(--text-2);"></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin:10px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);">
         <label style="font-size:12px;">Mes que liquidás<br><input type="month" id="empLiqMes" onchange="_empAvisoPagosDelMes()" style="padding:6px 8px; font-size:13px;"></label>
+        <label style="font-size:12px;" title="Fecha con la que sale «emitido» el recibo. Podés ponerla distinta de hoy (ej. la fecha de pago).">Fecha de emisión<br><input type="date" id="empLiqFecha" style="padding:6px 8px; font-size:13px;"></label>
         <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()" title="Imprime el recibo y lo deja guardado en «Recibos anteriores»">🖨️ Imprimir y guardar</button>
         <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
