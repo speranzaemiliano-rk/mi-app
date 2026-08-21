@@ -13030,9 +13030,19 @@
     // Importa una lista pegada (una línea por mes). Escribe todo en un solo update.
     function cacImportarLista() {
         if (!puedeEditar) { alert('No tenés permisos para editar el índice CAC.'); return; }
-        var raw = (document.getElementById('cacBulkInput') || {}).value || '';
+        var ta  = document.getElementById('cacBulkInput');
+        var raw = (ta || {}).value || '';
         var st  = document.getElementById('cfgCACStatus');
-        if (!db) { if (st) st.textContent = '⚠️ Sin conexión.'; return; }
+        if (!db) { alert('⚠️ Sin conexión con la base. Intentá de nuevo en unos segundos.'); return; }
+        // Este botón NO abre ninguna ventana: importa lo que esté PEGADO en el recuadro de arriba.
+        // Si está vacío hay que decirlo acá; el renglón de estado vive debajo de la tabla y no se ve.
+        if (!raw.trim()) {
+            alert('Pegá primero los meses en el recuadro de arriba, y después tocá «Importar lista».\n\n' +
+                  'Una línea por mes, por ejemplo:\n2026-05 21035.60\n2026-04 20493.20\n\n' +
+                  'Si lo que querés son los índices oficiales ya cargados, usá el botón «📥 Cargar CAC ago 2025 – may 2026».');
+            if (ta) ta.focus();
+            return;
+        }
         var mapa = {}, ok = 0, ignoradas = 0;
         raw.split(/\r?\n/).forEach(function(l) {
             if (!l.trim()) return;
@@ -13044,12 +13054,19 @@
             var val = nums.length ? Math.max.apply(null, nums) : 0;   // el índice es el número más grande de la línea
             if (val > 0) { mapa[mes] = val; ok++; } else { ignoradas++; }
         });
-        if (!ok) { if (st) st.textContent = '⚠️ No se reconoció ningún mes/valor. Revisá el formato (ej: 2026-05 21035.60).'; return; }
+        if (!ok) {
+            alert('⚠️ No se reconoció ningún mes/valor.\n\nRevisá el formato: una línea por mes, con el mes y el valor.\nEjemplo: 2026-05 21035.60');
+            return;
+        }
         db.ref('global/config/cacIndices').update(mapa).then(function() {
-            if (st) st.textContent = '✅ ' + ok + ' mes' + (ok !== 1 ? 'es' : '') + ' importado' + (ok !== 1 ? 's' : '') + (ignoradas ? ' · ' + ignoradas + ' línea(s) ignorada(s)' : '') + '.';
-            var ta = document.getElementById('cacBulkInput'); if (ta) ta.value = '';
-        }).catch(function() {
-            if (st) st.textContent = '❌ No se pudo importar (revisá permisos/conexión).';
+            var msg = '✅ ' + ok + ' mes' + (ok !== 1 ? 'es' : '') + ' importado' + (ok !== 1 ? 's' : '') + (ignoradas ? ' · ' + ignoradas + ' línea(s) ignorada(s)' : '') + '.';
+            if (st) st.textContent = msg;
+            if (ta) ta.value = '';
+            alert(msg);
+        }).catch(function(e) {
+            var d = (e && (e.code || e.message)) ? (e.code || e.message) : '';
+            if (st) st.textContent = '❌ No se pudo importar.';
+            alert('❌ No se pudo importar el índice CAC.' + (d ? '\n\nMotivo: ' + d : '\n\nRevisá permisos y conexión.'));
         });
     }
 
@@ -13068,9 +13085,13 @@
         var pisa = Object.keys(oficiales).filter(function(m){ return _cacDeMes(m) > 0; });
         if (pisa.length && !confirm('Ya hay ' + pisa.length + ' de esos meses cargados. ¿Sobrescribirlos con los valores oficiales?')) return;
         db.ref('global/config/cacIndices').update(oficiales).then(function() {
-            if (st) st.textContent = '✅ Cargados ' + Object.keys(oficiales).length + ' meses (Costo de Construcción, ago 2025 – may 2026).';
-        }).catch(function() {
-            if (st) st.textContent = '❌ No se pudo cargar (revisá permisos/conexión).';
+            var msg = '✅ Cargados ' + Object.keys(oficiales).length + ' meses (Costo de Construcción, ago 2025 – may 2026).';
+            if (st) st.textContent = msg;
+            alert(msg);
+        }).catch(function(e) {
+            var d = (e && (e.code || e.message)) ? (e.code || e.message) : '';
+            if (st) st.textContent = '❌ No se pudo cargar.';
+            alert('❌ No se pudieron cargar los índices oficiales.' + (d ? '\n\nMotivo: ' + d : '\n\nRevisá permisos y conexión.'));
         });
     }
 
@@ -25842,6 +25863,18 @@
     };
 
     var editandoRemunPagoId = null;   // id del pago que se está editando (null = alta nueva)
+    // Cómo se paga el sueldo lo decide cada empresa: forzar "banco" obligaba a corregirlo a mano
+    // en cada pago. Se recuerda lo último que se usó (por dispositivo) y se arranca con eso.
+    function _remMedioPreferido() {
+        try { var v = localStorage.getItem('rk_rem_pago_medio'); if (v === 'banco' || v === 'efectivo') return v; } catch (e) {}
+        return 'efectivo';
+    }
+    function _remRecordarMedio(banco, efe) {
+        try {
+            if (banco > 0 && efe <= 0)      localStorage.setItem('rk_rem_pago_medio', 'banco');
+            else if (efe > 0 && banco <= 0) localStorage.setItem('rk_rem_pago_medio', 'efectivo');
+        } catch (e) {}
+    }
     function abrirFormRemunPago(prefill) {
         prefill = prefill || {};
         editandoRemunPagoId = null;
@@ -25852,16 +25885,19 @@
         var mes = prefill.mes || _remMesActualISO();
         document.getElementById('remPagoMes').value = mes;
         document.getElementById('remPagoFecha').value = _remHoyISO();
-        // El total a cobrar (Parte A + Parte B) se pre-carga entero en "banco": el reparto
-        // entre banco y efectivo es una decisión del pago, no de la liquidación.
-        var _tot = (prefill.banco || 0) + (prefill.fuera || 0);
-        document.getElementById('remPagoBanco').value    = _tot > 0 ? Math.round(_tot) : '';
-        document.getElementById('remPagoEfectivo').value = (prefill.efectivo > 0) ? Math.round(prefill.efectivo) : '';
+        // El total a cobrar (Parte A + Parte B) se pre-carga entero en UNA sola columna: la que se
+        // usó la última vez (efectivo por defecto). El reparto es una decisión del pago, no de la
+        // liquidación, y se puede repartir a mano igual. Se conservan los centavos, no se redondea.
+        var _tot = (prefill.banco || 0) + (prefill.fuera || 0) + (prefill.efectivo || 0);
+        var _r2 = function(n){ return Math.round(n * 100) / 100; };
+        var _enBanco = _remMedioPreferido() === 'banco';
+        document.getElementById('remPagoBanco').value    = (_tot > 0 &&  _enBanco) ? _r2(_tot) : '';
+        document.getElementById('remPagoEfectivo').value = (_tot > 0 && !_enBanco) ? _r2(_tot) : '';
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
         var tipoEl = document.getElementById('remPagoTipo'); if (tipoEl) tipoEl.value = prefill.tipo || 'pago';
         var detEl = document.getElementById('remPagoDetalle'); if (detEl) detEl.value = prefill.detalle || '';
         document.getElementById('remPagoFormEstado').textContent = prefill.nombre
-            ? 'Pre-cargado desde el recibo de ' + prefill.nombre + ' por el total a cobrar' + ((prefill.fuera > 0) ? ' (recibo + Parte B)' : '') + '. Repartí cuánto va por banco y cuánto en efectivo: puede ser todo por uno, o mitad y mitad.'
+            ? 'Pre-cargado desde el recibo de ' + prefill.nombre + ' por el total a cobrar' + ((prefill.fuera > 0) ? ' (recibo + Parte B)' : '') + ', en ' + (_enBanco ? 'BANCO' : 'EFECTIVO') + ' (lo último que usaste). Cambiá el reparto si este pago fue distinto: puede ser todo por uno, o mitad y mitad.'
             : '';
         _remPagoRefrescarPendiente();
     }
@@ -26038,6 +26074,7 @@
                 var _sn = await REF_REMUN_PAGOS.child(_idPago).once('value');
                 if (!_sn.exists()) throw new Error('El pago no quedó en la base (la escritura no dejó rastro).');
             }
+            _remRecordarMedio(banco, efe);   // la próxima vez arranca como pagaste esta
             cerrarFormRemunPago();
             renderRemuneraciones();
         } catch(e) {
