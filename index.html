@@ -24510,37 +24510,85 @@
         var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
         var mail = (typeof auth !== 'undefined' && auth && auth.currentUser) ? (auth.currentUser.email || '') : '';
         var L = [];
-        L.push('Usuario: ' + (mail || '(sin sesión)'));
-        L.push('UID: ' + (uid || '(sin uid)'));
-        L.push('Rol superadmin en la app: ' + ((typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? 'SÍ' : 'NO'));
-        L.push('Ruta privada: cajaDiaria/' + (uid || '?') + '/remuneracionesRecibos');
-        L.push('Recibos en memoria: ' + ((remunRecibos || []).length));
-        L.push('Pagos en memoria: ' + ((remunPagos || []).length));
-        if (!uid || !REF_REMUN_RECIBOS) { alert('🔧 Diagnóstico\n\n' + L.join('\n') + '\n\n❌ No hay sesión lista. Cerrá sesión y volvé a entrar.'); return; }
+        var pon = function(t){ L.push(t); };
+        pon('Usuario: ' + (mail || '(sin sesión)'));
+        pon('UID: ' + (uid || '(sin uid)'));
+        pon('Rol superadmin en la app: ' + ((typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? 'SÍ' : 'NO'));
+        pon('En memoria → recibos: ' + ((remunRecibos||[]).length) + ' · pagos: ' + ((remunPagos||[]).length) + ' · consolidaciones: ' + ((remunConsolidados||[]).length));
+        pon('Suscripción a la nube: ' + (_remunPrivadoSub ? 'activa' : 'NO activa'));
+        if (_remErrLectura) pon('Último error de lectura: ' + _remErrLectura.msg);
+        if (!uid || typeof db === 'undefined' || !db) { _remMostrarDiag(L.concat(['', '❌ No hay sesión lista. Cerrá sesión y volvé a entrar.'])); return; }
+
+        // Se miran las rutas ACTUALES (privadas, por usuario) y también las VIEJAS de la raíz:
+        // si el sistema guardó alguna vez ahí, los datos siguen existiendo pero la app no los lee.
+        var rutas = [
+            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesRecibos',       ref: 'cajaDiaria/' + uid + '/remuneracionesRecibos' },
+            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesPagos',         ref: 'cajaDiaria/' + uid + '/remuneracionesPagos' },
+            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesConsolidados',  ref: 'cajaDiaria/' + uid + '/remuneracionesConsolidados' },
+            { et: 'VIEJA   /remuneracionesRecibos (raíz)',                ref: 'remuneracionesRecibos' },
+            { et: 'VIEJA   /remuneracionesPagos (raíz)',                  ref: 'remuneracionesPagos' },
+            { et: 'VIEJA   /remuneracionesConsolidados (raíz)',           ref: 'remuneracionesConsolidados' }
+        ];
         var pruebaRef = db.ref('cajaDiaria/' + uid + '/_prueba');
-        pruebaRef.set({ ts: Date.now() }).then(function() {
-            L.push('Escritura de prueba: ✅ OK');
-            return REF_REMUN_RECIBOS.once('value');
-        }).then(function(snap) {
-            var v = snap.val(), n = v ? Object.keys(v).length : 0;
-            L.push('Lectura de recibos: ✅ OK — ' + n + ' recibo(s) guardado(s) en la nube');
-            if (n && !(remunRecibos || []).length) L.push('⚠️ Hay recibos en la nube pero la pantalla está vacía: recargá la página.');
-            if (!n) L.push('ℹ️ La nube no tiene ningún recibo guardado todavía.');
+        pruebaRef.set({ ts: Date.now() }).then(function(){ pon('Escritura de prueba: ✅ OK'); })
+        .catch(function(e){ pon('Escritura de prueba: ❌ ' + ((e && (e.code||e.message)) || e)); })
+        .then(function(){
             pruebaRef.remove().catch(function(){});
-            alert('🔧 Diagnóstico de Remuneraciones\n\n' + L.join('\n'));
-        }).catch(function(e) {
-            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
-            L.push('❌ FALLÓ: ' + msg);
-            if (/permission|denied/i.test(msg)) {
-                L.push('');
-                L.push('Es un problema de PERMISOS de la base, no de la app.');
-                L.push('Arreglo: Firebase → Realtime Database → Reglas,');
-                L.push('pegar el contenido de database.rules.json y PUBLICAR.');
-                L.push('Tiene que estar la rama "cajaDiaria".');
+            pon('');
+            pon('── Qué hay guardado en la nube ──');
+            return Promise.all(rutas.map(function(r){
+                return db.ref(r.ref).once('value').then(function(sn){
+                    var v = sn.val(); var n = 0;
+                    if (v) n = Array.isArray(v) ? v.filter(Boolean).length : Object.keys(v).length;
+                    return r.et + ': ' + n;
+                }).catch(function(e){
+                    return r.et + ': ❌ ' + ((e && (e.code||e.message)) || e);
+                });
+            }));
+        }).then(function(res){
+            res.forEach(pon);
+            var viejos = res.filter(function(x){ return x.indexOf('VIEJA') === 0 && /: [1-9]/.test(x); });
+            var nuevos = res.filter(function(x){ return x.indexOf('ACTUAL') === 0 && /: [1-9]/.test(x); });
+            pon('');
+            if (viejos.length && !nuevos.length) {
+                pon('⚠️ Tus datos están en las rutas VIEJAS (la raíz) y la app lee las nuevas.');
+                pon('Por eso no ves nada. Se pueden mudar: avisame y lo hago.');
+            } else if (nuevos.length && !(remunRecibos||[]).length) {
+                pon('⚠️ Hay datos en la nube pero la pantalla está vacía: recargá la página.');
+            } else if (!viejos.length && !nuevos.length) {
+                pon('ℹ️ No hay NADA guardado en ninguna de las dos rutas.');
+                pon('O sea: el guardado no está llegando a la base.');
+            } else {
+                pon('✅ Los datos están donde la app los busca.');
             }
-            alert('🔧 Diagnóstico de Remuneraciones\n\n' + L.join('\n'));
+            _remMostrarDiag(L);
+        }).catch(function(e){
+            pon('❌ ' + ((e && (e.code||e.message)) || e));
+            _remMostrarDiag(L);
         });
     };
+    // El alert() cortaba el texto y no se podía copiar. Se muestra en un cuadro con scroll.
+    function _remMostrarDiag(lineas) {
+        var txt = lineas.join('\n');
+        console.log('DIAGNÓSTICO REMUNERACIONES\n' + txt);
+        var prev = document.getElementById('remDiagOverlay'); if (prev) prev.remove();
+        var ov = document.createElement('div');
+        ov.id = 'remDiagOverlay';
+        ov.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;';
+        ov.innerHTML = '<div style="background:var(--surface,#fff); color:var(--text,#111); border-radius:12px; max-width:680px; width:100%; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,.3);">' +
+            '<div style="padding:14px 18px; border-bottom:1px solid var(--border,#ddd); font-weight:700;">🔧 Diagnóstico de Remuneraciones</div>' +
+            '<pre id="remDiagTxt" style="margin:0; padding:16px 18px; overflow:auto; flex:1; font-size:12.5px; line-height:1.55; white-space:pre-wrap; font-family:ui-monospace,Menlo,Consolas,monospace;"></pre>' +
+            '<div style="padding:12px 18px; border-top:1px solid var(--border,#ddd); display:flex; gap:8px; justify-content:flex-end;">' +
+            '<button class="btn btn-outline btn-sm" id="remDiagCopiar">📋 Copiar</button>' +
+            '<button class="btn btn-gold btn-sm" id="remDiagCerrar">Cerrar</button></div></div>';
+        document.body.appendChild(ov);
+        ov.querySelector('#remDiagTxt').textContent = txt;
+        ov.querySelector('#remDiagCerrar').onclick = function(){ ov.remove(); };
+        ov.querySelector('#remDiagCopiar').onclick = function(){
+            try { navigator.clipboard.writeText(txt); this.textContent = '✅ Copiado'; } catch(e){}
+        };
+        ov.onclick = function(ev){ if (ev.target === ov) ov.remove(); };
+    }
     // Suscripción idempotente a los 3 nodos privados. Se llama desde cargarDatos y también al abrir
     // Remuneraciones, por si al arrancar la sesión la auth (dueño) todavía no estaba lista.
     var _remunPrivadoSub = false;
