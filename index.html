@@ -21881,6 +21881,21 @@
     }
     // Guarda por diff: update solo lo cambiado/nuevo, remove (null) lo borrado. NO toca los
     // ítems que no están en el batch → no pisa lo que agregó otro usuario en paralelo.
+    // Firebase RECHAZA cualquier objeto que contenga `undefined`, y lo hace lanzando de forma
+    // SINCRÓNICA desde update(): esa excepción salta por encima del .catch() y mata el click sin
+    // dejar rastro — el dato queda en pantalla y nunca viaja a la nube. Se limpia antes de escribir.
+    function _sanitizarFB(v) {
+        if (v === undefined || typeof v === 'function') return undefined;
+        if (v === null) return null;
+        if (typeof v === 'number') return isFinite(v) ? v : 0;
+        if (Array.isArray(v)) return v.map(function(x){ var y = _sanitizarFB(x); return y === undefined ? null : y; });
+        if (typeof v === 'object') {
+            var out = {};
+            Object.keys(v).forEach(function(k){ var y = _sanitizarFB(v[k]); if (y !== undefined) out[k] = y; });
+            return out;
+        }
+        return v;
+    }
     function _colPersist(coll, ref, arr) {
         if (!ref) return Promise.resolve();
         var batch = {}, nowSnap = {};
@@ -21905,7 +21920,14 @@
         _borrar.forEach(function(id) { batch[id] = null; });
         _colSnap[coll] = nowSnap;
         if (!Object.keys(batch).length) return Promise.resolve();
-        return ref.update(batch);
+        // El try/catch convierte el fallo sincrónico en un rechazo normal, para que el .catch()
+        // de quien llama se entere y el usuario vea el aviso en vez de un guardado fantasma.
+        try {
+            return ref.update(_sanitizarFB(batch));
+        } catch (e) {
+            console.error('[' + coll + '] update() falló al escribir:', e, batch);
+            return Promise.reject(e);
+        }
     }
 
     // ── Edición segura entre usuarios ────────────────────────────────
@@ -24447,17 +24469,20 @@
     let REF_REMUN_PAGOS = null;
     let remunPagos = [];
     var _remPagoSel = {};   // ids tildados para consolidar
-    function persistirRemunPagos() { _asegurarRefsRemun(); return _colPersist('remunPagos', REF_REMUN_PAGOS, remunPagos).catch(_avisarErrorRemun); }
+    // Sin ref no hay guardado posible: acá se RECHAZA en vez de seguir de largo, porque un
+    // "no pasó nada" silencioso es justo lo que hacía perder recibos sin que nadie se enterara.
+    function _errSinRef() { return Promise.reject(new Error('La sesión con la base todavía no está lista. Esperá unos segundos y volvé a guardar.')); }
+    function persistirRemunPagos() { _asegurarRefsRemun(); if (!REF_REMUN_PAGOS) return _errSinRef().catch(_avisarErrorRemun); return _colPersist('remunPagos', REF_REMUN_PAGOS, remunPagos).catch(_avisarErrorRemun); }
     // ── Recibos de sueldo guardados por mes (snapshots de la liquidación). Nodo privado aparte. ──
     let REF_REMUN_RECIBOS = null;
     let remunRecibos = [];
-    function persistirRemunRecibos() { _asegurarRefsRemun(); return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(_avisarErrorRemun); }
+    function persistirRemunRecibos() { _asegurarRefsRemun(); if (!REF_REMUN_RECIBOS) return _errSinRef().catch(_avisarErrorRemun); return _colPersist('remunRecibos', REF_REMUN_RECIBOS, remunRecibos).catch(_avisarErrorRemun); }
     // ── Consolidaciones de pagos (batch): entidad editable para adjuntarle después el
     //    comprobante de transferencia / factura / recibo. Nodo privado aparte. ──
     let REF_REMUN_CONSOL = null;
     let remunConsolidados = [];
     var _remConsTarget = null;   // consId al que se le va a adjuntar un archivo
-    function persistirRemunConsolidados() { _asegurarRefsRemun(); return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(_avisarErrorRemun); }
+    function persistirRemunConsolidados() { _asegurarRefsRemun(); if (!REF_REMUN_CONSOL) return _errSinRef().catch(_avisarErrorRemun); return _colPersist('remunConsolidados', REF_REMUN_CONSOL, remunConsolidados).catch(_avisarErrorRemun); }
     // Lazy-init de los 3 nodos privados de remuneraciones. Se guardan bajo
     // 'cajaDiaria/<uid>/...' porque ese nodo tiene reglas de Firebase PRIVADAS (solo ese uid lee
     // y escribe) que YA ESTÁN DESPLEGADAS — así los recibos/pagos persisten sin depender de
@@ -25965,6 +25990,7 @@
         var btn = document.getElementById('btnGuardarRemunPago'); if (btn) btn.disabled = true;
         var estado = document.getElementById('remPagoFormEstado');
         var adjunto = null;
+        var _idPago = editandoRemunPagoId || null;
         var fileEl = document.getElementById('remPagoAdjunto');
         var file = fileEl && fileEl.files && fileEl.files[0];
         try {
@@ -25984,8 +26010,9 @@
                     if (adjunto) ex.adjunto = adjunto;   // solo reemplaza el comprobante si subió uno nuevo
                 }
             } else {
+                _idPago = 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000);
                 remunPagos.push({
-                    id: 'RP-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+                    id: _idPago,
                     nombre: nombre, mes: mes, fecha: fecha || _remHoyISO(),
                     montoBanco: banco, montoEfectivo: efe, tipo: tipo, detalle: detalle, adjunto: adjunto,
                     empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
@@ -25994,6 +26021,13 @@
                 });
             }
             await persistirRemunPagos();
+            // persistirRemunPagos() atrapa su propio error para avisar, así que el await de arriba
+            // sale bien igual cuando la escritura falló. Por eso se comprueba contra la base: si el
+            // pago no está, se avisa acá en vez de cerrar el formulario como si estuviera guardado.
+            if (_idPago && REF_REMUN_PAGOS) {
+                var _sn = await REF_REMUN_PAGOS.child(_idPago).once('value');
+                if (!_sn.exists()) throw new Error('El pago no quedó en la base (la escritura no dejó rastro).');
+            }
             cerrarFormRemunPago();
             renderRemuneraciones();
         } catch(e) {
@@ -27115,14 +27149,22 @@
             snap.id = 'REC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
             remunRecibos.push(snap);
         }
-        persistirRemunRecibos();
+        var _guardado = persistirRemunRecibos();
         // Recordar los conceptos en el legajo, para arrancar de ahí la próxima liquidación.
         if (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx]) {
             remuneraciones[editandoEmpleadoIdx].conceptos = emp.conceptos;
             persistirRemuneraciones();
         }
         _renderRecibosEmpleado(emp.id);
-        return true;
+        // Se devuelve la promesa para poder CONFIRMAR contra la base antes de decir "guardado".
+        var _id = (existente ? existente.id : snap.id);
+        return Promise.resolve(_guardado).then(function() {
+            if (!REF_REMUN_RECIBOS || !_id) return true;
+            return REF_REMUN_RECIBOS.child(_id).once('value').then(function(sn) {
+                if (sn.exists()) return true;
+                throw new Error('El recibo no quedó en la base (la escritura no dejó rastro).');
+            });
+        });
     }
 
     // Al imprimir/"sacar" el recibo, lo dejamos guardado también para que quede en «Recibos
@@ -27139,7 +27181,10 @@
         }
         var yaExiste = (remunRecibos || []).some(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
         if (yaExiste) return;   // ya está guardado; no lo pisamos
-        _guardarReciboSnap(emp, mes, { silencioso: true });
+        Promise.resolve(_guardarReciboSnap(emp, mes, { silencioso: true })).catch(function(e) {
+            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+            alert('⚠️ El recibo se imprimió pero NO quedó guardado.\n\nMotivo: ' + msg);
+        });
     }
 
     // Guarda (graba) el recibo de sueldo del mes elegido como una foto de la liquidación actual.
@@ -27150,7 +27195,8 @@
         if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con "Guardar empleado", y después guardá el recibo del mes.'); return; }
         var mes = (document.getElementById('empLiqMes') || {}).value || '';
         if (!mes) { alert('Elegí el mes que estás liquidando.'); return; }
-        if (!_guardarReciboSnap(emp, mes, {})) return;   // el usuario canceló el reemplazo
+        var _res = _guardarReciboSnap(emp, mes, {});
+        if (_res === false) return;                     // el usuario canceló el reemplazo
         var t = remTotalesConceptos(emp);
         var _netoOfi = remNetoOficial(emp), _fuera = t.fuera, _neto = _netoOfi + _fuera;
         // Ofrecer cargar el PAGO de sueldo del mes con el neto ya calculado (para consolidarlo
@@ -27158,13 +27204,22 @@
         // (fuera del recibo) en efectivo; el usuario después reparte banco/efectivo.
         var _detalle = _fuera ? ('\n\nRecibo oficial: $' + (_netoOfi).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
             ' · Fuera del recibo: $' + (_fuera).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})) : '';
-        if (confirm('✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\n¿Cargar también el PAGO de sueldo de este mes (total $' + (_neto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ') en «Pagos de sueldo»? Después lo consolidás en Caja/Banco.' + _detalle)) {
-            cerrarModalLiquidar();
-            remVista('pagos');   // la vista de pagos es la que muestra esa tarjeta
-            abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: _netoOfi, efectivo: 0, fuera: _fuera > 0 ? _fuera : 0 });
-            var card = document.getElementById('remPagosCard');
-            if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+        // El "✅ guardado" sale RECIÉN cuando la base confirmó el recibo. Antes se cantaba victoria
+        // apenas se agregaba a la lista en pantalla, aunque la escritura hubiera fallado.
+        Promise.resolve(_res).then(function() {
+            if (confirm('✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\n¿Cargar también el PAGO de sueldo de este mes (total $' + (_neto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ') en «Pagos de sueldo»? Después lo consolidás en Caja/Banco.' + _detalle)) {
+                cerrarModalLiquidar();
+                remVista('pagos');   // la vista de pagos es la que muestra esa tarjeta
+                abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: _netoOfi, efectivo: 0, fuera: _fuera > 0 ? _fuera : 0 });
+                var card = document.getElementById('remPagosCard');
+                if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }).catch(function(e) {
+            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+            console.error('Recibo de sueldo — no se pudo guardar:', e);
+            alert('❌ El recibo NO se guardó.\n\nMotivo: ' + msg +
+                  '\n\nNo cierres la pantalla: anotá los datos antes de recargar.\nUsá 🔧 Diagnóstico en Remuneraciones y pasame el resultado.');
+        });
     };
 
     // Lista los recibos guardados de un empleado, con reimprimir / eliminar.
