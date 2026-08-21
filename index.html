@@ -21894,7 +21894,15 @@
             batch[it.id] = it;
         });
         var prev = _colSnap[coll] || {};
-        Object.keys(prev).forEach(function(id) { if (!(id in nowSnap)) batch[id] = null; }); // borrados
+        var _borrar = Object.keys(prev).filter(function(id) { return !(id in nowSnap); });
+        // RED DE SEGURIDAD: que la lista quede VACÍA teniendo varios ítems conocidos nunca es una
+        // acción real del usuario (borra de a uno), sino una lista que se vació sola por un error
+        // de carga. Emitir esos null borraría en la nube todo lo que había. Se corta acá.
+        if (!arr.length && _borrar.length > 1) {
+            console.warn('[' + coll + '] Se evitó borrar ' + _borrar.length + ' registro(s) en la nube: la lista en memoria quedó vacía sin que se borraran a mano.');
+            return Promise.resolve();   // no se toca _colSnap: el estado conocido sigue siendo el bueno
+        }
+        _borrar.forEach(function(id) { batch[id] = null; });
         _colSnap[coll] = nowSnap;
         if (!Object.keys(batch).length) return Promise.resolve();
         return ref.update(batch);
@@ -24456,14 +24464,69 @@
     // desplegar reglas nuevas para los nodos remuneraciones* de nivel raíz (que la base rechaza
     // con el '.write': false por defecto si esas reglas no se publicaron). Las dos variantes del
     // mail del dueño son la misma cuenta de Gmail (los puntos no cuentan) → mismo uid siempre.
+    // Dónde viven los datos de sueldos. La ruta por-uid (cajaDiaria/<uid>/) los ata a la CUENTA con
+    // la que se entró: si el mismo dueño ingresa por otro método (Google en vez de contraseña) el
+    // uid es otro y los recibos quedan invisibles, aunque estén guardados. Por eso se usa la ruta
+    // FIJA de la raíz (remuneraciones*), que las reglas ya reservan al rol superadmin y no depende
+    // del uid ni del dispositivo. Si esas reglas todavía no están publicadas, la base rechaza la
+    // lectura y se vuelve solo por respaldo a la ruta vieja, sin perder nada.
+    var _remBaseRaiz = true;          // true = raíz (fija) · false = respaldo cajaDiaria/<uid>/
+    function _remBasePath() {
+        if (_remBaseRaiz) return '';
+        var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
+        return uid ? ('cajaDiaria/' + uid + '/') : null;
+    }
     function _asegurarRefsRemun() {
         if (typeof db === 'undefined' || !db) return;
         var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
-        if (!uid) return;
-        var base = 'cajaDiaria/' + uid + '/';
+        if (!uid) return;               // sin sesión no se arma nada
+        var base = _remBasePath();
+        if (base === null) return;
         if (!REF_REMUN_PAGOS)   REF_REMUN_PAGOS   = db.ref(base + 'remuneracionesPagos');
         if (!REF_REMUN_RECIBOS) REF_REMUN_RECIBOS = db.ref(base + 'remuneracionesRecibos');
         if (!REF_REMUN_CONSOL)  REF_REMUN_CONSOL  = db.ref(base + 'remuneracionesConsolidados');
+    }
+    // La raíz no se pudo leer (reglas sin publicar) → volver a la ruta por-uid y re-suscribir.
+    function _remVolverARutaVieja(motivo) {
+        if (!_remBaseRaiz) return false;
+        console.warn('Remuneraciones: la ruta fija no está disponible (' + motivo + '). Se usa la ruta por usuario.');
+        _remBaseRaiz = false;
+        REF_REMUN_PAGOS = REF_REMUN_RECIBOS = REF_REMUN_CONSOL = null;
+        delete _colSnap['remunPagos']; delete _colSnap['remunRecibos']; delete _colSnap['remunConsolidados'];
+        _remunPrivadoSub = false;
+        _remErrLectura = null;
+        _suscribirRemunPrivado();
+        return true;
+    }
+    // Trae a la ruta fija lo que haya quedado en la ruta vieja por-uid. Solo AGREGA lo que falta
+    // (por id); nunca pisa ni borra el origen, así que se puede repetir sin riesgo.
+    var _remMigrado = false;
+    function _remMigrarDesdeRutaVieja() {
+        if (_remMigrado || !_remBaseRaiz) return;
+        var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
+        if (!uid) return;
+        _remMigrado = true;
+        var defs = [
+            ['remuneracionesPagos',        function(){ return remunPagos; },        persistirRemunPagos],
+            ['remuneracionesRecibos',      function(){ return remunRecibos; },      persistirRemunRecibos],
+            ['remuneracionesConsolidados', function(){ return remunConsolidados; }, persistirRemunConsolidados]
+        ];
+        defs.forEach(function(d) {
+            db.ref('cajaDiaria/' + uid + '/' + d[0]).once('value').then(function(sn) {
+                var v = sn.val(); if (!v) return;
+                var items = Array.isArray(v) ? v.filter(Boolean) : Object.keys(v).map(function(k){ var it = v[k]; if (it && !it.id) it.id = k; return it; }).filter(Boolean);
+                if (!items.length) return;
+                var arr = d[1](); var hay = {};
+                arr.forEach(function(x){ if (x && x.id) hay[x.id] = 1; });
+                var nuevos = items.filter(function(x){ return x && x.id && !hay[x.id]; });
+                if (!nuevos.length) return;
+                nuevos.forEach(function(x){ arr.push(x); });
+                console.log('Remuneraciones: recuperados ' + nuevos.length + ' registro(s) de ' + d[0] + '.');
+                d[2]();
+                if (typeof renderRemuneraciones === 'function') renderRemuneraciones();
+                if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista();
+            }).catch(function(){});
+        });
     }
     // Avisa (una sola vez) si un guardado privado falla — típicamente PERMISSION_DENIED por reglas
     // de Firebase sin desplegar. Antes el error se tragaba y el dato "desaparecía" en silencio.
@@ -24516,6 +24579,7 @@
         pon('Rol superadmin en la app: ' + ((typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? 'SÍ' : 'NO'));
         pon('En memoria → recibos: ' + ((remunRecibos||[]).length) + ' · pagos: ' + ((remunPagos||[]).length) + ' · consolidaciones: ' + ((remunConsolidados||[]).length));
         pon('Suscripción a la nube: ' + (_remunPrivadoSub ? 'activa' : 'NO activa'));
+        pon('Ruta en uso: ' + (_remBaseRaiz ? 'FIJA (raíz) — no depende de la cuenta' : 'por usuario (cajaDiaria/<uid>) — respaldo'));
         if (_remErrLectura) pon('Último error de lectura: ' + _remErrLectura.msg);
         if (!uid || typeof db === 'undefined' || !db) { _remMostrarDiag(L.concat(['', '❌ No hay sesión lista. Cerrá sesión y volvé a entrar.'])); return; }
 
@@ -24597,9 +24661,9 @@
         _asegurarRefsRemun();
         if (!REF_REMUN_RECIBOS) return;   // uid todavía no listo → se reintenta al abrir la pestaña
         _remunPrivadoSub = true;
-        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ _avisarErrorLecturaRemun('pagos de sueldo', e); });
-        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); if (typeof _renderSueldosMes === 'function') _renderSueldosMes(); }, function(e){ _avisarErrorLecturaRemun('recibos de sueldo', e); });
-        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ _avisarErrorLecturaRemun('consolidaciones', e); });
+        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ if (_remVolverARutaVieja('pagos')) return; _avisarErrorLecturaRemun('pagos de sueldo', e); });
+        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); if (typeof _renderSueldosMes === 'function') _renderSueldosMes(); _remMigrarDesdeRutaVieja(); }, function(e){ if (_remVolverARutaVieja('recibos')) return; _avisarErrorLecturaRemun('recibos de sueldo', e); });
+        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ if (_remVolverARutaVieja('consolidaciones')) return; _avisarErrorLecturaRemun('consolidaciones', e); });
     }
     // El dueño (Super Administrador) ve Remuneraciones, además del gate de reglas en la base.
     // Genérico por instalación: vale el rol superadmin o el adminEmail configurado (config.js),
