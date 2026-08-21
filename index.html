@@ -5144,10 +5144,13 @@
                           Pegá una línea por mes con el <strong>mes y el valor</strong> del índice (Costo de Construcción). Acepta formatos como
                           <code>2026-05 21035.60</code>, <code>MAY2026&nbsp;&nbsp;21.035,60</code> o <code>05/2026;21035,60</code>.
                           Las líneas sin mes reconocible se ignoran.
+                          También podés <strong>subir un Excel o CSV</strong> con una fila por mes (mes y valor en columnas separadas): se vuelca acá para que lo revises antes de importar.
                         </p>
                         <textarea id="cacBulkInput" rows="6" placeholder="2026-05 21035.60&#10;2026-04 20493.20&#10;2026-03 19771.20" style="width:100%;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:8px;"></textarea>
                         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                           <button class="btn btn-gold btn-sm" onclick="cacImportarLista()">⬆️ Importar lista</button>
+                          <input type="file" id="cacExcelInput" accept=".xlsx,.xls,.csv" style="display:none;" onchange="cacLeerExcel(this)">
+                          <button class="btn btn-outline btn-sm" onclick="document.getElementById('cacExcelInput').click()" title="Leer los meses y valores desde un Excel o CSV (una fila por mes)">📄 Subir Excel / CSV</button>
                           <button class="btn btn-outline btn-sm" onclick="cacCargarOficial()" title="Carga los índices oficiales de Costo de Construcción de ago 2025 a may 2026">📥 Cargar CAC ago 2025 – may 2026</button>
                         </div>
                       </div>
@@ -13028,6 +13031,54 @@
     }
 
     // Importa una lista pegada (una línea por mes). Escribe todo en un solo update.
+    // Lee un Excel/CSV con los índices y lo vuelca al recuadro de texto. NO importa solo:
+    // deja la lista a la vista para revisarla, y se guarda con «⬆️ Importar lista». Así se
+    // aprovecha el mismo parser de meses/valores que ya se usa al pegar a mano.
+    window.cacLeerExcel = function(input) {
+        var file = input && input.files && input.files[0];
+        if (input) input.value = '';   // permite volver a elegir el MISMO archivo
+        if (!file) return;
+        if (!puedeEditar) { alert('No tenés permisos para editar el índice CAC.'); return; }
+        if (typeof XLSX === 'undefined') { alert('No se pudo cargar la librería de Excel. Revisá tu conexión y volvé a intentar.'); return; }
+        var fr = new FileReader();
+        fr.onerror = function() { alert('❌ No se pudo leer el archivo.'); };
+        fr.onload = function(e) {
+            try {
+                var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+                var ws = wb.Sheets[wb.SheetNames[0]];
+                if (!ws) { alert('❌ El archivo no tiene ninguna hoja con datos.'); return; }
+                var filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+                var lineas = [], ignoradas = 0;
+                filas.forEach(function(f) {
+                    if (!f || !f.length) return;
+                    // Una fecha real de Excel se pasa a 'YYYY-MM' acá: si se dejara como texto
+                    // suelto (ej. "01/05/2026") el orden día/mes podría leerse al revés.
+                    var linea = f.map(function(c) {
+                        if (c instanceof Date) return c.getFullYear() + '-' + String(c.getMonth() + 1).padStart(2, '0');
+                        return String(c == null ? '' : c);
+                    }).join(' ').trim();
+                    if (!linea) return;
+                    if (!_cacParseMes(linea)) { ignoradas++; return; }   // encabezados y filas sueltas
+                    lineas.push(linea);
+                });
+                if (!lineas.length) {
+                    alert('⚠️ No se reconoció ningún mes en «' + file.name + '».\n\n' +
+                          'El archivo tiene que tener una fila por mes, con el mes y el valor ' +
+                          '(por ejemplo: 2026-05 en una columna y 21035.60 en la otra).');
+                    return;
+                }
+                var ta = document.getElementById('cacBulkInput');
+                if (ta) { ta.value = lineas.join('\n'); ta.focus(); }
+                alert('📄 Se leyeron ' + lineas.length + ' mes(es) de «' + file.name + '»' +
+                      (ignoradas ? ' (' + ignoradas + ' fila(s) ignorada(s), como los encabezados)' : '') + '.\n\n' +
+                      'Revisá la lista en el recuadro y tocá «⬆️ Importar lista» para guardarla.');
+            } catch (err) {
+                alert('❌ No se pudo leer el archivo: ' + (err && err.message ? err.message : err));
+            }
+        };
+        fr.readAsArrayBuffer(file);
+    };
+
     function cacImportarLista() {
         if (!puedeEditar) { alert('No tenés permisos para editar el índice CAC.'); return; }
         var ta  = document.getElementById('cacBulkInput');
