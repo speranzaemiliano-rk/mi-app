@@ -4720,6 +4720,10 @@
                         🔒 Esta sección es confidencial y solo la puede ver el <strong>Super Administrador</strong>.
                     </div>
                     <div id="remContenido">
+                        <!-- Aviso si los datos privados de Remuneraciones NO se pudieron leer de la nube.
+                             Sin esto, un error de permisos dejaba las listas vacías y parecía que los
+                             recibos "se borraban", cuando en realidad nunca se llegaban a leer. -->
+                        <div id="remErrorCarga" style="display:none; margin:0 0 14px; padding:12px 14px; border-radius:10px; border:1px solid var(--danger); background:rgba(220,60,60,.08); font-size:13px; color:var(--text-2);"></div>
                         <!-- ═══ Sueldos del mes: tablero único por empleado (recibo · pago · consolidación) ═══ -->
                         <div class="table-card" id="remMesCard">
                             <div class="table-card-head">
@@ -4942,6 +4946,7 @@
                             <div class="table-card-head">
                                 <h3>📄 Recibos emitidos</h3>
                                 <input type="text" id="remRecibosBuscador" placeholder="Empleado o mes…" oninput="_renderRemunRecibosLista()" style="padding:7px 10px; font-size:12px; width:180px;">
+                                <button class="btn btn-outline btn-sm" onclick="diagnosticarRemun()" title="Comprueba contra la base cuántos recibos hay guardados y si hay un problema de permisos">🔧 Diagnóstico</button>
                             </div>
                             <div class="table-wrap">
                                 <table>
@@ -24468,8 +24473,74 @@
         if (_remunErrAvisado) return;
         _remunErrAvisado = true;
         var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
-        alert('⚠️ No se pudo guardar en la nube (recibo / pago de sueldo).\n\nDetalle: ' + msg + '\n\nRevisá la conexión e intentá de nuevo. Si el problema persiste, avisá.');
+        var permisos = /permission|denied/i.test(msg);
+        alert('⚠️ NO se pudo guardar en la nube (recibo / pago de sueldo).\n\n' +
+            'Lo que acabás de cargar se ve en pantalla pero NO quedó guardado: al recargar se pierde.\n\n' +
+            'Detalle: ' + msg +
+            (permisos
+                ? '\n\nEs un problema de PERMISOS de la base, no de la app.\nArreglo: Firebase → Realtime Database → Reglas,\npegar database.rules.json y PUBLICAR (tiene que estar la rama "cajaDiaria").'
+                : '\n\nRevisá la conexión e intentá de nuevo.') +
+            '\n\nUsá el botón 🔧 Diagnóstico en Remuneraciones para más detalle.');
     }
+    // Un error LEYENDO los nodos privados dejaba las listas vacías sin decir nada: los recibos
+    // parecían "borrarse" cuando en realidad nunca se llegaban a leer. Ahora se muestra.
+    var _remErrLectura = null;
+    function _avisarErrorLecturaRemun(que, e) {
+        console.error('Remuneraciones — no se pudo LEER ' + que + ':', e);
+        _remErrLectura = { que: que, msg: (e && (e.code || e.message)) ? (e.code || e.message) : String(e) };
+        _remPintarErrorCarga();
+    }
+    function _remPintarErrorCarga() {
+        var el = document.getElementById('remErrorCarga');
+        if (!el) return;
+        if (!_remErrLectura) { el.style.display = 'none'; return; }
+        var permisos = /permission|denied/i.test(_remErrLectura.msg || '');
+        el.style.display = '';
+        el.innerHTML = '<strong>⚠️ No se pudieron leer los ' + escHtml(_remErrLectura.que) + ' de la nube.</strong>' +
+            '<br>Lo que ves abajo puede estar incompleto. <strong>No cargues de nuevo</strong> lo que parezca faltar: ' +
+            'lo más probable es que esté guardado y no se pueda leer.' +
+            '<br><span style="color:var(--text-3);font-size:12px;">Detalle: ' + escHtml(_remErrLectura.msg) + '</span>' +
+            (permisos ? '<br><span style="font-size:12px;">Suele ser que las <strong>reglas de Firebase</strong> no tengan publicada la rama <code>cajaDiaria</code>.</span>' : '') +
+            '<div style="margin-top:8px;"><button class="btn btn-outline btn-sm" onclick="diagnosticarRemun()">🔧 Diagnosticar</button></div>';
+    }
+    // Prueba real contra la base: escribe y lee un valor de prueba en el nodo privado y cuenta
+    // qué hay guardado. Sirve para saber si el problema es de permisos, de sesión o de datos.
+    window.diagnosticarRemun = function() {
+        _asegurarRefsRemun();
+        var uid = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser.uid : null;
+        var mail = (typeof auth !== 'undefined' && auth && auth.currentUser) ? (auth.currentUser.email || '') : '';
+        var L = [];
+        L.push('Usuario: ' + (mail || '(sin sesión)'));
+        L.push('UID: ' + (uid || '(sin uid)'));
+        L.push('Rol superadmin en la app: ' + ((typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? 'SÍ' : 'NO'));
+        L.push('Ruta privada: cajaDiaria/' + (uid || '?') + '/remuneracionesRecibos');
+        L.push('Recibos en memoria: ' + ((remunRecibos || []).length));
+        L.push('Pagos en memoria: ' + ((remunPagos || []).length));
+        if (!uid || !REF_REMUN_RECIBOS) { alert('🔧 Diagnóstico\n\n' + L.join('\n') + '\n\n❌ No hay sesión lista. Cerrá sesión y volvé a entrar.'); return; }
+        var pruebaRef = db.ref('cajaDiaria/' + uid + '/_prueba');
+        pruebaRef.set({ ts: Date.now() }).then(function() {
+            L.push('Escritura de prueba: ✅ OK');
+            return REF_REMUN_RECIBOS.once('value');
+        }).then(function(snap) {
+            var v = snap.val(), n = v ? Object.keys(v).length : 0;
+            L.push('Lectura de recibos: ✅ OK — ' + n + ' recibo(s) guardado(s) en la nube');
+            if (n && !(remunRecibos || []).length) L.push('⚠️ Hay recibos en la nube pero la pantalla está vacía: recargá la página.');
+            if (!n) L.push('ℹ️ La nube no tiene ningún recibo guardado todavía.');
+            pruebaRef.remove().catch(function(){});
+            alert('🔧 Diagnóstico de Remuneraciones\n\n' + L.join('\n'));
+        }).catch(function(e) {
+            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+            L.push('❌ FALLÓ: ' + msg);
+            if (/permission|denied/i.test(msg)) {
+                L.push('');
+                L.push('Es un problema de PERMISOS de la base, no de la app.');
+                L.push('Arreglo: Firebase → Realtime Database → Reglas,');
+                L.push('pegar el contenido de database.rules.json y PUBLICAR.');
+                L.push('Tiene que estar la rama "cajaDiaria".');
+            }
+            alert('🔧 Diagnóstico de Remuneraciones\n\n' + L.join('\n'));
+        });
+    };
     // Suscripción idempotente a los 3 nodos privados. Se llama desde cargarDatos y también al abrir
     // Remuneraciones, por si al arrancar la sesión la auth (dueño) todavía no estaba lista.
     var _remunPrivadoSub = false;
@@ -24478,9 +24549,9 @@
         _asegurarRefsRemun();
         if (!REF_REMUN_RECIBOS) return;   // uid todavía no listo → se reintenta al abrir la pestaña
         _remunPrivadoSub = true;
-        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
-        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); if (typeof _renderSueldosMes === 'function') _renderSueldosMes(); }, function(){});
-        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(){});
+        REF_REMUN_PAGOS.on('value', function(snap){ remunPagos = _colProcesarCarga('remunPagos', REF_REMUN_PAGOS, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ _avisarErrorLecturaRemun('pagos de sueldo', e); });
+        REF_REMUN_RECIBOS.on('value', function(snap){ remunRecibos = _colProcesarCarga('remunRecibos', REF_REMUN_RECIBOS, snap.val()); if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista(); if (typeof _renderSueldosMes === 'function') _renderSueldosMes(); }, function(e){ _avisarErrorLecturaRemun('recibos de sueldo', e); });
+        REF_REMUN_CONSOL.on('value', function(snap){ remunConsolidados = _colProcesarCarga('remunConsolidados', REF_REMUN_CONSOL, snap.val()); if (typeof renderRemuneraciones === 'function') renderRemuneraciones(); }, function(e){ _avisarErrorLecturaRemun('consolidaciones', e); });
     }
     // El dueño (Super Administrador) ve Remuneraciones, además del gate de reglas en la base.
     // Genérico por instalación: vale el rol superadmin o el adminEmail configurado (config.js),
@@ -25158,6 +25229,7 @@
         if (contenido) contenido.style.display = esSA ? '' : 'none';
         if (!esSA) return;
         _suscribirRemunPrivado();   // por si al arrancar la sesión la auth no estaba lista
+        _remPintarErrorCarga();     // avisa si la lectura de la nube falló (listas vacías engañosas)
         _remAplicarVista();         // mostrar solo la sección elegida en el submenú lateral
 
 
