@@ -4735,7 +4735,9 @@
                                 </div>
                             </div>
                             <div class="form-hint" style="padding:10px 14px; color:var(--text-2); border-bottom:1px solid var(--border);">
-                                Una <strong>fila por empleado</strong>. Por cada uno, en orden: <strong>1)</strong> 💰 Liquidar (genera el recibo) · <strong>2)</strong> 💵 Pagar (registrás lo que le diste, banco o efectivo) · <strong>3)</strong> 📊 Consolidar (lo manda a Caja/Banco). La columna <strong>Estado</strong> te dice qué falta.
+                                Una <strong>fila por empleado</strong>. Por cada uno: <strong>1)</strong> 💰 Liquidar (genera el recibo) · <strong>2)</strong> 💵 Pagar (registrás lo que le diste, banco o efectivo) · <strong>3)</strong> 📊 Consolidar (lo manda a Caja/Banco). La columna <strong>Estado</strong> te dice qué falta.
+                                <br><strong>Un solo recibo por mes</strong>, aunque el sueldo se pague en varias veces. Si le das un <strong>adelanto</strong> antes de liquidar, cargalo con 💵 Adelanto: no hace falta recibo para eso. Cuando después liquides el mes, el recibo <strong>resta solo</strong> lo ya entregado y muestra el saldo. Después pagás ese saldo con <strong>💵 Pagar saldo</strong>, que ya viene con el importe exacto.
+                                <br><span style="color:var(--danger);">Ojo:</span> un adelanto se carga <strong>una sola vez</strong>, acá como pago. No lo cargues además como descuento en la liquidación, porque se contaría dos veces.
                             </div>
                             <div class="table-wrap">
                                 <table>
@@ -25615,14 +25617,21 @@
                 : '<span class="pill badge-warn">⚠️ Sin recibo</span>';
 
             var estado, col;
-            if (!recibo)             { estado = 'Falta liquidar';            col = 'var(--warn)'; }
+            if (!recibo)             { estado = (pagado > 0.5) ? ('Adelanto ' + fmt(pagado) + ' · falta liquidar') : 'Falta liquidar'; col = 'var(--warn)'; }
             else if (saldo > 0.5)    { estado = 'Falta pagar ' + fmt(saldo); col = 'var(--danger)'; }
             else if (pendientes.length) { estado = 'Falta consolidar';       col = 'var(--gold)'; }
             else if (pagado > 0.5)   { estado = '✅ Cerrado';                 col = 'var(--success)'; }
             else                     { estado = 'Liquidado, sin pagar';      col = 'var(--danger)'; }
 
             var acc = '<button class="btn btn-outline btn-sm" onclick="liquidarSueldoEmpleado('+idx+')" title="Liquidar / editar el recibo del mes">💰 Liquidar</button>';
-            if (recibo && saldo > 0.5) acc += '<button class="btn btn-gold btn-sm" onclick="remMesRegistrarPago('+idx+')" title="Registrar el pago de este empleado">💵 Pagar</button>';
+            if (recibo && saldo > 0.5) {
+                // El importe va en el botón: se paga el saldo exacto de un toque, sin calcular nada.
+                acc += '<button class="btn btn-gold btn-sm" onclick="remMesRegistrarPago('+idx+',\'pago\')" title="Registrar el pago del saldo que falta">💵 Pagar saldo ' + fmt(saldo) + '</button>';
+            } else if (!recibo) {
+                // Un adelanto NO necesita recibo previo: se entrega a mitad de mes y, cuando después
+                // se liquida, el recibo lo resta solo y muestra el saldo a cobrar.
+                acc += '<button class="btn btn-outline btn-sm" onclick="remMesRegistrarPago('+idx+',\'adelanto\')" title="Registrar un adelanto ahora, sin liquidar el mes todavía. Al liquidar, el recibo lo descuenta solo.">💵 Adelanto</button>';
+            }
 
             var tr = document.createElement('tr');
             tr.innerHTML =
@@ -25630,7 +25639,7 @@
                 '<td>' + reciboCell + '</td>' +
                 '<td style="text-align:right;">' + fmt(liquidado) + '</td>' +
                 '<td style="text-align:right;">' + fmt(pagado) + '</td>' +
-                '<td style="text-align:right;font-weight:700;">' + (Math.abs(saldo) < 0.5 ? '<span style="color:var(--success);">$0,00</span>' : fmt(saldo)) + '</td>' +
+                '<td style="text-align:right;font-weight:700;">' + (!recibo ? '<span style="color:var(--text-3);">—</span>' : (Math.abs(saldo) < 0.5 ? '<span style="color:var(--success);">$0,00</span>' : fmt(saldo))) + '</td>' +
                 '<td><span style="font-weight:600;color:' + col + ';">' + estado + '</span></td>' +
                 '<td><div class="action-btns">' + acc + '</div></td>';
             tbody.appendChild(tr);
@@ -25643,13 +25652,16 @@
     }
     // Desde el tablero: registrar el pago de un empleado. Lleva al formulario de «Pagos de sueldo»
     // ya cargado con el nombre, el mes y el saldo que falta (por defecto en efectivo).
-    window.remMesRegistrarPago = function(idx) {
+    window.remMesRegistrarPago = function(idx, tipo) {
         if (!_esDuenoRemun()) return;
         var emp = remuneraciones[idx]; if (!emp) return;
         var mes = _remMesSel();
         var saldo = Math.max(0, _remLiquidadoDe(emp.nombre, mes) - _remPagadoDe(emp.nombre, mes));
         remVista('pagos');
-        abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: 0, efectivo: saldo });
+        // En un adelanto no hay saldo que pre-cargar (todavía no se liquidó): el importe lo pone
+        // el usuario. En un pago se pre-carga el saldo exacto que falta.
+        abrirFormRemunPago({ nombre: emp.nombre, mes: mes, banco: 0, efectivo: saldo,
+                             tipo: tipo || 'pago', detalle: (tipo === 'adelanto') ? 'Adelanto' : '' });
         var card = document.getElementById('remPagosCard');
         if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
@@ -25947,9 +25959,12 @@
         var adj = document.getElementById('remPagoAdjunto'); if (adj) adj.value = '';
         var tipoEl = document.getElementById('remPagoTipo'); if (tipoEl) tipoEl.value = prefill.tipo || 'pago';
         var detEl = document.getElementById('remPagoDetalle'); if (detEl) detEl.value = prefill.detalle || '';
-        document.getElementById('remPagoFormEstado').textContent = prefill.nombre
-            ? 'Pre-cargado desde el recibo de ' + prefill.nombre + ' por el total a cobrar' + ((prefill.fuera > 0) ? ' (recibo + Parte B)' : '') + ', en ' + (_enBanco ? 'BANCO' : 'EFECTIVO') + ' (lo último que usaste). Cambiá el reparto si este pago fue distinto: puede ser todo por uno, o mitad y mitad.'
-            : '';
+        document.getElementById('remPagoFormEstado').textContent = !prefill.nombre ? ''
+            : (prefill.tipo === 'adelanto')
+                ? 'Adelanto a ' + prefill.nombre + ' de ' + _mesLabel(mes) + '. Poné el importe que le entregás: NO hace falta liquidar el mes todavía. Cuando después liquides, el recibo lo descuenta solo y muestra el saldo a cobrar.'
+                : (_tot > 0)
+                    ? 'Pre-cargado por el saldo que falta de ' + prefill.nombre + ((prefill.fuera > 0) ? ' (recibo + Parte B)' : '') + ', en ' + (_enBanco ? 'BANCO' : 'EFECTIVO') + ' (lo último que usaste). Cambiá el reparto si este pago fue distinto: puede ser todo por uno, o mitad y mitad.'
+                    : 'Pago a ' + prefill.nombre + ' de ' + _mesLabel(mes) + '. Poné el importe entregado.';
         _remPagoRefrescarPendiente();
     }
     // Editar un pago ya guardado (ej.: adjuntarle la factura/comprobante que faltó, o corregir el reparto).
