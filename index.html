@@ -25631,6 +25631,20 @@
             else if (pendientes.length) { estado = 'Falta consolidar';       col = 'var(--gold)'; }
             else if (pagado > 0.5)   { estado = '✅ Cerrado';                 col = 'var(--success)'; }
             else                     { estado = 'Liquidado, sin pagar';      col = 'var(--danger)'; }
+            // Un descuento del recibo que coincide con un pago registrado es el mismo importe
+            // contado dos veces: baja el neto y encima figura como entregado, así que el sueldo
+            // aparece saldado cuando en realidad falta pagarlo. Se avisa acá, que es donde se mira.
+            if (recibo && pagado > 0.5) {
+                var _montosPag = pagos.map(function(rp){ return (rp.montoBanco||0)+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); });
+                var _dups = (recibo.conceptos || []).map(_remNormConcepto).filter(function(c){
+                    if (c.tipo !== 'descuento' || !(c.monto > 0)) return false;
+                    return _montosPag.some(function(mp){ return Math.abs(mp - c.monto) < 0.5; }) || /adelant|a cuenta|entregad/i.test(c.nombre || '');
+                });
+                if (_dups.length) {
+                    estado = '⚠️ Adelanto contado 2 veces — tocá 💰 Liquidar';
+                    col = 'var(--danger)';
+                }
+            }
 
             var acc = '<button class="btn btn-outline btn-sm" onclick="liquidarSueldoEmpleado('+idx+')" title="Liquidar / editar el recibo del mes">💰 Liquidar</button>';
             if (recibo && saldo > 0.5) {
@@ -26850,11 +26864,76 @@
             box.innerHTML = '💡 ¿Le diste un <strong>adelanto</strong> de este mes? No lo cargues como descuento acá: ' +
                 'se registra en «Pagos de sueldo» y el recibo lo resta solo.' + boton;
         } else {
+            // Si además hay un DESCUENTO cargado que coincide con un pago ya registrado, ese importe
+            // se está restando dos veces: baja el neto del recibo y encima figura como entregado.
+            // El resultado es un sueldo que parece saldado cuando en realidad falta pagarlo.
+            var dup = _empDescuentosDuplicados(nombre, mes);
+            if (dup.length) {
+                var totalDup = dup.reduce(function(t, d){ return t + d.monto; }, 0);
+                box.style.borderColor = 'var(--danger)';
+                box.style.background = 'rgba(220,60,60,.08)';
+                box.innerHTML = '⚠️ <strong>Este importe está contado dos veces.</strong><br>' +
+                    dup.map(function(d){ return '«' + escHtml(d.nombre || 'Descuento') + '» ' + m(d.monto); }).join(' · ') +
+                    ' figura como <strong>descuento</strong> acá y además como <strong>pago entregado</strong> en «Pagos de sueldo».' +
+                    '<br>Así el recibo baja el neto ' + m(totalDup) + ' de más y el sueldo parece saldado cuando todavía falta pagarlo.' +
+                    '<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">' +
+                        '<button type="button" class="btn btn-gold btn-sm" onclick="empQuitarDescuentosDuplicados()" ' +
+                        'title="Saca el descuento del recibo. El pago queda registrado igual y el recibo lo resta solo al mostrar el saldo.">' +
+                        '🗑️ Quitar el descuento del recibo</button>' +
+                        '<button type="button" class="btn btn-outline btn-sm" onclick="empIrACargarPago()">💵 Ver / cargar pagos</button>' +
+                    '</div>';
+                return;
+            }
             box.style.borderColor = 'var(--warn)';
             box.style.background = 'rgba(230,160,60,.08)';
             box.innerHTML = '💵 Este mes ya tiene <strong>' + m(ya) + '</strong> registrados como pago/adelanto en «Pagos de sueldo». ' +
                 'El recibo los resta solo y muestra el <strong>saldo a cobrar</strong>: <u>no</u> los cargues también como descuento acá.' + boton;
         }
+    };
+    // Filas de concepto del modal (Parte A + Parte B), en el mismo orden que _empLeerConceptos.
+    function _empFilasConcepto() {
+        var a = Array.prototype.slice.call(document.querySelectorAll('#empConceptosLista .emp-concepto-fila'));
+        var b = Array.prototype.slice.call(document.querySelectorAll('#empConceptosListaB .emp-concepto-fila-b'));
+        return a.concat(b).filter(function(f) {
+            var n = f.querySelector('.emp-c-nombre'), mo = f.querySelector('.emp-c-monto');
+            if (!n || !mo) return false;
+            return (n.value || '').trim() || (parseFloat(mo.value) || 0);
+        });
+    }
+    // Descuentos de la liquidación que ya están cargados como pago de ese mes: mismo importe que
+    // un pago registrado, o un nombre que delata un adelanto.
+    var _empDupCache = [];
+    function _empDescuentosDuplicados(nombre, mes) {
+        _empDupCache = [];
+        if (typeof remunPagos === 'undefined') return [];
+        var nEmp = _remNorm(nombre);
+        var montosPagados = (remunPagos || []).filter(function(rp) {
+            return rp && rp.mes === mes && _remNorm(rp.nombre || '') === nEmp;
+        }).map(function(rp) { return (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0); });
+        if (!montosPagados.length) return [];
+        _empFilasConcepto().forEach(function(f) {
+            var tipoEl = f.querySelector('.emp-c-tipo');
+            if (!tipoEl || tipoEl.value !== 'descuento') return;
+            var nom = (f.querySelector('.emp-c-nombre').value || '').trim();
+            var monto = parseFloat(f.querySelector('.emp-c-monto').value) || 0;
+            if (monto <= 0) return;
+            var coincide = montosPagados.some(function(mp) { return Math.abs(mp - monto) < 0.5; });
+            if (!coincide && !/adelant|a cuenta|entregad/i.test(nom)) return;
+            _empDupCache.push({ fila: f, nombre: nom, monto: monto });
+        });
+        return _empDupCache;
+    }
+    // Saca del recibo los descuentos que ya están registrados como pago. El pago NO se toca.
+    window.empQuitarDescuentosDuplicados = function() {
+        if (!_empDupCache.length) return;
+        var total = _empDupCache.reduce(function(t, d){ return t + d.monto; }, 0);
+        var f2 = function(n){ return '$' + n.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        if (!confirm('Se van a quitar del recibo ' + _empDupCache.length + ' descuento(s) por ' + f2(total) + '.\n\n' +
+                     'El pago sigue registrado en «Pagos de sueldo»: el recibo lo va a restar solo al mostrar el saldo a cobrar.\n\n¿Confirmás?')) return;
+        _empDupCache.forEach(function(d){ if (d.fila && d.fila.remove) d.fila.remove(); });
+        _empDupCache = [];
+        renderPreviewLiquidacion();
+        alert('✅ Listo. Revisá el neto y guardá el recibo con «💾 Guardar recibo del mes».');
     };
     // Del modal de liquidación al formulario de pago, con el empleado y el mes ya puestos.
     window.empIrACargarPago = function() {
