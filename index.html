@@ -24694,14 +24694,17 @@
 
         // Se miran las rutas ACTUALES (privadas, por usuario) y también las VIEJAS de la raíz:
         // si el sistema guardó alguna vez ahí, los datos siguen existiendo pero la app no los lee.
-        var rutas = [
-            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesRecibos',       ref: 'cajaDiaria/' + uid + '/remuneracionesRecibos' },
-            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesPagos',         ref: 'cajaDiaria/' + uid + '/remuneracionesPagos' },
-            { et: 'ACTUAL  cajaDiaria/<uid>/remuneracionesConsolidados',  ref: 'cajaDiaria/' + uid + '/remuneracionesConsolidados' },
-            { et: 'VIEJA   /remuneracionesRecibos (raíz)',                ref: 'remuneracionesRecibos' },
-            { et: 'VIEJA   /remuneracionesPagos (raíz)',                  ref: 'remuneracionesPagos' },
-            { et: 'VIEJA   /remuneracionesConsolidados (raíz)',           ref: 'remuneracionesConsolidados' }
-        ];
+        // Las etiquetas salen de la ruta que la app está usando AHORA, no de un texto fijo: si no,
+        // al cambiar la ruta principal el diagnóstico sigue llamando "vieja" a la que está en uso
+        // y concluye al revés de lo que pasa.
+        var _colsRem = ['Recibos', 'Pagos', 'Consolidados'];
+        var rutas = [];
+        _colsRem.forEach(function(c) {
+            rutas.push({ grupo: 'raiz', col: c, et: (_remBaseRaiz ? 'EN USO ' : 'otra   ') + '/remuneraciones' + c + ' (raíz, fija)', ref: 'remuneraciones' + c });
+        });
+        _colsRem.forEach(function(c) {
+            rutas.push({ grupo: 'uid', col: c, et: (_remBaseRaiz ? 'otra   ' : 'EN USO ') + 'cajaDiaria/<uid>/remuneraciones' + c, ref: 'cajaDiaria/' + uid + '/remuneraciones' + c });
+        });
         var pruebaRef = db.ref('cajaDiaria/' + uid + '/_prueba');
         pruebaRef.set({ ts: Date.now() }).then(function(){ pon('Escritura de prueba: ✅ OK'); })
         .catch(function(e){ pon('Escritura de prueba: ❌ ' + ((e && (e.code||e.message)) || e)); })
@@ -24713,26 +24716,29 @@
                 return db.ref(r.ref).once('value').then(function(sn){
                     var v = sn.val(); var n = 0;
                     if (v) n = Array.isArray(v) ? v.filter(Boolean).length : Object.keys(v).length;
-                    return r.et + ': ' + n;
+                    return { grupo: r.grupo, n: n, linea: r.et + ': ' + n };
                 }).catch(function(e){
-                    return r.et + ': ❌ ' + ((e && (e.code||e.message)) || e);
+                    return { grupo: r.grupo, n: -1, linea: r.et + ': ❌ ' + ((e && (e.code||e.message)) || e) };
                 });
             }));
         }).then(function(res){
-            res.forEach(pon);
-            var viejos = res.filter(function(x){ return x.indexOf('VIEJA') === 0 && /: [1-9]/.test(x); });
-            var nuevos = res.filter(function(x){ return x.indexOf('ACTUAL') === 0 && /: [1-9]/.test(x); });
+            res.forEach(function(r){ pon(r.linea); });
+            var grupoEnUso = _remBaseRaiz ? 'raiz' : 'uid';
+            var suma = function(g){ return res.filter(function(r){ return r.grupo === g && r.n > 0; }).length; };
+            var enUso = suma(grupoEnUso), enLaOtra = suma(grupoEnUso === 'raiz' ? 'uid' : 'raiz');
+            var enPantalla = (remunRecibos||[]).length + (remunPagos||[]).length + (remunConsolidados||[]).length;
             pon('');
-            if (viejos.length && !nuevos.length) {
-                pon('⚠️ Tus datos están en las rutas VIEJAS (la raíz) y la app lee las nuevas.');
-                pon('Por eso no ves nada. Se pueden mudar: avisame y lo hago.');
-            } else if (nuevos.length && !(remunRecibos||[]).length) {
-                pon('⚠️ Hay datos en la nube pero la pantalla está vacía: recargá la página.');
-            } else if (!viejos.length && !nuevos.length) {
+            if (!enUso && !enLaOtra) {
                 pon('ℹ️ No hay NADA guardado en ninguna de las dos rutas.');
                 pon('O sea: el guardado no está llegando a la base.');
+            } else if (!enUso && enLaOtra) {
+                pon('⚠️ Los datos están en la OTRA ruta, no en la que la app está usando.');
+                pon('Se pueden mudar: avisame y lo hago.');
+            } else if (enUso && !enPantalla) {
+                pon('⚠️ Hay datos en la ruta en uso pero la pantalla está vacía: recargá la página.');
             } else {
-                pon('✅ Los datos están donde la app los busca.');
+                pon('✅ Todo en orden: los datos están en la ruta que la app usa y se están leyendo.');
+                if (enLaOtra) pon('(La otra ruta conserva una copia vieja; no molesta.)');
             }
             _remMostrarDiag(L);
         }).catch(function(e){
