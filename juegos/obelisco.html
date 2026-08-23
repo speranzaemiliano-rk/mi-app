@@ -1,0 +1,2682 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carreras Obelisco 3D</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #08090d;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    color: #e6e6e6; overflow: hidden; touch-action: none;
+  }
+  h1 { margin: 8px 0 4px; font-size: 19px; letter-spacing: 1px; color: #f5c542; }
+  /* El tablero mide 1000x600 fijo. En pantallas chicas se escala entero
+     (canvas + controles táctiles) en vez de recortarse o desbordar. */
+  #stage { transform-origin: top center; }
+  #wrap { position: relative; border: 3px solid #22242b; border-radius: 10px;
+          box-shadow: 0 0 40px rgba(0,0,0,0.8); overflow: hidden; }
+  canvas { display: block; background: #b9dcea; }
+  #hud { position: absolute; top: 12px; left: 12px; pointer-events: none;
+         text-shadow: 0 2px 6px rgba(0,0,0,0.9); }
+  .hudRow { font-size: 13px; letter-spacing: 1px; color: #cfd4dc; }
+  .hudBig { font-size: 30px; font-weight: 800; color: #fff; line-height: 1; }
+  .hudBig span { font-size: 14px; color: #f5c542; font-weight: 600; }
+  .scoreRow { font-size:22px; font-weight:800; color:#f5c542; line-height:1.15; }
+  .scoreRow span { font-size:14px; color:#54d17a; font-weight:700; }
+  /* El puesto es el dato principal: es una carrera, no un contador de puntos */
+  .posRow { line-height: 0.92; margin-bottom: 2px; }
+  .posRow b { font-size: 52px; font-weight: 900; color: #fff; }
+  .posRow i { font-size: 22px; font-weight: 900; color: #f5c542; font-style: normal; }
+  .posRow em { font-size: 13px; color: #9aa1ab; font-style: normal; letter-spacing: 1px; }
+  #speedBarBg { width: 190px; height: 7px; background: rgba(0,0,0,0.5);
+                border-radius: 4px; margin-top: 7px; overflow: hidden;
+                border: 1px solid rgba(255,255,255,0.2); }
+  #speedBarFill { height: 100%; width: 0%;
+                  background: linear-gradient(90deg,#54d17a,#f5c542,#e63946); }
+  #nitroBarBg { width: 190px; height: 9px; background: rgba(0,0,0,0.5);
+                border-radius: 4px; margin-top: 5px; overflow: hidden;
+                border: 1px solid rgba(255,255,255,0.2); }
+  #nitroBarFill { height: 100%; width: 0%; background: linear-gradient(90deg,#3aa7ff,#8ee6ff); }
+  #nitroHint { font-size: 11px; color: #7d838d; margin-top: 3px; }
+  #nitroHint.listo { color: #8ee6ff; }
+  #minimap { position: absolute; top: 12px; right: 62px; pointer-events: none;
+             opacity: 0.92; }
+  /* Aviso de rival justo delante: da la referencia de a quién estás peleando */
+  #gapTxt { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+            font-size: 13px; letter-spacing: 1px; color: #cfd4dc; pointer-events: none;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.9); text-align: center; }
+  #gapTxt b { color: #fff; font-size: 15px; }
+  #msgOverlay { position: absolute; inset: 0; display: flex; align-items: center;
+                justify-content: center; background: rgba(0,0,0,0.7);
+                font-size: 60px; font-weight: 900; color: #f5c542;
+                text-shadow: 0 6px 20px #000; }
+  #finalPanel { position: absolute; inset: 0; display: none; flex-direction: column;
+                align-items: center; justify-content: center;
+                background: rgba(0,0,0,0.88); text-align: center; }
+  #finalPanel button { margin-top: 18px; padding: 11px 26px; font-size: 16px;
+                       border: none; border-radius: 6px; background: #f5c542;
+                       color: #14161a; font-weight: bold; cursor: pointer; }
+  #muteBtn { position:absolute; top:12px; right:14px; width:40px; height:40px;
+             border-radius:50%; background:rgba(0,0,0,0.45); border:1px solid rgba(255,255,255,0.25);
+             display:flex; align-items:center; justify-content:center; font-size:19px;
+             cursor:pointer; user-select:none; z-index:5; }
+  #muteBtn:hover { background:rgba(0,0,0,0.7); }
+  #touchControls { position: absolute; bottom: 16px; left: 0; right: 0;
+                   display: flex; justify-content: space-between; padding: 0 16px;
+                   pointer-events: none; }
+  .tbtn { pointer-events: all; width: 64px; height: 64px; border-radius: 50%;
+          background: rgba(255,255,255,0.14); border: 2px solid rgba(255,255,255,0.35);
+          color: #fff; font-size: 22px; display: flex; align-items: center;
+          justify-content: center; user-select: none; backdrop-filter: blur(4px); }
+  .tbtn:active { background: rgba(255,255,255,0.4); }
+  #steer { display: flex; gap: 10px; }
+  small { color: #7d838d; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>🏁 CARRERAS OBELISCO 3D — Buenos Aires</h1>
+<div id="stage">
+<div id="wrap">
+  <canvas id="c" width="1000" height="600"></canvas>
+  <div id="hud">
+    <div class="posRow"><b id="posTxt">8</b><i id="posOrd">º</i> <em>DE 8</em></div>
+    <div class="hudRow">VUELTA <b id="lapTxt">1/3</b> · <b id="timeTxt">00:00.0</b></div>
+    <div class="scoreRow"><b id="scoreTxt">0</b> <span id="comboTxt"></span></div>
+    <div class="hudBig"><b id="kmhTxt">0</b> <span>KM/H</span></div>
+    <div id="speedBarBg"><div id="speedBarFill"></div></div>
+    <div id="nitroBarBg"><div id="nitroBarFill"></div></div>
+    <div id="nitroHint">NITRO · ESPACIO</div>
+  </div>
+  <canvas id="minimap" width="150" height="150"></canvas>
+  <div id="gapTxt"></div>
+  <div id="muteBtn" title="Silenciar">🔊</div>
+  <div id="msgOverlay">3</div>
+  <div id="finalPanel">
+    <div id="finalText" style="font-size:22px;color:#f5c542;font-weight:bold;"></div>
+    <button onclick="restart()">Correr de nuevo</button>
+  </div>
+  <div id="touchControls">
+    <div id="steer">
+      <div class="tbtn" id="btnLeft">◀</div>
+      <div class="tbtn" id="btnRight">▶</div>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <div class="tbtn" id="btnNitro">💨</div>
+      <div class="tbtn" id="btnBrake">🛑</div>
+      <div class="tbtn" id="btnGas">⏫</div>
+    </div>
+  </div>
+</div>
+</div>
+<small>Flechas / WASD para manejar · ESPACIO: nitro (se carga pasando rivales y raspando el tránsito) · Salís último entre 8 · 3 vueltas</small>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 1000, H = 600;
+// Render en alta densidad para que no se vea pixelado en pantallas retina
+const DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+canvas.width = W*DPR; canvas.height = H*DPR;
+canvas.style.width = W+'px'; canvas.style.height = H+'px';
+ctx.scale(DPR, DPR);
+ctx.imageSmoothingQuality = 'low';
+const lapTxt = document.getElementById('lapTxt');
+const timeTxt = document.getElementById('timeTxt');
+const kmhTxt = document.getElementById('kmhTxt');
+const speedBarFill = document.getElementById('speedBarFill');
+const scoreTxt = document.getElementById('scoreTxt');
+const comboTxt = document.getElementById('comboTxt');
+const msgOverlay = document.getElementById('msgOverlay');
+const finalPanel = document.getElementById('finalPanel');
+const finalText = document.getElementById('finalText');
+const posTxt = document.getElementById('posTxt');
+const posOrd = document.getElementById('posOrd');
+const nitroBarFill = document.getElementById('nitroBarFill');
+const nitroHint = document.getElementById('nitroHint');
+const gapTxt = document.getElementById('gapTxt');
+const mapCv = document.getElementById('minimap');
+const mapCtx = mapCv.getContext('2d');
+
+// Escalar el tablero para que entre en cualquier pantalla sin recortarse
+const stage = document.getElementById('stage');
+function fitStage(){
+  const s = Math.min(1, (window.innerWidth - 14)/1006, (window.innerHeight - 100)/612);
+  stage.style.transform = 'scale(' + s + ')';
+  stage.style.height = Math.ceil(612*s) + 'px';
+}
+window.addEventListener('resize', fitStage);
+fitStage();
+
+/* ============================================================
+   AUDIO — todo sintetizado con Web Audio, sin archivos externos
+   Motor con cambios de marcha, derrape, viento, choques y efectos.
+   ============================================================ */
+const AUDIO = (function(){
+  let ac = null, ready = false, muted = false;
+  let master, engBus, oscA, oscB, sub, engFilt, engGain;
+  let noiseSrc, skidFilt, skidGain, windFilt, windGain, rumbleFilt, rumbleGain;
+
+  function noiseBuffer(){
+    const len = ac.sampleRate * 2;
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<len;i++) d[i] = Math.random()*2 - 1;
+    return buf;
+  }
+
+  function init(){
+    if(ready) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    try {
+      ac = new AC();
+      master = ac.createGain();
+      master.gain.value = 0.55;
+      master.connect(ac.destination);
+
+      // ---- Motor: onda armónica propia (no dientes de sierra) ----
+      // Un motor tiene armónicos que DECAEN y órdenes pares reforzadas.
+      // La sierra pura tiene armónicos hasta el infinito y suena a zumbido.
+      const AMP = [0, 1.00, 0.78, 0.42, 0.62, 0.26, 0.34, 0.16, 0.22,
+                      0.11, 0.15, 0.08, 0.10, 0.055, 0.07, 0.04, 0.05];
+      const re = new Float32Array(AMP.length), im = new Float32Array(AMP.length);
+      for(let i=1;i<AMP.length;i++) im[i] = AMP[i];
+      const engWave = ac.createPeriodicWave(re, im, {disableNormalization:false});
+
+      engBus  = ac.createGain();  engBus.gain.value = 0;
+      engFilt = ac.createBiquadFilter();
+      engFilt.type = 'lowpass';
+      engFilt.frequency.value = 600;
+      engFilt.Q.value = 1.4;
+
+      oscA = ac.createOscillator(); oscA.setPeriodicWave(engWave); oscA.frequency.value = 40;
+      oscB = ac.createOscillator(); oscB.setPeriodicWave(engWave); oscB.frequency.value = 40;
+      oscB.detune.value = 9;
+      sub  = ac.createOscillator(); sub.type = 'sine'; sub.frequency.value = 20;
+
+      const oscBG = ac.createGain(); oscBG.gain.value = 0.45;
+      const subG  = ac.createGain(); subG.gain.value  = 0.60;
+      oscA.connect(engFilt);
+      oscB.connect(oscBG); oscBG.connect(engFilt);
+      sub.connect(subG);   subG.connect(engFilt);
+
+      // Rugido: ruido grave que da cuerpo, filtrado bien abajo
+      rumbleFilt = ac.createBiquadFilter();
+      rumbleFilt.type = 'lowpass'; rumbleFilt.frequency.value = 190; rumbleFilt.Q.value = 1;
+      rumbleGain = ac.createGain(); rumbleGain.gain.value = 0;
+
+      engFilt.connect(engBus); engBus.connect(master);
+      oscA.start(); oscB.start(); sub.start();
+
+      // ---- Ruido base: sirve para derrape y viento ----
+      noiseSrc = ac.createBufferSource();
+      noiseSrc.buffer = noiseBuffer();
+      noiseSrc.loop = true;
+
+      skidFilt = ac.createBiquadFilter();
+      skidFilt.type = 'bandpass'; skidFilt.frequency.value = 2400; skidFilt.Q.value = 3.5;
+      skidGain = ac.createGain(); skidGain.gain.value = 0;
+
+      windFilt = ac.createBiquadFilter();
+      windFilt.type = 'lowpass'; windFilt.frequency.value = 700;
+      windGain = ac.createGain(); windGain.gain.value = 0;
+
+      noiseSrc.connect(skidFilt);  skidFilt.connect(skidGain);   skidGain.connect(master);
+      noiseSrc.connect(windFilt);  windFilt.connect(windGain);   windGain.connect(master);
+      noiseSrc.connect(rumbleFilt);rumbleFilt.connect(rumbleGain);rumbleGain.connect(master);
+      noiseSrc.start();
+
+      ready = true;
+    } catch(e){ ready = false; }
+  }
+
+  function resume(){
+    if(!ready) init();
+    if(ac && ac.state === 'suspended') ac.resume();
+  }
+
+  // Actualiza el motor en cada cuadro
+  function update(speedPct, throttle, skid, running){
+    if(!ready || muted) return;
+    const t = ac.currentTime;
+
+    // Cambios de marcha: la frecuencia sube dentro de cada marcha y cae al pasar
+    const GEARS = 5;
+    const g = Math.min(GEARS-1, Math.floor(speedPct*GEARS));
+    const inGear = (speedPct*GEARS) - g;             // 0..1 dentro de la marcha
+    const rpm = 0.28 + inGear*0.72;                  // no baja de ralentí
+
+    // Frecuencia de encendido de un 4 cilindros: ~27 Hz en ralentí, ~200 a fondo
+    const base = 27 + rpm*(148 + g*11);
+
+    oscA.frequency.setTargetAtTime(base, t, 0.045);
+    oscB.frequency.setTargetAtTime(base*1.004, t, 0.045);
+    sub.frequency.setTargetAtTime(base*0.5, t, 0.045);
+
+    // El filtro se abre con las vueltas y con el acelerador
+    engFilt.frequency.setTargetAtTime(240 + rpm*rpm*2100 + (throttle?520:0), t, 0.06);
+    engFilt.Q.setTargetAtTime(1.2 + rpm*2.2, t, 0.1);
+
+    const vol = running ? (0.075 + rpm*0.115 + (throttle?0.05:0)) : 0.035;
+    engBus.gain.setTargetAtTime(vol, t, 0.07);
+
+    // Rugido grave proporcional a las vueltas
+    rumbleGain.gain.setTargetAtTime(running ? (0.030 + rpm*0.055) : 0.012, t, 0.09);
+    rumbleFilt.frequency.setTargetAtTime(120 + rpm*170, t, 0.09);
+
+    // Viento: sólo a alta velocidad
+    windGain.gain.setTargetAtTime(Math.max(0,(speedPct-0.35))*0.085, t, 0.15);
+    windFilt.frequency.setTargetAtTime(500 + speedPct*1100, t, 0.15);
+
+    // Derrape
+    const sk = skid > 0.28 ? Math.min(0.13, (skid-0.28)*0.30) : 0;
+    skidGain.gain.setTargetAtTime(sk, t, 0.05);
+    skidFilt.frequency.setTargetAtTime(1900 + skid*1600, t, 0.08);
+  }
+
+  // Golpe seco de choque
+  function crash(){
+    if(!ready || muted) return;
+    const t = ac.currentTime;
+
+    const n = ac.createBufferSource();
+    n.buffer = noiseBuffer();
+    const f = ac.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.setValueAtTime(1800, t);
+    f.frequency.exponentialRampToValueAtTime(180, t+0.34);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.42, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+0.42);
+    n.connect(f); f.connect(g); g.connect(master);
+    n.start(t); n.stop(t+0.45);
+
+    const o = ac.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(38, t+0.28);
+    const og = ac.createGain();
+    og.gain.setValueAtTime(0.40, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t+0.30);
+    o.connect(og); og.connect(master);
+    o.start(t); o.stop(t+0.32);
+  }
+
+  // Tono corto para puntaje, cuenta regresiva, vuelta
+  function tone(freq, dur, type, vol, slideTo){
+    if(!ready || muted) return;
+    const t = ac.currentTime;
+    const o = ac.createOscillator();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(freq, t);
+    if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t+dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol||0.16, t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t+dur+0.02);
+  }
+
+  const pass      = ()=> tone(660, 0.10, 'square', 0.10, 990);
+  const closePass = ()=> { tone(880, 0.09, 'square', 0.12, 1320); setTimeout(()=>tone(1320,0.10,'square',0.10),70); };
+  const beep      = ()=> tone(520, 0.16, 'square', 0.20);
+  const go        = ()=> { tone(1040, 0.34, 'square', 0.22); setTimeout(()=>tone(1560,0.30,'square',0.16),90); };
+  const lap       = ()=> { [660,880,1100].forEach((f,i)=> setTimeout(()=>tone(f,0.20,'triangle',0.17), i*80)); };
+  const finish    = ()=> { [660,880,1100,1320].forEach((f,i)=> setTimeout(()=>tone(f,0.32,'triangle',0.18), i*130)); };
+
+  function setMuted(m){
+    muted = m;
+    if(ready) master.gain.setTargetAtTime(m ? 0 : 0.55, ac.currentTime, 0.05);
+  }
+  const isMuted = ()=> muted;
+
+  return { init, resume, update, crash, pass, closePass, beep, go, lap, finish, setMuted, isMuted };
+})();
+
+/* ============================================================
+   PARÁMETROS DEL MOTOR
+   ============================================================ */
+const SEG_LEN = 200;
+const ROAD_W = 2200;
+const CAM_HEIGHT = 1100;
+const FOV = 100;
+const CAM_DEPTH = 1 / Math.tan((FOV/2)*Math.PI/180);
+const DRAW_DIST = 170;
+const TOTAL_LAPS = 3;
+const FOG_DENSITY = 2.3;
+const FOG_COLOR = [214, 158, 120];   // niebla cálida de atardecer
+
+/* ============================================================
+   SPRITES PRE-RENDERIZADOS (alta definición, dibujados una vez)
+   ============================================================ */
+function makeCanvas(w,h){
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  return {cv, c: cv.getContext('2d')};
+}
+
+// --- Edificio estilo porteño con planta baja comercial, balcones y cornisa ---
+function makeBuilding(palette, floors, seed){
+  const w = 300, h = 96 + floors*78;
+  const {cv,c} = makeCanvas(w,h);
+  let rnd = seed;
+  const rand = ()=> (rnd = (rnd*9301+49297)%233280)/233280;
+
+  // Cuerpo: degradado lateral (luz de un lado) + oscurecido hacia la base,
+  // que es lo que da sensación de altura y de calle en sombra.
+  const g = c.createLinearGradient(0,0,w,0);
+  g.addColorStop(0,    palette.light);
+  g.addColorStop(0.42, palette.base);
+  g.addColorStop(1,    palette.dark);
+  c.fillStyle = g; c.fillRect(0,0,w,h);
+  const vg = c.createLinearGradient(0,0,0,h);
+  vg.addColorStop(0,   'rgba(255,255,255,0.10)');
+  vg.addColorStop(0.55,'rgba(0,0,0,0)');
+  vg.addColorStop(1,   'rgba(0,0,0,0.30)');
+  c.fillStyle = vg; c.fillRect(0,0,w,h);
+
+  // Cornisa con sombra proyectada
+  c.fillStyle = palette.trim;  c.fillRect(0,0,w,16);
+  c.fillStyle = 'rgba(255,255,255,0.30)'; c.fillRect(0,16,w,3);
+  c.fillStyle = 'rgba(0,0,0,0.28)';       c.fillRect(0,19,w,6);
+
+  // Pilastras verticales: rompen la repetición horizontal
+  const cols = 3, marginX = 20;
+  const colW = (w - marginX*2)/cols;
+  c.fillStyle = 'rgba(0,0,0,0.10)';
+  for(let i=1;i<cols;i++) c.fillRect(marginX+i*colW-4, 26, 8, h-90);
+
+  for(let f=0; f<floors; f++){
+    const fy = 34 + f*78;
+    // Losa entre pisos, con luz arriba y sombra abajo
+    c.fillStyle = 'rgba(0,0,0,0.16)';       c.fillRect(0, fy+62, w, 6);
+    c.fillStyle = 'rgba(255,255,255,0.18)'; c.fillRect(0, fy+68, w, 2);
+
+    for(let i=0; i<cols; i++){
+      const wx = marginX + i*colW + colW*0.16;
+      const ww = colW*0.68;
+      // Hueco con sombra interior (da profundidad al vano)
+      c.fillStyle = 'rgba(0,0,0,0.55)';
+      c.fillRect(wx-3, fy+6, ww+6, 50);
+      // Vidrio: refleja cielo arriba y edificio de enfrente abajo
+      const lit = rand() < 0.22;
+      const gg = c.createLinearGradient(wx, fy+8, wx, fy+54);
+      if(lit){ gg.addColorStop(0,'#ffe6ab'); gg.addColorStop(1,'#b98c3c'); }
+      else   { gg.addColorStop(0,'#93b6cf'); gg.addColorStop(0.45,'#4a6076');
+               gg.addColorStop(1,'#2b3a49'); }
+      c.fillStyle = gg; c.fillRect(wx, fy+8, ww, 46);
+      // Cruceta de la carpintería
+      c.fillStyle = 'rgba(240,240,235,0.55)';
+      c.fillRect(wx+ww/2-1, fy+8, 2, 46);
+      c.fillRect(wx, fy+28, ww, 2);
+      // Antepecho / balcón
+      c.fillStyle = 'rgba(238,234,224,0.75)';
+      c.fillRect(wx-6, fy+54, ww+12, 4);
+      c.fillStyle = 'rgba(28,30,36,0.80)';
+      for(let b=0;b<8;b++) c.fillRect(wx-6 + b*(ww+12)/8, fy+58, 2, 10);
+      c.fillStyle = 'rgba(28,30,36,0.90)';
+      c.fillRect(wx-7, fy+68, ww+14, 3);
+    }
+  }
+
+  // Planta baja: local con toldo, vidriera y zócalo oscuro
+  const gy = h - 74;
+  c.fillStyle = '#1e2128'; c.fillRect(0, gy, w, 74);
+  const shopG = c.createLinearGradient(0, gy+20, 0, h-10);
+  shopG.addColorStop(0,'#ffe3a2'); shopG.addColorStop(1,'#8f6a25');
+  c.fillStyle = shopG; c.fillRect(16, gy+22, w-32, 42);
+  c.fillStyle = 'rgba(0,0,0,0.35)';
+  for(let i=1;i<4;i++) c.fillRect(16 + i*(w-32)/4, gy+22, 4, 42);
+  c.fillStyle = '#33281c'; c.fillRect(w*0.45, gy+26, 36, 38);
+  for(let i=0;i<9;i++){
+    c.fillStyle = i%2===0 ? palette.awning : '#f3f1ea';
+    c.fillRect(6 + i*(w-12)/9, gy, (w-12)/9, 18);
+  }
+  c.fillStyle = 'rgba(0,0,0,0.35)'; c.fillRect(0, gy+18, w, 4);
+  c.fillStyle = '#15171c'; c.fillRect(0, h-10, w, 10);
+  return cv;
+}
+
+const BUILDING_SPRITES = [
+  makeBuilding({light:'#eadfc6', base:'#d6c8a8', dark:'#a99574', trim:'#f2ead7', awning:'#c1272d'}, 6, 17),
+  makeBuilding({light:'#dcbfa4', base:'#c19d7d', dark:'#8f7355', trim:'#e8d6c2', awning:'#2a6b4f'}, 4, 91),
+  makeBuilding({light:'#b3bcc9', base:'#8d97a6', dark:'#606978', trim:'#c9d2dd', awning:'#1f4e79'}, 8, 53),
+  makeBuilding({light:'#e3d6d0', base:'#c4b0a8', dark:'#8f7d76', trim:'#efe6e1', awning:'#8e44ad'}, 5, 128),
+  makeBuilding({light:'#d9dcd2', base:'#b6bbae', dark:'#848a7c', trim:'#eceee6', awning:'#b8860b'}, 7, 204),
+  makeBuilding({light:'#f0e2cd', base:'#dcc9a9', dark:'#ab9776', trim:'#f8f0e2', awning:'#7d1d24'}, 3, 61),
+  makeBuilding({light:'#c6c3bb', base:'#a29e94', dark:'#726f66', trim:'#dbd8d0', awning:'#2f6b4f'}, 9, 175),
+];
+
+// --- Jacarandá ---
+function makeTree(){
+  const w = 240, h = 300;
+  const {cv,c} = makeCanvas(w,h);
+  // tronco
+  const tg = c.createLinearGradient(w/2-12,0,w/2+12,0);
+  tg.addColorStop(0,'#6b4a2f'); tg.addColorStop(0.5,'#503620'); tg.addColorStop(1,'#38240f');
+  c.fillStyle = tg;
+  c.beginPath();
+  c.moveTo(w/2-13, h); c.lineTo(w/2+13, h);
+  c.lineTo(w/2+7, h*0.48); c.lineTo(w/2-7, h*0.48);
+  c.closePath(); c.fill();
+  // ramas
+  c.strokeStyle = '#503620'; c.lineWidth = 5; c.lineCap='round';
+  [[-1,0.55],[1,0.52],[-1,0.42],[1,0.4]].forEach(([dir,fy])=>{
+    c.beginPath();
+    c.moveTo(w/2, h*fy);
+    c.lineTo(w/2 + dir*48, h*(fy-0.14));
+    c.stroke();
+  });
+  // copa de jacarandá (varios blobs violeta)
+  const blobs = [[0.5,0.28,0.30],[0.28,0.36,0.22],[0.72,0.36,0.22],[0.38,0.20,0.19],[0.63,0.19,0.19],[0.5,0.13,0.17]];
+  blobs.forEach(([bx,by,br],i)=>{
+    const rg = c.createRadialGradient(w*bx-br*w*0.3, h*by-br*h*0.3, br*w*0.1, w*bx, h*by, br*w);
+    rg.addColorStop(0,'#c79ae8');
+    rg.addColorStop(0.6,'#9b6bd1');
+    rg.addColorStop(1,'#6c46a0');
+    c.fillStyle = rg;
+    c.beginPath();
+    c.arc(w*bx, h*by, br*w, 0, Math.PI*2);
+    c.fill();
+  });
+  return cv;
+}
+const TREE_SPRITE = makeTree();
+
+// --- Farol porteño de dos brazos ---
+function makeLamp(){
+  const w = 120, h = 420;
+  const {cv,c} = makeCanvas(w,h);
+  const g = c.createLinearGradient(w/2-6,0,w/2+6,0);
+  g.addColorStop(0,'#4b5058'); g.addColorStop(0.5,'#2c3037'); g.addColorStop(1,'#191c21');
+  c.fillStyle = g;
+  c.fillRect(w/2-6, 40, 12, h-40);
+  // base
+  c.fillStyle = '#22262c';
+  c.fillRect(w/2-14, h-22, 28, 22);
+  // brazo curvo
+  c.strokeStyle = '#2c3037'; c.lineWidth = 8; c.lineCap='round';
+  c.beginPath();
+  c.moveTo(w/2, 60);
+  c.quadraticCurveTo(w/2, 24, w/2+34, 22);
+  c.stroke();
+  c.beginPath();
+  c.moveTo(w/2, 60);
+  c.quadraticCurveTo(w/2, 24, w/2-34, 22);
+  c.stroke();
+  // luminarias con halo
+  [-34, 34].forEach(dx=>{
+    c.fillStyle = '#23272e';
+    c.fillRect(w/2+dx-14, 20, 28, 10);
+    const hg = c.createRadialGradient(w/2+dx, 34, 2, w/2+dx, 34, 26);
+    hg.addColorStop(0,'rgba(255,240,190,1)');
+    hg.addColorStop(0.35,'rgba(255,224,138,0.6)');
+    hg.addColorStop(1,'rgba(255,224,138,0)');
+    c.fillStyle = hg;
+    c.beginPath(); c.arc(w/2+dx, 34, 26, 0, Math.PI*2); c.fill();
+  });
+  return cv;
+}
+const LAMP_SPRITE = makeLamp();
+
+// --- Obelisco ---
+function makeObelisk(){
+  const w = 200, h = 900;
+  const {cv,c} = makeCanvas(w,h);
+  const bodyTop = h*0.06, baseW = 62, topW = 26;
+  const g = c.createLinearGradient(w/2-baseW/2, 0, w/2+baseW/2, 0);
+  g.addColorStop(0,'#f4f3ea');
+  g.addColorStop(0.42,'#e2e1d5');
+  g.addColorStop(0.72,'#b9b8aa');
+  g.addColorStop(1,'#8e8d80');
+  c.fillStyle = g;
+  c.beginPath();
+  c.moveTo(w/2-baseW/2, h);
+  c.lineTo(w/2+baseW/2, h);
+  c.lineTo(w/2+topW/2, bodyTop+40);
+  c.lineTo(w/2-topW/2, bodyTop+40);
+  c.closePath(); c.fill();
+  // punta piramidal
+  c.fillStyle = '#cbcabc';
+  c.beginPath();
+  c.moveTo(w/2-topW/2, bodyTop+40);
+  c.lineTo(w/2+topW/2, bodyTop+40);
+  c.lineTo(w/2, bodyTop);
+  c.closePath(); c.fill();
+  c.fillStyle = 'rgba(255,255,255,0.5)';
+  c.beginPath();
+  c.moveTo(w/2-topW/2, bodyTop+40);
+  c.lineTo(w/2, bodyTop);
+  c.lineTo(w/2, bodyTop+40);
+  c.closePath(); c.fill();
+  // ventanita superior
+  c.fillStyle = '#3a3d38';
+  c.fillRect(w/2-5, bodyTop+64, 10, 16);
+  // base escalonada
+  c.fillStyle = '#a8a79a';
+  c.fillRect(w/2-baseW/2-10, h-26, baseW+20, 26);
+  c.fillStyle = '#8d8c80';
+  c.fillRect(w/2-baseW/2-18, h-12, baseW+36, 12);
+  // puerta
+  c.fillStyle = '#4a4c46';
+  c.fillRect(w/2-9, h-52, 18, 26);
+  return cv;
+}
+const OBELISK_SPRITE = makeObelisk();
+
+// --- Kiosco de diarios ---
+function makeKiosco(){
+  const w = 220, h = 190;
+  const {cv,c} = makeCanvas(w,h);
+  c.fillStyle = '#2f6b4f';
+  c.fillRect(20, 46, w-40, h-46);
+  const gg = c.createLinearGradient(0,60,0,h-20);
+  gg.addColorStop(0,'#ffe9a8'); gg.addColorStop(1,'#b8883a');
+  c.fillStyle = gg;
+  c.fillRect(34, 62, w-68, 70);
+  // revistas colgadas
+  for(let i=0;i<5;i++){
+    c.fillStyle = ['#e63946','#4361ee','#f5c542','#2a9d8f','#e76f51'][i];
+    c.fillRect(40+i*((w-80)/5), 68, (w-80)/5-6, 26);
+  }
+  // toldo a rayas
+  for(let i=0;i<7;i++){
+    c.fillStyle = i%2===0 ? '#c1272d' : '#f2f2ee';
+    c.fillRect(6 + i*(w-12)/7, 26, (w-12)/7, 22);
+  }
+  c.fillStyle = 'rgba(0,0,0,0.3)';
+  c.fillRect(6, 46, w-12, 4);
+  return cv;
+}
+const KIOSCO_SPRITE = makeKiosco();
+
+// --- Vehículos de tránsito (vista trasera) ---
+function makeVehicle(kind, color){
+  const isBus = kind==='colectivo';
+  const w = isBus ? 300 : 220, h = isBus ? 250 : 150;
+  const {cv,c} = makeCanvas(w,h);
+  const bodyTop = isBus ? 12 : 34;
+  const bodyH = h - bodyTop - 22;
+
+  // sombra
+  c.fillStyle = 'rgba(0,0,0,0.32)';
+  c.beginPath(); c.ellipse(w/2, h-8, w*0.44, 12, 0,0,Math.PI*2); c.fill();
+
+  // ruedas
+  c.fillStyle = '#15171b';
+  c.fillRect(w*0.06, h-42, w*0.15, 36);
+  c.fillRect(w*0.79, h-42, w*0.15, 36);
+
+  // carrocería con degradado
+  const g = c.createLinearGradient(0, bodyTop, w, h);
+  g.addColorStop(0, shade(color, 46));
+  g.addColorStop(0.45, color);
+  g.addColorStop(1, shade(color, -46));
+  c.fillStyle = g;
+  roundRect(c, w*0.05, bodyTop, w*0.9, bodyH, isBus?10:18);
+  c.fill();
+  c.strokeStyle = 'rgba(0,0,0,0.35)'; c.lineWidth = 3; c.stroke();
+
+  // luneta trasera
+  const wg = c.createLinearGradient(0, bodyTop+8, 0, bodyTop+bodyH*0.44);
+  wg.addColorStop(0,'#8fb6d4'); wg.addColorStop(1,'#33414f');
+  c.fillStyle = wg;
+  roundRect(c, w*0.14, bodyTop+10, w*0.72, bodyH*(isBus?0.42:0.36), 8);
+  c.fill();
+  c.fillStyle = 'rgba(255,255,255,0.22)';
+  c.beginPath();
+  c.moveTo(w*0.16, bodyTop+12);
+  c.lineTo(w*0.44, bodyTop+12);
+  c.lineTo(w*0.24, bodyTop+bodyH*0.4);
+  c.lineTo(w*0.16, bodyTop+bodyH*0.4);
+  c.closePath(); c.fill();
+
+  if(kind==='taxi'){
+    // techo negro característico del taxi porteño
+    c.fillStyle = '#15171b';
+    roundRect(c, w*0.05, bodyTop, w*0.9, bodyH*0.16, 14);
+    c.fill();
+    // cartel TAXI
+    c.fillStyle = '#15171b';
+    c.fillRect(w*0.38, bodyTop-14, w*0.24, 14);
+    c.fillStyle = '#f5c542';
+    c.font = 'bold 13px Arial'; c.textAlign='center';
+    c.fillText('TAXI', w/2, bodyTop-3);
+  }
+  if(isBus){
+    // ventanas laterales del colectivo
+    c.fillStyle = 'rgba(60,80,100,0.75)';
+    for(let i=0;i<3;i++) c.fillRect(w*0.1+i*w*0.28, bodyTop+bodyH*0.5, w*0.22, bodyH*0.2);
+    // franja de color
+    c.fillStyle = shade(color, -70);
+    c.fillRect(w*0.05, bodyTop+bodyH*0.74, w*0.9, bodyH*0.07);
+  }
+
+  // paragolpes
+  c.fillStyle = '#3a3f47';
+  roundRect(c, w*0.05, bodyTop+bodyH-16, w*0.9, 16, 6);
+  c.fill();
+
+  // luces traseras
+  c.fillStyle = '#d0342c';
+  roundRect(c, w*0.09, bodyTop+bodyH*0.6, w*0.14, bodyH*0.16, 4); c.fill();
+  roundRect(c, w*0.77, bodyTop+bodyH*0.6, w*0.14, bodyH*0.16, 4); c.fill();
+  c.fillStyle = 'rgba(255,160,150,0.7)';
+  c.fillRect(w*0.10, bodyTop+bodyH*0.62, w*0.05, bodyH*0.05);
+  c.fillRect(w*0.78, bodyTop+bodyH*0.62, w*0.05, bodyH*0.05);
+
+  // patente
+  c.fillStyle = '#f0f0ea';
+  c.fillRect(w*0.42, bodyTop+bodyH*0.66, w*0.16, bodyH*0.11);
+
+  return cv;
+}
+function roundRect(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r);
+  c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);
+  c.arcTo(x,y,x+w,y,r);
+  c.closePath();
+}
+function shade(hex, amt){
+  const n = parseInt(hex.slice(1),16);
+  let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  r=Math.max(0,Math.min(255,r+amt)); g=Math.max(0,Math.min(255,g+amt)); b=Math.max(0,Math.min(255,b+amt));
+  return `rgb(${r},${g},${b})`;
+}
+
+const VEHICLE_SPRITES = {
+  taxi:       makeVehicle('taxi','#f5c542'),
+  autoAzul:   makeVehicle('auto','#3c5fd0'),
+  autoRojo:   makeVehicle('auto','#c0392b'),
+  autoBlanco: makeVehicle('auto','#dfe2e6'),
+  colectivo1: makeVehicle('colectivo','#2a9d8f'),
+  colectivo2: makeVehicle('colectivo','#8e44ad'),
+};
+
+// --- Auto de carrera rival (vista trasera) ---
+// Tiene que leerse DISTINTO del tránsito de un vistazo: alerón, número y
+// franja central. Si un rival se confunde con un taxi, la carrera no se entiende.
+function makeRacer(color, num){
+  const w = 230, h = 165;
+  const {cv,c} = makeCanvas(w,h);
+  const bodyTop = 46, bodyH = h - bodyTop - 20;
+
+  c.fillStyle = 'rgba(0,0,0,0.32)';
+  c.beginPath(); c.ellipse(w/2, h-6, w*0.46, 11, 0,0,Math.PI*2); c.fill();
+
+  // neumáticos anchos, sobresalen del cuerpo
+  c.fillStyle = '#15171b';
+  roundRect(c, w*0.015, h-52, w*0.20, 46, 5); c.fill();
+  roundRect(c, w*0.785, h-52, w*0.20, 46, 5); c.fill();
+  c.fillStyle = 'rgba(255,255,255,0.10)';
+  c.fillRect(w*0.03, h-46, w*0.17, 4);
+  c.fillRect(w*0.80, h-46, w*0.17, 4);
+
+  // carrocería baja y ancha
+  const g = c.createLinearGradient(0, bodyTop, w, h);
+  g.addColorStop(0, shade(color, 54));
+  g.addColorStop(0.45, color);
+  g.addColorStop(1, shade(color, -54));
+  c.fillStyle = g;
+  roundRect(c, w*0.08, bodyTop, w*0.84, bodyH, 12);
+  c.fill();
+  c.strokeStyle = 'rgba(0,0,0,0.42)'; c.lineWidth = 3; c.stroke();
+
+  // franja central de competición
+  c.fillStyle = 'rgba(255,255,255,0.82)';
+  c.fillRect(w*0.44, bodyTop, w*0.12, bodyH);
+  c.fillStyle = shade(color, -80);
+  c.fillRect(w*0.475, bodyTop, w*0.05, bodyH);
+
+  // luneta
+  const wg = c.createLinearGradient(0, bodyTop+8, 0, bodyTop+bodyH*0.42);
+  wg.addColorStop(0,'#7fa8c8'); wg.addColorStop(1,'#2b3844');
+  c.fillStyle = wg;
+  roundRect(c, w*0.17, bodyTop+9, w*0.66, bodyH*0.34, 7); c.fill();
+
+  // alerón trasero: lo que lo delata como auto de carrera
+  c.fillStyle = shade(color, -70);
+  c.fillRect(w*0.135, bodyTop-6, w*0.06, 26);
+  c.fillRect(w*0.805, bodyTop-6, w*0.06, 26);
+  const ag = c.createLinearGradient(0, bodyTop-22, 0, bodyTop-6);
+  ag.addColorStop(0, shade(color, 30)); ag.addColorStop(1, shade(color, -30));
+  c.fillStyle = ag;
+  roundRect(c, w*0.10, bodyTop-22, w*0.80, 16, 3); c.fill();
+  c.strokeStyle = 'rgba(0,0,0,0.45)'; c.lineWidth = 2; c.stroke();
+
+  // número de competencia sobre el alerón
+  c.fillStyle = '#f7f7f2';
+  c.font = 'bold 15px Arial'; c.textAlign = 'center';
+  c.fillText(num, w/2, bodyTop-9);
+
+  // difusor y luz de lluvia
+  c.fillStyle = '#1a1c21';
+  roundRect(c, w*0.14, bodyTop+bodyH-15, w*0.72, 15, 4); c.fill();
+  c.fillStyle = '#2a2d33';
+  for(let i=0;i<5;i++) c.fillRect(w*0.20+i*w*0.14, bodyTop+bodyH-13, w*0.035, 12);
+  c.fillStyle = '#e2352c';
+  c.beginPath(); c.arc(w/2, bodyTop+bodyH-7, 4, 0, Math.PI*2); c.fill();
+
+  // ópticas traseras
+  c.fillStyle = '#d0342c';
+  roundRect(c, w*0.12, bodyTop+bodyH*0.60, w*0.16, bodyH*0.15, 3); c.fill();
+  roundRect(c, w*0.72, bodyTop+bodyH*0.60, w*0.16, bodyH*0.15, 3); c.fill();
+  c.fillStyle = 'rgba(255,170,160,0.75)';
+  c.fillRect(w*0.13, bodyTop+bodyH*0.62, w*0.06, bodyH*0.05);
+  c.fillRect(w*0.73, bodyTop+bodyH*0.62, w*0.06, bodyH*0.05);
+
+  return cv;
+}
+
+// 7 rivales — nombres de calles y barrios porteños
+const RIVAL_DEFS = [
+  {nombre:'Belgrano',  color:'#2f7fae', num:'4'},
+  {nombre:'Almagro',   color:'#e07a1f', num:'11'},
+  {nombre:'Caballito', color:'#3fa34d', num:'23'},
+  {nombre:'Boedo',     color:'#8e44ad', num:'6'},
+  {nombre:'Palermo',   color:'#d8d5cc', num:'9'},
+  {nombre:'La Boca',   color:'#1f4e79', num:'12'},
+  {nombre:'Barracas',  color:'#b03030', num:'2'},
+];
+RIVAL_DEFS.forEach(r => { r.sprite = makeRacer(r.color, r.num); });
+
+// --- Cartel de calle porteño (chapa azul) ---
+function makeStreetSign(text){
+  const w = 260, h = 300;
+  const {cv,c} = makeCanvas(w,h);
+  // poste
+  c.fillStyle = '#3a3f47';
+  c.fillRect(w/2-7, 70, 14, h-70);
+  c.fillStyle = '#22262c';
+  c.fillRect(w/2-7, 70, 5, h-70);
+  // chapa
+  c.fillStyle = '#1f4e79';
+  roundRect(c, 14, 18, w-28, 56, 6); c.fill();
+  c.strokeStyle = '#e8eef5'; c.lineWidth = 3;
+  roundRect(c, 20, 24, w-40, 44, 4); c.stroke();
+  c.fillStyle = '#f2f5f9';
+  c.font = 'bold 26px Arial'; c.textAlign = 'center';
+  c.fillText(text, w/2, 56);
+  return cv;
+}
+const SIGN_SPRITES = {
+  sign9julio:   makeStreetSign('9 DE JULIO'),
+  signCorr:     makeStreetSign('CORRIENTES'),
+  signMayo:     makeStreetSign('AV. DE MAYO'),
+  signDiag:     makeStreetSign('DIAG. NORTE'),
+  signFlorida:  makeStreetSign('FLORIDA'),
+  signCallao:   makeStreetSign('CALLAO'),
+};
+
+// --- Semáforo ---
+function makeTrafficLight(){
+  const w = 140, h = 420;
+  const {cv,c} = makeCanvas(w,h);
+  c.fillStyle = '#2c3037';
+  c.fillRect(w/2-8, 120, 16, h-120);
+  c.fillStyle = '#1a1d22';
+  c.fillRect(w/2-8, 120, 6, h-120);
+  // caja
+  c.fillStyle = '#23272e';
+  roundRect(c, w/2-26, 10, 52, 118, 8); c.fill();
+  c.strokeStyle = '#12151a'; c.lineWidth = 3; c.stroke();
+  // luces
+  [['#3a1414',28],['#3a3414',62],['#1c4a24',96]].forEach(([col,y],i)=>{
+    c.fillStyle = col;
+    c.beginPath(); c.arc(w/2, y, 15, 0, Math.PI*2); c.fill();
+  });
+  // la verde encendida con halo
+  const gg = c.createRadialGradient(w/2, 96, 2, w/2, 96, 26);
+  gg.addColorStop(0,'rgba(120,255,150,1)');
+  gg.addColorStop(0.4,'rgba(60,220,110,0.6)');
+  gg.addColorStop(1,'rgba(60,220,110,0)');
+  c.fillStyle = gg;
+  c.beginPath(); c.arc(w/2, 96, 26, 0, Math.PI*2); c.fill();
+  return cv;
+}
+const TRAFFIC_LIGHT_SPRITE = makeTrafficLight();
+
+// --- Cúpula del Congreso ---
+function makeCongreso(){
+  const w = 420, h = 480;
+  const {cv,c} = makeCanvas(w,h);
+  const cx = w/2;
+  // cuerpo
+  const g = c.createLinearGradient(0,0,w,0);
+  g.addColorStop(0,'#e8e3d4'); g.addColorStop(0.5,'#d3ccb8'); g.addColorStop(1,'#a49c88');
+  c.fillStyle = g;
+  c.fillRect(30, 250, w-60, h-250);
+  // columnas
+  c.fillStyle = 'rgba(255,255,255,0.55)';
+  for(let i=0;i<9;i++) c.fillRect(48+i*((w-96)/9), 280, 16, h-300);
+  c.fillStyle = 'rgba(0,0,0,0.2)';
+  for(let i=0;i<9;i++) c.fillRect(60+i*((w-96)/9), 280, 5, h-300);
+  // frontón
+  c.fillStyle = '#ddd6c2';
+  c.beginPath();
+  c.moveTo(20, 252); c.lineTo(cx, 205); c.lineTo(w-20, 252);
+  c.closePath(); c.fill();
+  // tambor de la cúpula
+  c.fillStyle = '#b8b2a0';
+  c.fillRect(cx-78, 148, 156, 60);
+  c.fillStyle = 'rgba(0,0,0,0.2)';
+  for(let i=0;i<7;i++) c.fillRect(cx-70+i*20, 152, 7, 52);
+  // cúpula verdosa (cobre oxidado)
+  const dg = c.createLinearGradient(cx-80, 40, cx+80, 150);
+  dg.addColorStop(0,'#8fd0b8'); dg.addColorStop(0.5,'#4e9c82'); dg.addColorStop(1,'#2c6b56');
+  c.fillStyle = dg;
+  c.beginPath();
+  c.ellipse(cx, 150, 80, 92, 0, Math.PI, 0);
+  c.fill();
+  // linterna y aguja
+  c.fillStyle = '#3d8570';
+  c.fillRect(cx-14, 32, 28, 30);
+  c.fillStyle = '#c9a24a';
+  c.beginPath(); c.moveTo(cx-6, 32); c.lineTo(cx+6, 32); c.lineTo(cx, 4); c.closePath(); c.fill();
+  return cv;
+}
+const CONGRESO_SPRITE = makeCongreso();
+
+// --- Casa Rosada ---
+function makeCasaRosada(){
+  const w = 460, h = 300;
+  const {cv,c} = makeCanvas(w,h);
+  const cx = w/2;
+  const g = c.createLinearGradient(0,0,w,0);
+  g.addColorStop(0,'#f0b8ac'); g.addColorStop(0.5,'#d98d80'); g.addColorStop(1,'#a9645b');
+  c.fillStyle = g;
+  c.fillRect(0, 90, w, h-90);
+  // arco central
+  c.fillStyle = '#c47a6e';
+  c.fillRect(cx-70, 60, 140, h-60);
+  c.fillStyle = '#7d453e';
+  c.beginPath();
+  c.moveTo(cx-40, h); c.lineTo(cx-40, 130);
+  c.arc(cx, 130, 40, Math.PI, 0);
+  c.lineTo(cx+40, h);
+  c.closePath(); c.fill();
+  // cornisa
+  c.fillStyle = '#f6d9d2';
+  c.fillRect(0, 90, w, 12);
+  c.fillRect(cx-70, 60, 140, 12);
+  // ventanas con arco
+  c.fillStyle = '#5b3630';
+  for(let i=0;i<10;i++){
+    const wx = 20 + i*((w-40)/10);
+    if(Math.abs(wx+16-cx) < 78) continue;
+    c.beginPath();
+    c.moveTo(wx, h-30); c.lineTo(wx, 150);
+    c.arc(wx+15, 150, 15, Math.PI, 0);
+    c.lineTo(wx+30, h-30);
+    c.closePath(); c.fill();
+  }
+  // balaustrada superior
+  c.fillStyle = '#e8c0b6';
+  for(let i=0;i<26;i++) c.fillRect(6+i*(w-12)/26, 74, 7, 16);
+  // bandera
+  c.fillStyle = '#5c5c5c';
+  c.fillRect(cx-2, 0, 4, 62);
+  c.fillStyle = '#75aadb'; c.fillRect(cx+2, 4, 46, 10);
+  c.fillStyle = '#ffffff'; c.fillRect(cx+2, 14, 46, 10);
+  c.fillStyle = '#75aadb'; c.fillRect(cx+2, 24, 46, 10);
+  return cv;
+}
+const CASA_ROSADA_SPRITE = makeCasaRosada();
+
+// --- Café notable con fileteado ---
+function makeCafe(){
+  const w = 280, h = 260;
+  const {cv,c} = makeCanvas(w,h);
+  const g = c.createLinearGradient(0,0,w,0);
+  g.addColorStop(0,'#4a2f1e'); g.addColorStop(0.5,'#382214'); g.addColorStop(1,'#231409');
+  c.fillStyle = g;
+  c.fillRect(0, 54, w, h-54);
+  // vidriera cálida
+  const vg = c.createLinearGradient(0, 90, 0, h-24);
+  vg.addColorStop(0,'#ffe1a0'); vg.addColorStop(1,'#b07a2a');
+  c.fillStyle = vg;
+  c.fillRect(20, 90, w-40, h-118);
+  // divisiones de la vidriera
+  c.fillStyle = '#2c1a0e';
+  for(let i=1;i<4;i++) c.fillRect(20+i*(w-40)/4, 90, 7, h-118);
+  c.fillRect(20, 90, w-40, 7);
+  // mesitas en la vereda
+  c.fillStyle = '#1d1109';
+  c.fillRect(30, h-30, 34, 6);
+  c.fillRect(44, h-24, 6, 24);
+  c.fillRect(w-64, h-30, 34, 6);
+  c.fillRect(w-50, h-24, 6, 24);
+  // toldo bordó
+  for(let i=0;i<7;i++){
+    c.fillStyle = i%2===0 ? '#7d1d24' : '#f0e6d2';
+    c.fillRect(4 + i*(w-8)/7, 34, (w-8)/7, 22);
+  }
+  c.fillStyle = 'rgba(0,0,0,0.3)';
+  c.fillRect(4, 54, w-8, 4);
+  // cartel con fileteado
+  c.fillStyle = '#12100c';
+  roundRect(c, 40, 4, w-80, 30, 5); c.fill();
+  c.strokeStyle = '#c9a24a'; c.lineWidth = 2;
+  roundRect(c, 45, 8, w-90, 22, 4); c.stroke();
+  c.fillStyle = '#f0d98a';
+  c.font = 'bold 16px Georgia'; c.textAlign = 'center';
+  c.fillText('CAFÉ NOTABLE', w/2, 25);
+  return cv;
+}
+const CAFE_SPRITE = makeCafe();
+
+// --- Parada de colectivo ---
+function makeParada(){
+  const w = 200, h = 220;
+  const {cv,c} = makeCanvas(w,h);
+  c.fillStyle = '#2c3037';
+  c.fillRect(16, 34, 10, h-34);
+  c.fillRect(w-26, 34, 10, h-34);
+  // techo
+  c.fillStyle = '#3d434c';
+  roundRect(c, 6, 18, w-12, 22, 5); c.fill();
+  // panel publicitario
+  const ag = c.createLinearGradient(0, 60, 0, h-30);
+  ag.addColorStop(0,'#7fc7e8'); ag.addColorStop(1,'#2f7fae');
+  c.fillStyle = ag;
+  c.fillRect(34, 60, w-68, h-100);
+  c.fillStyle = 'rgba(255,255,255,0.85)';
+  c.font = 'bold 15px Arial'; c.textAlign='center';
+  c.fillText('PARADA', w/2, 100);
+  c.font = 'bold 12px Arial';
+  c.fillText('152 · 29 · 5', w/2, 122);
+  // banco
+  c.fillStyle = '#4a5058';
+  c.fillRect(30, h-40, w-60, 8);
+  return cv;
+}
+const PARADA_SPRITE = makeParada();
+
+// --- Arco de largada ---
+function makeBanner(){
+  const w = 900, h = 260;
+  const {cv,c} = makeCanvas(w,h);
+  // postes
+  c.fillStyle = '#2b2f36';
+  c.fillRect(20, 60, 34, h-60);
+  c.fillRect(w-54, 60, 34, h-60);
+  c.fillStyle = '#1a1d22';
+  c.fillRect(20, 60, 10, h-60);
+  c.fillRect(w-54, 60, 10, h-60);
+  // travesaño celeste/blanco/celeste
+  c.fillStyle = '#75aadb'; c.fillRect(20, 20, w-40, 16);
+  c.fillStyle = '#ffffff'; c.fillRect(20, 36, w-40, 16);
+  c.fillStyle = '#75aadb'; c.fillRect(20, 52, w-40, 16);
+  // sol de mayo simplificado
+  c.fillStyle = '#f5c542';
+  c.beginPath(); c.arc(w/2, 44, 11, 0, Math.PI*2); c.fill();
+  // texto
+  c.fillStyle = '#14161a';
+  c.font = 'bold 30px Arial'; c.textAlign = 'center';
+  c.fillText('OBELISCO GP', w/2, 100);
+  // banderas a cuadros
+  for(let i=0;i<Math.floor((w-80)/24);i++){
+    for(let j=0;j<2;j++){
+      c.fillStyle = ((i+j)%2===0) ? '#101216' : '#f5f5f0';
+      c.fillRect(40+i*24, 112+j*14, 24, 14);
+    }
+  }
+  return cv;
+}
+const BANNER_SPRITE = makeBanner();
+
+/* ============================================================
+   CIRCUITO (con curvas y colinas)
+   ============================================================ */
+const segments = [];
+function lastY(){ return segments.length===0 ? 0 : segments[segments.length-1].p2.world.y; }
+function addSegment(curve, y){
+  const n = segments.length;
+  segments.push({
+    index: n,
+    p1: { world:{ y: lastY(), z: n*SEG_LEN }, camera:{}, screen:{} },
+    p2: { world:{ y: y,      z: (n+1)*SEG_LEN }, camera:{}, screen:{} },
+    curve,
+    color: (Math.floor(n/4)%2===0) ? 'light' : 'dark',
+    sprites: [],
+    cars: []
+  });
+}
+function easeIn(a,b,t){ return a + (b-a)*t*t; }
+function easeInOut(a,b,t){ return a + (b-a)*(1-Math.cos(t*Math.PI))/2; }
+function addRoad(enter, hold, leave, curve, y){
+  const startY = lastY(), endY = startY + (y||0)*SEG_LEN;
+  const total = enter+hold+leave;
+  for(let i=0;i<enter;i++) addSegment(easeInOut(0,curve,i/enter), easeInOut(startY,endY,i/total));
+  for(let i=0;i<hold;i++)  addSegment(curve, easeInOut(startY,endY,(enter+i)/total));
+  for(let i=0;i<leave;i++) addSegment(easeInOut(curve,0,i/leave), easeInOut(startY,endY,(enter+hold+i)/total));
+}
+function addStraight(n, y){ addRoad(n, n, n, 0, y||0); }
+
+// Trazado
+addStraight(18, 0);            // largada — Av. 9 de Julio
+addRoad(14, 18, 14,  2.4,  0);  // curva a Diagonal Norte
+addStraight(10, 22);           // subida
+addRoad(12, 16, 12, -3.2,  0);  // Diagonal Norte (curva fuerte izq)
+addStraight(14, -22);          // bajada — Av. Corrientes
+addRoad(14, 20, 14,  2.8,  18); // curva larga en subida
+addStraight(10, 0);
+addRoad(12, 14, 12,  2.2, -20); // Av. de Mayo en bajada
+addStraight(8, 0);
+addRoad(10, 12, 10, -2.0,  0);  // cierre hacia la largada
+addStraight(8, 0);
+
+const trackLength = segments.length * SEG_LEN;
+
+// --- Decorados a los costados ---
+function addSprite(i, kind, offset, scale){
+  segments[i % segments.length].sprites.push({kind, offset, scale: scale||1});
+}
+// Faroles y jacarandás sobre la vereda
+for(let i=6; i<segments.length; i+=5){
+  const side = (Math.floor(i/5)%2===0) ? -1 : 1;
+  addSprite(i, (Math.floor(i/10)%2===0) ? 'lamp' : 'tree', side*1.32, 1);
+}
+
+// Fachadas: espaciadas en profundidad. Por la perspectiva igual forman una
+// pared continua, pero sin superponerse 8 veces sobre el mismo píxel.
+for(let i=0; i<segments.length; i+=4){
+  addSprite(i,   'building'+(i%7),        -2.85, 1);
+  addSprite(i+2, 'building'+((i*3+2)%7),   2.85, 1);
+}
+
+for(let i=20; i<segments.length; i+=40){
+  addSprite(i, 'kiosco', (i%80<40) ? -1.45 : 1.45, 1);
+}
+for(let i=14; i<segments.length; i+=26){
+  addSprite(i, 'semaforo', (i%52<26) ? -1.20 : 1.20, 1);
+}
+for(let i=32; i<segments.length; i+=48){
+  addSprite(i, 'parada', (i%96<48) ? 1.48 : -1.48, 1);
+}
+for(let i=26; i<segments.length; i+=44){
+  addSprite(i, 'cafe', (i%88<44) ? -2.10 : 2.10, 1);
+}
+
+// Carteles con nombres de calles reales, en orden por el circuito
+const L = segments.length;
+[['sign9julio',0.03],['signDiag',0.13],['signCorr',0.26],['signFlorida',0.38],
+ ['signMayo',0.52],['signCallao',0.64],['sign9julio',0.76],['signCorr',0.88]]
+ .forEach(([kind,frac],i)=>{
+   addSprite(Math.floor(L*frac), kind, (i%2===0) ? -1.25 : 1.25, 1);
+ });
+
+// Monumentos porteños en puntos clave del recorrido
+addSprite(4, 'banner', 0, 1);
+addSprite(Math.floor(L*0.44),   'obelisk', -2.6, 1);
+addSprite(Math.floor(L*0.44)+1, 'obelisk',  2.6, 1);
+addSprite(Math.floor(L*0.18),   'congreso', -5.2, 1);
+addSprite(Math.floor(L*0.68),   'casarosada', 5.6, 1);
+addSprite(Math.floor(L*0.92),   'congreso',  5.2, 1);
+
+// --- Tránsito: 4 carriles, con un patrón que siempre deja un hueco para pasar ---
+const LANES = [-0.64, -0.22, 0.22, 0.64];
+const LANE_ORDER = [0, 2, 1, 3, 2, 0, 3, 1];   // evita bloquear la calle entera
+const VEHICLE_MIX = ['taxi','autoAzul','taxi','autoRojo','colectivo1',
+                     'taxi','autoBlanco','autoAzul','taxi','colectivo2',
+                     'autoRojo','taxi'];
+const trafficDefs = [];
+for(let i=0; i<26; i++){
+  const kind = VEHICLE_MIX[i % VEHICLE_MIX.length];
+  const isBus = kind.startsWith('colectivo');
+  trafficDefs.push({
+    frac  : 0.015 + i*0.0378,
+    offset: LANES[LANE_ORDER[i % LANE_ORDER.length]],
+    spd   : isBus ? (165 + (i%3)*18) : (270 + (i%5)*22),
+    kind  : kind
+  });
+}
+let traffic = [];
+function resetTraffic(){
+  traffic = trafficDefs.map(d=>({ z: d.frac*trackLength, offset: d.offset, spd: d.spd, kind: d.kind, cool: 0 }));
+}
+resetTraffic();
+
+/* ---------- Rivales ----------
+   Largan escalonados adelante del jugador, que sale último. Todos tienen que
+   cubrir la misma distancia (3 vueltas), así que el puesto se mide por
+   distancia recorrida, no por dónde están parados en la calle. */
+const RIVAL_BASE  = 1620;
+const RIVAL_ACCEL = 520;    // parecido al del jugador, para una largada pareja
+const RIVAL_FRENO = 1100;
+let rivals = [];
+function resetRivals(){
+  rivals = RIVAL_DEFS.map((d,i)=>{
+    const startZ = (i+1)*230;
+    const carril = [-0.52,0.52,-0.18,0.18,-0.52,0.52,0][i % 7];
+    return {
+      def: d, startZ,
+      z: startZ % trackLength,
+      lap: 0,
+      lane: carril,                   // carril elegido por la IA
+      offset: carril,                 // posición lateral real (se acerca al carril)
+      targetOffset: carril,
+      spd: 0,                         // largan parados, igual que el jugador
+      baseSpd: RIVAL_BASE + i*40,     // el de más adelante es también el más rápido
+      cool: 0,
+      finished: false, finishT: 0
+    };
+  });
+}
+resetRivals();
+function rivalDist(r){ return r.lap*trackLength + r.z - r.startZ; }
+function playerDist(){ return laps*trackLength + position; }
+
+/* ---------- Trazado del circuito para el minimapa ----------
+   Se integra la curvatura para obtener la forma en planta. El circuito no
+   cierra solo, así que se escala el giro total a una vuelta completa y se
+   reparte el error de cierre a lo largo del recorrido. */
+const MAP_PATH = (function(){
+  // Normalizar por el giro TOTAL, sumando curvas a izquierda y derecha en
+  // valor absoluto. Con la suma con signo las curvas opuestas se cancelaban,
+  // k se disparaba, y cada curva daba varias vueltas sobre sí misma: garabato.
+  let sumAbs = 0;
+  for(const s of segments) sumAbs += Math.abs(s.curve);
+  const k = sumAbs > 0.001 ? (Math.PI*3.2)/sumAbs : 0.01;
+  const pts = [];
+  let ang = 0, px = 0, py = 0;
+  for(const s of segments){
+    ang += s.curve * k;
+    px += Math.sin(ang); py += Math.cos(ang);
+    pts.push({x:px, y:py});
+  }
+  // repartir el error de cierre para que la vuelta termine donde empezó
+  const ex = pts[pts.length-1].x, ey = pts[pts.length-1].y;
+  for(let i=0;i<pts.length;i++){
+    const t = (i+1)/pts.length;
+    pts[i].x -= ex*t; pts[i].y -= ey*t;
+  }
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of pts){ if(p.x<x0)x0=p.x; if(p.x>x1)x1=p.x; if(p.y<y0)y0=p.y; if(p.y>y1)y1=p.y; }
+  const span = Math.max(x1-x0, y1-y0) || 1;
+  const PAD = 16, SIZE = 150 - PAD*2;
+  for(const p of pts){
+    p.mx = PAD + (p.x-x0)/span*SIZE + (SIZE-(x1-x0)/span*SIZE)/2;
+    p.my = PAD + (p.y-y0)/span*SIZE + (SIZE-(y1-y0)/span*SIZE)/2;
+  }
+  return pts;
+})();
+function mapPoint(z){
+  const i = Math.floor((((z % trackLength) + trackLength) % trackLength)/SEG_LEN) % MAP_PATH.length;
+  return MAP_PATH[i];
+}
+
+function segAt(z){ return segments[Math.floor(z/SEG_LEN) % segments.length]; }
+function pctRemaining(z){ return (z % SEG_LEN)/SEG_LEN; }
+function interpolate(a,b,pct){ return a + (b-a)*pct; }
+
+/* ============================================================
+   ESTADO DEL JUEGO
+   ============================================================ */
+const MAX_SPEED = 2400, ACCEL = 560, BRAKE = 1500, DECEL = 700;
+const OFFROAD_DECEL = 1900, OFFROAD_MAX = MAX_SPEED*0.42;
+let position = 0, playerX = 0, speed = 0;
+let laps = 0, elapsed = 0, finished = false, finishTime = 0;
+let raceStarted = false, raceOver = false;
+let hitFlash = 0, skidLevel = 0, camRoll = 0;
+let score = 0, combo = 1, comboTimer = 0, overtakes = 0, closeCalls = 0;
+let popups = [];
+let puesto = 8, mejorPuesto = 8, rivalesPasados = 0;
+let nitro = 0, nitroActivo = false, finalPos = 8;
+const NITRO_GASTO = 0.42;   // fracción de tanque por segundo con nitro activo
+
+const keys = {};
+// Las flechas y la barra espaciadora hacen scroll de la página si no se frenan
+const TECLAS_JUEGO = [' ','arrowup','arrowdown','arrowleft','arrowright'];
+window.addEventListener('keydown', e=>{
+  const k = e.key.toLowerCase();
+  if(TECLAS_JUEGO.indexOf(k) >= 0) e.preventDefault();
+  keys[k] = true; AUDIO.resume();
+});
+window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
+function bindTouch(id, key){
+  const el = document.getElementById(id);
+  const on = e=>{ e.preventDefault(); keys[key]=true; };
+  const off= e=>{ e.preventDefault(); keys[key]=false; };
+  el.addEventListener('touchstart', e=>{ AUDIO.resume(); on(e); }); el.addEventListener('touchend', off);
+  el.addEventListener('mousedown', ()=>{ AUDIO.resume(); keys[key]=true; });
+  el.addEventListener('mouseup', ()=>keys[key]=false);
+  el.addEventListener('mouseleave', ()=>keys[key]=false);
+}
+bindTouch('btnLeft','arrowleft'); bindTouch('btnRight','arrowright');
+bindTouch('btnGas','arrowup');    bindTouch('btnBrake','arrowdown');
+bindTouch('btnNitro',' ');
+
+const gasKey   = ()=> keys['arrowup']||keys['w'];
+const brakeKey = ()=> keys['arrowdown']||keys['s'];
+const leftKey  = ()=> keys['arrowleft']||keys['a'];
+const rightKey = ()=> keys['arrowright']||keys['d'];
+const nitroKey = ()=> keys[' ']||keys['shift'];
+
+/* ---------- IA de los rivales ---------- */
+const CARRILES_IA = [-0.62, -0.21, 0.21, 0.62];
+function distanciaRelativa(a, b){
+  let d = a - b;
+  if(d >  trackLength/2) d -= trackLength;
+  if(d < -trackLength/2) d += trackLength;
+  return d;
+}
+function actualizarRivales(dt){
+  const pd = playerDist();
+  for(const r of rivals){
+    if(r.cool > 0) r.cool -= dt;
+    if(r.finished) continue;
+    const seg = segAt(r.z);
+
+    // Objetivo de velocidad: frenan en curva, y ajustan un poco según dónde
+    // esté el jugador para que la carrera no se defina en la primera vuelta.
+    let target = r.baseSpd * (1 - Math.min(0.34, Math.abs(seg.curve)*0.105));
+    const delta = pd - rivalDist(r);
+    if(delta > 2600)       target *= 1.08;   // el jugador se escapó: aprietan
+    else if(delta < -3400) target *= 0.93;   // el jugador quedó lejos: aflojan
+
+    // Aceleran de a poco, como el jugador. Si arrancaran ya a velocidad de
+    // crucero, en la largada se escapaban solos y la carrera nacía perdida.
+    if(r.spd < target) r.spd = Math.min(target, r.spd + RIVAL_ACCEL*dt);
+    else               r.spd = Math.max(target, r.spd - RIVAL_FRENO*dt);
+
+    // ¿Tienen tránsito tapando su carril? Buscan el carril libre más cercano.
+    let bloqueado = false;
+    for(const t of traffic){
+      const d = distanciaRelativa(t.z, r.z);
+      if(d > 0 && d < 900 && Math.abs(t.offset - r.lane) < 0.30){ bloqueado = true; break; }
+    }
+    if(bloqueado){
+      let mejor = r.lane, mejorCosto = 1e9;
+      for(const carril of CARRILES_IA){
+        let costo = Math.abs(carril - r.lane)*0.6;
+        for(const t of traffic){
+          const d = distanciaRelativa(t.z, r.z);
+          if(d > 0 && d < 1100 && Math.abs(t.offset - carril) < 0.30) costo += 3;
+        }
+        if(costo < mejorCosto){ mejorCosto = costo; mejor = carril; }
+      }
+      r.lane = mejor;
+    }
+
+    // La centrífuga también los abre en las curvas (se calcula de cero cada
+    // cuadro: si se acumulara, terminarían pegados al cordón).
+    r.targetOffset = Math.max(-0.74, Math.min(0.74, r.lane - seg.curve*0.045));
+    r.offset += (r.targetOffset - r.offset) * Math.min(1, dt*1.6);
+
+    r.z += r.spd*dt;
+    if(r.z >= trackLength){ r.z -= trackLength; r.lap++; }
+    if(!r.finished && rivalDist(r) >= TOTAL_LAPS*trackLength){
+      r.finished = true; r.finishT = elapsed;
+    }
+  }
+}
+
+/* Al chocar, empujar al lado que esté MÁS LIBRE. Empujar siempre al lado
+   opuesto rebotaba contra el auto del carril de al lado y encadenaba choques. */
+function empujarALadoLibre(desde){
+  let mejorX = playerX, mejorCosto = 1e9;
+  for(const cand of [playerX + 0.34, playerX - 0.34]){
+    let costo = Math.abs(cand - desde) < 0.30 ? 6 : 0;   // seguiría encima del que chocó
+    if(Math.abs(cand) > 0.96) costo += 2;                // lo tira contra el cordón
+    for(const o of traffic){
+      if(Math.abs(distanciaRelativa(o.z, position)) < 260 && Math.abs(cand - o.offset) < 0.32) costo += 3;
+    }
+    for(const r of rivals){
+      if(Math.abs(distanciaRelativa(r.z, position)) < 260 && Math.abs(cand - r.offset) < 0.32) costo += 3;
+    }
+    if(costo < mejorCosto){ mejorCosto = costo; mejorX = cand; }
+  }
+  playerX = Math.max(-1.85, Math.min(1.85, mejorX));
+}
+
+function update(dt){
+  const playerSeg = segAt(position);
+  const speedPct = speed/MAX_SPEED;
+  const offRoad = Math.abs(playerX) > 1;
+
+  // ---- nitro: se carga pasando rivales y al ras, se gasta apretando ----
+  if(nitroKey() && nitro > 0.02 && speed > 150) nitroActivo = true;
+  if(!nitroKey()) nitroActivo = false;
+  if(nitroActivo){
+    nitro = Math.max(0, nitro - NITRO_GASTO*dt);
+    if(nitro <= 0) nitroActivo = false;
+  }
+  const maxNow = (offRoad ? OFFROAD_MAX : MAX_SPEED) * (nitroActivo ? 1.24 : 1);
+
+  if(gasKey())        speed += ACCEL*(nitroActivo ? 2.1 : 1)*dt;
+  else if(brakeKey()) speed -= BRAKE*dt;
+  else                speed -= DECEL*dt;
+  // La vereda frena fuerte mientras venís rápido, pero no te deja clavado:
+  // por debajo del tope de vereda sólo arrastra, así podés volver a la calle.
+  if(offRoad) speed -= OFFROAD_DECEL*dt*(speed > OFFROAD_MAX ? 1 : 0.22);
+  speed = Math.max(0, Math.min(maxNow, speed));
+
+  const steer = dt * 2.6 * speedPct;
+  if(leftKey())  playerX -= steer;
+  if(rightKey()) playerX += steer;
+
+  const centrifugal = dt * speedPct * speedPct * playerSeg.curve * 0.62;
+  playerX -= centrifugal;
+  skidLevel = Math.min(1, Math.abs(centrifugal)*70 + (offRoad?0.8:0));
+  playerX = Math.max(-1.85, Math.min(1.85, playerX));  // tope: la vereda, no adentro del edificio
+
+  // ---- tránsito, sobrepasos y choques ----
+  traffic.forEach(t=>{
+    t.z = (t.z + t.spd*dt) % trackLength;
+    let d = t.z - position;
+    if(d >  trackLength/2) d -= trackLength;
+    if(d < -trackLength/2) d += trackLength;
+    const lateral = Math.abs(playerX - t.offset);
+    const isBus = t.kind.startsWith('colectivo');
+    // caja de colisión = medio auto + medio auto (antes era el doble de ancha)
+    const hitW = isBus ? 0.36 : 0.30;
+
+    if(t.cool > 0) t.cool -= dt;
+
+    if(Math.abs(d) < 150 && lateral < hitW && t.cool <= 0){
+      t.cool = 0.6;                    // sin esto el mismo auto te choca cuadro a cuadro
+      speed *= 0.3;
+      empujarALadoLibre(t.offset);
+      hitFlash = 0.5;
+      score = Math.max(0, score - 150);
+      combo = 1;
+      comboTimer = 0;
+      addPopup('-150', '#ff6b6b');
+      AUDIO.crash();
+      t.passed = true;
+    }
+
+    // sobrepaso: estaba adelante y quedó atrás
+    if(!t.passed && d < -40 && d > -400){
+      t.passed = true;
+      const close = lateral < 0.50;              // pasada al ras
+      const pts = (close ? 250 : 100) * combo;
+      score += pts;
+      overtakes++;
+      if(close){
+        closeCalls++; addPopup('¡AL RAS! +'+pts, '#54d17a'); AUDIO.closePass();
+        nitro = Math.min(1, nitro + 0.20);       // la pasada al ras carga nitro
+      }
+      else { addPopup('+'+pts, '#f5c542'); AUDIO.pass(); }
+      combo = Math.min(8, combo + (close ? 2 : 1));
+      comboTimer = 3.2;
+    }
+    if(d > 120) t.passed = false;                 // se resetea al alejarse
+  });
+
+  // ---- rivales: mover la IA y resolver los toques rueda a rueda ----
+  actualizarRivales(dt);
+  for(const r of rivals){
+    const d = distanciaRelativa(r.z, position);
+    if(Math.abs(d) < 150 && Math.abs(playerX - r.offset) < 0.30 && r.cool <= 0){
+      r.cool = 0.7;
+      speed *= 0.55;
+      r.spd *= 0.72;                              // el toque los frena a los dos
+      const haciaDerecha = playerX >= r.offset;
+      empujarALadoLibre(r.offset);
+      r.lane = Math.max(-0.72, Math.min(0.72, r.lane + (haciaDerecha ? -0.22 : 0.22)));
+      hitFlash = 0.4;
+      combo = 1; comboTimer = 0;
+      addPopup('¡TOQUE!', '#ff9f43');
+      AUDIO.crash();
+    }
+  }
+
+  // ---- puesto en carrera ----
+  const pd = playerDist();
+  let adelante = 0;
+  for(const r of rivals) if(rivalDist(r) > pd) adelante++;
+  const nuevoPuesto = adelante + 1;
+  if(nuevoPuesto < puesto && !finished){
+    const ganados = puesto - nuevoPuesto;
+    rivalesPasados += ganados;
+    score += 500*ganados;
+    addPopup((nuevoPuesto === 1 ? '¡PUNTERO!' : 'PUESTO ' + nuevoPuesto) + '  +' + (500*ganados), '#8ee6ff');
+    nitro = Math.min(1, nitro + 0.30);
+    AUDIO.closePass();
+  }
+  puesto = nuevoPuesto;
+  if(puesto < mejorPuesto) mejorPuesto = puesto;
+
+  // el combo se enfría si dejás de pasar autos
+  if(comboTimer > 0){
+    comboTimer -= dt;
+    if(comboTimer <= 0) combo = 1;
+  }
+
+  // puntos por mantener velocidad alta
+  if(speedPct > 0.8) score += Math.round(speedPct * 26 * dt);
+
+  updatePopups(dt);
+
+  position += speed*dt;
+  if(position >= trackLength){
+    position -= trackLength;
+    laps++;
+    score += 1000;
+    addPopup('¡VUELTA! +1000', '#7fc7e8');
+    AUDIO.lap();
+    if(laps >= TOTAL_LAPS && !finished){
+      finished = true; finishTime = elapsed; finalPos = puesto; endRace();
+    }
+  }
+}
+
+/* ---------- Carteles flotantes de puntaje ---------- */
+function addPopup(text, color){
+  popups.push({text, color, life:1.3, y:0});
+  if(popups.length > 6) popups.shift();
+}
+function updatePopups(dt){
+  for(let i=popups.length-1;i>=0;i--){
+    popups[i].life -= dt;
+    popups[i].y += dt*46;
+    if(popups[i].life <= 0) popups.splice(i,1);
+  }
+}
+function drawPopups(){
+  ctx.save();
+  ctx.textAlign = 'center';
+  popups.forEach((p,i)=>{
+    ctx.globalAlpha = Math.min(1, p.life*1.6);
+    ctx.font = 'bold 26px Segoe UI, Arial';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    const y = H*0.34 - p.y + i*6;
+    ctx.strokeText(p.text, W*0.5, y);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, W*0.5, y);
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+const ORDINALES = ['','º','º','º','º','º','º','º','º'];
+/* Los segundos son el RESTO de dividir por 60. Sumando el total, pasado el
+   minuto salía «01:104.92» en vez de «01:44.92». */
+function formatoTiempo(t, dec){
+  // Truncar y no redondear: 59,99 s con un decimal redondeaba a «00:60.0».
+  const p = Math.pow(10, dec);
+  const tt = Math.floor(t*p)/p;
+  const mm = String(Math.floor(tt/60)).padStart(2,'0');
+  const ss = (tt % 60).toFixed(dec).padStart(dec ? 3+dec : 2, '0');
+  return mm + ':' + ss;
+}
+function updateHUD(){
+  kmhTxt.textContent = Math.round((speed/MAX_SPEED)*280);
+  lapTxt.textContent = `${Math.min(laps+1,TOTAL_LAPS)}/${TOTAL_LAPS}`;
+  timeTxt.textContent = formatoTiempo(elapsed, 1);
+  speedBarFill.style.width = Math.round((speed/MAX_SPEED)*100)+'%';
+  scoreTxt.textContent = score.toLocaleString('es-AR');
+  comboTxt.textContent = combo > 1 ? ('x'+combo) : '';
+
+  posTxt.textContent = puesto;
+  posTxt.style.color = puesto === 1 ? '#f5c542' : '#fff';
+  posOrd.textContent = ORDINALES[puesto] || 'º';
+
+  nitroBarFill.style.width = Math.round(nitro*100)+'%';
+  const listo = nitro > 0.15;
+  nitroHint.textContent = nitroActivo ? '¡NITRO!' : (listo ? 'NITRO LISTO · ESPACIO' : 'NITRO · ESPACIO');
+  nitroHint.className = listo ? 'listo' : '';
+
+  // A quién estás peleando: el de adelante, o si sos puntero, el que te persigue
+  const pd = playerDist();
+  let refe = null, gap = 0, atras = false;
+  for(const r of rivals){
+    const g = rivalDist(r) - pd;
+    if(g > 0 && (refe === null || g < gap)){ refe = r; gap = g; atras = false; }
+  }
+  if(refe === null){
+    for(const r of rivals){
+      const g = pd - rivalDist(r);
+      if(g > 0 && (refe === null || g < gap)){ refe = r; gap = g; atras = true; }
+    }
+  }
+  if(refe){
+    const seg = (gap/Math.max(speed, 700)).toFixed(1);
+    gapTxt.innerHTML = atras
+      ? '<b>' + refe.def.nombre.toUpperCase() + '</b> a −' + seg + ' s'
+      : '<b>' + refe.def.nombre.toUpperCase() + '</b> a +' + seg + ' s';
+  } else gapTxt.textContent = '';
+}
+
+/* ---------- Minimapa ---------- */
+function drawMinimap(){
+  const g = mapCtx;
+  g.clearRect(0,0,150,150);
+  g.fillStyle = 'rgba(10,12,18,0.55)';
+  roundRect(g, 0, 0, 150, 150, 10); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.16)'; g.lineWidth = 1;
+  roundRect(g, 0.5, 0.5, 149, 149, 10); g.stroke();
+
+  // trazado
+  g.beginPath();
+  for(let i=0;i<MAP_PATH.length;i++){
+    const p = MAP_PATH[i];
+    if(i===0) g.moveTo(p.mx, p.my); else g.lineTo(p.mx, p.my);
+  }
+  g.closePath();
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  g.strokeStyle = '#20242c'; g.lineWidth = 8; g.stroke();
+  g.strokeStyle = '#5d6572'; g.lineWidth = 4; g.stroke();
+
+  // línea de largada
+  const s0 = MAP_PATH[0], s1 = MAP_PATH[3 % MAP_PATH.length];
+  g.strokeStyle = '#f5f5f0'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(s0.mx, s0.my); g.lineTo(s1.mx, s1.my); g.stroke();
+
+  // rivales
+  for(const r of rivals){
+    const p = mapPoint(r.z);
+    g.fillStyle = r.def.color;
+    g.beginPath(); g.arc(p.mx, p.my, 3.2, 0, Math.PI*2); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 1; g.stroke();
+  }
+
+  // jugador
+  const pp = mapPoint(position);
+  g.fillStyle = '#f5c542';
+  g.beginPath(); g.arc(pp.mx, pp.my, 4.6, 0, Math.PI*2); g.fill();
+  g.strokeStyle = '#14161a'; g.lineWidth = 1.6; g.stroke();
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function project(p, camX, camY, camZ){
+  p.camera.x = (p.world.x || 0) - camX;
+  p.camera.y = p.world.y - camY;
+  p.camera.z = p.world.z - camZ;
+  p.screen.scale = CAM_DEPTH/p.camera.z;
+  p.screen.x = Math.round(W/2 + p.screen.scale * p.camera.x * W/2);
+  p.screen.y = Math.round(H/2 - p.screen.scale * p.camera.y * H/2);
+  p.screen.w = Math.round(     p.screen.scale * ROAD_W   * W/2);
+}
+function fogAmount(n){
+  const d = n/DRAW_DIST;
+  return 1 - Math.exp(-FOG_DENSITY*d*d);
+}
+function poly(x1,y1,x2,y2,x3,y3,x4,y4,color){
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.lineTo(x4,y4);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawSky(shift, horizonY){
+  // Cielo de atardecer: violeta profundo arriba, naranja incandescente al ras
+  const g = ctx.createLinearGradient(0,0,0,horizonY+50);
+  g.addColorStop(0,   '#2b2350');
+  g.addColorStop(0.32,'#6a3f7a');
+  g.addColorStop(0.55,'#b8567a');
+  g.addColorStop(0.74,'#e8825a');
+  g.addColorStop(0.90,'#f6b04e');
+  g.addColorStop(1,   '#ffd77a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,horizonY+60);
+
+  // Sol grande, bajo, apoyado casi en el horizonte
+  const sunX = W*0.68, sunY = horizonY - 26;
+  const halo = ctx.createRadialGradient(sunX, sunY, 10, sunX, sunY, 260);
+  halo.addColorStop(0,   'rgba(255,244,206,0.95)');
+  halo.addColorStop(0.10,'rgba(255,226,150,0.85)');
+  halo.addColorStop(0.34,'rgba(255,180,110,0.35)');
+  halo.addColorStop(1,   'rgba(255,150,90,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(sunX-260, sunY-260, 520, 520);
+  // disco del sol
+  const disc = ctx.createRadialGradient(sunX, sunY, 2, sunX, sunY, 62);
+  disc.addColorStop(0,  '#fff6df');
+  disc.addColorStop(0.6,'#ffe7a4');
+  disc.addColorStop(1,  '#ffca6a');
+  ctx.fillStyle = disc;
+  ctx.beginPath(); ctx.arc(sunX, sunY, 62, 0, Math.PI*2); ctx.fill();
+
+  // Nubes teñidas de naranja/rosa, más densas cerca del sol
+  [[0.10,54,1,0.55],[0.40,40,0.85,0.6],[0.60,64,1.2,0.75],[0.86,46,0.7,0.5]].forEach(([fx,cy,sc,al])=>{
+    const span = W+300;
+    let cx = ((fx*W) - (shift*0.22) % span + span) % span - 150;
+    const near = 1 - Math.min(1, Math.abs(cx - sunX)/500);
+    ctx.save(); ctx.translate(cx,cy); ctx.scale(sc,sc);
+    const cg = ctx.createLinearGradient(0,-16,0,16);
+    cg.addColorStop(0, `rgba(255,${180+near*40|0},${150+near*30|0},${al})`);
+    cg.addColorStop(1, `rgba(${170+near*40|0},110,120,${al*0.8})`);
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.ellipse(0,0,48,14,0,0,Math.PI*2);
+    ctx.ellipse(30,-8,28,12,0,0,Math.PI*2);
+    ctx.ellipse(-28,-6,26,11,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Skyline recortado contra el sol: casi negro, más oscuro cerca del disco
+  const skyline = (alpha, scale, speedMul, base)=>{
+    const bw = 76*scale;
+    const off = (shift*speedMul) % bw;
+    for(let x=-bw; x<W+bw; x+=bw){
+      const seed = Math.abs(Math.floor((x+off)/bw)*37);
+      const hh = (34 + (seed%80))*scale;
+      const sx = x - off;
+      // recorte a contraluz: las siluetas cerca del sol se ven más oscuras y cálidas
+      const near = 1 - Math.min(1, Math.abs(sx+bw*0.37 - sunX)/620);
+      const r = base + near*26, gg = base*0.9 + near*10, b = base*1.1 + near*4;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = `rgb(${r|0},${gg|0},${b|0})`;
+      ctx.fillRect(sx, horizonY-hh, bw*0.74, hh);
+      ctx.globalAlpha = 1;
+    }
+  };
+  skyline(0.55, 1.4, 0.10, 92);
+  skyline(0.80, 1.0, 0.22, 54);
+}
+
+// Ancho de cada objeto expresado en "unidades de calle":
+// 1.0 = media calzada (del centro al cordón). Así todo queda a escala real.
+const SPRITE_W = {
+  lamp:0.42, tree:0.90, kiosco:0.55, obelisk:2.10, banner:2.90,
+  semaforo:0.34, parada:0.62, cafe:1.25, congreso:6.20, casarosada:8.20,
+  sign:0.44, building:3.40,
+  taxi:0.26, autoAzul:0.26, autoRojo:0.26, autoBlanco:0.26,
+  colectivo1:0.38, colectivo2:0.38,
+};
+
+function drawSpriteScaled(img, p, offset, worldW, clipY, shadow){
+  const s = p.screen.scale;
+  if(s <= 0) return;
+
+  // p.screen.w es media calzada en píxeles -> escala directa y correcta
+  const destW = worldW * p.screen.w;
+  const destH = destW * (img.height / img.width);
+  if(destW < 0.7 || destH < 0.7) return;
+
+  const destX = p.screen.x + (s * offset * ROAD_W * W/2) - destW/2;
+  const destY = p.screen.y - destH;
+
+  // culling con margen: la cámara puede estar rotada unos grados,
+  // así que se descarta con un borde de seguridad en vez del filo exacto
+  const CULL = 80;
+  if(destX + destW < -CULL || destX > W+CULL) return;
+  if(destY > H+CULL) return;
+  // nunca redimensionar imágenes descomunales: nada visible mide 4x la pantalla
+  if(destW > W*4){ return; }
+
+  if(shadow !== false && destW > 6 && destW < W*1.5){
+    ctx.fillStyle = 'rgba(16,18,24,0.32)';
+    ctx.beginPath();
+    ctx.ellipse(destX + destW/2, p.screen.y, destW*0.46, Math.max(1, destW*0.09), 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // ---- Recorte al viewport ----
+  // Un edificio cercano puede proyectarse a 4000x9000 px. En vez de dejar
+  // que el navegador redimensione todo eso, se dibuja sólo la porción visible.
+  const kx = img.width / destW, ky = img.height / destH;
+  let sx0 = 0, sy0 = 0, sw = img.width, sh = img.height;
+  let dx = destX, dy = destY, dw = destW, dh = destH;
+
+  if(dx < -CULL){ const cut = -CULL-dx; sx0 += cut*kx; sw -= cut*kx; dw -= cut; dx = -CULL; }
+  if(dx + dw > W+CULL){ const cut = dx + dw - (W+CULL); sw -= cut*kx; dw -= cut; }
+  if(dy < -CULL){ const cut = -CULL-dy; sy0 += cut*ky; sh -= cut*ky; dh -= cut; dy = -CULL; }
+
+  const bottom = Math.min(H+CULL, clipY !== undefined ? clipY : H+CULL);
+  if(dy + dh > bottom){ const cut = dy + dh - bottom; sh -= cut*ky; dh -= cut; }
+
+  if(dw < 0.7 || dh < 0.7 || sw <= 0.5 || sh <= 0.5) return;
+  ctx.drawImage(img, sx0, sy0, sw, sh, dx|0, dy|0, Math.max(1,dw|0), Math.max(1,dh|0));
+}
+
+function render(){
+  const baseSeg = segAt(position);
+  const basePct = pctRemaining(position);
+  const camY = CAM_HEIGHT + interpolate(baseSeg.p1.world.y, baseSeg.p2.world.y, basePct);
+  const camX = playerX * ROAD_W;
+
+  let maxY = H;
+  let x = 0, dx = -(baseSeg.curve * basePct);
+
+  // horizonte aproximado
+  drawSky(position*0.05 + playerX*30 + baseSeg.curve*150, H/2);
+
+  // Suelo urbano: un solo relleno de fondo en vez de uno por segmento
+  // (esto sacaba ~85 rectángulos de pantalla completa por cuadro)
+  const groundG = ctx.createLinearGradient(0, H*0.42, 0, H);
+  groundG.addColorStop(0,    `rgb(${FOG_COLOR[0]},${FOG_COLOR[1]},${FOG_COLOR[2]})`);
+  groundG.addColorStop(0.30, '#8a6a5c');
+  groundG.addColorStop(1,    '#39312f');
+  ctx.fillStyle = groundG;
+  ctx.fillRect(0, H*0.42, W, H*0.58);
+
+  const visible = [];
+  const baseIndex = baseSeg.index;
+
+  for(let n=0; n<DRAW_DIST; n++){
+    const seg = segments[(baseIndex+n) % segments.length];
+    const looped = (baseIndex+n) >= segments.length;
+    const camZ = position - (looped ? trackLength : 0);
+
+    project(seg.p1, camX - x,          camY, camZ);
+    project(seg.p2, camX - x - dx,     camY, camZ);
+
+    x  += dx;
+    dx += seg.curve;
+
+    if(seg.p1.camera.z <= CAM_DEPTH) continue;
+    if(seg.p2.screen.y >= seg.p1.screen.y) continue;  // detrás de una colina
+    if(seg.p2.screen.y >= maxY) continue;
+
+    visible.push({seg, n, clipY: maxY});
+    maxY = seg.p2.screen.y;
+  }
+
+  // pintar de lejos a cerca
+  for(let i=visible.length-1; i>=0; i--){
+    const {seg, n} = visible[i];
+    const p1 = seg.p1.screen, p2 = seg.p2.screen;
+    const fog = fogAmount(n);
+    const light = seg.color === 'light';
+    const k = seg.index;
+    const bandH = p1.y - p2.y;
+
+    // la niebla se mezcla en el color en vez de pintarse encima
+    // (antes eran ~90 rectángulos de pantalla completa por cuadro)
+    const mix = (c)=>{
+      if(fog < 0.004) return `rgb(${c[0]},${c[1]},${c[2]})`;
+      const f = fog, g = 1-fog;
+      return `rgb(${(c[0]*g+FOG_COLOR[0]*f)|0},${(c[1]*g+FOG_COLOR[1]*f)|0},${(c[2]*g+FOG_COLOR[2]*f)|0})`;
+    };
+
+    // suelo urbano: sólo si la vereda no cubre ya todo el ancho de pantalla
+    if(bandH >= 3 && p1.w*1.78 < W*0.55){
+      ctx.fillStyle = mix(light ? [75,77,82] : [70,72,77]);
+      ctx.fillRect(0, p2.y, W, bandH);
+    }
+
+    // vereda de baldosas (≈5 m, medida real de una avenida porteña)
+    poly(p1.x-p1.w*1.78,p1.y, p1.x+p1.w*1.78,p1.y,
+         p2.x+p2.w*1.78,p2.y, p2.x-p2.w*1.78,p2.y,
+         mix(light ? [190,168,150] : [176,155,138]));
+
+    // cordón de vereda
+    poly(p1.x-p1.w*1.12,p1.y, p1.x+p1.w*1.12,p1.y,
+         p2.x+p2.w*1.12,p2.y, p2.x-p2.w*1.12,p2.y,
+         mix(light ? [150,128,116] : [136,116,105]));
+    poly(p1.x-p1.w*1.05,p1.y, p1.x+p1.w*1.05,p1.y,
+         p2.x+p2.w*1.05,p2.y, p2.x-p2.w*1.05,p2.y,
+         mix(light ? [224,196,168] : [204,178,152]));
+
+    // asfalto (base cálida de atardecer)
+    poly(p1.x-p1.w,p1.y, p1.x+p1.w,p1.y, p2.x+p2.w,p2.y, p2.x-p2.w,p2.y,
+         mix(light ? [92,80,82] : [84,73,76]));
+
+    // ---- SOMBRAS LARGAS del atardecer ----
+    // El sol viene de la derecha y está bajo, así que los edificios de la
+    // derecha proyectan sombras largas que barren la calle hacia la izquierda.
+    // Se dibujan como bandas diagonales oscuras cada pocas "cuadras".
+    if(bandH >= 1.2 && fog < 0.85){
+      const period = 6;
+      const phase = seg.index % period;
+      if(phase < 3){
+        const shf = 1 - phase/3;                    // sombra fresca -> se desvanece
+        const x1a = p1.x - p1.w*1.15, x1b = p1.x + p1.w*0.15;
+        const x2a = p2.x - p2.w*1.15, x2b = p2.x + p2.w*0.15;
+        poly(x1a,p1.y, x1b,p1.y, x2b,p2.y, x2a,p2.y, `rgba(38,26,44,${0.30*shf*(1-fog)})`);
+      }
+    }
+
+    // ---- detalle fino: sólo si la franja es lo bastante grande en pantalla ----
+    // (a lo lejos estos polígonos ocupaban menos de un píxel y costaban igual)
+    if(bandH >= 1.6 && fog < 0.9){
+      // sombra del cordón sobre el asfalto
+      poly(p1.x-p1.w*1.08,p1.y, p1.x+p1.w*1.08,p1.y,
+           p2.x+p2.w*1.08,p2.y, p2.x-p2.w*1.08,p2.y, `rgba(20,20,25,${0.35*(1-fog)})`);
+
+      // parches de reparación y manchas
+      const noise = ((k*9301+49297)%233280)/233280;
+      if(noise > 0.84){
+        const px = (noise-0.84)/0.16*1.2 - 0.6;
+        poly(p1.x+p1.w*(px-0.22),p1.y, p1.x+p1.w*(px+0.22),p1.y,
+             p2.x+p2.w*(px+0.22),p2.y, p2.x+p2.w*(px-0.22),p2.y,
+             `rgba(28,28,34,${0.35*(1-fog)})`);
+      }
+
+      // sombra de los edificios sobre la vereda izquierda (sol a la derecha)
+      poly(p1.x-p1.w*1.78,p1.y, p1.x-p1.w*1.12,p1.y,
+           p2.x-p2.w*1.12,p2.y, p2.x-p2.w*1.78,p2.y, `rgba(18,22,32,${0.17*(1-fog)})`);
+
+      // rodadura de los neumáticos
+      const tw = `rgba(0,0,0,${0.10*(1-fog)})`;
+      poly(p1.x-p1.w*0.54,p1.y, p1.x-p1.w*0.24,p1.y,
+           p2.x-p2.w*0.24,p2.y, p2.x-p2.w*0.54,p2.y, tw);
+      poly(p1.x+p1.w*0.24,p1.y, p1.x+p1.w*0.54,p1.y,
+           p2.x+p2.w*0.54,p2.y, p2.x+p2.w*0.24,p2.y, tw);
+
+      // líneas de carril
+      if(light){
+        poly(p1.x-p1.w*0.028,p1.y, p1.x+p1.w*0.028,p1.y,
+             p2.x+p2.w*0.028,p2.y, p2.x-p2.w*0.028,p2.y, mix([239,206,98]));
+        poly(p1.x-p1.w*0.55,p1.y, p1.x-p1.w*0.51,p1.y,
+             p2.x-p2.w*0.51,p2.y, p2.x-p2.w*0.55,p2.y, mix([226,226,218]));
+        poly(p1.x+p1.w*0.51,p1.y, p1.x+p1.w*0.55,p1.y,
+             p2.x+p2.w*0.55,p2.y, p2.x+p2.w*0.51,p2.y, mix([226,226,218]));
+      }
+
+      // senda peatonal
+      if(k % 37 === 0){
+        const cw = mix([240,240,232]);
+        for(let b=-4; b<=4; b++){
+          poly(p1.x+p1.w*(b*0.2-0.07),p1.y, p1.x+p1.w*(b*0.2+0.07),p1.y,
+               p2.x+p2.w*(b*0.2+0.07),p2.y, p2.x+p2.w*(b*0.2-0.07),p2.y, cw);
+        }
+      }
+    }
+  }
+
+  // Reflejo del sol sobre el asfalto: banda especular hacia el horizonte.
+  // Es el detalle que hace que el asfalto se lea como superficie y no como color.
+  if(visible.length > 8){
+    const far  = visible[visible.length-1].seg.p2.screen;
+    const near = visible[0].seg.p1.screen;
+    const g2 = ctx.createLinearGradient(0, far.y, 0, near.y);
+    g2.addColorStop(0,  'rgba(255,244,212,0.30)');
+    g2.addColorStop(0.5,'rgba(255,244,212,0.09)');
+    g2.addColorStop(1,  'rgba(255,244,212,0)');
+    ctx.fillStyle = g2;
+    ctx.beginPath();
+    ctx.moveTo(far.x  - far.w*0.10,  far.y);
+    ctx.lineTo(far.x  + far.w*0.10,  far.y);
+    ctx.lineTo(near.x + near.w*0.16, near.y);
+    ctx.lineTo(near.x - near.w*0.16, near.y);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // índice de todo lo que se mueve (tránsito + rivales) por segmento,
+  // una sola vez por cuadro
+  const trafficBySeg = new Map();
+  const indexar = (z, offset, sprite, wid)=>{
+    const si = segAt(z).index;
+    if(!trafficBySeg.has(si)) trafficBySeg.set(si, []);
+    trafficBySeg.get(si).push({z, offset, sprite, wid});
+  };
+  for(const t of traffic) indexar(t.z, t.offset, VEHICLE_SPRITES[t.kind], SPRITE_W[t.kind]);
+  for(const r of rivals)  indexar(r.z, r.offset, r.def.sprite, 0.28);
+
+  // ---- Descarte por oclusión de fachadas ----
+  // Las fachadas forman una pared: las lejanas quedan totalmente tapadas por
+  // las cercanas. Se recorre de cerca a lejos y se marcan las que no se verán.
+  const hidden = new Set();
+  let lMinX = Infinity, lMaxX = -Infinity, lTop = Infinity;
+  let rMinX = Infinity, rMaxX = -Infinity, rTop = Infinity;
+  for(let i=0; i<visible.length; i++){
+    const {seg, n} = visible[i];
+    if(fogAmount(n) > 0.94) continue;
+    for(const sp of seg.sprites){
+      if(sp.kind.charCodeAt(0) !== 98) continue;      // 'b' de building
+      const scr = seg.p1.screen;
+      const dW = SPRITE_W.building * scr.w;
+      const dX = scr.x + (scr.scale * sp.offset * ROAD_W * W/2) - dW/2;
+      const dY = scr.y - dW * (BUILDING_SPRITES[0].height / BUILDING_SPRITES[0].width);
+      if(sp.offset < 0){
+        if(dX >= lMinX && dX + dW <= lMaxX && dY >= lTop){ hidden.add(sp); continue; }
+        if(dX < lMinX) lMinX = dX;
+        if(dX + dW > lMaxX) lMaxX = dX + dW;
+        if(dY < lTop) lTop = dY;
+      } else {
+        if(dX >= rMinX && dX + dW <= rMaxX && dY >= rTop){ hidden.add(sp); continue; }
+        if(dX < rMinX) rMinX = dX;
+        if(dX + dW > rMaxX) rMaxX = dX + dW;
+        if(dY < rTop) rTop = dY;
+      }
+    }
+  }
+
+  // sprites y vehículos, de lejos a cerca (con niebla)
+  for(let i=visible.length-1; i>=0; i--){
+    const {seg, n, clipY} = visible[i];
+    const fog = fogAmount(n);
+    if(fog > 0.94) continue;
+    const alpha = 1-fog;
+
+    ctx.globalAlpha = alpha;
+    for(const sp of seg.sprites){
+      if(hidden.has(sp)) continue;
+      let img = null, key = sp.kind;
+      if(sp.kind === 'lamp')          img = LAMP_SPRITE;
+      else if(sp.kind === 'tree')     img = TREE_SPRITE;
+      else if(sp.kind === 'kiosco')   img = KIOSCO_SPRITE;
+      else if(sp.kind === 'obelisk')  img = OBELISK_SPRITE;
+      else if(sp.kind === 'banner')   img = BANNER_SPRITE;
+      else if(sp.kind === 'semaforo') img = TRAFFIC_LIGHT_SPRITE;
+      else if(sp.kind === 'parada')   img = PARADA_SPRITE;
+      else if(sp.kind === 'cafe')     img = CAFE_SPRITE;
+      else if(sp.kind === 'congreso') img = CONGRESO_SPRITE;
+      else if(sp.kind === 'casarosada') img = CASA_ROSADA_SPRITE;
+      else if(sp.kind.startsWith('sign')){ img = SIGN_SPRITES[sp.kind]; key = 'sign'; }
+      else if(sp.kind.startsWith('building')){ img = BUILDING_SPRITES[+sp.kind.slice(-1)]; key = 'building'; }
+      if(img) drawSpriteScaled(img, seg.p1, sp.offset, SPRITE_W[key] || 1, clipY);
+    }
+
+    const here = trafficBySeg.get(seg.index);
+    if(here){
+      // dentro del mismo segmento, dibujar primero lo más lejano
+      if(here.length > 1) here.sort((a,b)=> b.z - a.z);
+      for(const t of here){
+        // Interpolar la posición REAL dentro del segmento.
+        // Antes se dibujaba siempre en el inicio del segmento, así que el auto
+        // quedaba congelado y saltaba de golpe al cruzar al siguiente.
+        const pct = (t.z % SEG_LEN) / SEG_LEN;
+        const a = seg.p1.screen, b = seg.p2.screen;
+        const ip = { screen: {
+          x:     a.x     + (b.x     - a.x    )*pct,
+          y:     a.y     + (b.y     - a.y    )*pct,
+          w:     a.w     + (b.w     - a.w    )*pct,
+          scale: a.scale + (b.scale - a.scale)*pct
+        }};
+        drawSpriteScaled(t.sprite, ip, t.offset, t.wid, clipY);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ============================================================
+   MOTOR 3D DEL AUTO — sombreado suave + reflejos de entorno
+   - normales por vértice (Gouraud): elimina el aspecto facetado
+   - environment mapping: la carrocería refleja cielo y asfalto
+   - Fresnel: los bordes reflejan más, como la pintura real
+   - oclusión ambiental y especular del sol
+   ============================================================ */
+// Estos valores están calculados para que el auto quede EXACTAMENTE a escala
+// con la calzada y con los vehículos de tránsito (0.29 de media calzada de ancho).
+const FOCAL     = 894;
+const HORIZON_Y = H/2;
+const CAR_CAM_Z = 11.0;
+const CAR_CAM_Y = -2.341;
+
+const SX = 0.86;   // afinar el ancho
+const SY = 1.00;   // alturas ya absolutas, medidas de la referencia
+const MESH = { verts: [], faces: [], groups: [], vnorm: [] };
+function V(x,y,z,g){ MESH.verts.push({x,y,z,g:(g===undefined?-1:g)}); return MESH.verts.length-1; }
+function F(idx, mat){ MESH.faces.push({idx, mat}); }
+function G(pivot, opts){ MESH.groups.push(Object.assign({pivot}, opts||{})); return MESH.groups.length-1; }
+
+/* ---------- Materiales: color base + cuánto reflejan ---------- */
+/* Paleta: blanco perla con detalles oscuros.
+   A 206 px de ancho, el contraste alto es lo que hace legible la silueta;
+   gris sobre gris se leia como una mancha. */
+const M = {
+  paint  : {c:[186, 28, 34], refl:0.20, fres:0.80, spec:0.55, rough:0.07},
+  paintD : {c:[118, 16, 20], refl:0.16, fres:0.65, spec:0.40, rough:0.16},
+  rocker : {c:[ 26, 27, 32], refl:0.10, fres:0.40, spec:0.16, rough:0.45},
+  arch   : {c:[ 14, 15, 18], refl:0.06, fres:0.30, spec:0.10, rough:0.65},
+  glass  : {c:[  9, 13, 20], refl:0.52, fres:1.00, spec:0.95, rough:0.02},
+  chrome : {c:[206,212,224], refl:0.88, fres:0.60, spec:1.00, rough:0.02},
+  tire   : {c:[ 15, 16, 19], refl:0.04, fres:0.28, spec:0.08, rough:0.75},
+  tire2  : {c:[ 23, 25, 29], refl:0.04, fres:0.28, spec:0.08, rough:0.75},
+  rim    : {c:[198,204,214], refl:0.55, fres:0.55, spec:0.92, rough:0.05},
+  rimDk  : {c:[ 32, 35, 41], refl:0.24, fres:0.45, spec:0.38, rough:0.32},
+  dark   : {c:[ 17, 19, 23], refl:0.08, fres:0.35, spec:0.14, rough:0.55},
+  head   : {c:[228,240,252], refl:0.72, fres:0.90, spec:1.00, rough:0.02},
+  tail   : {c:[214, 26, 26], refl:0.38, fres:0.75, spec:0.90, rough:0.04, tail:true},
+  amber  : {c:[232,140, 30], refl:0.42, fres:0.78, spec:0.80, rough:0.06},
+  plate  : {c:[238,238,230], refl:0.10, fres:0.35, spec:0.20, rough:0.45},
+};
+
+/* ---------- Perfil del sedán (14 secciones) ---------- */
+const SECTIONS = [
+  // Proporciones medidas sobre una foto de sedán real:
+  // invernadero ~30% de la altura, cuerpo ~70%, rueda ~52%.
+  {z:-2.34, hw:0.88, yb:0.30, yw:1.02, rhw:0.74, yr:1.10},  // paragolpes trasero
+  {z:-2.10, hw:0.94, yb:0.26, yw:1.06, rhw:0.80, yr:1.16},  // cola
+  {z:-1.80, hw:0.97, yb:0.24, yw:1.09, rhw:0.84, yr:1.21},  // tapa de baúl
+  {z:-1.45, hw:0.98, yb:0.24, yw:1.11, rhw:0.82, yr:1.27},  // base de luneta
+  {z:-1.05, hw:0.98, yb:0.24, yw:1.12, rhw:0.74, yr:1.45},  // luneta
+  {z:-0.60, hw:0.975,yb:0.24, yw:1.13, rhw:0.66, yr:1.58},  // techo atrás
+  {z:-0.10, hw:0.97, yb:0.24, yw:1.13, rhw:0.64, yr:1.62},  // techo
+  {z: 0.40, hw:0.97, yb:0.24, yw:1.13, rhw:0.64, yr:1.62},  // techo
+  {z: 0.90, hw:0.97, yb:0.24, yw:1.12, rhw:0.66, yr:1.59},  // techo adelante
+  {z: 1.30, hw:0.97, yb:0.24, yw:1.10, rhw:0.74, yr:1.42},  // parabrisas
+  {z: 1.65, hw:0.965,yb:0.24, yw:1.05, rhw:0.86, yr:1.12},  // base parabrisas
+  {z: 2.02, hw:0.94, yb:0.26, yw:0.98, rhw:0.88, yr:1.04},  // capot
+  {z: 2.30, hw:0.90, yb:0.28, yw:0.92, rhw:0.84, yr:0.98},  // frente
+  {z: 2.44, hw:0.76, yb:0.34, yw:0.86, rhw:0.68, yr:0.92},  // trompa
+];
+
+// 13 puntos por anillo -> silueta redondeada
+function ringPoints(s0){
+  const s = { z:s0.z, hw:s0.hw*SX, yb:s0.yb, yw:s0.yw*SY, rhw:s0.rhw*SX, yr:s0.yr*SY };
+  const gap = s.yr - s.yw;
+  // el hombro se levanta en PROPORCION al hueco cintura-techo.
+  // Con un valor fijo, en el capot (hueco 0.06) se pasaba del techo
+  // y el anillo se cruzaba sobre si mismo.
+  const shx = (s.rhw + s.hw*0.96)/2, shy = (s.yw + s.yr)/2 + gap*0.20;
+  return [
+    [ s.hw*0.82, s.yb        ],
+    [ s.hw*0.98, s.yb + 0.18 ],
+    [ s.hw,      s.yw - 0.08 ],
+    [ s.hw*0.96, s.yw        ],
+    [ shx,       shy         ],
+    [ s.rhw,     s.yr        ],
+    [ 0,         s.yr + 0.03 ],
+    [-s.rhw,     s.yr        ],
+    [-shx,       shy         ],
+    [-s.hw*0.96, s.yw        ],
+    [-s.hw,      s.yw - 0.08 ],
+    [-s.hw*0.98, s.yb + 0.18 ],
+    [-s.hw*0.82, s.yb        ],
+  ];
+}
+const RP = 13;
+const rings = SECTIONS.map(s => ringPoints(s).map(([x,y]) => V(x, y, s.z)));
+
+for(let si=0; si<rings.length-1; si++){
+  const a = rings[si], b = rings[si+1];
+  for(let j=0; j<RP-1; j++){
+    let mat = M.paint;
+    const sideGlass = (j===3 || j===4 || j===7 || j===8);   // ventanillas
+    const roofTop   = (j===5 || j===6);                     // panel de techo
+
+    // Secciones con vidrio de lado a lado: luneta y parabrisas
+    const fullGlass = (si===3 || si===4 || si===8 || si===9);
+    // Secciones de techo: ventanillas laterales + techo negro
+    const cabin     = (si>=5 && si<=7);
+
+    if(fullGlass && (sideGlass || roofTop)) mat = M.glass;
+    else if(cabin && sideGlass)             mat = M.glass;
+    else if(cabin && roofTop)               mat = M.dark;    // techo negro
+    if(j===0 || j===RP-2)                   mat = M.rocker;  // zócalos
+    F([a[j], a[j+1], b[j+1], b[j]], mat);
+  }
+  F([a[RP-1], a[0], b[0], b[RP-1]], M.dark);   // piso
+}
+F(rings[0].slice().reverse(), M.paintD);
+F(rings[rings.length-1],      M.paint);
+
+function addBox(x0,x1, y0,y1, z0,z1, mat){
+  x0*=SX; x1*=SX; y0*=SY; y1*=SY;
+  const v = [ V(x0,y0,z0),V(x1,y0,z0),V(x1,y1,z0),V(x0,y1,z0),
+              V(x0,y0,z1),V(x1,y0,z1),V(x1,y1,z1),V(x0,y1,z1) ];
+  F([v[0],v[3],v[2],v[1]], mat); F([v[4],v[5],v[6],v[7]], mat);
+  F([v[0],v[4],v[7],v[3]], mat); F([v[1],v[2],v[6],v[5]], mat);
+  F([v[3],v[7],v[6],v[2]], mat); F([v[0],v[1],v[5],v[4]], mat);
+  return v;
+}
+
+/* ---------- Detalles ---------- */
+addBox(-0.985,-0.955, 1.13, 1.60, 0.34, 0.52, M.dark);        // pilar B (negro)
+addBox( 0.955, 0.985, 1.13, 1.60, 0.34, 0.52, M.dark);
+addBox(-0.995,-0.962, 1.115,1.155,-1.30, 1.42, M.chrome);     // moldura cromada
+addBox( 0.962, 0.995, 1.115,1.155,-1.30, 1.42, M.chrome);
+addBox(-1.012,-0.972, 0.960,1.010,-0.70,-0.44, M.chrome);     // manijas
+addBox( 0.972, 1.012, 0.960,1.010,-0.70,-0.44, M.chrome);
+addBox(-1.012,-0.972, 0.960,1.010, 0.16, 0.42, M.chrome);
+addBox( 0.972, 1.012, 0.960,1.010, 0.16, 0.42, M.chrome);
+addBox(-1.19,-0.99, 1.16,1.30, 1.02,1.22, M.dark);            // espejos
+addBox( 0.99, 1.19, 1.16,1.30, 1.02,1.22, M.dark);
+addBox(-1.20,-1.17, 1.18,1.28, 1.04,1.20, M.glass);
+addBox( 1.17, 1.20, 1.18,1.28, 1.04,1.20, M.glass);
+addBox(-0.70, 0.70, 0.42,0.74, 2.42,2.49, M.dark);            // parrilla baja
+addBox(-0.72, 0.72, 0.74,0.795,2.43,2.50, M.chrome);
+addBox(-0.56, 0.56, 0.22,0.40, 2.40,2.48, M.dark);
+addBox(-0.86,-0.30, 0.815,0.90, 2.30,2.45, M.head);           // faros LED finos
+addBox( 0.30, 0.86, 0.815,0.90, 2.30,2.45, M.head);
+addBox(-0.88,-0.74, 0.795,0.855,2.28,2.40, M.amber);
+addBox( 0.74, 0.88, 0.795,0.855,2.28,2.40, M.amber);
+addBox(-0.92,-0.26, 0.865,0.985,-2.40,-2.20, M.tail);         // ópticas finas
+addBox( 0.26, 0.92, 0.865,0.985,-2.40,-2.20, M.tail);
+addBox(-0.28, 0.28, 0.885,0.965,-2.385,-2.35, M.tail);        // banda entre ópticas
+addBox(-0.22, 0.22, 1.245,1.285,-1.46,-1.40, M.tail);
+addBox(-0.25, 0.25, 0.555,0.715,-2.405,-2.385, M.plate);      // patente
+addBox(-0.84, 0.84, 1.055,1.090,-2.36,-2.30, M.chrome);
+addBox(-0.90, 0.90, 0.22,0.52,-2.40,-2.26, M.paintD);         // paragolpes
+addBox(-0.88, 0.88, 0.18,0.34,-2.42,-2.30, M.dark);
+addBox(-0.86, 0.86, 0.18,0.34, 2.38,2.52, M.dark);
+addBox(-0.62,-0.44, 0.26,0.40,-2.44,-2.38, M.chrome);         // escape
+
+/* ---------- Pasarruedas: arco oscuro sobre cada rueda ----------
+   Es el detalle que más define la silueta de un auto visto de atrás.  */
+function addArch(cx0, cz){
+  const cx = cx0*SX;
+  const sgn = cx > 0 ? 1 : -1;
+  const y = 0.42, rIn = 0.47, rOut = 0.60;
+  const xIn = cx - sgn*0.03, xOut = cx + sgn*0.055;
+  const A0 = Math.PI*0.06, A1 = Math.PI*0.94;   // arco superior
+  const N = 7;
+  let prev = null;
+  for(let i=0;i<=N;i++){
+    const a = A0 + (A1-A0)*(i/N);
+    const py = y + Math.sin(a)*rIn,  pz = cz + Math.cos(a)*rIn;
+    const qy = y + Math.sin(a)*rOut, qz = cz + Math.cos(a)*rOut;
+    const cur = [ V(xIn, py, pz), V(xOut, py, pz), V(xOut, qy, qz), V(xIn, qy, qz) ];
+    if(prev){
+      F([prev[1], cur[1], cur[2], prev[2]], M.arch);   // cara exterior
+      F([prev[0], prev[3], cur[3], cur[0]], M.arch);   // cara interior
+      F([prev[2], cur[2], cur[3], prev[3]], M.arch);   // canto superior
+    }
+    prev = cur;
+  }
+}
+addArch(-1.00, 1.46);  addArch( 1.00, 1.46);
+addArch(-1.02,-1.40);  addArch( 1.02,-1.40);
+
+/* ---------- Ruedas ---------- */
+const WS = 13;
+function addWheel(cx0, cz, isFront){
+  const cx = cx0*SX;
+  const r=0.42, halfW=0.15, y=0.42;
+  const g = G({x:cx,y:y,z:cz}, {spin:true, steer:isFront});
+  const sgn = cx>0?1:-1;
+  const inner=[], outer=[], rimPt=[];
+  for(let i=0;i<WS;i++){
+    const a=(i/WS)*Math.PI*2;
+    const py=y+Math.cos(a)*r, pz=cz+Math.sin(a)*r;
+    inner.push(V(cx-halfW*sgn, py, pz, g));
+    outer.push(V(cx+halfW*sgn, py, pz, g));
+    rimPt.push(V(cx+halfW*sgn*1.01, y+Math.cos(a)*r*0.72, cz+Math.sin(a)*r*0.72, g));
+  }
+  for(let i=0;i<WS;i++){ const j=(i+1)%WS;
+    F([inner[i],inner[j],outer[j],outer[i]], (i%2===0)?M.tire:M.tire2); }
+  for(let i=0;i<WS;i++){ const j=(i+1)%WS;
+    F([outer[i],outer[j],rimPt[j],rimPt[i]], M.tire); }
+  const hub = V(cx+halfW*sgn*1.03, y, cz, g);
+  for(let i=0;i<WS;i++){ const j=(i+1)%WS;
+    F([hub, rimPt[i], rimPt[j]], (i%3===0)?M.rim:M.rimDk); }
+  const hubIn = V(cx-halfW*sgn*1.03, y, cz, g);
+  for(let i=0;i<WS;i++){ const j=(i+1)%WS; F([hubIn, inner[j], inner[i]], M.dark); }
+}
+addWheel(-1.00, 1.46, true);  addWheel( 1.00, 1.46, true);
+addWheel(-1.02,-1.40, false); addWheel( 1.02,-1.40, false);
+
+/* ---------- Normales por vértice (sombreado suave) ---------- */
+(function computeVertexNormals(){
+  const n = MESH.verts.length;
+  const acc = Array.from({length:n}, ()=>({x:0,y:0,z:0}));
+  for(const f of MESH.faces){
+    const [i0,i1,i2] = f.idx;
+    const a=MESH.verts[i0], b=MESH.verts[i1], c=MESH.verts[i2];
+    const ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z;
+    const vx=c.x-a.x, vy=c.y-a.y, vz=c.z-a.z;
+    const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    f.fn = {x:nx, y:ny, z:nz};
+    // sólo se suavizan las superficies grandes de carrocería y vidrio
+    if(f.mat===M.paint || f.mat===M.glass || f.mat===M.paintD || f.mat===M.rocker){
+      for(const i of f.idx){ acc[i].x+=nx; acc[i].y+=ny; acc[i].z+=nz; }
+    }
+  }
+  MESH.vnorm = acc.map((v,i)=>{
+    const m = Math.hypot(v.x,v.y,v.z);
+    if(m < 1e-9) return null;                 // cara dura: usa normal plana
+    return {x:v.x/m, y:v.y/m, z:v.z/m};
+  });
+  // oclusión ambiental simple por altura: lo de abajo recibe menos luz rebotada
+  MESH.ao = MESH.verts.map(v => Math.max(0.52, Math.min(1, 0.52 + v.y*0.62)));
+})();
+
+/* ---------- Entorno reflejado ---------- */
+// Sol de atardecer: bajo en el cielo (poca componente Y) y hacia la derecha
+const SUN = (()=>{ const l={x:0.52,y:0.30,z:-0.40};
+  const m=Math.hypot(l.x,l.y,l.z); return {x:l.x/m,y:l.y/m,z:l.z/m}; })();
+const AMBIENT = 0.30;
+const SUN_COLOR = [255, 214, 150];   // luz dorada del sol bajo
+const SKY_TOP   = [96, 78, 130];     // cenit violáceo
+const SKY_HORIZON = [255, 178, 118]; // horizonte naranja
+const GROUND_REFL = [46, 38, 40];    // el suelo refleja poco y oscuro
+
+// Color que "ve" un reflejo apuntando en la dirección (rx,ry,rz)
+function envSample(rx, ry, rz, out){
+  if(ry >= 0){
+    // mezcla cenit -> horizonte según la altura del rayo
+    const t = Math.min(1, ry*1.2);
+    out[0] = SKY_HORIZON[0] + (SKY_TOP[0]-SKY_HORIZON[0])*t;
+    out[1] = SKY_HORIZON[1] + (SKY_TOP[1]-SKY_HORIZON[1])*t;
+    out[2] = SKY_HORIZON[2] + (SKY_TOP[2]-SKY_HORIZON[2])*t;
+    // destello del sol reflejado
+    const sd = rx*SUN.x + ry*SUN.y + rz*SUN.z;
+    if(sd > 0.72){
+      const sfr = (sd-0.72)/0.28;
+      out[0] += sfr*sfr*230; out[1] += sfr*sfr*180; out[2] += sfr*sfr*110;
+    }
+  } else {
+    const t = Math.min(1, -ry*1.5);
+    out[0] = SKY_HORIZON[0] + (GROUND_REFL[0]-SKY_HORIZON[0])*t;
+    out[1] = SKY_HORIZON[1] + (GROUND_REFL[1]-SKY_HORIZON[1])*t;
+    out[2] = SKY_HORIZON[2] + (GROUND_REFL[2]-SKY_HORIZON[2])*t;
+  }
+  return out;
+}
+
+let carYaw=0, carRoll=0, carPitch=0, wheelSpin=0, steerAngle=0;
+const _env = [0,0,0];
+
+/* Color final de un vértice: difuso + reflejo de entorno + Fresnel + especular */
+function shadeVertex(nx,ny,nz, px,py,pz, mat, ao, braking){
+  // vector hacia la cámara (la cámara está en el origen)
+  const vl = Math.hypot(px,py,pz) || 1;
+  const vx = -px/vl, vy = -py/vl, vz = -pz/vl;
+
+  let ndv = nx*vx + ny*vy + nz*vz;
+  if(ndv < 0){ ndv = -ndv; }
+
+  // reflejo R = 2(N·V)N - V
+  const d2 = 2*ndv;
+  const rx = d2*nx - vx, ry = d2*ny - vy, rz = d2*nz - vz;
+  envSample(rx, ry, rz, _env);
+
+  // Fresnel: al mirar de canto, todo refleja más
+  const fres = Math.pow(1 - ndv, 4) * mat.fres;
+  const refl = Math.min(0.96, mat.refl + (1-mat.refl)*fres);
+
+  // difuso, teñido por el color del sol; relleno ambiente teñido por el cielo
+  const diff = Math.max(0, nx*SUN.x + ny*SUN.y + nz*SUN.z);
+  const sunLit = diff * ao;
+  const ambLit = AMBIENT * ao;
+  const c = mat.c;
+
+  // especular (brillo directo del sol, con su color cálido)
+  const hx = SUN.x+vx, hy = SUN.y+vy, hz = SUN.z+vz;
+  const hl = Math.hypot(hx,hy,hz) || 1;
+  const ndh = Math.max(0, (hx/hl)*nx + (hy/hl)*ny + (hz/hl)*nz);
+  const shin = 2 + 220*(1-mat.rough);
+  const spec = Math.pow(ndh, shin) * mat.spec;
+
+  // Componente iluminada: base * (sol cálido + ambiente violáceo del cielo)
+  const litR = (1-refl) * c[0]/255 * (sunLit*SUN_COLOR[0] + ambLit*SKY_TOP[0]*0.6);
+  const litG = (1-refl) * c[1]/255 * (sunLit*SUN_COLOR[1] + ambLit*SKY_TOP[1]*0.6);
+  const litB = (1-refl) * c[2]/255 * (sunLit*SUN_COLOR[2] + ambLit*SKY_TOP[2]*0.6);
+
+  let r = litR + _env[0]*refl*(0.35+0.65*ao) + spec*SUN_COLOR[0];
+  let g = litG + _env[1]*refl*(0.35+0.65*ao) + spec*SUN_COLOR[1];
+  let b = litB + _env[2]*refl*(0.35+0.65*ao) + spec*SUN_COLOR[2];
+
+  if(mat.tail && braking){ r = r*0.35 + 255*0.75; g = g*0.3 + 55; b = b*0.3 + 48; }
+
+  // Compresión de brillos con "rodilla suave": los medios tonos quedan
+  // intactos y sólo se comprime lo que pasa de 200, para no quemar a blanco.
+  r = r<200 ? r : 200 + 55*(1-Math.exp(-(r-200)/70));
+  g = g<200 ? g : 200 + 55*(1-Math.exp(-(g-200)/70));
+  b = b<200 ? b : 200 + 55*(1-Math.exp(-(b-200)/70));
+  return [r<0?0:r>255?255:r, g<0?0:g>255?255:g, b<0?0:b>255?255:b];
+}
+
+/* ---------- Render ---------- */
+function drawPlayerCar(dt){
+  const speedPct  = speed/MAX_SPEED;
+  const steerAxis = (rightKey()?1:0) - (leftKey()?1:0);
+  const braking   = brakeKey();
+  const accel     = gasKey();
+  const lerp = (a,b,t)=> a + (b-a)*Math.min(1,t);
+
+  carYaw     = lerp(carYaw,   steerAxis*0.10*(0.35+speedPct), dt*7);
+  carRoll    = lerp(carRoll, -steerAxis*0.050*(0.3+speedPct), dt*6);
+  carPitch   = lerp(carPitch, braking ? 0.045 : (accel ? -0.026 : 0), dt*5);
+  steerAngle = lerp(steerAngle, steerAxis*0.36, dt*9);
+  wheelSpin += speed*dt*0.013;
+
+  const cy=Math.cos(carYaw),   sy=Math.sin(carYaw);
+  const cp=Math.cos(carPitch), sp=Math.sin(carPitch);
+  const cr=Math.cos(carRoll),  sr=Math.sin(carRoll);
+  const cs=Math.cos(wheelSpin),ss=Math.sin(wheelSpin);
+  const cst=Math.cos(steerAngle), sst=Math.sin(steerAngle);
+
+  const bounce  = Math.sin(elapsed*24)*speedPct*0.018 + Math.sin(elapsed*11)*speedPct*0.011;
+  const lateral = -playerX*0.10 + steerAxis*0.09;
+
+  // rotar posición y normal con la misma cadena
+  function rot(x,y,z){
+    const x1=x*cr-y*sr, y1=x*sr+y*cr, z1=z;
+    const y2=y1*cp-z1*sp, z2=y1*sp+z1*cp;
+    return { x:x1*cy+z2*sy, y:y2, z:-x1*sy+z2*cy };
+  }
+
+  const nv = MESH.verts.length;
+  const tv = new Array(nv), tn = new Array(nv), sc = new Array(nv);
+  for(let i=0;i<nv;i++){
+    const v = MESH.verts[i];
+    let x=v.x, y=v.y, z=v.z;
+    let n = MESH.vnorm[i];
+    let nx = n?n.x:0, ny = n?n.y:0, nz = n?n.z:0;
+
+    if(v.g >= 0){
+      const g = MESH.groups[v.g];
+      let lx=x-g.pivot.x, ly=y-g.pivot.y, lz=z-g.pivot.z;
+      if(g.spin){ let a=ly*cs-lz*ss, b2=ly*ss+lz*cs; ly=a; lz=b2;
+                  a=ny*cs-nz*ss; b2=ny*ss+nz*cs; ny=a; nz=b2; }
+      if(g.steer){ let a=lx*cst+lz*sst, b2=-lx*sst+lz*cst; lx=a; lz=b2;
+                   a=nx*cst+nz*sst; b2=-nx*sst+nz*cst; nx=a; nz=b2; }
+      x=lx+g.pivot.x; y=ly+g.pivot.y; z=lz+g.pivot.z;
+    }
+
+    const P = rot(x,y,z);
+    tv[i] = { x:P.x+lateral, y:P.y+CAR_CAM_Y+bounce, z:P.z+CAR_CAM_Z };
+    tn[i] = n ? rot(nx,ny,nz) : null;
+    const f = FOCAL/tv[i].z;
+    sc[i] = { x: W/2 + tv[i].x*f, y: HORIZON_Y - tv[i].y*f };
+  }
+
+  const list = [];
+  for(const f of MESH.faces){
+    const idx=f.idx, a=tv[idx[0]], b=tv[idx[1]], c=tv[idx[2]];
+    const ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z;
+    const vx=c.x-a.x, vy=c.y-a.y, vz=c.z-a.z;
+    let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    const nl=Math.hypot(nx,ny,nz)||1; nx/=nl; ny/=nl; nz/=nl;
+
+    let cx=0, cyy=0, cz=0;
+    for(const i of idx){ cx+=tv[i].x; cyy+=tv[i].y; cz+=tv[i].z; }
+    const k=idx.length; cx/=k; cyy/=k; cz/=k;
+
+    if(nx*cx + ny*cyy + nz*cz > 0) continue;
+    if(cz <= 0.4) continue;
+    list.push({f, z:cz, fn:{x:nx,y:ny,z:nz}, cen:{x:cx,y:cyy,z:cz}});
+  }
+  list.sort((p,q)=> q.z - p.z);
+
+  // sombra de contacto
+  const shX = W/2 + lateral*FOCAL/CAR_CAM_Z;
+  const shY = HORIZON_Y - (CAR_CAM_Y + 0.02)*FOCAL/CAR_CAM_Z;
+  const shW = 2.45*FOCAL/CAR_CAM_Z;
+  const sg = ctx.createRadialGradient(shX, shY, 4, shX, shY, shW*0.55);
+  sg.addColorStop(0,'rgba(8,10,16,0.62)');
+  sg.addColorStop(0.55,'rgba(8,10,16,0.30)');
+  sg.addColorStop(1,'rgba(8,10,16,0)');
+  ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.ellipse(shX, shY, shW*0.55, shW*0.115, 0,0,Math.PI*2); ctx.fill();
+
+  if(skidLevel > 0.25 && speed > 200){
+    for(let i=0;i<5;i++){
+      ctx.fillStyle = `rgba(226,228,232,${(skidLevel-0.25)*0.45*Math.random()})`;
+      ctx.beginPath();
+      ctx.arc(shX-150+Math.random()*300, shY+Math.random()*16, 12+Math.random()*26, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // ---- pintar caras con sombreado suave ----
+  for(const item of list){
+    const f = item.f, idx = f.idx, mat = f.mat;
+
+    // colores por vértice
+    let minL=1e9, maxL=-1e9, iMin=0, iMax=0;
+    const cols = [];
+    for(let i=0;i<idx.length;i++){
+      const vi = idx[i];
+      const n = tn[vi] || item.fn;               // normal suave, o plana si es arista dura
+      const p = tv[vi];
+      const col = shadeVertex(n.x,n.y,n.z, p.x,p.y,p.z, mat, MESH.ao[vi], braking);
+      cols.push(col);
+      const L = col[0]*0.3 + col[1]*0.59 + col[2]*0.11;
+      if(L<minL){ minL=L; iMin=i; }
+      if(L>maxL){ maxL=L; iMax=i; }
+    }
+
+    // trazar el polígono y medir su tamaño en pantalla
+    let bx0=1e9, by0=1e9, bx1=-1e9, by1=-1e9;
+    ctx.beginPath();
+    for(let i=0;i<idx.length;i++){
+      const s = sc[idx[i]];
+      if(s.x<bx0) bx0=s.x; if(s.x>bx1) bx1=s.x;
+      if(s.y<by0) by0=s.y; if(s.y>by1) by1=s.y;
+      if(i===0) ctx.moveTo(s.x,s.y); else ctx.lineTo(s.x,s.y);
+    }
+    ctx.closePath();
+    const screenArea = (bx1-bx0)*(by1-by0);
+
+    // degradado entre el vértice más oscuro y el más claro -> superficie continua
+    // (sólo vale la pena en caras grandes; en las chicas no se distingue)
+    const pA = sc[idx[iMin]], pB = sc[idx[iMax]];
+    const span = Math.hypot(pB.x-pA.x, pB.y-pA.y);
+    let style;
+    if(screenArea > 110 && maxL-minL > 7 && span > 3){
+      const gr = ctx.createLinearGradient(pA.x,pA.y, pB.x,pB.y);
+      const a = cols[iMin], b = cols[iMax];
+      gr.addColorStop(0, `rgb(${a[0]|0},${a[1]|0},${a[2]|0})`);
+      gr.addColorStop(1, `rgb(${b[0]|0},${b[1]|0},${b[2]|0})`);
+      style = gr;
+    } else {
+      let r=0,g=0,bb=0;
+      for(const c of cols){ r+=c[0]; g+=c[1]; bb+=c[2]; }
+      const m = cols.length;
+      style = `rgb(${(r/m)|0},${(g/m)|0},${(bb/m)|0})`;
+    }
+    ctx.fillStyle = style;
+    ctx.fill();
+    ctx.strokeStyle = style;
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+  }
+
+  // resplandor de frenos
+  if(braking){
+    const gy = HORIZON_Y - (CAR_CAM_Y + 0.70)*FOCAL/CAR_CAM_Z;
+    ctx.globalCompositeOperation = 'lighter';
+    [-0.60, 0.60].forEach(off=>{
+      const gx = W/2 + (off + lateral)*FOCAL/CAR_CAM_Z;
+      const gg = ctx.createRadialGradient(gx, gy, 2, gx, gy, 54);
+      gg.addColorStop(0,'rgba(255,86,66,0.8)');
+      gg.addColorStop(1,'rgba(255,60,50,0)');
+      ctx.fillStyle = gg;
+      ctx.fillRect(gx-54, gy-54, 108, 108);
+    });
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+/* ---------- Efectos de pantalla ---------- */
+function drawSpeedFX(speedPct){
+  if(speedPct > 0.45 || nitroActivo){
+    const a = Math.min(1, Math.max(0,(speedPct-0.45)/0.55) + (nitroActivo ? 0.55 : 0));
+    ctx.strokeStyle = nitroActivo
+      ? `rgba(150,225,255,${a*0.30})`
+      : `rgba(255,255,255,${a*0.16})`;
+    ctx.lineWidth = 1.6;
+    // Arrancan MUY afuera: son visión periférica. Naciendo cerca del centro
+    // cruzaban el auto y la calle enteros y la pantalla parecía un vidrio rayado.
+    const cx = W/2, cy = H*0.46;
+    const N = 14;
+    for(let i=0;i<N;i++){
+      const ang = (i/N)*Math.PI*2 + elapsed*0.3;
+      const r0 = 400, r1 = 400 + a*300;
+      ctx.beginPath();
+      ctx.moveTo(cx+Math.cos(ang)*r0, cy+Math.sin(ang)*r0*0.62);
+      ctx.lineTo(cx+Math.cos(ang)*r1, cy+Math.sin(ang)*r1*0.62);
+      ctx.stroke();
+    }
+    // desenfoque de velocidad en los bordes
+    const tinte = nitroActivo ? '150,225,255' : '255,255,255';
+    const eg = ctx.createLinearGradient(0,0,W,0);
+    eg.addColorStop(0,   `rgba(${tinte},${a*0.20})`);
+    eg.addColorStop(0.2, `rgba(${tinte},0)`);
+    eg.addColorStop(0.8, `rgba(${tinte},0)`);
+    eg.addColorStop(1,   `rgba(${tinte},${a*0.20})`);
+    ctx.fillStyle = eg;
+    ctx.fillRect(0,0,W,H);
+  }
+  // viñeta
+  const vg = ctx.createRadialGradient(W/2,H/2,H*0.4,W/2,H/2,W*0.78);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,'rgba(0,0,0,0.45)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0,0,W,H);
+}
+
+// Corrección de color: unifica la paleta y da aire cinematográfico
+// (sin globalCompositeOperation 'overlay', que fuerza recomposición lenta)
+function drawColorGrade(){
+  // Baño cálido que viene desde el sol (arriba-derecha).
+  // Suave a propósito: con más carga tapaba el contraste y toda la escena
+  // quedaba de un beige lechoso donde no se distinguía nada.
+  const warm = ctx.createRadialGradient(W*0.68, H*0.34, 40, W*0.68, H*0.34, W*0.95);
+  warm.addColorStop(0,   'rgba(255,196,120,0.13)');
+  warm.addColorStop(0.45,'rgba(255,170,100,0.06)');
+  warm.addColorStop(1,   'rgba(120,70,110,0.06)');
+  ctx.fillStyle = warm;
+  ctx.fillRect(0,0,W,H);
+
+  // Esquina inferior-izquierda en sombra fría/violácea (opuesta al sol)
+  const cool = ctx.createLinearGradient(0, H, W*0.55, H*0.4);
+  cool.addColorStop(0, 'rgba(60,50,95,0.22)');
+  cool.addColorStop(1, 'rgba(60,50,95,0)');
+  ctx.fillStyle = cool;
+  ctx.fillRect(0,0,W,H);
+
+  // Neblina dorada, sólo en la franja del horizonte
+  const haze = ctx.createLinearGradient(0, H*0.34, 0, H*0.54);
+  haze.addColorStop(0,'rgba(232,168,122,0.15)');
+  haze.addColorStop(1,'rgba(232,168,122,0)');
+  ctx.fillStyle = haze;
+  ctx.fillRect(0, H*0.34, W, H*0.20);
+}
+
+function draw(dt){
+  const speedPct = speed/MAX_SPEED;
+  const offRoad = Math.abs(playerX) > 1;
+  const shakeMag = speedPct*1.8 + (offRoad?5:0) + hitFlash*8;
+  const sx = (Math.random()-0.5)*shakeMag, sy = (Math.random()-0.5)*shakeMag;
+
+  const curveNow = segAt(position).curve;
+  camRoll += ((-curveNow * speedPct * 0.028) - camRoll) * Math.min(1, dt*4);
+
+  ctx.save();
+  // La rotación con escala fuerza un resampling de pantalla completa;
+  // sólo se aplica cuando el ángulo es perceptible (> ~0.2 grados).
+  if(Math.abs(camRoll) > 0.004){
+    ctx.translate(W/2 + sx, H/2 + sy);
+    ctx.rotate(camRoll);
+    ctx.scale(1.03, 1.03);
+    ctx.translate(-W/2, -H/2);
+  } else {
+    ctx.translate(sx, sy);
+  }
+  render();
+  drawColorGrade();
+  drawPlayerCar(dt);
+  ctx.restore();
+
+  drawSpeedFX(speedPct);
+  drawPopups();
+
+  if(hitFlash > 0){
+    ctx.fillStyle = `rgba(235,60,60,${hitFlash*0.5})`;
+    ctx.fillRect(0,0,W,H);
+    hitFlash = Math.max(0, hitFlash - dt*1.8);
+  }
+}
+
+/* ============================================================
+   BUCLE PRINCIPAL
+   ============================================================ */
+let lastTime = null;
+function loop(ts){
+  if(lastTime === null) lastTime = ts;
+  const dt = Math.min((ts-lastTime)/1000, 0.05);
+  lastTime = ts;
+  if(raceStarted && !raceOver){
+    elapsed += dt;
+    update(dt);
+    updateHUD();
+    AUDIO.update(speed/MAX_SPEED, gasKey(), skidLevel, true);
+  }
+  draw(dt);
+  drawMinimap();
+  requestAnimationFrame(loop);
+}
+
+function startCountdown(){
+  let n = 3;
+  msgOverlay.style.display = 'flex';
+  msgOverlay.textContent = n;
+  const iv = setInterval(()=>{
+    n--;
+    if(n > 0)     { msgOverlay.textContent = n; AUDIO.beep(); }
+    else if(n===0){ msgOverlay.textContent = '¡YA!'; AUDIO.go(); }
+    else {
+      clearInterval(iv);
+      msgOverlay.style.display = 'none';
+      raceStarted = true;
+    }
+  }, 800);
+}
+
+function clasificacion(){
+  const lista = rivals.map(r=>({
+    nombre: r.def.nombre, color: r.def.color, num: r.def.num, d: rivalDist(r), vos:false
+  }));
+  lista.push({nombre:'VOS', color:'#f5c542', num:'—', d: playerDist(), vos:true});
+  lista.sort((a,b)=> b.d - a.d);
+  return lista;
+}
+
+function endRace(){
+  raceOver = true;
+  const tiempo = formatoTiempo(finishTime, 2);
+  // El bonus más grande es por el puesto: es una carrera, no una contrarreloj
+  const bonusPuesto = Math.max(0, (9 - finalPos)) * 1200;
+  const bonusTiempo = Math.max(0, Math.round((180 - finishTime) * 25));
+  score += bonusPuesto + bonusTiempo;
+
+  const titulo = finalPos === 1 ? '🏆 ¡GANASTE EL OBELISCO GP!'
+               : finalPos <= 3  ? '🥉 ¡AL PODIO!'
+               : '🏁 CARRERA TERMINADA';
+
+  const filas = clasificacion().slice(0,8).map((c,i)=>
+    '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;' +
+      (c.vos ? 'background:rgba(245,197,66,0.14);border-radius:4px;' : '') + '">' +
+      '<span style="width:22px;text-align:right;color:#9aa1ab">' + (i+1) + 'º</span>' +
+      '<span style="width:10px;height:10px;border-radius:2px;background:' + c.color + '"></span>' +
+      '<span style="flex:1;text-align:left;color:' + (c.vos ? '#f5c542' : '#cfd4dc') +
+        ';font-weight:' + (c.vos ? '800' : '400') + '">' + c.nombre + '</span>' +
+    '</div>'
+  ).join('');
+
+  finalText.innerHTML =
+    titulo +
+    '<div style="font-size:64px;margin:6px 0 0;color:#f5c542;line-height:1">' + finalPos + 'º</div>' +
+    '<div style="font-size:13px;color:#9aa1ab;letter-spacing:1px;margin-bottom:10px">DE 8</div>' +
+    '<div style="width:300px;margin:0 auto 12px;font-size:14px">' + filas + '</div>' +
+    '<div style="font-size:30px;color:#fff;font-weight:800">' + score.toLocaleString('es-AR') + '</div>' +
+    '<div style="font-size:14px;color:#cfd4dc;font-weight:400;line-height:1.7">' +
+      'Tiempo ' + tiempo + '<br>' +
+      'Bonus por puesto ' + bonusPuesto.toLocaleString('es-AR') +
+      ' &nbsp;·&nbsp; por tiempo ' + bonusTiempo.toLocaleString('es-AR') + '<br>' +
+      'Rivales pasados ' + rivalesPasados +
+      ' &nbsp;·&nbsp; Tránsito esquivado ' + overtakes +
+      ' &nbsp;·&nbsp; Al ras ' + closeCalls +
+    '</div>';
+  finalPanel.style.display = 'flex';
+  AUDIO.update(0,false,0,false);
+  AUDIO.finish();
+}
+
+function restart(){
+  position = 0; playerX = 0; speed = 0;
+  laps = 0; elapsed = 0; finished = false; finishTime = 0;
+  raceStarted = false; raceOver = false; hitFlash = 0; skidLevel = 0;
+  score = 0; combo = 1; comboTimer = 0; overtakes = 0; closeCalls = 0; popups = [];
+  puesto = 8; mejorPuesto = 8; rivalesPasados = 0; finalPos = 8;
+  nitro = 0; nitroActivo = false;
+  resetTraffic();
+  resetRivals();
+  finalPanel.style.display = 'none';
+  startCountdown();
+}
+
+const muteBtn = document.getElementById('muteBtn');
+muteBtn.addEventListener('click', ()=>{
+  AUDIO.resume();
+  const m = !AUDIO.isMuted();
+  AUDIO.setMuted(m);
+  muteBtn.textContent = m ? '🔇' : '🔊';
+});
+
+startCountdown();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
