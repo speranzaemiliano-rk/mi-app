@@ -4855,6 +4855,9 @@
                                     <button class="btn btn-gold btn-sm" onclick="abrirFormRemunPago()" id="btnCargarRemunPago">➕ Cargar pago</button>
                                 </div>
                             </div>
+                            <!-- Saldos que faltan pagar del mes: la respuesta a "ya pagué una parte,
+                                 ¿cómo pago el resto?" sin tener que ir a otra pantalla ni sacar la cuenta. -->
+                            <div id="remPagosPendientes" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:rgba(230,160,60,.06);"></div>
                             <div id="remDesdeRecibosPanel" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface-2);">
                                 <div style="font-size:12px; font-weight:600; margin-bottom:8px;">Recibos emitidos de <span id="remDesdeRecibosMes"></span> — tildá los que quieras convertir en pago:</div>
                                 <div id="remDesdeRecibosLista" style="max-height:220px; overflow-y:auto;"></div>
@@ -25688,7 +25691,60 @@
         });
     }
 
+    // Empleados con sueldo liquidado y saldo sin pagar, en el mes que se está mirando.
+    function _remPendientesDelMes(mes) {
+        if (!mes) return [];
+        var vistos = {}, out = [];
+        (remunRecibos || []).forEach(function(r) {
+            if (!r || r.mes !== mes) return;
+            var nom = r.empleadoNombre || '';
+            var k = _remNorm(nom);
+            if (!k || vistos[k]) return;
+            vistos[k] = 1;
+            var liq = _remLiquidadoDe(nom, mes), pag = _remPagadoDe(nom, mes);
+            var pend = liq - pag;
+            if (pend > 0.5) out.push({ nombre: nom, liquidado: liq, pagado: pag, pendiente: pend });
+        });
+        return out.sort(function(a, b){ return a.nombre.localeCompare(b.nombre); });
+    }
+    function _renderRemunPendientes() {
+        var box = document.getElementById('remPagosPendientes'); if (!box) return;
+        // Se usa el mes "Desde" como mes de trabajo; si está vacío, el mes en curso.
+        var mes = (document.getElementById('remPagoMesFiltro') || {}).value || _remMesActualISO();
+        var lista = _remPendientesDelMes(mes);
+        // Se guardan acá y el botón manda el ÍNDICE: meter el nombre dentro del onclick se rompe
+        // con un apellido que tenga apóstrofo (O'Brien) al desescaparse el HTML.
+        _remPendCache = { mes: mes, lista: lista };
+        if (!lista.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        var fmt = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        box.style.display = '';
+        box.innerHTML = '<div style="font-size:12px; font-weight:700; margin-bottom:8px;">⏳ Falta pagar de ' + escHtml(_mesLabel(mes)) + '</div>' +
+            lista.map(function(o, i) {
+                return '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 0; border-top:1px solid var(--border);">' +
+                    '<span style="flex:1; min-width:160px; font-size:13px;"><strong>' + escHtml(o.nombre) + '</strong>' +
+                        '<span style="color:var(--text-3); font-size:11px;"> · sueldo ' + fmt(o.liquidado) +
+                        (o.pagado > 0.5 ? ' · ya entregado ' + fmt(o.pagado) : '') + '</span></span>' +
+                    '<span style="font-weight:700; color:var(--danger);">' + fmt(o.pendiente) + '</span>' +
+                    '<button class="btn btn-gold btn-sm" onclick="remPagarSaldo(' + i + ')" ' +
+                        'title="Cargar el pago de lo que falta, con el importe ya puesto">💵 Pagar saldo</button>' +
+                '</div>';
+            }).join('') +
+            '<div class="form-hint" style="color:var(--text-3); margin-top:6px;">El importe sale de restarle al sueldo liquidado lo que ya le entregaste (adelantos y pagos a cuenta). Podés pagar menos y queda el resto pendiente.</div>';
+    }
+    // Abre el formulario con el saldo exacto ya cargado.
+    var _remPendCache = { mes: '', lista: [] };
+    window.remPagarSaldo = function(i) {
+        if (!_esDuenoRemun()) return;
+        var o = (_remPendCache.lista || [])[i]; if (!o) return;
+        var mes = _remPendCache.mes;
+        var pend = Math.max(0, _remLiquidadoDe(o.nombre, mes) - _remPagadoDe(o.nombre, mes));
+        abrirFormRemunPago({ nombre: o.nombre, mes: mes, banco: 0, efectivo: pend, tipo: 'pago' });
+        var f = document.getElementById('remPagoForm');
+        if (f && f.scrollIntoView) f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
     function _renderRemunPagos() {
+        _renderRemunPendientes();
         var tbody = document.getElementById('remPagosBody');
         if (!tbody) return;
         // Rango de meses (ambos opcionales): vacío = TODOS los meses. Para un mes puntual,
