@@ -828,7 +828,7 @@ app.post('/afip', async (req, res) => {
         const afip = crearAfip();
 
         const {
-            tipoComp, ptoVta, concepto, fecha, moneda,
+            tipoComp, ptoVta, concepto, fecha, moneda, cotizacion,
             cuitRecep, condIva, razon, dom,
             impNeto, impIVA, impTotal, alicId, descripcion,
             cbtesAsoc
@@ -843,6 +843,18 @@ app.post('/afip', async (req, res) => {
                 Id:      parseInt(alicId),
                 BaseImp: impNeto,
                 Importe: impIVA
+            });
+        }
+
+        // En moneda extranjera ARCA exige la cotización real (pesos por unidad). Estaba fija en 1,
+        // así que un comprobante en dólares se emitía como si 1 USD = 1 ARS. Se valida acá también
+        // y no sólo en el navegador: es un dato fiscal, un comprobante mal emitido no se deshace.
+        const _cotiz = (moneda && moneda !== 'PES') ? Number(cotizacion) : 1;
+        if (!(_cotiz > 0)) {
+            return res.status(400).json({
+                ok: false,
+                error: 'Falta la cotización para emitir en moneda extranjera (' + moneda + '). ' +
+                       'Informá cuántos pesos vale una unidad de esa moneda.'
             });
         }
 
@@ -863,7 +875,7 @@ app.post('/afip', async (req, res) => {
             ImpIVA:     impIVA,
             ImpTrib:    0,
             MonId:      moneda,
-            MonCotiz:   1,
+            MonCotiz:   _cotiz,
             CondicionIVAReceptorId: parseInt(condIva) || 5, // obligatorio desde RG 5616 (1=RI,4=Exento,5=CF,6=Monotributo)
             // afip.js envuelve este array en {AlicIva:...} internamente; pasar el array pelado
             Iva: alicuotas.length ? alicuotas : null

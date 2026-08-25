@@ -33272,6 +33272,15 @@
     // ══════════════════════════════════════════════════════════
     var AFIP_FUNCTION_URL = ((_APPCFG.backendUrl || 'https://mi-app-production-e1cd.up.railway.app').replace(/\/afip\/?$/,'').replace(/\/+$/,'')) + '/afip'; // fallback global por instalación
 
+    // Con dólares hay que informar la cotización: se pre-carga con el tipo de cambio de la app.
+    window.afipToggleCotiz = function() {
+        var esDol = (document.getElementById('afipMoneda') || {}).value === 'DOL';
+        var wrap = document.getElementById('afipCotizWrap');
+        if (wrap) wrap.style.display = esDol ? '' : 'none';
+        var c = document.getElementById('afipCotiz');
+        if (esDol && c && !c.value && typeof exchangeRate !== 'undefined' && exchangeRate > 0) c.value = exchangeRate;
+    };
+
     function abrirEmitirFacturaAFIP() {
         document.getElementById('afipFecha').valueAsDate = new Date();
         document.getElementById('afipResultado').style.display = 'none';
@@ -33282,6 +33291,9 @@
         document.getElementById('afipDomRecep').value = '';
         document.getElementById('afipDescripcion').value = '';
         document.getElementById('afipTipoComp').value = '1';
+        document.getElementById('afipMoneda').value = 'PES';
+        var _ac = document.getElementById('afipCotiz'); if (_ac) _ac.value = '';
+        afipToggleCotiz();
         document.getElementById('afipCbtesAsocSection').style.display = 'none';
         document.getElementById('afipAsocNro').value = '';
         var empNombre = empresaActual ? empresaActual.nombre : '(sin empresa)';
@@ -33361,6 +33373,7 @@
         var concepto   = parseInt(document.getElementById('afipConcepto').value);
         var fecha      = document.getElementById('afipFecha').value.replace(/-/g,'');
         var moneda     = document.getElementById('afipMoneda').value;
+        var cotizacion = (moneda === 'DOL') ? (parseFloat(document.getElementById('afipCotiz').value) || 0) : 1;
         var cuitRecep  = document.getElementById('afipCuitRecep').value.replace(/[-]/g,'');
         var condIva    = parseInt(document.getElementById('afipCondIvaRecep').value);
         var razon      = document.getElementById('afipRazonRecep').value.trim();
@@ -33389,6 +33402,10 @@
         }
 
         if (!cuitRecep || !impNeto) { alert('Completá CUIT receptor e importe neto.'); return; }
+        if (moneda === 'DOL' && !(cotizacion > 0)) {
+            alert('Para facturar en dólares tenés que informar la cotización (pesos por dólar del día).\n\nARCA la exige: sin ella el comprobante se emitiría como si 1 dólar valiera 1 peso.');
+            return;
+        }
 
         var btn = document.getElementById('btnEmitirAFIP');
         btn.disabled = true; btn.textContent = 'Emitiendo…';
@@ -33398,7 +33415,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    tipoComp, ptoVta, concepto, fecha, moneda,
+                    tipoComp, ptoVta, concepto, fecha, moneda, cotizacion,
                     cuitRecep, condIva, razon, dom,
                     impNeto, impIVA, impTotal, alicId, descripcion,
                     cbtesAsoc
@@ -33419,7 +33436,7 @@
             if (REF_FACTURAS_ARCA) {
                 var registro = {
                     tipoComp: tipoComp, ptoVta: ptoVta, nro: data.cbteDesde,
-                    fecha: fecha, moneda: moneda, cuitRecep: cuitRecep,
+                    fecha: fecha, moneda: moneda, cotizacion: cotizacion, cuitRecep: cuitRecep,
                     condIva: condIva, razon: razon, dom: dom,
                     impNeto: impNeto, impIVA: impIVA, impTotal: impTotal,
                     condVenta: condVenta,
@@ -39013,10 +39030,15 @@
         </div>
         <div class="form-group">
           <label>Moneda</label>
-          <select id="afipMoneda">
+          <select id="afipMoneda" onchange="afipToggleCotiz()">
             <option value="PES">ARS (Pesos)</option>
             <option value="DOL">USD (Dólares)</option>
           </select>
+        </div>
+        <div class="form-group" id="afipCotizWrap" style="display:none;">
+          <label>Cotización del dólar *</label>
+          <input type="number" id="afipCotiz" step="0.01" min="0" placeholder="Ej: 1560.00">
+          <div class="form-hint">Pesos por dólar del día. ARCA lo exige para facturar en moneda extranjera: los importes van en USD y este valor los convierte.</div>
         </div>
       </div>
 
