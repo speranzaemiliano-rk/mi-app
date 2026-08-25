@@ -9870,17 +9870,22 @@
     function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
     // Reimprime UNA sola Orden de Pago para varias facturas pagadas juntas (mismo grupoPagoId).
     function imprimirPagoGrupoFact(grupoId){
-        var incl=[],montoTotal=0,totalRet=0,fecha='',mod='A',nroCorr='',nroTransf='',prov='',retMap={};
+        var incl=[],montoTotal=0,totalRet=0,fecha='',mod='A',nroCorr='',nroTransf='',prov='',retMap={},monedas={};
         facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){
             if((p.grupoPagoId||'')!==grupoId) return;
             incl.push(f.numero?('N°'+f.numero):(f.descripcion||'s/n'));
             montoTotal+=p.monto||0; totalRet+=p.totalRet||0;
             fecha=p.fecha; mod=p.modalidad; nroCorr=p.nroCorrelativo||''; nroTransf=p.nroComprobante||''; prov=f.proveedor||prov;
+            monedas[f.moneda||'ARS']=1;
             (p.retenciones||[]).forEach(function(r){ retMap[r.codigo]=(retMap[r.codigo]||0)+(r.monto||0); });
         });});
         if(!incl.length) return;
         var rets=Object.keys(retMap).map(function(c){return{codigo:c,monto:retMap[c],desc:c};});
-        var itemSint={proveedor:prov,descripcion:incl.length+' facturas: '+incl.join(', '),numero:nroCorr};
+        // La OP hereda la moneda de las facturas incluidas. Si el grupo mezclara monedas, no hay
+        // una sola moneda válida para el total: se deja ARS, como venía.
+        var _monsGrupo=Object.keys(monedas);
+        var itemSint={proveedor:prov,descripcion:incl.length+' facturas: '+incl.join(', '),numero:nroCorr,
+                      moneda:(_monsGrupo.length===1?_monsGrupo[0]:'ARS')};
         imprimirReciboFactura(itemSint,montoTotal,fecha,mod,rets,totalRet,nroCorr,nroTransf);
     }
     // Reimprime el comprobante de retención combinado de un pago de varias facturas (mismo grupoPagoId).
@@ -11412,7 +11417,11 @@
 
     function imprimirReciboDato(item, montoPago, fechaPago, desglose, modalidadPago, retenciones, totalRet, nroTransf) {
         if (!item) return;
-        const fmt    = n => '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+        // La OP sale en la MONEDA del comprobante. Estaba fijo en '$', así que un pago en dólares
+        // se imprimía como si fueran pesos. Sin moneda cargada se asume ARS, como siempre.
+        const _monOP = (item.moneda === 'USD') ? 'USD' : 'ARS';
+        const _simOP = _monOP === 'USD' ? 'USD ' : '$ ';
+        const fmt    = n => _simOP + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
         const fmtUsd = n => 'USD ' + (Number(n||0)/exchangeRate).toLocaleString('es-AR',{maximumFractionDigits:2});
         const c      = calcPresupuesto(item);
         const recibo = item.reciboCorrelativo || item.recibo || generarNumeroRecibo();
@@ -11470,7 +11479,10 @@
         '<div class="tot-final"><span>Avance</span><span>' + (item.presupuesto ? Math.round((c.pagadoTotal/item.presupuesto)*100) : 0) + '%</span></div>' +
         '</div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + (item.proveedor||'Proveedor') + '</div><div class="fi">Entregó — ' + emp.nombre + '</div></div>' +
-        '<div class="pie">Comprobante ' + recibo + ' · Fecha ' + fechaDoc + ' · TC: $' + exchangeRate.toFixed(2) + '</div>' +
+        '<div class="pie">Comprobante ' + recibo + ' · Fecha ' + fechaDoc + ' · TC: $' + exchangeRate.toFixed(2) +
+            (_monOP === 'USD' && hayPago && exchangeRate > 0
+                ? ' · Equivalente $ ' + (Number(montoPago||0) * exchangeRate).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
+                : '') + '</div>' +
         '</div><scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
 
         _imprimirDocHTML(html);
@@ -11481,7 +11493,7 @@
     function imprimirPresupuestoDoc(index) {
         var item = datos[index];
         if (!item) return;
-        var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var fmt = function(n){ return ((item.moneda === 'USD') ? 'USD ' : '$ ') + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var fmtUsd = function(n){ return 'USD ' + (Number(n||0)/exchangeRate).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var c = calcPresupuesto(item);
         var nro = item.reciboCorrelativo || item.recibo || generarNumeroRecibo();
@@ -11515,7 +11527,7 @@
         '</div></div>' +
         '<div class="totales">' +
         '<div class="tot-row"><span>Subtotal</span><span>' + fmt(item.presupuesto) + '</span></div>' +
-        '<div class="tot-row"><span>Equivalente USD</span><span>' + fmtUsd(item.presupuesto) + '</span></div>' +
+        (item.moneda === 'USD' ? '' : '<div class="tot-row"><span>Equivalente USD</span><span>' + fmtUsd(item.presupuesto) + '</span></div>') +
         '<div class="tot-final"><span>Total</span><span>' + fmt(item.presupuesto) + '</span></div>' +
         '</div></div>' +
         '<div class="firmas"><div class="fi">Conformidad — ' + (item.proveedor || 'Proveedor') + '</div><div class="fi">Firma y sello — ' + emp.nombre + '</div></div>' +
@@ -17980,7 +17992,11 @@
     });
 
     function imprimirReciboFactura(f, monto, fecha, mod, rets, totalRet, nroComprobante, nroTransf, retHtml) {
-        var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        // La OP sale en la MONEDA de la factura. Estaba fijo en '$': una factura en dólares
+        // generaba una orden de pago que decía pesos.
+        var _monOP = (f && f.moneda === 'USD') ? 'USD' : 'ARS';
+        var _simOP = _monOP === 'USD' ? 'USD ' : '$ ';
+        var fmt = function(n){ return _simOP + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var modLabel = mod==='A' ? 'Bancarizado — Modalidad A' : 'Efectivo — Modalidad B';
         var neto  = monto - (totalRet||0);
         var emision = new Date().toLocaleDateString('es-AR');
