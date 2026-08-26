@@ -8633,45 +8633,64 @@
     // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
     // ═══════════ Unificar proveedores duplicados ═══════════
     // Los movimientos referencian al proveedor por NOMBRE (no por id), así que unificar es
-    // reapuntar ese nombre en todas las colecciones y borrar la ficha sobrante. No se borra
-    // ningún movimiento: sólo cambian de titular.
+    // reapuntar ese nombre en todas las colecciones y borrar la ficha sobrante. El nombre del
+    // proveedor vive en `razonSocial` (y opcionalmente `nombreFantasia`), NO en `nombre`.
     function _unifNorm(x) { return (x || '').toString().trim().toLowerCase().replace(/\s+/g, ' '); }
+    function _unifProvPorNombre(nombre) {
+        var n = _unifNorm(nombre);
+        return (proveedores || []).find(function(x){ return _unifNorm(x.razonSocial) === n; }) || null;
+    }
+    // Nombres con los que puede estar cargado un movimiento de ese proveedor: la razón social y,
+    // si no la comparte con otro proveedor, también el nombre de fantasía (las facturas a veces
+    // se cargan con ese). Se excluye una fantasía repetida para no arrastrar movimientos ajenos.
+    function _unifClavesDe(nombre) {
+        var pv = _unifProvPorNombre(nombre), claves = {};
+        claves[_unifNorm(nombre)] = 1;
+        if (pv && pv.nombreFantasia) {
+            var nf = _unifNorm(pv.nombreFantasia);
+            var repetida = (proveedores || []).filter(function(x){
+                return _unifNorm(x.nombreFantasia) === nf || _unifNorm(x.razonSocial) === nf;
+            }).length > 1;
+            if (nf && !repetida) claves[nf] = 1;
+        }
+        return claves;
+    }
 
     // Cuenta (o reapunta, si aplicar=true) todo lo que está a nombre de `de` para pasarlo a `a`.
     function _unifRecorrer(de, a, aplicar) {
-        var k = _unifNorm(de), r = { presupuestos: 0, facturas: 0, documentos: 0, creditos: 0, emitidos: 0, vencimientos: 0, pagos: 0 };
-        var docsTocados = {};
+        var claves = _unifClavesDe(de);
+        var coincide = function(x) { return !!claves[_unifNorm(x)]; };
+        var r = { presupuestos: 0, facturas: 0, documentos: 0, creditos: 0, emitidos: 0, vencimientos: 0, pagos: 0 };
+        var docsTocados = {}, vencsTocados = [];
         var cuentaPagos = function(obj) { return ((obj && obj.pagosHistorial) || []).length; };
 
         (typeof datos !== 'undefined' ? datos : []).forEach(function(d) {
-            if (!d || _unifNorm(d.proveedor) !== k) return;
+            if (!d || !coincide(d.proveedor)) return;
             r.presupuestos++; r.pagos += cuentaPagos(d);
             if (aplicar) d.proveedor = a;
         });
         (typeof facturas !== 'undefined' ? facturas : []).forEach(function(f) {
-            if (!f || _unifNorm(f.proveedor) !== k) return;
+            if (!f || !coincide(f.proveedor)) return;
             r.facturas++; r.pagos += cuentaPagos(f);
             if (aplicar) f.proveedor = a;
         });
         (typeof documentos !== 'undefined' ? documentos : []).forEach(function(d) {
-            if (!d || _unifNorm(d.proveedor) !== k) return;
+            if (!d || !coincide(d.proveedor)) return;
             r.documentos++; r.pagos += cuentaPagos(d);
             if (aplicar) { d.proveedor = a; docsTocados[d.id] = d; }
         });
         (typeof creditosProveedor !== 'undefined' ? creditosProveedor : []).forEach(function(c) {
-            if (!c || _unifNorm(c.proveedor) !== k) return;
+            if (!c || !coincide(c.proveedor)) return;
             r.creditos++;
             if (aplicar) c.proveedor = a;
         });
         (typeof comprobantesEmitidos !== 'undefined' ? comprobantesEmitidos : []).forEach(function(e) {
-            if (!e || _unifNorm(e.proveedorNombre) !== k) return;
+            if (!e || !coincide(e.proveedorNombre)) return;
             r.emitidos++;
             if (aplicar) e.proveedorNombre = a;
         });
-        var vencsTocados = [];
-        var vencs = (typeof vencimientos !== 'undefined' && vencimientos) ? vencimientos : [];
-        vencs.forEach(function(v) {
-            if (!v || _unifNorm(v.proveedor) !== k) return;
+        (typeof vencimientos !== 'undefined' ? (vencimientos || []) : []).forEach(function(v) {
+            if (!v || !coincide(v.proveedor)) return;
             r.vencimientos++;
             if (aplicar) { v.proveedor = a; vencsTocados.push(v); }
         });
@@ -8682,10 +8701,12 @@
 
     window.abrirUnificarProveedores = function(nombreOrigen) {
         if (!puedeEditar) { alert('No tenés permisos para unificar proveedores.'); return; }
-        var lista = (proveedores || []).slice().sort(function(x, y){ return (x.nombre||'').localeCompare(y.nombre||''); });
+        var lista = (proveedores || []).filter(function(pv){ return pv && pv.razonSocial; })
+            .sort(function(x, y){ return (x.razonSocial||'').localeCompare(y.razonSocial||''); });
         if (lista.length < 2) { alert('Hacen falta al menos dos proveedores cargados.'); return; }
         var opts = '<option value="">— Elegí —</option>' + lista.map(function(pv) {
-            return '<option value="' + escHtml(pv.nombre || '') + '">' + escHtml(pv.nombre || '(sin nombre)') + (pv.cuit ? ' · ' + escHtml(pv.cuit) : '') + '</option>';
+            var etiqueta = pv.razonSocial + (pv.nombreFantasia ? ' (' + pv.nombreFantasia + ')' : '') + (pv.cuit ? ' · ' + pv.cuit : '');
+            return '<option value="' + escHtml(pv.razonSocial) + '">' + escHtml(etiqueta) + '</option>';
         }).join('');
         document.getElementById('unifProvOrigen').innerHTML = opts;
         document.getElementById('unifProvDestino').innerHTML = opts;
@@ -8709,13 +8730,13 @@
             ['Presupuestos', c.presupuestos], ['Facturas', c.facturas], ['Comprobantes recibidos', c.documentos],
             ['Comprobantes emitidos', c.emitidos], ['Créditos a favor', c.creditos], ['Vencimientos', c.vencimientos]
         ].filter(function(f){ return f[1] > 0; });
-        // Dos fichas del mismo CUIT es la señal más fuerte de que están duplicadas.
-        var pDe = (proveedores||[]).find(function(x){ return _unifNorm(x.nombre) === _unifNorm(de); }) || {};
-        var pA  = (proveedores||[]).find(function(x){ return _unifNorm(x.nombre) === _unifNorm(a);  }) || {};
-        var mismoCuit = pDe.cuit && pA.cuit && pDe.cuit.replace(/\D/g,'') === pA.cuit.replace(/\D/g,'');
+        // Dos fichas con el mismo CUIT es la señal más fuerte de que están duplicadas.
+        var pDe = _unifProvPorNombre(de) || {}, pA = _unifProvPorNombre(a) || {};
+        var cuitDe = (pDe.cuit || '').replace(/\D/g, ''), cuitA = (pA.cuit || '').replace(/\D/g, '');
+        var mismoCuit = cuitDe && cuitA && cuitDe === cuitA;
         box.innerHTML =
             (mismoCuit ? '<div style="color:var(--success);margin-bottom:8px;">✅ Los dos tienen el mismo CUIT (' + escHtml(pDe.cuit) + '): son el mismo proveedor.</div>'
-                       : (pDe.cuit && pA.cuit ? '<div style="color:var(--warn);margin-bottom:8px;">⚠️ Tienen CUIT distinto (' + escHtml(pDe.cuit) + ' vs ' + escHtml(pA.cuit) + '). Revisá que sean realmente el mismo.</div>' : '')) +
+                       : (cuitDe && cuitA ? '<div style="color:var(--warn);margin-bottom:8px;">⚠️ Tienen CUIT distinto (' + escHtml(pDe.cuit) + ' vs ' + escHtml(pA.cuit) + '). Revisá que sean realmente el mismo.</div>' : '')) +
             '<div><strong>' + escHtml(de) + '</strong> → <strong>' + escHtml(a) + '</strong></div>' +
             (filas.length
                 ? '<ul style="margin:8px 0 0 18px; padding:0;">' + filas.map(function(f){ return '<li>' + f[0] + ': <strong>' + f[1] + '</strong></li>'; }).join('') + '</ul>' +
@@ -8740,17 +8761,17 @@
             var res = _unifRecorrer(de, a, true);
             if (res.presupuestos) persistir();
             if (res.facturas)     persistirFacturas();
-            if (res.creditos && typeof persistirCreditos === 'function') persistirCreditos();
-            if (res.emitidos && typeof persistirEmitidos === 'function') persistirEmitidos();
-            Object.keys(res._docsTocados || {}).forEach(function(id) {
-                REF_DOCS.child(id).update({ proveedor: a });
-            });
+            if (res.creditos)     persistirCreditos();
+            if (res.emitidos)     persistirEmitidos();
+            Object.keys(res._docsTocados || {}).forEach(function(id) { REF_DOCS.child(id).update({ proveedor: a }); });
             // Los vencimientos son globales y se guardan de a un nodo (no hay persistir* de lista).
             (res._vencsTocados || []).forEach(function(v) {
                 if (REF_VENCIMIENTOS && v && v.id) REF_VENCIMIENTOS.child(v.id).update({ proveedor: a });
             });
-            // Por último se saca la ficha duplicada del maestro.
-            proveedores = (proveedores || []).filter(function(pv){ return _unifNorm(pv.nombre) !== _unifNorm(de); });
+            // Por último se saca la ficha duplicada del maestro (por razón social, que es su nombre).
+            var antes = (proveedores || []).length;
+            proveedores = (proveedores || []).filter(function(pv){ return _unifNorm(pv.razonSocial) !== _unifNorm(de); });
+            if (antes === proveedores.length) { alert('⚠️ No se encontró la ficha de «' + de + '» para eliminar. Los movimientos sí se movieron.'); }
             persistirProveedores();
             cerrarUnificarProveedores();
             if (typeof renderProveedores === 'function') renderProveedores();
@@ -14010,7 +14031,7 @@
                 // «Unificar» también acá: el duplicado se detecta mirando la lista, así que la acción
                 // tiene que estar en la fila del proveedor y no sólo en el encabezado de la tarjeta.
                 const btnUnif = puedeEditar
-                    ? `<button class="btn btn-outline btn-sm" onclick="abrirUnificarProveedores('${(p.nombre||'').replace(/'/g,"\\'")}')" title="Unificar este proveedor con otro (si está duplicado)">🔗</button>`
+                    ? `<button class="btn btn-outline btn-sm" onclick="abrirUnificarProveedores('${(p.razonSocial||'').replace(/'/g,"\\'")}')" title="Unificar este proveedor con otro (si está duplicado)">🔗</button>`
                     : '';
                 const acciones = (esSuperAdmin
                     ? `<button class="btn btn-outline btn-sm" onclick="editarProveedor(${index})">✏ Editar</button>${btnUnif}<button class="btn btn-danger-sm" onclick="eliminarProveedor(${index})">✕</button>`
