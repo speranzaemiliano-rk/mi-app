@@ -76,6 +76,18 @@
   }
   #barraPotencia { height: 100%; width: 0%; background: linear-gradient(90deg,#8ee6ff,#f5c542,#e8443a); }
 
+  /* La página corre dentro de un marco: hasta que no recibe el foco, las
+     teclas se las queda la página de afuera y el juego parece no responder. */
+  #clicTeclado {
+    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    background: rgba(10,13,18,0.88); border: 1px solid #f5c542; border-radius: 999px;
+    color: #f5c542; font-size: 13px; letter-spacing: .6px; padding: 8px 18px;
+    font-family: 'Oswald','Arial Narrow',sans-serif; z-index: 6; white-space: nowrap;
+    pointer-events: none; opacity: 0; transition: opacity .2s;
+  }
+  #clicTeclado.visible { opacity: 1; }
+  @media (hover: none) and (pointer: coarse) { #clicTeclado { display: none; } }
+
   #mute { position: absolute; top: 10px; right: 12px; width: 36px; height: 36px;
           border-radius: 50%; background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.22);
           display: flex; align-items: center; justify-content: center; font-size: 17px;
@@ -143,9 +155,10 @@
     <span class="nombreEq">BARRIO</span>
   </div>
 </div>
-<div id="wrap">
+<div id="wrap" tabindex="0">
   <canvas id="c" width="1000" height="660"></canvas>
   <div id="barraPotenciaBg"><div id="barraPotencia"></div></div>
+  <div id="clicTeclado">Hacé clic en la cancha para jugar con el teclado</div>
   <div id="mute" title="Silenciar">🔊</div>
   <div id="aviso"><div id="avisoGrande">¡A JUGAR!</div><div id="avisoChico"></div></div>
   <div id="final"></div>
@@ -350,7 +363,13 @@ let controlado = null, cambioBloqueo = 0;
 let sacudida = 0, destellos = [], estelaPelota = [];
 let avisoTimer = 0, tiempoDeGol = 0, ultimoGoleador = null;
 let cargaPatada = 0, cargando = false;
-const DURACION = 90;            // segundos reales; el reloj muestra 0'–90'
+/* RITMO escala TODO el juego en el tiempo: velocidades, fuerza de los pases y
+   remates, gravedad y rozamiento. Bajar una velocidad suelta rompe el balance
+   (la pelota llegaría igual de rápido que antes); escalando el conjunto, las
+   trayectorias son las mismas y sólo tardan más. Como en 90 s entra menos
+   juego, el partido dura proporcionalmente más y el reloj lo mapea a 0'–90'. */
+const RITMO = 0.72;
+const DURACION = Math.round(90 / RITMO);   // segundos reales; el reloj muestra 0'–90'
 
 function crearJugadores(){
   jugadores = [];
@@ -362,7 +381,7 @@ function crearJugadores(){
         eq: ei, rol: f.rol, base: { x: fx, y: f.y },
         x: CANCHA.x0 + fx*CANCHA.w, y: CANCHA.y0 + f.y*CANCHA.h,
         vx: 0, vy: 0, mira: eq.dir, paso: 0,
-        vel: f.rol === 'ARQ' ? 182 : (f.rol === 'DEL' ? 232 : 218),
+        vel: (f.rol === 'ARQ' ? 182 : (f.rol === 'DEL' ? 232 : 218)) * RITMO,
         aturdido: 0, barrida: 0, num: fi === 0 ? 1 : fi + 1
       };
       jugadores.push(p);
@@ -395,6 +414,25 @@ window.addEventListener('keydown', e=>{
   teclas[k] = true;
 });
 window.addEventListener('keyup', e=>{ teclas[e.key.toLowerCase()] = false; });
+
+// Tomar el teclado: sin foco en el marco, las flechas y la barra no llegan.
+const zonaJuego = document.getElementById('wrap');
+const elClicTeclado = document.getElementById('clicTeclado');
+function tomarTeclado(){
+  try { window.focus(); } catch(e){}
+  try { zonaJuego.focus({ preventScroll: true }); } catch(e){ zonaJuego.focus(); }
+  revisarFoco();
+}
+function revisarFoco(){
+  const ok = document.hasFocus();
+  elClicTeclado.classList.toggle('visible', !ok);
+}
+document.addEventListener('pointerdown', tomarTeclado);
+window.addEventListener('focus', revisarFoco);
+window.addEventListener('blur', revisarFoco);
+setInterval(revisarFoco, 700);
+tomarTeclado();
+setTimeout(tomarTeclado, 300);
 
 // Palanca táctil
 let palanca = { activa:false, dx:0, dy:0, id:null };
@@ -464,13 +502,13 @@ function arcoRival(eq){ return arcoDe(1-eq); }
    PELOTA
    ============================================================ */
 // Parámetros del arquero, en un solo lugar para poder ajustarlos y medirlos
-const ARQ = { alcance: 20, ruido: 44, estirada: 1.9, altoMax: 74, atajaHasta: 380 };
+const ARQ = { alcance: 20, ruido: 44, estirada: 1.9, altoMax: 74, atajaHasta: 380*RITMO };
 // El quite NO se deriva del radio del dibujo: si se ata al tamaño, agrandar
 // al jugador para que se vea mejor cambia el balance del partido sin querer.
 const QUITE = { alcance: 29, tiempo: 0.50 };
-const VEL_DOMINABLE = 520;   // por encima de esto la pelota no se domina de primera
+const VEL_DOMINABLE = 520*RITMO;   // por encima de esto la pelota no se domina de primera
 const FRICCION_PISO = 0.86;    // por segundo
-const GRAVEDAD = 900;
+const GRAVEDAD = 900*RITMO*RITMO;
 
 function soltarPelota(desde, dirx, diry, fuerza, altura){
   const n = normalizar(dirx, diry);
@@ -503,7 +541,7 @@ function actualizarPelota(dt){
   b.z += b.vz*dt;
   if(b.z > 0) b.vz -= GRAVEDAD*dt;
   if(b.z <= 0){
-    if(b.vz < -60){ b.vz = -b.vz*0.42; AUDIO.rebote(); } else { b.vz = 0; }
+    if(b.vz < -60*RITMO){ b.vz = -b.vz*0.42; AUDIO.rebote(); } else { b.vz = 0; }
     b.z = 0;
   }
 
@@ -513,9 +551,9 @@ function actualizarPelota(dt){
 
   // rozamiento sólo cuando toca el piso
   if(b.z <= 0.6){
-    const f = Math.pow(FRICCION_PISO, dt);
+    const f = Math.pow(FRICCION_PISO, dt*RITMO);
     b.vx *= f; b.vy *= f;
-    if(Math.hypot(b.vx, b.vy) < 6){ b.vx = 0; b.vy = 0; }
+    if(Math.hypot(b.vx, b.vy) < 6*RITMO){ b.vx = 0; b.vy = 0; }
   }
 
   estelaPelota.push({ x:b.x, y:b.y, z:b.z });
@@ -538,7 +576,7 @@ function bloquearPelota(){
   // destino: la pelota rebotaba entre los diez y se quedaba pegada al círculo
   // central el partido entero (0 remates en 90 s).
   const dominable = vel <= VEL_DOMINABLE && b.z <= 16;
-  if(dominable || vel < 30) return;
+  if(dominable || vel < 30*RITMO) return;
 
   for(const p of jugadores){
     if(p === b.ultimoToque && b.cool > 0.06) continue;
@@ -720,8 +758,8 @@ function patearAlArco(p, potencia, mira){
   const d = dist(p, arco);
   ang += (Math.random()-0.5)*(0.045 + potencia*0.075 + Math.min(d,420)/420*0.075);
   const n = { x: Math.cos(ang), y: Math.sin(ang) };
-  const fuerza = 380 + potencia*400;
-  soltarPelota(p, n.x, n.y, fuerza, 55 + potencia*140);
+  const fuerza = (380 + potencia*400) * RITMO;
+  soltarPelota(p, n.x, n.y, fuerza, (55 + potencia*140) * RITMO);
   AUDIO.patada(0.35 + potencia*0.65);
   p.mira = ang;
 }
@@ -730,7 +768,7 @@ function pasarA(p, destino){
   if(!destino) return false;
   const n = normalizar(destino.x - p.x, destino.y - p.y);
   const d = dist(p, destino);
-  soltarPelota(p, n.x, n.y, lim(d*1.65, 260, 560), 0);
+  soltarPelota(p, n.x, n.y, lim(d*1.65, 260, 560) * RITMO, 0);
   AUDIO.pase();
   p.mira = Math.atan2(n.y, n.x);
   return true;
@@ -748,14 +786,14 @@ function iaJugador(p, dt){
     // no a dónde está. Yendo a dónde está siempre llegaba tarde.
     let objetivoY = b.y;
     let remateEncima = false;
-    if(!b.dueno && Math.abs(b.vx) > 80 && Math.sign(b.vx) === -dirAtaque){
+    if(!b.dueno && Math.abs(b.vx) > 80*RITMO && Math.sign(b.vx) === -dirAtaque){
       const t = (miArco.x - b.x)/b.vx;
       if(t > 0 && t < 1.5){
         // Lectura imperfecta a propósito: un arquero que adivina exacto
         // ataja todo y no se puede hacer un gol. El error crece con la
         // potencia del remate, que es lo que pasa de verdad.
         const vel = Math.hypot(b.vx, b.vy);
-        objetivoY = b.y + b.vy*t + (p.ruidoArq || 0)*Math.min(vel/700, 1)*ARQ.ruido;
+        objetivoY = b.y + b.vy*t + (p.ruidoArq || 0)*Math.min(vel/(700*RITMO), 1)*ARQ.ruido;
         remateEncima = true;
       }
     }
@@ -773,7 +811,7 @@ function iaJugador(p, dt){
       if(c) pasarA(p, c);
       else {
         const n = normalizar(dirAtaque, (Math.random()-0.5)*0.7);
-        soltarPelota(p, n.x, n.y, 480, 120);
+        soltarPelota(p, n.x, n.y, 480*RITMO, 120*RITMO);
         AUDIO.patada(0.6);
       }
     }
@@ -1297,10 +1335,11 @@ document.getElementById('mute').addEventListener('click', ()=>{
 });
 
 document.getElementById('ayuda').innerHTML =
-  '<b>Flechas / WASD</b> mover &nbsp;·&nbsp; ' +
-  '<b>ESPACIO</b> patear (mantené para más potencia) — sin la pelota, barrida &nbsp;·&nbsp; ' +
-  '<b>Z</b> pase — sin la pelota, cambiar de jugador &nbsp;·&nbsp; ' +
-  'Partido de ' + Math.round(DURACION) + ' segundos';
+  '<b>← ↑ → ↓</b> mover &nbsp;·&nbsp; ' +
+  '<b>BARRA ESPACIADORA</b> patear, mantenela apretada para pegarle más fuerte ' +
+  '(sin la pelota: barrida) &nbsp;·&nbsp; ' +
+  '<b>Z</b> pasar (sin la pelota: cambiar de jugador)<br>' +
+  'Si las teclas no responden, hacé un clic sobre la cancha.'
 
 posicionarSaque(1);
 arrancarSaque('¡A JUGAR!', '');
