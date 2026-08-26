@@ -8602,9 +8602,82 @@
     }
     // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
     function _btnVerComprobantePago(p) {
-        if (!p || !p.comprobanteId) return '';
-        var nom = (p.comprobanteNombre || 'comprobante').replace(/'/g, '');
-        return '<button class="btn btn-outline btn-sm" title="Ver comprobante de transferencia" onclick="descargarDoc(\'' + p.comprobanteId + '\',\'' + nom + '\')">📎</button>';
+        if (!p) return '';
+        var out = '';
+        if (p.comprobanteId) {
+            var nom = (p.comprobanteNombre || 'comprobante').replace(/'/g, '');
+            out += '<button class="btn btn-outline btn-sm" title="Ver comprobante de transferencia" onclick="descargarDoc(\'' + p.comprobanteId + '\',\'' + nom + '\')">📎</button>';
+        }
+        // Adjuntar/reemplazar el comprobante DESPUÉS de emitida la orden de pago. Antes esto sólo
+        // se podía desde «Editar pago» (✏), que no sugiere adjuntar nada y encima no aparece en los
+        // pagos que agrupan varias facturas: no había forma de subirlo.
+        if (puedeEditar && !p.esEmit) {
+            var _st = p.esDoc ? 'doc' : (p.esFact ? 'factura' : 'presup');
+            var _di = p.esDoc ? ("'" + p.di + "'") : p.di;
+            var _gr = (p.esFact && p._nGrupo > 1 && p.grupoPagoId) ? ("'" + p.grupoPagoId + "'") : 'null';
+            out += '<button class="btn btn-outline btn-sm" title="' + (p.comprobanteId ? 'Reemplazar el' : 'Adjuntar el') + ' comprobante de transferencia' +
+                   (_gr !== 'null' ? ' (se adjunta a todas las facturas de este pago)' : '') + '" ' +
+                   'onclick="adjuntarCompPago(\'' + _st + '\',' + _di + ',' + p.pi + ',' + _gr + ')">' +
+                   (p.comprobanteId ? '🔄' : '📎+') + '</button>';
+        }
+        return out;
+    }
+    // Sube el comprobante de transferencia y lo cuelga del pago ya registrado.
+    window.adjuntarCompPago = function(srcTipo, di, pi, grupoId) {
+        if (!puedeEditar) { alert('No tenés permisos para modificar pagos.'); return; }
+        var inp = document.getElementById('_inpAdjCompPago');
+        if (!inp) {
+            inp = document.createElement('input');
+            inp.type = 'file'; inp.id = '_inpAdjCompPago';
+            inp.accept = 'image/*,application/pdf';
+            inp.style.display = 'none';
+            document.body.appendChild(inp);
+        }
+        inp.value = '';   // permite volver a elegir el MISMO archivo
+        inp.onchange = function() {
+            var file = inp.files && inp.files[0]; if (!file) return;
+            var docId = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            var tipo = file.type || 'application/pdf';
+            leerArchivoBase64(file, function(t){ console.log('Comprobante:', t); }).then(function(b64) {
+                return REF_DOCS.child(docId).set({ nombre: file.name, tipo: tipo, contenido: b64 });
+            }).then(function() {
+                var n = _aplicarCompAPagos(srcTipo, di, pi, grupoId,
+                    { comprobanteId: docId, comprobanteNombre: file.name, comprobanteTipo: tipo });
+                if (!n) { alert('No se encontró el pago al que adjuntarlo.'); return; }
+                alert('✅ Comprobante adjuntado' + (n > 1 ? ' a las ' + n + ' facturas de este pago' : '') + '.');
+                if (typeof renderizar === 'function') renderizar();
+            }).catch(function(e) {
+                alert('❌ No se pudo adjuntar el comprobante: ' + (e && e.message ? e.message : e));
+            });
+        };
+        inp.click();
+    };
+    // Cuelga el adjunto del pago (o de TODOS los pagos del grupo, si el pago fue de varias
+    // facturas juntas: es una sola transferencia, el mismo comprobante vale para todas).
+    function _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj) {
+        var n = 0;
+        var poner = function(p) {
+            if (!p) return;
+            p.comprobanteId = adj.comprobanteId; p.comprobanteNombre = adj.comprobanteNombre; p.comprobanteTipo = adj.comprobanteTipo;
+            n++;
+        };
+        if (grupoId) {
+            facturas.forEach(function(f) {
+                (f.pagosHistorial || []).forEach(function(p) { if ((p.grupoPagoId || '') === grupoId) poner(p); });
+            });
+            if (n) persistirFacturas();
+            return n;
+        }
+        if (srcTipo === 'presup') {
+            var d = datos[di]; poner(d && (d.pagosHistorial || [])[pi]); if (n) persistir();
+        } else if (srcTipo === 'factura') {
+            var f = facturas[di]; poner(f && (f.pagosHistorial || [])[pi]); if (n) persistirFacturas();
+        } else if (srcTipo === 'doc') {
+            var dd = (documentos || []).find(function(x) { return x.id === di; });
+            poner(dd && (dd.pagosHistorial || [])[pi]);
+            if (n) REF_DOCS.child(di).update({ pagosHistorial: dd.pagosHistorial });
+        }
+        return n;
     }
 
     document.getElementById('formPago').addEventListener('submit', async function(e) {
