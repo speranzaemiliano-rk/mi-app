@@ -27964,6 +27964,25 @@
         var ipcSec = document.getElementById('alqIPCSector');
         if (cacSec) cacSec.style.display = (indice === 'CAC') ? 'grid' : 'none';
         if (ipcSec) ipcSec.style.display = (indice === 'IPC') ? '' : 'none';
+        // Se propone el período a partir del contrato: primer mes = inicio del contrato, y la
+        // vigencia un salto de «frecuencia» meses después. Es el caso normal de la primera
+        // actualización; después se corrige a mano si el contrato ya lleva varios ajustes.
+        if (indice === 'IPC') {
+            var mb = document.getElementById('alqIPCMesBase'), ab = document.getElementById('alqIPCAnioBase');
+            var mf = document.getElementById('alqIPCMesFin'),  af = document.getElementById('alqIPCAnioFin');
+            var ini = (document.getElementById('alqInicio') || {}).value || '';
+            if (mb && ab && mf && af && ini && !mb.value && !ab.value) {
+                var _p = ini.split('-');
+                var _m = parseInt(_p[1], 10), _a = parseInt(_p[0], 10);
+                var _f = parseInt((document.getElementById('alqFrecuencia') || {}).value, 10) || 3;
+                if (_m && _a) {
+                    mb.value = _m; ab.value = _a;
+                    var _tot = (_m - 1) + _f;
+                    mf.value = (_tot % 12) + 1; af.value = _a + Math.floor(_tot / 12);
+                }
+            }
+            if (typeof _alqIPCMostrarMeses === 'function') _alqIPCMostrarMeses();
+        }
         // "Sin actualización" (FIJO): no hay período → el campo de frecuencia no muestra nada.
         var esFijo = (indice === 'FIJO');
         var freq = document.getElementById('alqFrecuencia');
@@ -28103,11 +28122,46 @@
     // El redondeo replica el de ikiwi.net.ar/calculadoras/inflacion-ipc: primero se redondea
     // el % de variación a 1 decimal, y recién ahí se aplica al monto (no al revés).
     var _alqIPCNuevoCanon = null;
+    // La actualización toma los meses del período TRANSCURRIDO, incluido el primero: un contrato
+    // que arranca en febrero y ajusta cada 3 meses aplica en mayo el acumulado de feb+mar+abr.
+    // El IPC del INDEC es un ÍNDICE: acumular esos meses es dividir el índice del último mes del
+    // período (abril) por el del mes ANTERIOR al primero (enero). De ahí el corrimiento de -1 mes
+    // en las dos puntas; sin él, febrero quedaba afuera y la actualización salía corta.
+    function _mesMenos1(mes, anio) {
+        return (mes > 1) ? { mes: mes - 1, anio: anio } : { mes: 12, anio: anio - 1 };
+    }
+    var _MESES_NOM = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    // Meses que entran en la cuenta: del primero del período al anterior al de vigencia.
+    function _alqIPCMesesDelPeriodo(mesIni, anioIni, mesVig, anioVig) {
+        var out = [], m = mesIni, a = anioIni, tope = 200;
+        while (tope-- > 0) {
+            if (a > anioVig || (a === anioVig && m >= mesVig)) break;   // el mes de vigencia NO entra
+            out.push({ mes: m, anio: a });
+            if (m === 12) { m = 1; a++; } else { m++; }
+        }
+        return out;
+    }
+    window._alqIPCMostrarMeses = function() {
+        var box = document.getElementById('alqIPCMesesInfo'); if (!box) return;
+        var mi = parseInt((document.getElementById('alqIPCMesBase')||{}).value) || 0;
+        var ai = parseInt((document.getElementById('alqIPCAnioBase')||{}).value) || 0;
+        var mf = parseInt((document.getElementById('alqIPCMesFin')||{}).value) || 0;
+        var af = parseInt((document.getElementById('alqIPCAnioFin')||{}).value) || 0;
+        if (!mi || !ai || !mf || !af) { box.textContent = 'Poné el primer mes del período y desde cuándo rige el nuevo canon.'; return; }
+        var ms = _alqIPCMesesDelPeriodo(mi, ai, mf, af);
+        if (!ms.length) { box.innerHTML = '<span style="color:var(--danger);">El mes de vigencia tiene que ser posterior al primer mes del período.</span>'; return; }
+        box.innerHTML = 'Se toma la inflación de <strong>' + ms.map(function(x){ return _MESES_NOM[x.mes-1] + (x.anio !== ms[0].anio ? ' ' + x.anio : ''); }).join(' + ') +
+            ' ' + ms[ms.length-1].anio + '</strong> (' + ms.length + ' mes' + (ms.length>1?'es':'') + '). El mes desde el que rige no entra en la cuenta.';
+    };
+
     function calcularIPCAlquiler() {
-        var mesIni = parseInt(document.getElementById('alqIPCMesBase').value) || 0;
-        var anioIni = parseInt(document.getElementById('alqIPCAnioBase').value) || 0;
-        var mesFin = parseInt(document.getElementById('alqIPCMesFin').value) || 0;
-        var anioFin = parseInt(document.getElementById('alqIPCAnioFin').value) || 0;
+        var mesPer = parseInt(document.getElementById('alqIPCMesBase').value) || 0;
+        var anioPer = parseInt(document.getElementById('alqIPCAnioBase').value) || 0;
+        var mesVig = parseInt(document.getElementById('alqIPCMesFin').value) || 0;
+        var anioVig = parseInt(document.getElementById('alqIPCAnioFin').value) || 0;
+        // Corrimiento de -1 mes en las dos puntas (ver comentario arriba).
+        var _ini = _mesMenos1(mesPer, anioPer), _fin = _mesMenos1(mesVig, anioVig);
+        var mesIni = _ini.mes, anioIni = _ini.anio, mesFin = _fin.mes, anioFin = _fin.anio;
         var resDiv = document.getElementById('alqIPCResultado');
         var aplicarWrap = document.getElementById('alqIPCAplicarWrap');
         if (!mesIni || !anioIni || !mesFin || !anioFin) { resDiv.textContent = 'Completá mes y año de ambos períodos.'; return; }
@@ -28120,7 +28174,7 @@
                 var pctRedondeado = r.variacionPct.toFixed(1);
                 var pctTexto = pctRedondeado.replace('.', ',') + '%';
                 var canonInicial = parseFloat(document.getElementById('alqCanon').value) || 0;
-                var periodoBase = anioIni + '-' + String(mesIni).padStart(2,'0');
+                var periodoBase = anioPer + '-' + String(mesPer).padStart(2,'0');
                 var canonActualFlat = parseFloat(document.getElementById('alqCanonActual').value) || 0;
                 var canonBase = _canonVigenteEnPeriodo(canonInicial, canonActualFlat, _alqAjustesCanonWorking, periodoBase);
                 var extra = '';
@@ -28128,11 +28182,13 @@
                     var ajuste = ((canonBase * parseFloat(pctRedondeado)) / 100).toFixed(1);
                     _alqIPCNuevoCanon = parseFloat((canonBase + parseFloat(ajuste)).toFixed(2));
                     extra = '<br>Canon actualizado: <strong>$' + _alqIPCNuevoCanon.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</strong>';
-                    document.getElementById('alqIPCVigDesdeMes').value = mesFin;
-                    document.getElementById('alqIPCVigDesdeAnio').value = anioFin;
+                    document.getElementById('alqIPCVigDesdeMes').value = mesVig;
+                    document.getElementById('alqIPCVigDesdeAnio').value = anioVig;
                     aplicarWrap.style.display = '';
                 }
-                resDiv.innerHTML = '✅ Variación IPC: <strong>' + pctTexto + '</strong> (INDEC, Nacional Nivel General — mismo criterio que ikiwi.net.ar)' + extra;
+                var _ms = _alqIPCMesesDelPeriodo(mesPer, anioPer, mesVig, anioVig);
+                resDiv.innerHTML = '✅ Variación IPC: <strong>' + pctTexto + '</strong> ' +
+                    '<span style="color:var(--text-3);">(' + _ms.map(function(x){ return _MESES_NOM[x.mes-1].slice(0,3); }).join('+') + ' ' + (_ms.length ? _ms[_ms.length-1].anio : '') + ' — INDEC Nacional Nivel General)</span>' + extra;
             })
             .catch(function() { resDiv.textContent = '⚠️ No se pudo conectar con el backend para consultar IPC.'; });
     }
@@ -37583,22 +37639,23 @@
         <div id="alqIPCSector" style="display:none;margin-top:10px;">
           <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px;">
             <div class="form-group" style="margin:0;">
-              <label style="font-size:10px;">Mes base</label>
-              <select id="alqIPCMesBase"></select>
+              <label style="font-size:10px;">1er mes del período</label>
+              <select id="alqIPCMesBase" onchange="_alqIPCMostrarMeses()"></select>
             </div>
             <div class="form-group" style="margin:0;">
-              <label style="font-size:10px;">Año base</label>
-              <input type="number" id="alqIPCAnioBase" min="2016" step="1" placeholder="Ej: 2025">
+              <label style="font-size:10px;">Año</label>
+              <input type="number" id="alqIPCAnioBase" min="2016" step="1" placeholder="Ej: 2026" oninput="_alqIPCMostrarMeses()">
             </div>
             <div class="form-group" style="margin:0;">
-              <label style="font-size:10px;">Mes actual</label>
-              <select id="alqIPCMesFin"></select>
+              <label style="font-size:10px;">Rige desde</label>
+              <select id="alqIPCMesFin" onchange="_alqIPCMostrarMeses()"></select>
             </div>
             <div class="form-group" style="margin:0;">
-              <label style="font-size:10px;">Año actual</label>
-              <input type="number" id="alqIPCAnioFin" min="2016" step="1" placeholder="Ej: 2026">
+              <label style="font-size:10px;">Año</label>
+              <input type="number" id="alqIPCAnioFin" min="2016" step="1" placeholder="Ej: 2026" oninput="_alqIPCMostrarMeses()">
             </div>
           </div>
+          <div class="form-hint" id="alqIPCMesesInfo" style="margin-top:6px;"></div>
           <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="calcularIPCAlquiler()">📊 Calcular variación IPC (INDEC)</button>
           <div class="form-hint" id="alqIPCResultado"></div>
           <div id="alqIPCAplicarWrap" style="display:none;margin-top:8px;padding:8px;background:var(--surface);border-radius:6px;">
