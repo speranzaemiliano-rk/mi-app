@@ -4054,6 +4054,7 @@
                         <button class="btn btn-primary btn-sm" id="btnAgregarProv" onclick="agregarProveedor()">＋ Agregar Proveedor</button>
                         <button class="btn btn-gold btn-sm" id="btnCargarCompProv" onclick="abrirCargarComprobante()" title="Cargar una factura oficial (ARCA) o un comprobante no oficial (X)">📥 Cargar comprobante</button>
                         <button class="btn btn-outline btn-sm" onclick="abrirResumenProveedores()">📊 Resumen</button>
+                        <button class="btn btn-outline btn-sm" id="btnUnificarProv" onclick="abrirUnificarProveedores()" title="Juntar dos proveedores duplicados en uno solo, moviendo sus facturas, pagos y presupuestos">🔗 Unificar duplicados</button>
                     </div>
                     <div class="search-row">
                         <input type="text" class="search-input" id="buscadorProv" oninput="renderProveedores()" placeholder="Buscar por nombre, CUIT, rubro o grupo…">
@@ -6575,6 +6576,35 @@
 </div>
 
 <!-- ── MODAL: AGREGAR/EDITAR PROVEEDOR ── -->
+<div class="modal" id="modalUnificarProv">
+  <div class="modal-box" style="max-width:640px;">
+    <div class="modal-head">
+      <h2>🔗 Unificar proveedores duplicados</h2>
+      <button class="modal-close" onclick="cerrarUnificarProveedores()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-hint" style="margin-bottom:14px;">
+        Junta dos fichas del mismo proveedor en una sola. Todo lo que esté a nombre del duplicado
+        —facturas, comprobantes, pagos, presupuestos, créditos y vencimientos— pasa al correcto,
+        y la ficha duplicada se elimina. <strong>No se borra ningún movimiento.</strong>
+      </div>
+      <div class="form-group">
+        <label>Proveedor duplicado (se elimina) *</label>
+        <select id="unifProvOrigen" onchange="unifProvPrevisualizar()" style="width:100%;"></select>
+      </div>
+      <div class="form-group">
+        <label>Proveedor correcto (queda) *</label>
+        <select id="unifProvDestino" onchange="unifProvPrevisualizar()" style="width:100%;"></select>
+      </div>
+      <div id="unifProvPreview" style="margin-top:6px; padding:12px 14px; border-radius:10px; border:1px solid var(--border); background:var(--surface-2); font-size:13px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-outline" onclick="cerrarUnificarProveedores()">Cancelar</button>
+      <button type="button" class="btn btn-gold" id="btnConfirmarUnifProv" onclick="confirmarUnificarProveedores()">🔗 Unificar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="modalProv">
     <div class="modal-box">
         <div class="modal-head">
@@ -8601,6 +8631,135 @@
         return { comprobanteId: id, comprobanteNombre: file.name, comprobanteTipo: file.type };
     }
     // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
+    // ═══════════ Unificar proveedores duplicados ═══════════
+    // Los movimientos referencian al proveedor por NOMBRE (no por id), así que unificar es
+    // reapuntar ese nombre en todas las colecciones y borrar la ficha sobrante. No se borra
+    // ningún movimiento: sólo cambian de titular.
+    function _unifNorm(x) { return (x || '').toString().trim().toLowerCase().replace(/\s+/g, ' '); }
+
+    // Cuenta (o reapunta, si aplicar=true) todo lo que está a nombre de `de` para pasarlo a `a`.
+    function _unifRecorrer(de, a, aplicar) {
+        var k = _unifNorm(de), r = { presupuestos: 0, facturas: 0, documentos: 0, creditos: 0, emitidos: 0, vencimientos: 0, pagos: 0 };
+        var docsTocados = {};
+        var cuentaPagos = function(obj) { return ((obj && obj.pagosHistorial) || []).length; };
+
+        (typeof datos !== 'undefined' ? datos : []).forEach(function(d) {
+            if (!d || _unifNorm(d.proveedor) !== k) return;
+            r.presupuestos++; r.pagos += cuentaPagos(d);
+            if (aplicar) d.proveedor = a;
+        });
+        (typeof facturas !== 'undefined' ? facturas : []).forEach(function(f) {
+            if (!f || _unifNorm(f.proveedor) !== k) return;
+            r.facturas++; r.pagos += cuentaPagos(f);
+            if (aplicar) f.proveedor = a;
+        });
+        (typeof documentos !== 'undefined' ? documentos : []).forEach(function(d) {
+            if (!d || _unifNorm(d.proveedor) !== k) return;
+            r.documentos++; r.pagos += cuentaPagos(d);
+            if (aplicar) { d.proveedor = a; docsTocados[d.id] = d; }
+        });
+        (typeof creditosProveedor !== 'undefined' ? creditosProveedor : []).forEach(function(c) {
+            if (!c || _unifNorm(c.proveedor) !== k) return;
+            r.creditos++;
+            if (aplicar) c.proveedor = a;
+        });
+        (typeof comprobantesEmitidos !== 'undefined' ? comprobantesEmitidos : []).forEach(function(e) {
+            if (!e || _unifNorm(e.proveedorNombre) !== k) return;
+            r.emitidos++;
+            if (aplicar) e.proveedorNombre = a;
+        });
+        var vencsTocados = [];
+        var vencs = (typeof vencimientos !== 'undefined' && vencimientos) ? vencimientos : [];
+        vencs.forEach(function(v) {
+            if (!v || _unifNorm(v.proveedor) !== k) return;
+            r.vencimientos++;
+            if (aplicar) { v.proveedor = a; vencsTocados.push(v); }
+        });
+        r._docsTocados = docsTocados;
+        r._vencsTocados = vencsTocados;
+        return r;
+    }
+
+    window.abrirUnificarProveedores = function() {
+        if (!puedeEditar) { alert('No tenés permisos para unificar proveedores.'); return; }
+        var lista = (proveedores || []).slice().sort(function(x, y){ return (x.nombre||'').localeCompare(y.nombre||''); });
+        if (lista.length < 2) { alert('Hacen falta al menos dos proveedores cargados.'); return; }
+        var opts = '<option value="">— Elegí —</option>' + lista.map(function(pv) {
+            return '<option value="' + escHtml(pv.nombre || '') + '">' + escHtml(pv.nombre || '(sin nombre)') + (pv.cuit ? ' · ' + escHtml(pv.cuit) : '') + '</option>';
+        }).join('');
+        document.getElementById('unifProvOrigen').innerHTML = opts;
+        document.getElementById('unifProvDestino').innerHTML = opts;
+        document.getElementById('unifProvPreview').innerHTML = '<span style="color:var(--text-3);">Elegí los dos proveedores para ver qué se va a mover.</span>';
+        document.getElementById('modalUnificarProv').classList.add('active');
+    };
+    window.cerrarUnificarProveedores = function() { document.getElementById('modalUnificarProv').classList.remove('active'); };
+
+    window.unifProvPrevisualizar = function() {
+        var de = document.getElementById('unifProvOrigen').value;
+        var a  = document.getElementById('unifProvDestino').value;
+        var box = document.getElementById('unifProvPreview');
+        if (!de || !a) { box.innerHTML = '<span style="color:var(--text-3);">Elegí los dos proveedores para ver qué se va a mover.</span>'; return; }
+        if (_unifNorm(de) === _unifNorm(a)) { box.innerHTML = '<span style="color:var(--danger);">Son el mismo proveedor: elegí dos distintos.</span>'; return; }
+        var c = _unifRecorrer(de, a, false);
+        var filas = [
+            ['Presupuestos', c.presupuestos], ['Facturas', c.facturas], ['Comprobantes recibidos', c.documentos],
+            ['Comprobantes emitidos', c.emitidos], ['Créditos a favor', c.creditos], ['Vencimientos', c.vencimientos]
+        ].filter(function(f){ return f[1] > 0; });
+        // Dos fichas del mismo CUIT es la señal más fuerte de que están duplicadas.
+        var pDe = (proveedores||[]).find(function(x){ return _unifNorm(x.nombre) === _unifNorm(de); }) || {};
+        var pA  = (proveedores||[]).find(function(x){ return _unifNorm(x.nombre) === _unifNorm(a);  }) || {};
+        var mismoCuit = pDe.cuit && pA.cuit && pDe.cuit.replace(/\D/g,'') === pA.cuit.replace(/\D/g,'');
+        box.innerHTML =
+            (mismoCuit ? '<div style="color:var(--success);margin-bottom:8px;">✅ Los dos tienen el mismo CUIT (' + escHtml(pDe.cuit) + '): son el mismo proveedor.</div>'
+                       : (pDe.cuit && pA.cuit ? '<div style="color:var(--warn);margin-bottom:8px;">⚠️ Tienen CUIT distinto (' + escHtml(pDe.cuit) + ' vs ' + escHtml(pA.cuit) + '). Revisá que sean realmente el mismo.</div>' : '')) +
+            '<div><strong>' + escHtml(de) + '</strong> → <strong>' + escHtml(a) + '</strong></div>' +
+            (filas.length
+                ? '<ul style="margin:8px 0 0 18px; padding:0;">' + filas.map(function(f){ return '<li>' + f[0] + ': <strong>' + f[1] + '</strong></li>'; }).join('') + '</ul>' +
+                  (c.pagos ? '<div style="margin-top:6px;color:var(--text-3);font-size:12px;">Incluye ' + c.pagos + ' pago(s) ya registrado(s), que se mantienen tal cual.</div>' : '')
+                : '<div style="margin-top:8px;color:var(--text-3);">No hay movimientos a nombre del duplicado: sólo se elimina su ficha.</div>');
+    };
+
+    window.confirmarUnificarProveedores = function() {
+        if (!puedeEditar) return;
+        var de = document.getElementById('unifProvOrigen').value;
+        var a  = document.getElementById('unifProvDestino').value;
+        if (!de || !a) { alert('Elegí los dos proveedores.'); return; }
+        if (_unifNorm(de) === _unifNorm(a)) { alert('Son el mismo proveedor.'); return; }
+        var prev = _unifRecorrer(de, a, false);
+        var totalMov = prev.presupuestos + prev.facturas + prev.documentos + prev.emitidos + prev.creditos + prev.vencimientos;
+        if (!confirm('Se van a pasar ' + totalMov + ' registro(s) de «' + de + '» a «' + a + '», y se va a eliminar la ficha de «' + de + '».\n\n' +
+                     'Los movimientos NO se borran: cambian de titular.\n\nEsta acción no se puede deshacer sola. ¿Confirmás?')) return;
+
+        var btn = document.getElementById('btnConfirmarUnifProv');
+        if (btn) { btn.disabled = true; btn.textContent = 'Unificando…'; }
+        try {
+            var res = _unifRecorrer(de, a, true);
+            if (res.presupuestos) persistir();
+            if (res.facturas)     persistirFacturas();
+            if (res.creditos && typeof persistirCreditos === 'function') persistirCreditos();
+            if (res.emitidos && typeof persistirEmitidos === 'function') persistirEmitidos();
+            Object.keys(res._docsTocados || {}).forEach(function(id) {
+                REF_DOCS.child(id).update({ proveedor: a });
+            });
+            // Los vencimientos son globales y se guardan de a un nodo (no hay persistir* de lista).
+            (res._vencsTocados || []).forEach(function(v) {
+                if (REF_VENCIMIENTOS && v && v.id) REF_VENCIMIENTOS.child(v.id).update({ proveedor: a });
+            });
+            // Por último se saca la ficha duplicada del maestro.
+            proveedores = (proveedores || []).filter(function(pv){ return _unifNorm(pv.nombre) !== _unifNorm(de); });
+            persistirProveedores();
+            cerrarUnificarProveedores();
+            if (typeof renderProveedores === 'function') renderProveedores();
+            if (typeof renderizar === 'function') renderizar();
+            alert('✅ Proveedores unificados. Todo quedó a nombre de «' + a + '».');
+        } catch (e) {
+            console.error(e);
+            alert('❌ No se pudo completar la unificación: ' + (e && e.message ? e.message : e));
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '🔗 Unificar'; }
+        }
+    };
+
     function _btnVerComprobantePago(p) {
         if (!p) return '';
         var out = '';
@@ -14128,7 +14287,7 @@
     // ===================== PERMISOS =====================
     function aplicarPermisos() {
         const show = puedeEditar ? '' : 'none';
-        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar'].forEach(id => {
+        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv'].forEach(id => {
             const el = document.getElementById(id); if (el) el.style.display = show;
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
