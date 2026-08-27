@@ -14446,15 +14446,23 @@
         var ths = tabla ? Array.prototype.map.call(tabla.querySelectorAll('thead th'), function(th) {
             return (th.textContent || '').replace(/[⇅↑↓]/g, '').trim();
         }) : [];
-        var filas = '', titulo = '', sub = '';
-        Array.prototype.forEach.call(tr.cells, function(td, i) {
-            var etiqueta = ths[i] || '';
-            var valor = (td.textContent || '').trim();
-            if (!valor || valor === '—') return;
-            if (td.querySelector('button')) return;              // la columna de acciones va aparte
-            if (!titulo) { titulo = valor; sub = etiqueta; return; }
-            filas += '<div class="c-kv"><span>' + escHtml(etiqueta) + '</span><span>' + escHtml(valor) + '</span></div>';
-        });
+        // Como título se busca la celda que IDENTIFICA la fila (un nombre, una descripción), no
+        // la primera: si no, en Caja el encabezado del panel terminaba siendo la fecha.
+        var celdas = Array.prototype.map.call(tr.cells, function(td, i) {
+            return { etiqueta: ths[i] || '', valor: (td.textContent || '').trim(), accion: !!td.querySelector('button') };
+        }).filter(function(c) { return c.valor && c.valor !== '—' && !c.accion; });
+        var iTit = -1;
+        for (var k = 0; k < celdas.length; k++) {
+            var v = celdas[k].valor;
+            // Con al menos tres letras seguidas y sin pinta de importe: eso es un nombre o un concepto.
+            if (/[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(v) && !/^[$\s]*[\d.,]+$/.test(v)) { iTit = k; break; }
+        }
+        if (iTit < 0 && celdas.length) iTit = 0;
+        var titulo = iTit >= 0 ? celdas[iTit].valor : '—';
+        var sub = iTit >= 0 ? celdas[iTit].etiqueta : '';
+        var filas = celdas.filter(function(c, k) { return k !== iTit; }).map(function(c) {
+            return '<div class="c-kv"><span>' + escHtml(c.etiqueta) + '</span><span>' + escHtml(c.valor) + '</span></div>';
+        }).join('');
         aside.innerHTML =
             '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);">'
             + escHtml((sub || 'SELECCIONADO').toUpperCase()) + '</div>'
@@ -14478,6 +14486,9 @@
         var aside = _densaMontar(cfg); if (!aside) return;
         var filas = _densaFilas(cfg);
         if (cfg.sel >= filas.length) cfg.sel = filas.length - 1;
+        // Sin nada elegido el panel mostraría sólo un cartel: se pre-selecciona la primera fila
+        // para que al entrar a la pantalla ya se vea información útil.
+        if (cfg.sel < 0 && filas.length) cfg.sel = 0;
         filas.forEach(function(tr, i) { tr.classList.toggle('c-sel', i === cfg.sel); });
         var tr = filas[cfg.sel];
         if (!tr) {
@@ -14496,12 +14507,18 @@
         if (!tb) return;
         // Delegación: la tabla se repinta entera muchas veces, así que el clic se escucha en el
         // tbody y no en cada fila. Un clic sobre un botón NO selecciona: hace lo suyo.
+        // Va en fase de CAPTURA y corta la propagación porque varias pantallas ya tenían un clic
+        // propio en la fila que abre el movimiento para editarlo: sin esto, tocar una fila abría
+        // ese diálogo y el panel no se enteraba. Con el detalle al costado, abrir para mirar ya no
+        // hace falta — y de paso se evita modificar un movimiento sin querer. Los botones de la
+        // fila (ver, imprimir, editar, eliminar) siguen funcionando igual.
         tb.addEventListener('click', function(ev) {
-            if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return;
+            if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea,label')) return;
             var tr = ev.target && ev.target.closest ? ev.target.closest('tr') : null; if (!tr) return;
             var i = _densaFilas(cfg).indexOf(tr); if (i < 0) return;
+            ev.stopPropagation();
             cfg.sel = i; _densaPintar(cfg);
-        });
+        }, true);
         // El repintado de la tabla no avisa: se observa para refrescar el panel cuando cambia.
         try {
             new MutationObserver(function() { _densaPintar(cfg); }).observe(tb, { childList: true });
