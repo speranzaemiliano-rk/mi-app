@@ -40,8 +40,11 @@
 // ════════════════════════════════════════════════════════════════════════
 window.OBRA_CONFIG = {
   firebase: {
+    // Proyecto "control-caja", separado del sistema de gestión.
+    // apiKey sólo hace falta si algún día se agrega login: la Realtime
+    // Database se maneja con la databaseURL y las reglas.
     apiKey:      "",
-    databaseURL: "",
-    projectId:   ""
+    databaseURL: "https://control-caja-965ad-default-rtdb.firebaseio.com",
+    projectId:   "control-caja-965ad"
   }
 };
