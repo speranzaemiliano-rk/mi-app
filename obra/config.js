@@ -58,9 +58,10 @@ window.OBRA_CONFIG = {
   firebase: {
     // Proyecto "control-caja", separado del sistema de gestión.
     // La apiKey hace falta para el login (Authentication).
-    apiKey:      "",
+    apiKey:      "AIzaSyA8GzV2O8GTwCatLmSdfII8vL1-QN2EiH0",
     databaseURL: "https://control-caja-965ad-default-rtdb.firebaseio.com",
-    projectId:   "control-caja-965ad"
+    projectId:   "control-caja-965ad",
+    authDomain:  "control-caja-965ad.firebaseapp.com"
   },
   // Nodo donde se guarda esta obra. Si algún día hay más de una obra en el
   // mismo proyecto, cada una lleva el suyo ("obra1", "obra2"…).
