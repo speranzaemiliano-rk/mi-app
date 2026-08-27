@@ -14397,6 +14397,182 @@
         _provPendPintarPanel();
     }
 
+    // ══════════ PANTALLAS DENSAS · motor genérico ══════════
+    // La estructura «planilla» (grilla compacta + panel de detalle + teclado) se define UNA vez
+    // acá y cada pantalla se suma con una línea. El armado del panel y el envoltorio del layout
+    // se hacen sobre el DOM que la pantalla ya pinta, así ninguna función de render se toca.
+    var _DENSAS = {};
+
+    // Envuelve la tarjeta de una tabla en el layout partido y le agrega el panel y los atajos.
+    // Es idempotente: si ya está montada, devuelve el panel existente.
+    function _densaMontar(cfg) {
+        var tb = document.getElementById(cfg.tbody); if (!tb) return null;
+        var card = tb.closest ? tb.closest('.table-card') : null; if (!card) return null;
+        if (card.parentElement && card.parentElement.classList.contains('c-split')) {
+            return card.parentElement.querySelector('.c-panel');
+        }
+        card.classList.add('c-dense');
+        var split = document.createElement('div');
+        split.className = 'c-split';
+        card.parentNode.insertBefore(split, card);
+        split.appendChild(card);
+        var aside = document.createElement('aside');
+        aside.className = 'c-panel';
+        split.appendChild(aside);
+        var pie = document.createElement('div');
+        pie.className = 'c-atajos';
+        pie.innerHTML = '<span><b>↑</b><b>↓</b> moverse</span>'
+                      + (cfg.enterTxt ? '<span><b>Enter</b> ' + cfg.enterTxt + '</span>' : '')
+                      + (cfg.buscador ? '<span><b>/</b> buscar</span>' : '')
+                      + (cfg.nuevoTxt ? '<span><b>N</b> ' + cfg.nuevoTxt + '</span>' : '')
+                      + '<span><b>Esc</b> soltar</span>';
+        card.appendChild(pie);
+        return aside;
+    }
+
+    // Filas seleccionables: se saltean los totales y el mensaje de lista vacía.
+    function _densaFilas(cfg) {
+        var tb = document.getElementById(cfg.tbody); if (!tb) return [];
+        return Array.prototype.filter.call(tb.rows, function(tr) {
+            return !tr.classList.contains('c-total') && !tr.querySelector('.empty-msg');
+        });
+    }
+
+    // Panel armado con lo que la propia tabla ya muestra: encabezado de columna + valor de celda.
+    // Sirve para cualquier pantalla sin escribir nada a medida; una pantalla puede reemplazarlo
+    // con cfg.panel si tiene algo mejor para contar (ej. el total del mismo proveedor).
+    function _densaPanelGenerico(cfg, tr, aside) {
+        var tabla = tr.closest('table');
+        var ths = tabla ? Array.prototype.map.call(tabla.querySelectorAll('thead th'), function(th) {
+            return (th.textContent || '').replace(/[⇅↑↓]/g, '').trim();
+        }) : [];
+        var filas = '', titulo = '', sub = '';
+        Array.prototype.forEach.call(tr.cells, function(td, i) {
+            var etiqueta = ths[i] || '';
+            var valor = (td.textContent || '').trim();
+            if (!valor || valor === '—') return;
+            if (td.querySelector('button')) return;              // la columna de acciones va aparte
+            if (!titulo) { titulo = valor; sub = etiqueta; return; }
+            filas += '<div class="c-kv"><span>' + escHtml(etiqueta) + '</span><span>' + escHtml(valor) + '</span></div>';
+        });
+        aside.innerHTML =
+            '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);">'
+            + escHtml((sub || 'SELECCIONADO').toUpperCase()) + '</div>'
+            + '<div style="font-size:16px;font-weight:700;margin-top:5px;line-height:1.25;">' + escHtml(titulo || '—') + '</div>'
+            + '<div style="margin-top:12px;">' + filas + '</div>';
+        // Los botones de la fila se copian al panel para tenerlos a mano sin buscarlos en la grilla.
+        var acc = tr.querySelector('.action-btns');
+        if (acc) {
+            var cont = document.createElement('div');
+            cont.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);';
+            Array.prototype.forEach.call(acc.querySelectorAll('button'), function(b) {
+                var c = b.cloneNode(true);
+                c.addEventListener('click', function(ev) { ev.stopPropagation(); b.click(); });
+                cont.appendChild(c);
+            });
+            aside.appendChild(cont);
+        }
+    }
+
+    function _densaPintar(cfg) {
+        var aside = _densaMontar(cfg); if (!aside) return;
+        var filas = _densaFilas(cfg);
+        if (cfg.sel >= filas.length) cfg.sel = filas.length - 1;
+        filas.forEach(function(tr, i) { tr.classList.toggle('c-sel', i === cfg.sel); });
+        var tr = filas[cfg.sel];
+        if (!tr) {
+            aside.innerHTML = '<div class="c-panel-vacio">Elegí una fila para ver su detalle acá, sin abrir ninguna ventana.'
+                            + '<br><br>También podés moverte con <b>↑</b> <b>↓</b>.</div>';
+            return;
+        }
+        if (cfg.panel) cfg.panel(tr, cfg.sel, aside);
+        else _densaPanelGenerico(cfg, tr, aside);
+    }
+
+    function registrarDensa(cfg) {
+        cfg.sel = -1;
+        _DENSAS[cfg.tab] = cfg;
+        var tb = document.getElementById(cfg.tbody);
+        if (!tb) return;
+        // Delegación: la tabla se repinta entera muchas veces, así que el clic se escucha en el
+        // tbody y no en cada fila. Un clic sobre un botón NO selecciona: hace lo suyo.
+        tb.addEventListener('click', function(ev) {
+            if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return;
+            var tr = ev.target && ev.target.closest ? ev.target.closest('tr') : null; if (!tr) return;
+            var i = _densaFilas(cfg).indexOf(tr); if (i < 0) return;
+            cfg.sel = i; _densaPintar(cfg);
+        });
+        // El repintado de la tabla no avisa: se observa para refrescar el panel cuando cambia.
+        try {
+            new MutationObserver(function() { _densaPintar(cfg); }).observe(tb, { childList: true });
+        } catch (e) {}
+        // Se monta ya: si se esperara al primer clic o repintado, la pantalla aparecería
+        // sin panel y sin la grilla compacta hasta que el usuario tocara algo.
+        _densaPintar(cfg);
+    }
+
+    // Un solo teclado para todas: actúa sobre la pantalla registrada que esté a la vista.
+    document.addEventListener('keydown', function(e) {
+        var cfg = null;
+        for (var k in _DENSAS) {
+            var panel = document.getElementById(k);
+            if (panel && panel.offsetParent !== null) { cfg = _DENSAS[k]; break; }
+        }
+        if (!cfg) return;
+        if (document.querySelector('.modal.active')) return;
+        var t = e.target, esCampo = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+        if (e.key === '/' && !esCampo && cfg.buscador) {
+            e.preventDefault();
+            var b = document.getElementById(cfg.buscador); if (b) { b.focus(); b.select(); }
+            return;
+        }
+        if (e.key === 'Escape' && esCampo) { t.blur(); return; }
+        if (esCampo) return;
+        var filas = _densaFilas(cfg);
+        if (!filas.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var n = cfg.sel + (e.key === 'ArrowDown' ? 1 : -1);
+            if (n < 0) n = 0;
+            if (n > filas.length - 1) n = filas.length - 1;
+            cfg.sel = n; _densaPintar(cfg);
+            if (filas[n] && filas[n].scrollIntoView) filas[n].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && filas[cfg.sel]) {
+            e.preventDefault();
+            // Por defecto, el primer botón de la fila: es la acción principal en todas las pantallas.
+            var btn = filas[cfg.sel].querySelector('.action-btns button') || filas[cfg.sel].querySelector('button');
+            if (cfg.enter) cfg.enter(filas[cfg.sel], cfg.sel);
+            else if (btn) btn.click();
+        } else if ((e.key === 'n' || e.key === 'N') && cfg.nuevo && puedeEditar) {
+            e.preventDefault();
+            cfg.nuevo();
+        }
+    });
+
+    // Alta de las pantallas de lista. Comprobantes pendientes y Pagos NO se registran acá:
+    // tienen su propio panel, con datos que la tabla no muestra (el total del mismo proveedor,
+    // el adjunto del pago), y su propio teclado. El resto usa el panel genérico.
+    document.addEventListener('DOMContentLoaded', function() {
+        [
+            { tab: 'panelCajaGeneral',        tbody: 'cgBody' },
+            { tab: 'panelEfectivoPesos',      tbody: 'efpBody' },
+            { tab: 'panelEfectivoUSD',        tbody: 'efuBody' },
+            { tab: 'panelCuentasBancarias',   tbody: 'cbBody' },
+            { tab: 'panelVentas',             tbody: 'ventasBody' },
+            { tab: 'panelAlquileres',         tbody: 'alquileresBody' },
+            { tab: 'panelServicios',          tbody: 'serviciosBody' },
+            { tab: 'panelIngGeneral',         tbody: 'ingGeneralBody' },
+            { tab: 'panelDocumentosEmitidos', tbody: 'emitidosBody' },
+            { tab: 'panelFacturas',           tbody: 'facturasBody' },
+            { tab: 'panelDocumentos',         tbody: 'documentosBody' },
+            { tab: 'panelEgresos',            tbody: 'egresosBody' },
+            { tab: 'panelVencimientos',       tbody: 'vencimientosBody' },
+            { tab: 'panelPresupuestos',       tbody: 'tableBody' }
+        ].forEach(function(cfg) {
+            if (document.getElementById(cfg.tbody)) registrarDensa(cfg);
+        });
+    });
+
     // ── Panel de detalle y teclado de la pantalla de comprobantes ──
     var _provPendRows = [];
     var _provPendSel = -1;
