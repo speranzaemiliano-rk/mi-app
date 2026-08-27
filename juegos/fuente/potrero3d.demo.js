@@ -20,7 +20,7 @@ let cancha = {};
 const teclas = {};
 let camaraModo = 0;           // 0 = transmisión (de costado), 1 = detrás del jugador
 let fps = 0, fpsAcum = 0, fpsCuadros = 0;
-let goles = 0, pausaGol = 0;
+let goles = 0, pausaGol = 0, atajadas = 0;
 
 /* Modelo externo (Mixamo): se carga arrastrando un .glb sobre la página.
    No hace falta red: el archivo se lee con FileReader y se parsea en memoria. */
@@ -30,6 +30,128 @@ const roles = { correr: null, parado: null, patear: null };
 const acciones = { correr: null, parado: null, patear: null };
 let accionCorriendo = null, patadaModelo = -1;
 const usandoModelo = () => !!modelo;
+
+/* ============================================================
+   SONIDO — todo sintetizado con Web Audio, sin archivos
+   Murmullo de hinchada permanente que sube cuando la jugada se acerca
+   al arco, más golpes, atajadas, gol y silbato.
+   ============================================================ */
+const AUDIO3D = (function(){
+  let ac = null, listo = false, mudo = false;
+  let master, hinchGain, hinchFiltro, vientoGain;
+
+  function ruido(seg){
+    const n = Math.floor(ac.sampleRate*seg);
+    const b = ac.createBuffer(1, n, ac.sampleRate);
+    const d = b.getChannelData(0);
+    for(let i = 0; i < n; i++) d[i] = Math.random()*2 - 1;
+    return b;
+  }
+
+  function init(){
+    if(listo) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    try {
+      ac = new AC();
+      master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
+
+      // hinchada: ruido filtrado en banda de voces
+      const src = ac.createBufferSource();
+      src.buffer = ruido(4); src.loop = true;
+      hinchFiltro = ac.createBiquadFilter();
+      hinchFiltro.type = 'bandpass'; hinchFiltro.frequency.value = 430; hinchFiltro.Q.value = 0.65;
+      hinchGain = ac.createGain(); hinchGain.gain.value = 0.055;
+      src.connect(hinchFiltro); hinchFiltro.connect(hinchGain); hinchGain.connect(master);
+      src.start();
+
+      // aire del estadio, muy por debajo
+      const v = ac.createBufferSource();
+      v.buffer = ruido(4); v.loop = true;
+      const vf = ac.createBiquadFilter();
+      vf.type = 'lowpass'; vf.frequency.value = 240;
+      vientoGain = ac.createGain(); vientoGain.gain.value = 0.022;
+      v.connect(vf); vf.connect(vientoGain); vientoGain.connect(master);
+      v.start();
+
+      listo = true;
+    } catch(e){ listo = false; }
+  }
+  function activar(){ if(!listo) init(); if(ac && ac.state === 'suspended') ac.resume(); }
+
+  function tono(f, dur, tipo, vol, hasta){
+    if(!listo || mudo) return;
+    const t = ac.currentTime;
+    const o = ac.createOscillator(); o.type = tipo || 'square';
+    o.frequency.setValueAtTime(f, t);
+    if(hasta) o.frequency.exponentialRampToValueAtTime(hasta, t + dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.12, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
+  }
+
+  function patada(fuerza){
+    if(!listo || mudo) return;
+    const t = ac.currentTime, f = Math.max(0, Math.min(1, fuerza));
+    const n = ac.createBufferSource(); n.buffer = ruido(0.2);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 850 + f*800; bp.Q.value = 1.1;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.10 + f*0.24, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + f*0.06);
+    n.connect(bp); bp.connect(g); g.connect(master);
+    n.start(t); n.stop(t + 0.2);
+    const o = ac.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(185 - f*70, t);
+    o.frequency.exponentialRampToValueAtTime(48, t + 0.10);
+    const og = ac.createGain();
+    og.gain.setValueAtTime(0.11 + f*0.20, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.15);
+  }
+
+  function pique(fuerza){
+    if(!listo || mudo) return;
+    tono(210, 0.055, 'triangle', 0.03 + Math.min(0.05, fuerza*0.02), 140);
+  }
+
+  // sube el murmullo un rato, como cuando pasa algo
+  function ola(pico, subida, bajada){
+    if(!listo || mudo) return;
+    const t = ac.currentTime;
+    hinchGain.gain.cancelScheduledValues(t);
+    hinchGain.gain.setValueAtTime(hinchGain.gain.value, t);
+    hinchGain.gain.linearRampToValueAtTime(pico, t + subida);
+    hinchGain.gain.linearRampToValueAtTime(0.055, t + subida + bajada);
+    hinchFiltro.frequency.cancelScheduledValues(t);
+    hinchFiltro.frequency.setValueAtTime(hinchFiltro.frequency.value, t);
+    hinchFiltro.frequency.linearRampToValueAtTime(1150, t + subida);
+    hinchFiltro.frequency.linearRampToValueAtTime(430, t + subida + bajada);
+  }
+
+  const gol = () => {
+    ola(0.36, 0.22, 3.6);
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tono(f, 0.30, 'square', 0.12), i*105));
+  };
+  const atajada = () => { ola(0.24, 0.14, 1.5); tono(320, 0.10, 'sawtooth', 0.09, 190); };
+  const silbato = () => { tono(2050, 0.14, 'square', 0.12, 2380); };
+
+  // el ambiente late según qué tan cerca del arco está la jugada
+  function ambiente(cerca){
+    if(!listo || mudo) return;
+    hinchGain.gain.setTargetAtTime(0.048 + cerca*0.075, ac.currentTime, 0.7);
+    hinchFiltro.frequency.setTargetAtTime(420 + cerca*320, ac.currentTime, 0.7);
+  }
+
+  function setMudo(m){
+    mudo = m;
+    if(listo) master.gain.setTargetAtTime(m ? 0 : 0.5, ac.currentTime, 0.05);
+  }
+  return { activar, patada, pique, gol, atajada, silbato, ambiente, setMudo,
+           estaMudo: () => mudo, andando: () => listo };
+})();
 
 /* ============================================================
    TEXTURAS DIBUJADAS EN CANVAS
@@ -43,6 +165,7 @@ function azar(semilla){
   let z = semilla;
   return () => (z = (z*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 }
+const lim = (v, a, b) => v < a ? a : (v > b ? b : v);
 
 function texturaCancha(){
   const W = 2048, H = Math.round(W * CANCHA_ANCHO / CANCHA_LARGO);
@@ -136,32 +259,118 @@ function texturaCancha(){
 }
 
 function texturaHinchada(){
-  const { c, g } = lienzo(1024, 256);
+  const W = 1024, H = 512;
+  const { c, g } = lienzo(W, H);
   const rnd = azar(99001);
-  const gg = g.createLinearGradient(0, 0, 0, 256);
-  gg.addColorStop(0, '#0c1017'); gg.addColorStop(1, '#1c232e');
-  g.fillStyle = gg; g.fillRect(0, 0, 1024, 256);
-  for(let f = 0; f < 20; f++){
-    const t = f/20, y = 24 + t*220;
-    for(let x = -6; x < 1030; x += 8 + t*3){
-      if(rnd() < 0.10) continue;
-      const r2 = rnd();
-      g.fillStyle = r2 < 0.14
-        ? (Math.floor(x/170) % 2 ? '#2c5f92' : '#8e3129')
-        : ['#3b424d','#474f5c','#2f3640','#535c6a'][(f*3 + Math.floor(x/8)) % 4];
-      g.globalAlpha = 0.35 + t*0.5;
-      g.beginPath(); g.arc(x + rnd()*3, y, 2 + t*1.6, 0, Math.PI*2); g.fill();
-      if(rnd() < 0.5){
-        g.fillStyle = ['#c9a184','#8a6247','#e0bd9c','#6d4a34'][Math.floor(rnd()*4)];
-        g.beginPath(); g.arc(x + rnd()*3, y - 2 - t, 1.2 + t, 0, Math.PI*2); g.fill();
-      }
+  const gg = g.createLinearGradient(0, 0, 0, H);
+  gg.addColorStop(0, '#080b11'); gg.addColorStop(0.5, '#131922'); gg.addColorStop(1, '#1e2632');
+  g.fillStyle = gg; g.fillRect(0, 0, W, H);
+
+  // escalones del graderío
+  g.fillStyle = 'rgba(0,0,0,0.30)';
+  const FILAS = 22;
+  for(let f = 0; f < FILAS; f++) g.fillRect(0, 20 + f*(H-40)/FILAS, W, 2);
+
+  const ROPA = ['#2c5f92','#8e3129','#3b424d','#474f5c','#2f3640','#535c6a',
+                '#1f4468','#6b2f28','#404855','#5a6270','#2a3441','#7a4a3a'];
+  const PIEL = ['#c9a184','#8a6247','#e0bd9c','#6d4a34','#a87b58'];
+
+  // se dibuja de atrás hacia adelante para que las filas de adelante tapen
+  for(let f = 0; f < FILAS; f++){
+    const t = f/(FILAS - 1);                 // 0 = fila de arriba (lejos)
+    const y = 24 + t*(H - 58);
+    const esc = 0.62 + t*0.62;               // más grandes las de adelante
+    const paso = 15*esc;
+    const luz = 0.42 + t*0.58;
+    for(let x = -paso; x < W + paso; x += paso){
+      if(rnd() < 0.09) continue;             // huecos: no está lleno
+      const px = x + (rnd() - 0.5)*paso*0.35;
+      const hombro = 6.2*esc, cabeza = 3.6*esc;
+      // cuerpo
+      g.globalAlpha = luz;
+      g.fillStyle = ROPA[Math.floor(rnd()*ROPA.length)];
+      g.beginPath();
+      g.moveTo(px - hombro, y + hombro*1.5);
+      g.quadraticCurveTo(px - hombro, y - hombro*0.2, px, y - hombro*0.25);
+      g.quadraticCurveTo(px + hombro, y - hombro*0.2, px + hombro, y + hombro*1.5);
+      g.closePath(); g.fill();
+      // cabeza
+      g.fillStyle = PIEL[Math.floor(rnd()*PIEL.length)];
+      g.beginPath(); g.arc(px, y - hombro*0.55, cabeza, 0, Math.PI*2); g.fill();
+      // pelo
+      g.globalAlpha = luz*0.85;
+      g.fillStyle = ['#231a12','#0f0d0b','#4a3218','#5c4632'][Math.floor(rnd()*4)];
+      g.beginPath(); g.arc(px, y - hombro*0.68, cabeza*0.95, Math.PI, 0); g.fill();
     }
   }
   g.globalAlpha = 1;
+  // sombra general hacia arriba, la parte alta está más oscura
+  const sg = g.createLinearGradient(0, 0, 0, H);
+  sg.addColorStop(0, 'rgba(0,0,0,0.55)'); sg.addColorStop(0.55, 'rgba(0,0,0,0.12)');
+  sg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = sg; g.fillRect(0, 0, W, H);
+
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
   tex.encoding = THREE.sRGBEncoding;
+  tex.anisotropy = 8;
   return tex;
+}
+
+/* Flashes de cámara en la tribuna: es el detalle que hace que el público
+   parezca vivo y no un empapelado. Son sprites que prenden y se apagan. */
+let flashes = [];
+function crearFlashes(){
+  const tex = (function(){
+    const { c, g } = lienzo(64, 64);
+    const rg = g.createRadialGradient(32, 32, 1, 32, 32, 32);
+    rg.addColorStop(0, 'rgba(255,255,245,1)');
+    rg.addColorStop(0.25, 'rgba(255,250,220,0.55)');
+    rg.addColorStop(1, 'rgba(255,250,220,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
+  for(let i = 0; i < 46; i++){
+    const m = new THREE.SpriteMaterial({
+      map: tex, transparent: true, opacity: 0, depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const sp = new THREE.Sprite(m);
+    sp.scale.setScalar(1.5);
+    reubicarFlash(sp);
+    sp.userData = { espera: Math.random()*4 };
+    escena.add(sp);
+    flashes.push(sp);
+  }
+}
+function reubicarFlash(sp){
+  const lado = Math.random() < 0.5 ? -1 : 1;
+  const cabecera = Math.random() < 0.32;
+  if(cabecera){
+    sp.position.set(Math.sign(Math.random() - 0.5)*(CANCHA_LARGO/2 + 8 + Math.random()*7),
+                    2.5 + Math.random()*7,
+                    (Math.random() - 0.5)*(CANCHA_ANCHO + 22));
+  } else {
+    sp.position.set((Math.random() - 0.5)*(CANCHA_LARGO + 14),
+                    2.5 + Math.random()*8,
+                    lado*(CANCHA_ANCHO/2 + 10 + Math.random()*11));
+  }
+}
+function actualizarFlashes(dt){
+  for(const sp of flashes){
+    const u = sp.userData;
+    u.espera -= dt;
+    if(u.espera <= 0){
+      if(sp.material.opacity > 0.05){
+        sp.material.opacity = 0;
+        u.espera = 1.2 + Math.random()*5.5;
+        reubicarFlash(sp);
+      } else {
+        sp.material.opacity = 0.85 + Math.random()*0.15;
+        u.espera = 0.05 + Math.random()*0.06;
+      }
+    }
+  }
 }
 
 function texturaVallas(){
@@ -305,6 +514,7 @@ function crearEscena(){
 
   crearVallas();
   crearTribunas();
+  crearFlashes();
   crearTorres();
   crearArco(-CANCHA_LARGO/2 + 1.2, 1);
   crearArco( CANCHA_LARGO/2 - 1.2, -1);
@@ -318,7 +528,7 @@ function crearEscena(){
   pelota.position.set(1.6, 0.11, 0);
   // `pegado` DEBE arrancar en 0: sin inicializar valía undefined, y como
   // `undefined <= 0` es falso, la condición de conducción nunca se cumplía.
-  pelota.userData = { v: new THREE.Vector3(), giro: new THREE.Vector3(), pegado: 0 };
+  pelota.userData = { v: new THREE.Vector3(), giro: new THREE.Vector3(), pegado: 0, atajada: 0 };
   escena.add(pelota);
 
   // ---- jugadores ----
@@ -348,7 +558,7 @@ function crearVallas(){
 
 function crearTribunas(){
   const tex = texturaHinchada();
-  tex.repeat.set(8, 1);
+  tex.repeat.set(4, 1);
   const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 });
   const matEstr = new THREE.MeshStandardMaterial({ color: 0x141920, roughness: 0.9 });
   const largo = CANCHA_LARGO + 20;
@@ -502,13 +712,13 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
   const G = new THREE.Group();
   const matPiel   = new THREE.MeshStandardMaterial({ color: colPiel, roughness: 0.62, metalness: 0 });
   const matPelo   = new THREE.MeshStandardMaterial({ color: colPelo, roughness: 0.88 });
-  const matShort  = new THREE.MeshStandardMaterial({ color: colShort, roughness: 0.88 });
-  const matMedias = new THREE.MeshStandardMaterial({ color: colMedias, roughness: 0.9 });
+  const matShort  = new THREE.MeshStandardMaterial({ color: colShort, roughness: 0.66, metalness: 0.03 });
+  const matMedias = new THREE.MeshStandardMaterial({ color: colMedias, roughness: 0.82 });
   const matBotin  = new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.35, metalness: 0.1 });
   const matOjo    = new THREE.MeshStandardMaterial({ color: 0xf6f7f9, roughness: 0.25 });
   const matPupila = new THREE.MeshStandardMaterial({ color: 0x1b1512, roughness: 0.2 });
   const matCam    = new THREE.MeshStandardMaterial({
-    map: texturaCamiseta(colCamisetaA, colCamisetaB), roughness: 0.78
+    map: texturaCamiseta(colCamisetaA, colCamisetaB), roughness: 0.62, metalness: 0.04
   });
   const matManga  = new THREE.MeshStandardMaterial({ color: colCamisetaA, roughness: 0.78 });
 
@@ -530,6 +740,13 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     [ 0.606, 0.058], [ 0.616, 0.020]
   ], matCam, 1.30, 0.76);
   torso.add(pecho);
+
+  // trapecio: sin esto el cuello sale del torso como un caño de una caja
+  const trapecio = esf(0.115, matCam);
+  trapecio.scale.set(1.55, 0.42, 0.70);
+  trapecio.position.y = 0.505;
+  trapecio.castShadow = true;
+  torso.add(trapecio);
 
   const dorsal = new THREE.Mesh(
     new THREE.PlaneGeometry(0.215, 0.215),
@@ -614,9 +831,19 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     codo.add(rotula);
     const ante = miembro([[0, 0.043], [0.35, 0.041], [1, 0.031]], 0.26, matPiel, 1, 0.92);
     codo.add(ante);
-    const mano = esf(0.042, matPiel);
-    mano.scale.set(0.92, 1.15, 0.6);
-    mano.position.y = -0.285;
+    const mano = new THREE.Group();
+    mano.position.y = -0.278;
+    const palma = esf(0.040, matPiel);
+    palma.scale.set(0.80, 1.25, 0.48);
+    mano.add(palma);
+    const dedos = esf(0.034, matPiel);          // el puño cerrado al correr
+    dedos.scale.set(0.90, 0.80, 0.62);
+    dedos.position.y = -0.040;
+    mano.add(dedos);
+    const pulgar = esf(0.017, matPiel);
+    pulgar.scale.set(1, 1.5, 1);
+    pulgar.position.set(-lado*0.028, -0.018, 0.012);
+    mano.add(pulgar);
     codo.add(mano);
     brazos.push({ hombro, codo, lado });
   });
@@ -637,7 +864,8 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     const muslo = miembro([[0, 0.098], [0.25, 0.092], [0.60, 0.080], [1, 0.068]],
                           0.42, matPiel, 1, 0.95);
     caderaP.add(muslo);
-    const shortP = miembro([[0, 0.106], [0.60, 0.101], [1, 0.090]], 0.20, matShort, 1, 0.97);
+    const shortP = miembro([[0, 0.106], [0.60, 0.101], [0.94, 0.093], [1, 0.098]],
+                           0.21, matShort, 1, 0.97);
     shortP.position.y = 0.035;
     caderaP.add(shortP);
 
@@ -659,15 +887,24 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     const tobillo = new THREE.Group();
     tobillo.position.y = -0.40;
     rodilla.add(tobillo);
-    const pie = esf(0.06, matBotin);
-    pie.scale.set(0.78, 0.55, 1.9);
-    pie.position.set(0, -0.028, 0.048);
-    pie.castShadow = true;
-    tobillo.add(pie);
-    const taco = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.05, 0.075), matBotin);
-    taco.position.set(0, -0.018, -0.028);
-    taco.castShadow = true;
-    tobillo.add(taco);
+    // botín: empeine que se afina en la punta, suela y talón
+    const empeine = esf(0.058, matBotin);
+    empeine.scale.set(0.74, 0.52, 1.75);
+    empeine.position.set(0, -0.022, 0.052);
+    empeine.castShadow = true;
+    tobillo.add(empeine);
+    const punta = esf(0.036, matBotin);
+    punta.scale.set(0.80, 0.62, 1.5);
+    punta.position.set(0, -0.030, 0.128);
+    tobillo.add(punta);
+    const talon = esf(0.044, matBotin);
+    talon.scale.set(0.86, 0.95, 0.80);
+    talon.position.set(0, -0.004, -0.026);
+    tobillo.add(talon);
+    const suela = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.016, 0.215), matBotin);
+    suela.position.set(0, -0.052, 0.048);
+    suela.castShadow = true;
+    tobillo.add(suela);
     piernas.push({ caderaP, rodilla, tobillo, lado });
   });
 
@@ -870,6 +1107,178 @@ function prepararSoltar(){
   document.getElementById('volverMuneco').addEventListener('click', volverAlMuneco);
 }
 
+/* ============================================================
+   ARQUERO
+   Se para en la línea, sigue la pelota de costado y, cuando le llega un
+   remate lejos de las manos, se tira. Con reacción y puntería imperfectas
+   a propósito: un arquero que adivina exacto ataja todo y no hay gol.
+   ============================================================ */
+/* Valores elegidos barriendo combinaciones y midiendo el porcentaje de gol.
+   Lo que decide el resultado es errorMax —cuánto le erra a la trayectoria—,
+   no el alcance ni la velocidad: con 0,9 ataja el 95% y no hay forma de
+   hacerle un gol; con 1,5 quedan dos de cada tres atajadas. */
+const ARQ3D = {
+  lineaX: CANCHA_LARGO/2 - 1.5,   // dónde se para
+  alcance: 0.62,                  // brazos extendidos, de pie
+  alcanceVuelo: 1.60,             // estirado en el aire
+  velLateral: 3.8,
+  reaccion: 0.16,                 // demora antes de decidir
+  errorMax: 1.50                  // cuánto puede errarle a la trayectoria
+};
+
+function iniciarArquero(){
+  arquero.position.set(ARQ3D.lineaX, 0, 0);
+  arquero.rotation.y = -Math.PI/2;          // mirando a la cancha
+  const A = arquero.userData;
+  A.vuelo = -1; A.ladoVuelo = 0; A.zObjetivo = 0;
+  A.espera = 0; A.error = 0; A.leyoRemate = false;
+  A.zBase = 0;
+}
+
+function animarArquero(dt){
+  const u = arquero.userData;
+  u.paso += dt*1.5;
+  const respira = Math.sin(u.paso*1.8)*0.02;
+
+  if(u.vuelo >= 0){
+    // ---- estirada ----
+    const k = Math.min(1, u.vuelo/0.62);
+    const arco = Math.sin(Math.min(1, k*1.25)*Math.PI);     // sube y baja
+    const rol = u.ladoVuelo * (0.35 + 1.15*Math.min(1, k*2.2));
+    u.cadera.rotation.z = rol;
+    u.cadera.rotation.x = -0.25*arco;
+    u.cadera.position.y = 0.92 + arco*0.55 - k*k*0.45;
+    u.torso.rotation.x = 0.10;
+    u.torso.rotation.z = 0;
+    // los dos brazos van hacia el lado de la estirada, estirados
+    u.brazos.forEach(b => {
+      b.hombro.rotation.x = -1.05 - 0.35*arco;
+      b.hombro.rotation.z = b.lado*0.10 + u.ladoVuelo*0.55;
+      b.codo.rotation.x = -0.10;
+    });
+    // piernas juntas y estiradas hacia atrás
+    u.piernas.forEach(p => {
+      p.caderaP.rotation.x = 0.22 - 0.5*arco;
+      p.caderaP.rotation.z = 0;
+      p.rodilla.rotation.x = -0.30;
+      p.tobillo.rotation.x = 0.35;
+    });
+    return;
+  }
+
+  // ---- postura de espera: agachado, piernas abiertas, brazos afuera ----
+  u.cadera.rotation.z = 0;
+  u.cadera.rotation.x = 0;
+  u.cadera.position.y = 0.80 + respira;
+  u.torso.rotation.x = 0.26 + respira*0.5;
+  u.torso.rotation.y = 0;
+  u.torso.rotation.z = 0;
+  u.cuello.rotation.x = -0.20;
+  u.piernas.forEach(p => {
+    p.caderaP.rotation.x = 0.34;
+    p.caderaP.rotation.z = p.lado*0.17;
+    p.rodilla.rotation.x = -0.62;
+    p.tobillo.rotation.x = 0.30;
+  });
+  u.brazos.forEach(b => {
+    b.hombro.rotation.x = -0.62;
+    b.hombro.rotation.z = b.lado*0.90;
+    b.codo.rotation.x = -0.40;
+  });
+}
+
+function actualizarArquero(dt){
+  const u = arquero.userData;
+  const P = pelota.userData;
+  const gx = CANCHA_LARGO/2 - 1.2;                    // línea de gol
+  const medioArco = ARCO_ANCHO/2;
+
+  if(u.vuelo >= 0){
+    u.vuelo += dt;
+    // se desplaza hacia donde se tiró
+    const objetivo = u.zObjetivo;
+    arquero.position.z += (objetivo - arquero.position.z) * Math.min(1, dt*5.5);
+    if(u.vuelo > 1.15){                               // se levanta
+      u.vuelo = -1; u.leyoRemate = false;
+      arquero.position.z = lim(arquero.position.z, -medioArco, medioArco);
+    }
+    animarArquero(dt);
+    return;
+  }
+
+  // ¿viene un remate al arco?
+  let remate = false, tCruce = 0, zCruce = 0, yCruce = 0;
+  if(P.v.x > 3 && pelota.position.x < gx){
+    tCruce = (gx - pelota.position.x)/P.v.x;
+    if(tCruce > 0 && tCruce < 1.6){
+      zCruce = pelota.position.z + P.v.z*tCruce;
+      yCruce = pelota.position.y + P.v.y*tCruce - 0.5*17.5*tCruce*tCruce;
+      if(Math.abs(zCruce) < medioArco + 0.9 && yCruce < ARCO_ALTO + 0.5) remate = true;
+    }
+  }
+
+  if(remate && !u.leyoRemate){
+    u.leyoRemate = true;
+    u.espera = ARQ3D.reaccion;
+    u.error = (Math.random()*2 - 1)*ARQ3D.errorMax;   // no lee perfecto
+  }
+  if(!remate) u.leyoRemate = false;
+
+  let destinoZ;
+  if(remate){
+    if(u.espera > 0){ u.espera -= dt; destinoZ = arquero.position.z; }
+    else {
+      destinoZ = lim(zCruce + u.error, -medioArco - 0.3, medioArco + 0.3);
+      // si no llega caminando, se tira
+      const falta = Math.abs(destinoZ - arquero.position.z);
+      if(falta > ARQ3D.velLateral*tCruce*0.9 + 0.15 && tCruce < 0.85){
+        u.vuelo = 0;
+        u.ladoVuelo = Math.sign(destinoZ - arquero.position.z) || 1;
+        u.zObjetivo = destinoZ;
+      }
+    }
+  } else {
+    // posicionamiento: acompaña la pelota sin salirse del arco
+    destinoZ = lim(pelota.position.z*0.45, -medioArco + 0.25, medioArco - 0.25);
+  }
+
+  if(u.vuelo < 0){
+    const paso = ARQ3D.velLateral*dt;
+    const d = destinoZ - arquero.position.z;
+    arquero.position.z += Math.abs(d) < paso ? d : Math.sign(d)*paso;
+    arquero.position.x += (ARQ3D.lineaX - arquero.position.x) * Math.min(1, dt*3);
+  }
+  animarArquero(dt);
+}
+
+/* ¿Llegó a la pelota? El alcance crece cuando está estirado. */
+function chequearAtajada(dt){
+  const P = pelota.userData;
+  if(P.atajada > 0){ P.atajada -= dt; return; }
+  const u = arquero.userData;
+  const dx = pelota.position.x - arquero.position.x;
+  if(dx < -0.95 || dx > 0.50) return;
+  const dz = Math.abs(pelota.position.z - arquero.position.z);
+  const alcance = u.vuelo >= 0 ? ARQ3D.alcanceVuelo : ARQ3D.alcance;
+  if(dz > alcance) return;
+  const altoMax = u.vuelo >= 0 ? 2.05 : 1.95;
+  if(pelota.position.y > altoMax) return;
+  if(Math.hypot(P.v.x, P.v.z) < 2) return;
+
+  // rechaza hacia afuera y arriba
+  const haciaAfuera = Math.sign(pelota.position.z - arquero.position.z) || (Math.random() < 0.5 ? -1 : 1);
+  const vel = Math.hypot(P.v.x, P.v.z);
+  P.v.x = -Math.abs(P.v.x)*0.45;
+  P.v.z = haciaAfuera*Math.max(2.5, vel*0.4);
+  P.v.y = 2.6 + Math.random()*1.8;
+  P.atajada = 0.5;
+  P.pegado = 0.5;
+  atajadas++;
+  document.getElementById('atajadasTxt').textContent = atajadas;
+  AUDIO3D.atajada();
+  mostrarAviso3d('¡ATAJÓ!', '#8be36b', 1.1);
+}
+
 /* Mezcla de animaciones del modelo: correr y parado se cruzan según la
    velocidad, y la patada se dispara una sola vez encima. */
 function animarModelo(dt, vel){
@@ -903,29 +1312,51 @@ function animarModelo(dt, vel){
 /* ============================================================
    ENTRADA
    ============================================================ */
-const TECLAS_JUEGO = [' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+const TECLAS_JUEGO = [' ', 'z', 'x', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if(TECLAS_JUEGO.indexOf(k) >= 0) e.preventDefault();
   if(!teclas[k]){
-    if(k === ' ') patear();
+    AUDIO3D.activar();
+    if(k === ' ') patear('tiro');
+    if(k === 'z') patear('bajo');
+    if(k === 'x') patear('alto');
     if(k === 'c') camaraModo = (camaraModo + 1) % 2;
   }
   teclas[k] = true;
 });
 window.addEventListener('keyup', e => { teclas[e.key.toLowerCase()] = false; });
 
-function botonTactil(id, tecla){
+function botonMover(id, tecla){
   const el = document.getElementById(id);
   if(!el) return;
-  const on = e => { e.preventDefault(); if(!teclas[tecla] && tecla === ' ') patear(); teclas[tecla] = true; };
+  const on = e => { e.preventDefault(); AUDIO3D.activar(); teclas[tecla] = true; };
   const off = e => { e.preventDefault(); teclas[tecla] = false; };
   el.addEventListener('touchstart', on); el.addEventListener('touchend', off);
+  el.addEventListener('touchcancel', off);
   el.addEventListener('mousedown', on);  el.addEventListener('mouseup', off);
   el.addEventListener('mouseleave', off);
 }
+function botonGolpe(id, tipo){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const dar = e => { e.preventDefault(); AUDIO3D.activar(); patear(tipo); };
+  el.addEventListener('touchstart', dar);
+  el.addEventListener('mousedown', dar);
+}
 
-function patear(){
+/* Tres formas de golpear la pelota. Cambian fuerza y cuánto se eleva:
+   el tiro va fuerte y a media altura, el pase bajo va rasante, y el pase
+   alto sale despacio pero muy arriba. */
+const GOLPES = {
+  tiro: { fuerza: 15.5, alto: 4.6, nombre: 'REMATE' },
+  bajo: { fuerza: 10.0, alto: 0.5, nombre: 'PASE BAJO' },
+  alto: { fuerza:  8.2, alto: 9.2, nombre: 'PASE ALTO' }
+};
+let tipoGolpe = 'tiro';
+
+function patear(tipo){
+  tipoGolpe = tipo || 'tiro';
   if(usandoModelo()){
     if(patadaModelo >= 0) return;
     patadaModelo = 0;
@@ -946,6 +1377,10 @@ function actualizar(dt){
   if(pausaGol > 0){
     pausaGol -= dt;
     if(pausaGol <= 0) reponer();
+  }
+  if(avisoTimer3d > 0){
+    avisoTimer3d -= dt;
+    if(avisoTimer3d <= 0 && pausaGol <= 0) document.getElementById('avisoGol').style.display = 'none';
   }
 
   // ---- mover al jugador ----
@@ -973,7 +1408,7 @@ function actualizar(dt){
   const vel = Math.hypot(u.v.x, u.v.z);
   const kPatada = usandoModelo() ? animarModelo(dt, vel)
                                  : animarFutbolista(jugador, dt, vel);
-  animarFutbolista(arquero, dt, 0);
+  actualizarArquero(dt);
 
   // ---- contacto con la pelota ----
   const P = pelota.userData;
@@ -986,10 +1421,12 @@ function actualizar(dt){
   if(kPatada >= 0.42 && kPatada <= 0.60 && dist < 1.25 && !P.pegado){
     // el latigazo justo cuando el pie pasa por la pelota
     const dir = adelante.clone().normalize();
-    const fuerza = 13 + Math.min(vel, 7)*0.9;
-    P.v.set(dir.x*fuerza, 5.0 + Math.random()*1.2, dir.z*fuerza);
+    const G = GOLPES[tipoGolpe] || GOLPES.tiro;
+    const fuerza = G.fuerza + Math.min(vel, 7)*0.75;
+    P.v.set(dir.x*fuerza, G.alto + Math.random()*0.6, dir.z*fuerza);
     P.giro.set(-dir.z*14, 0, dir.x*14);
     P.pegado = 0.55;
+    AUDIO3D.patada(tipoGolpe === 'tiro' ? 1 : (tipoGolpe === 'alto' ? 0.7 : 0.45));
   }
   if(P.pegado > 0) P.pegado -= dt;
 
@@ -1019,6 +1456,7 @@ function actualizar(dt){
   if(pelota.position.y < 0.11){
     pelota.position.y = 0.11;
     if(P.v.y < -0.6){
+      AUDIO3D.pique(Math.abs(P.v.y));
       P.v.y = -P.v.y*0.55;
       // El frenado horizontal va SOLO en el pique. Aplicado en cada cuadro
       // que toca el piso, a 60 por segundo, mataba cualquier pelotazo en
@@ -1030,6 +1468,8 @@ function actualizar(dt){
     const f = Math.pow(0.90, dt);        // rodar sobre césped
     P.v.x *= f; P.v.z *= f;
   }
+  chequearAtajada(dt);
+
   // paredes: rebota en el límite del campo, salvo por la boca del arco
   const LX = CANCHA_LARGO/2 - 1.0, LZ = CANCHA_ANCHO/2 - 1.0;
   const enBoca = Math.abs(pelota.position.z) < ARCO_ANCHO/2 - 0.12 &&
@@ -1074,20 +1514,38 @@ function actualizar(dt){
   camara.position.lerp(destino, Math.min(1, dt*(camaraModo === 0 ? 2.2 : 4.5)));
   camara.lookAt(foco.x, camaraModo === 0 ? 1.1 : 1.2, foco.z);
 
+  actualizarFlashes(dt);
+
+  // el murmullo sube cuando la jugada se acerca a un arco
+  const cerca = Math.min(1, Math.max(0,
+    (Math.abs(pelota.position.x) - CANCHA_LARGO*0.18) / (CANCHA_LARGO*0.30)));
+  AUDIO3D.ambiente(cerca);
+
   // la sombra sigue a la acción, así se mantiene nítida
   luzSol.position.set(foco.x + 18, 30, foco.z + 14);
   luzSol.target.position.set(foco.x, 0, foco.z);
   luzSol.target.updateMatrixWorld();
 }
 
+let avisoTimer3d = 0;
+function mostrarAviso3d(texto, color, seg){
+  const e = document.getElementById('avisoGol');
+  e.textContent = texto;
+  e.style.color = color || '#f5c542';
+  e.style.display = 'flex';
+  avisoTimer3d = seg || 1.9;
+}
+
 function gol3d(){
   goles++;
   document.getElementById('golesTxt').textContent = goles;
-  document.getElementById('avisoGol').style.display = 'flex';
+  mostrarAviso3d('¡GOL!', '#f5c542', 1.9);
+  AUDIO3D.gol();
   pausaGol = 1.9;
 }
 
 function reponer(){
+  AUDIO3D.silbato();
   pelota.position.set(0, 0.11, 0);
   pelota.userData.v.set(0, 0, 0);
   jugador.position.set(-3, 0, 1.5);
@@ -1128,17 +1586,30 @@ function arrancar(){
 
   reloj = new THREE.Clock();
   crearEscena();
+  iniciarArquero();
   ajustar();
   window.addEventListener('resize', ajustar);
 
   prepararSoltar();
-  botonTactil('btPatear3d', ' ');
-  botonTactil('btArriba', 'arrowup');
-  botonTactil('btAbajo', 'arrowdown');
-  botonTactil('btIzq', 'arrowleft');
-  botonTactil('btDer', 'arrowright');
+  botonGolpe('btTiro', 'tiro');
+  botonGolpe('btBajo', 'bajo');
+  botonGolpe('btAlto', 'alto');
+  botonMover('btArriba', 'arrowup');
+  botonMover('btAbajo', 'arrowdown');
+  botonMover('btIzq', 'arrowleft');
+  botonMover('btDer', 'arrowright');
   document.getElementById('btCam').addEventListener('click', () => { camaraModo = (camaraModo + 1) % 2; });
-  document.addEventListener('pointerdown', () => { try { window.focus(); } catch(e){} });
+  document.addEventListener('pointerdown', () => {
+    try { window.focus(); } catch(e){}
+    AUDIO3D.activar();
+  });
+  const bm = document.getElementById('btMute3d');
+  if(bm) bm.addEventListener('click', () => {
+    AUDIO3D.activar();
+    const m = !AUDIO3D.estaMudo();
+    AUDIO3D.setMudo(m);
+    bm.textContent = m ? '🔇' : '🔊';
+  });
 
   bucle();
 }
