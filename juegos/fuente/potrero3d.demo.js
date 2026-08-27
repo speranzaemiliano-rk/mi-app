@@ -560,8 +560,14 @@ function crearTribunas(){
   const tex = texturaHinchada();
   tex.repeat.set(4, 1);
   const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 });
-  const matEstr = new THREE.MeshStandardMaterial({ color: 0x141920, roughness: 0.9 });
-  const largo = CANCHA_LARGO + 20;
+  // 0x141920 era casi negro: donde una tribuna entraba en cuadro se veía como
+  // un agujero recortado y no como la espalda de una grada.
+  const matEstr = new THREE.MeshStandardMaterial({ color: 0x252c37, roughness: 0.9 });
+  // Las laterales tienen que pasar de largo a las cabeceras y taparles la
+  // esquina. Con CANCHA_LARGO + 20 terminaban en x=±32 y las cabeceras
+  // arrancan en ±25,5: el canto quedaba al aire y entraba en cuadro por
+  // arriba como una cuña oscura en las dos puntas.
+  const largo = CANCHA_LARGO + 46;
 
   // Cada grada es una caja con la hinchada SOLO en la cara que mira a la
   // cancha; el resto en gris estructura. Con la textura en las seis caras
@@ -589,11 +595,17 @@ function crearTribunas(){
   });
   // cabeceras: cara visible = -x si está del lado +x
   [-1, 1].forEach(lado => {
-    const grada = new THREE.Mesh(new THREE.BoxGeometry(17, 10, CANCHA_ANCHO + 34),
+    // Antes medía CANCHA_ANCHO + 34 de ancho y se metía dentro de las
+    // laterales: la esquina asomaba por arriba y entraba en cuadro como una
+    // cuña negra. Ahora termina justo antes de ellas.
+    const grada = new THREE.Mesh(new THREE.BoxGeometry(17, 10, CANCHA_ANCHO + 12),
                                  caras(lado > 0 ? 1 : 0));
     grada.position.set(lado*(CANCHA_LARGO/2 + 12), 4.0, 0);
     grada.rotation.z = -lado * 0.32;
     escena.add(grada);
+    const techo = new THREE.Mesh(new THREE.BoxGeometry(18, 0.7, CANCHA_ANCHO + 12), matEstr);
+    techo.position.set(lado*(CANCHA_LARGO/2 + 13), 13.2, 0);
+    escena.add(techo);
   });
 }
 
@@ -786,22 +798,32 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
   nariz.position.set(0, 0.146, -0.098);
   cuello.add(nariz);
   [-1, 1].forEach(l => {
+    // La oreja iba en z=-0,002, o sea a la altura del pómulo: de frente
+    // asomaba en la mejilla como una cicatriz. Va corrida hacia atrás.
     const oreja = esf(0.021, matPiel);
-    oreja.scale.set(0.32, 1.05, 0.72);
-    oreja.position.set(l*0.094, 0.146, -0.002);
+    oreja.scale.set(0.34, 1.05, 0.78);
+    oreja.position.set(l*0.097, 0.145, 0.014);
     cuello.add(oreja);
-    const ojo = esf(0.019, matOjo);
-    ojo.scale.set(1, 0.72, 0.6);
-    ojo.position.set(l*0.037, 0.163, -0.086);
+    const ojo = esf(0.0165, matOjo);
+    ojo.scale.set(1.06, 0.82, 0.62);
+    ojo.position.set(l*0.038, 0.162, -0.0865);   // hundido: sólo asoma el casquete
     cuello.add(ojo);
-    const pup = esf(0.0098, matPupila);
-    pup.position.set(l*0.037, 0.162, -0.096);
+    const pup = esf(0.0082, matPupila);
+    pup.position.set(l*0.038, 0.1615, -0.0935);
     cuello.add(pup);
     const ceja = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.008, 0.012), matPelo);
     ceja.position.set(l*0.038, 0.184, -0.099);   // apoyada sobre la piel, no clavada en ella
     ceja.rotation.z = -l*0.12;
     cuello.add(ceja);
   });
+  // boca: una ranura apoyada sobre el mentón. Sin ella la cara era dos puntos
+  // y una nariz, y de cerca no se leía como cara.
+  const boca = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.007, 0.010),
+    new THREE.MeshStandardMaterial({ color: 0x7d4b42, roughness: 0.75 }));
+  boca.position.set(0, 0.1135, -0.0935);
+  boca.rotation.x = 0.22;
+  cuello.add(boca);
+
   // Pelo: un CASQUETE que flota por encima del cráneo sin tocarlo en ningún
   // punto. Dos esferas de radio parecido que se cruzan (0,112 contra 0,104)
   // se cortan en un ángulo muy abierto, y ahí las dos superficies caen sobre
@@ -843,8 +865,8 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     const codo = new THREE.Group();
     codo.position.y = -0.28;
     hombro.add(codo);
-    const rotula = esf(0.0425, matPiel);
-    rotula.scale.set(1, 0.54, 0.96);
+    const rotula = esf(0.0415, matPiel);       // igual que la rodilla: redondo y por dentro del brazo
+    rotula.scale.set(0.98, 0.82, 0.96);
     codo.add(rotula);
     const ante = miembro([[0, 0.043], [0.35, 0.041], [1, 0.031]], 0.26, matPiel, 1, 0.92);
     codo.add(ante);
@@ -892,8 +914,11 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     // La rodilla es de PIEL y del mismo ancho que el muslo: antes era una
     // esfera blanca que sobresalía del perfil y se veía como una pelota
     // pegada. La media arranca más abajo, como en la cancha.
-    const rot = esf(0.067, matPiel);
-    rot.scale.set(1.0, 0.56, 0.96);
+    // Aplastada (0,56 de alto) la rótula tenía el borde muy filoso justo en la
+    // silueta, y el reflejo la dibujaba como un disco pegado. Más redonda y un
+    // poco más angosta que el muslo: rellena el hueco al doblar sin asomar.
+    const rot = esf(0.066, matPiel);
+    rot.scale.set(0.98, 0.80, 0.96);
     rodilla.add(rot);
     const pant = miembro([[0, 0.067], [0.22, 0.072], [0.55, 0.058], [1, 0.036]],
                          0.40, matPiel, 1, 0.95);
@@ -1592,7 +1617,10 @@ function actualizar(dt){
   let destino;
   if(camaraModo === 0){
     // transmisión: de costado, siguiendo la jugada
-    destino = new THREE.Vector3(foco.x*0.72, 9.6, CANCHA_ANCHO/2 + 7.5);
+    // Estaba a 22 m: el jugador ocupaba setenta píxeles y no se veía nada del
+    // muñeco. Más cerca, y sigue mejor a lo largo de la cancha (0,85) para que
+    // en los costados no quede todo de perfil lejano.
+    destino = new THREE.Vector3(foco.x*0.85, 7.8, CANCHA_ANCHO/2 + 5.0);
   } else {
     // detrás del jugador
     const atras = adelante.clone().multiplyScalar(-4.6);
