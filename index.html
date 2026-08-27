@@ -219,7 +219,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
 <!-- El tema se aplica ANTES de pintar: si se leyera después, la app aparecería
      un instante en claro y saltaría a oscuro en cada carga. -->
-<script>try{var _t=localStorage.getItem("rk_tema");if(_t==="oscuro"||_t==="medio")document.documentElement.setAttribute("data-theme",_t);}catch(e){}</script>
+<script>try{var _t=localStorage.getItem("rk_tema");if(_t==="oscuro"||_t==="medio"){document.documentElement.setAttribute("data-theme",_t);var _c=localStorage.getItem("rk_tema_css");if(_c)document.documentElement.setAttribute("style",_c);}}catch(e){}</script>
 <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -5379,6 +5379,29 @@
                       <button class="btn btn-outline btn-sm" id="btnTemaClaro"  onclick="setTema('claro')"  title="Fondo blanco, el de siempre">☀️ Claro</button>
                       <button class="btn btn-outline btn-sm" id="btnTemaMedio"  onclick="setTema('medio')"  title="Gris violáceo: oscuro pero sin el contraste fuerte del negro">🌗 Medio</button>
                       <button class="btn btn-outline btn-sm" id="btnTemaOscuro" onclick="setTema('oscuro')" title="Negro profundo, el de más contraste">🌙 Oscuro</button>
+                    </div>
+
+                    <div id="temaAjustes" style="margin-top:16px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2);">
+                      <div style="font-size:12px; font-weight:700; margin-bottom:2px;">Ajuste fino</div>
+                      <p style="font-size:11.5px; color:var(--text-2); margin:0 0 12px; line-height:1.55;">
+                        Movelas hasta que te resulte cómodo. Se aplican sobre los temas oscuros, en vivo.
+                      </p>
+                      <label style="display:block; font-size:11.5px; color:var(--text-2); margin-bottom:10px;">
+                        Brillo del fondo <span id="lblBrillo" style="color:var(--text-1); font-weight:600;"></span><br>
+                        <input type="range" id="ajBrillo" min="0" max="100" step="1" oninput="setAjusteTema('brillo', this.value)" style="width:100%;">
+                      </label>
+                      <label style="display:block; font-size:11.5px; color:var(--text-2); margin-bottom:10px;">
+                        Contraste del texto <span id="lblContraste" style="color:var(--text-1); font-weight:600;"></span><br>
+                        <input type="range" id="ajContraste" min="0" max="100" step="1" oninput="setAjusteTema('contraste', this.value)" style="width:100%;">
+                      </label>
+                      <label style="display:block; font-size:11.5px; color:var(--text-2); margin-bottom:10px;">
+                        Intensidad del color <span id="lblColor" style="color:var(--text-1); font-weight:600;"></span><br>
+                        <input type="range" id="ajColor" min="0" max="100" step="1" oninput="setAjusteTema('color', this.value)" style="width:100%;">
+                      </label>
+                      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                        <button class="btn btn-outline btn-sm" onclick="resetAjustesTema()">↺ Volver al original</button>
+                        <span id="temaContrasteInfo" style="font-size:11.5px; color:var(--text-2);"></span>
+                      </div>
                     </div>
                   </div>
 
@@ -14863,8 +14886,114 @@
         if (t === 'oscuro' || t === 'medio') document.documentElement.setAttribute('data-theme', t);
         else { document.documentElement.removeAttribute('data-theme'); t = 'claro'; }
         try { localStorage.setItem('rk_tema', t); } catch (e) {}
+        _temaAplicarAjustes();
         _marcarTemaActivo();
     };
+    // ── Ajuste fino del tema oscuro ──────────────────────────────────────
+    // Las tres perillas recalculan la paleta entera con aritmética HSL sobre un violeta base.
+    // El resultado se guarda YA CONVERTIDO a declaraciones CSS, para que el script del <head>
+    // pueda aplicarlo antes de pintar sin repetir esta cuenta.
+    var _AJ_DEF = { brillo: 50, contraste: 60, color: 50 };
+    function _ajustesTema() {
+        try { return Object.assign({}, _AJ_DEF, JSON.parse(localStorage.getItem('rk_tema_ajustes') || '{}')); }
+        catch (e) { return Object.assign({}, _AJ_DEF); }
+    }
+    function _hsl(h, sPct, lPct) {
+        var s2 = Math.max(0, Math.min(100, sPct)) / 100, l2 = Math.max(0, Math.min(100, lPct)) / 100;
+        var c = (1 - Math.abs(2 * l2 - 1)) * s2, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l2 - c / 2;
+        var r, g, b;
+        if (h < 60)       { r = c; g = x; b = 0; }
+        else if (h < 120) { r = x; g = c; b = 0; }
+        else if (h < 180) { r = 0; g = c; b = x; }
+        else if (h < 240) { r = 0; g = x; b = c; }
+        else if (h < 300) { r = x; g = 0; b = c; }
+        else              { r = c; g = 0; b = x; }
+        return '#' + [r, g, b].map(function(v) { return Math.round((v + m) * 255).toString(16).padStart(2, '0'); }).join('');
+    }
+    function _lumRel(hex) {
+        var c = hex.replace('#', '');
+        var v = [0, 2, 4].map(function(i) { return parseInt(c.substr(i, 2), 16) / 255; })
+            .map(function(x) { return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); });
+        return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+    }
+    function _contrasteEntre(a, b) {
+        var l1 = _lumRel(a), l2 = _lumRel(b);
+        return ((Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05));
+    }
+    // Devuelve {css, ratio} para los valores dados. HUE fijo en el violeta de la marca.
+    function _temaCalcular(aj) {
+        var H = 252;
+        var sat  = 6  + (aj.color / 100) * 26;          // cuánto violeta tiene el gris del fondo
+        var L    = 4  + (aj.brillo / 100) * 13;         // qué tan claro es el lienzo
+        var tL   = 76 + (aj.contraste / 100) * 22;      // qué tan claro es el texto
+        var acS  = 55 + (aj.color / 100) * 35;
+        var bg   = _hsl(H, sat, L);
+        var card = _hsl(H, sat, L + 5);
+        var t1   = _hsl(H, 18, tL);
+        var t2   = _hsl(H, 16, Math.max(45, tL - 18));
+        var t3   = _hsl(H, 14, Math.max(38, tL - 30));
+        var glow = (aj.color / 100) * 0.30;
+        var css = ''
+            + '--surface:' + bg + ';'
+            + '--surface-2:' + _hsl(H, sat, L + 9) + ';'
+            + '--border:' + _hsl(H, sat + 4, L + 14) + ';'
+            + '--border-soft:' + _hsl(H, sat + 2, L + 10) + ';'
+            + '--card:' + card + 'b8;'
+            + '--sidebar-bg:' + _hsl(H, sat, Math.max(2, L - 3)) + ';'
+            + '--ink:' + t1 + ';--text-1:' + t1 + ';--text-2:' + t2 + ';--text-3:' + t3 + ';'
+            + '--ink-soft:' + t2 + ';--ink-mid:' + t2 + ';'
+            + '--gold:' + _hsl(H + 6, acS, 72) + ';'
+            + '--gold-light:' + _hsl(H + 6, acS, 80) + ';'
+            + '--gold-pale:' + _hsl(H + 6, acS, 72) + '2e;'
+            + '--brand-mark:' + _hsl(H + 6, acS, 72) + ';'
+            + '--lienzo:radial-gradient(760px 420px at 8% -10%, rgba(140,110,255,' + glow.toFixed(3) + '), transparent 62%),'
+            +          'radial-gradient(620px 360px at 92% 6%, rgba(109,75,224,' + (glow * 0.6).toFixed(3) + '), transparent 64%);';
+        // El contraste se informa contra el fondo REAL del panel: es translúcido sobre el lienzo.
+        var fondoPanel = _mezclarHex(card, 0.72, bg);
+        return { css: css, ratio: _contrasteEntre(t1, fondoPanel) };
+    }
+    function _mezclarHex(sup, alpha, fondo) {
+        var p = function(x) { return [0, 2, 4].map(function(i) { return parseInt(x.replace('#', '').substr(i, 2), 16); }); };
+        var A = p(sup), B = p(fondo);
+        return '#' + A.map(function(v, i) { return Math.round(v * alpha + B[i] * (1 - alpha)).toString(16).padStart(2, '0'); }).join('');
+    }
+    window.setAjusteTema = function(k, v) {
+        var aj = _ajustesTema();
+        aj[k] = parseInt(v, 10) || 0;
+        try { localStorage.setItem('rk_tema_ajustes', JSON.stringify(aj)); } catch (e) {}
+        _temaAplicarAjustes();
+    };
+    window.resetAjustesTema = function() {
+        try { localStorage.removeItem('rk_tema_ajustes'); localStorage.removeItem('rk_tema_css'); } catch (e) {}
+        document.documentElement.removeAttribute('style');
+        _temaAplicarAjustes();
+    };
+    function _temaAplicarAjustes() {
+        var aj = _ajustesTema();
+        var r = _temaCalcular(aj);
+        try { localStorage.setItem('rk_tema_css', r.css); } catch (e) {}
+        // Sólo se pintan sobre los temas oscuros: en el claro la paleta es otra cosa.
+        var esOscuro = !!document.documentElement.getAttribute('data-theme');
+        document.documentElement.removeAttribute('style');
+        if (esOscuro) document.documentElement.setAttribute('style', r.css);
+        var set = function(id, val) { var el = document.getElementById(id); if (el && el.value != val) el.value = val; };
+        set('ajBrillo', aj.brillo); set('ajContraste', aj.contraste); set('ajColor', aj.color);
+        var txt = function(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; };
+        txt('lblBrillo', aj.brillo + '%'); txt('lblContraste', aj.contraste + '%'); txt('lblColor', aj.color + '%');
+        var info = document.getElementById('temaContrasteInfo');
+        if (info) {
+            info.innerHTML = esOscuro
+                ? ('Contraste del texto: <strong>' + r.ratio.toFixed(1) + ':1</strong> · '
+                   // Tan malo es quedarse corto como pasarse: arriba de ~13:1 es el blanco sobre
+                   // negro que cansa la vista, y ese aviso es tan útil como el de abajo.
+                   + (r.ratio < 4.5 ? '⚠️ muy bajo, cuesta leer'
+                      : r.ratio < 7  ? 'justo, legible'
+                      : r.ratio <= 13 ? '✔ cómodo'
+                      : 'muy alto — puede cansar en jornadas largas'))
+                : 'Las perillas se aplican sobre los temas oscuros.';
+        }
+    }
+
     function _marcarTemaActivo() {
         var actual = document.documentElement.getAttribute('data-theme') || 'claro';
         [['btnTemaClaro','claro'], ['btnTemaMedio','medio'], ['btnTemaOscuro','oscuro']].forEach(function(par) {
@@ -14880,6 +15009,7 @@
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
         _marcarTemaActivo();
+        _temaAplicarAjustes();
         // El flotante arranca oculto por CSS (para no asomar en el ingreso): se enciende acá.
         var _fab = document.getElementById('fabStack');
         if (_fab) _fab.style.display = puedeEditar ? 'flex' : 'none';
