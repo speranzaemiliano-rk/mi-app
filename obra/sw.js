@@ -2,7 +2,7 @@
 // Vive dentro de /obra/, así que su alcance (scope) es sólo esta carpeta:
 // no se pisa con el sw.js de la app principal, que cubre la raíz.
 // Objetivo: que la planilla abra en la obra aunque no haya señal.
-const CACHE = 'parte-obra-v1';
+const CACHE = 'parte-obra-v2';
 // La ruta base se deriva de dónde está servido este archivo (ej. /mi-app/obra/sw.js → /mi-app/obra/).
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
 const SHELL = [BASE, BASE + 'index.html', BASE + 'manifest.json'];
@@ -30,6 +30,11 @@ self.addEventListener('activate', function(e) {
 // caché sólo como respaldo cuando no hay señal.
 self.addEventListener('fetch', function(e) {
   if (e.request.method !== 'GET') return;
+  // Firebase y sus scripts van siempre por red, sin pasar por la caché:
+  // si no, una respuesta guardada rompería la sincronización.
+  var u = e.request.url;
+  if (u.indexOf('firebaseio.com') >= 0 || u.indexOf('firebasedatabase.app') >= 0 ||
+      u.indexOf('gstatic.com') >= 0 || u.indexOf('googleapis.com') >= 0) return;
   var esHTML = e.request.mode === 'navigate' ||
                (e.request.headers.get('accept') || '').includes('text/html');
   // cache:'no-store' evita que la caché HTTP de GitHub Pages (max-age=600)

@@ -59,6 +59,21 @@
   .chapa.alerta{background:rgba(180,52,42,.22);border-color:var(--ausente)}
   .chapa.alerta b{color:#FF9A90}
 
+  .nube{
+    display:flex;align-items:center;gap:7px;margin-top:11px;width:100%;
+    background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);
+    color:#D8D5CE;border-radius:4px;padding:8px 10px;font-family:inherit;
+    font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;text-align:left;
+  }
+  .nube:active{background:rgba(255,255,255,.16)}
+  .nube.on{border-color:var(--casco);color:var(--casco)}
+  .nube.mal{border-color:var(--ausente);color:#FF9A90}
+  .link-caja{
+    background:#F6F4F1;border:1px solid var(--linea);border-radius:5px;padding:10px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+    word-break:break-all;margin-bottom:12px;color:var(--tinta);
+  }
+
   .gremio{background:var(--carta);border:1px solid var(--linea);border-radius:6px;margin-bottom:12px;overflow:hidden}
   .gremio-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--linea);background:#FBFAF8}
   .gremio-head .nom{
@@ -175,6 +190,7 @@
       </div>
     </div>
     <div class="chapas" id="chapas"></div>
+    <button class="nube" id="btnNube"><span id="nubeTxt">Sin sincronizar — sólo en este equipo</span></button>
   </div>
 </header>
 
@@ -390,7 +406,10 @@
   var guardarTimer = null;
   function guardar(){
     clearTimeout(guardarTimer);
-    guardarTimer = setTimeout(function(){ escribir(CLAVE, JSON.stringify(datos)); }, 250);
+    guardarTimer = setTimeout(function(){
+      escribir(CLAVE, JSON.stringify(datos));
+      subirTodo();
+    }, 250);
   }
 
   /* =========================================================
@@ -824,6 +843,202 @@
     inp.focus();
   }
 
+  /* =========================================================
+     5bis) SINCRONIZAR ENTRE EQUIPOS
+     Sin login: el permiso es un código largo que viaja en el
+     link. La planilla sigue guardando en el teléfono, así que
+     funciona sin señal; la nube es un espejo que se pone al
+     día cuando hay conexión.
+     OJO: cualquiera con el link lee y escribe estos datos.
+  ========================================================= */
+  var FB = {
+    apiKey: "AIzaSyBfLKi3a6kZqkMKPQ8wRADQlUu3_NacXAA",
+    databaseURL: "https://modo-prueba-bb8c2-default-rtdb.firebaseio.com",
+    projectId: "modo-prueba-bb8c2"
+  };
+  var CLAVE_COD = "parteObra_codigo";
+  var nube = { ref: null, codigo: "", estado: "off", ultimo: "" };
+
+  function generarCodigo(){
+    // Sin l/I/1/0/O para que se pueda dictar por teléfono sin errores.
+    var abc = "abcdefghijkmnpqrstuvwxyz23456789", out = "";
+    var cr = window.crypto || window.msCrypto;
+    if (cr && cr.getRandomValues) {
+      var b = new Uint8Array(24);
+      cr.getRandomValues(b);
+      for (var i = 0; i < 24; i++) out += abc.charAt(b[i] % abc.length);
+    } else {
+      for (var j = 0; j < 24; j++) out += abc.charAt(Math.floor(Math.random() * abc.length));
+    }
+    return out;
+  }
+
+  function codigoDeURL(){
+    var m = location.search.match(/[?&]o=([A-Za-z0-9]{20,64})/);
+    return m ? m[1] : "";
+  }
+
+  function linkDeObra(cod){
+    return location.origin + location.pathname + "?o=" + cod;
+  }
+
+  function pintarNube(){
+    var b = document.getElementById("btnNube");
+    var t = document.getElementById("nubeTxt");
+    if (!b || !t) return;
+    b.className = "nube" + (nube.estado === "ok" ? " on" : (nube.estado === "mal" ? " mal" : ""));
+    if (nube.estado === "ok")        t.textContent = "Sincronizado — se ve en otros equipos";
+    else if (nube.estado === "yendo")t.textContent = "Conectando…";
+    else if (nube.estado === "mal")  t.textContent = "No sincroniza — tocá para ver por qué";
+    else                             t.textContent = "Sin sincronizar — sólo en este equipo";
+  }
+
+  // El SDK de Firebase se baja recién cuando hace falta: sin código,
+  // la planilla no pide nada a la red y abre igual de rápido.
+  function cargarFirebase(cb){
+    if (window.firebase && window.firebase.database) return cb(true);
+    var urls = ["https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js",
+                "https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"];
+    var i = 0;
+    (function siguiente(){
+      if (i >= urls.length) {
+        try { if (!firebase.apps.length) firebase.initializeApp(FB); } catch(e){ return cb(false); }
+        return cb(true);
+      }
+      var sc = document.createElement("script");
+      sc.src = urls[i++];
+      sc.onload = siguiente;
+      sc.onerror = function(){ cb(false); };
+      document.head.appendChild(sc);
+    })();
+  }
+
+  function paraNube(){
+    return { gremios: datos.gremios, personal: datos.personal, dias: datos.dias };
+  }
+
+  function subirTodo(){
+    if (!nube.ref) return;
+    var payload = paraNube();
+    nube.ultimo = JSON.stringify(payload);
+    nube.ref.set(payload).then(function(){
+      nube.estado = "ok"; pintarNube();
+    }).catch(function(e){
+      nube.estado = "mal"; nube.error = e && e.message ? e.message : String(e); pintarNube();
+    });
+  }
+
+  function escribiendo(){
+    var a = document.activeElement;
+    return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT"));
+  }
+
+  function bajarDeNube(v){
+    var entrante = JSON.stringify({ gremios: v.gremios || [], personal: v.personal || [], dias: v.dias || {} });
+    if (entrante === nube.ultimo) return;          // es el eco de lo que acabamos de subir
+    if (entrante === JSON.stringify(paraNube())) return;
+    nube.ultimo = entrante;
+    datos.gremios  = v.gremios  || [];
+    datos.personal = v.personal || [];
+    datos.dias     = v.dias     || {};
+    escribir(CLAVE, JSON.stringify(datos));
+    asegurarDia(fechaActual);
+    // Si está tipeando, no le arrebato el foco: sólo actualizo los números.
+    if (escribiendo()) actualizarTablero(); else render();
+  }
+
+  function conectarNube(cod){
+    if (!cod) return;
+    nube.codigo = cod;
+    nube.estado = "yendo"; pintarNube();
+    try { localStorage.setItem(CLAVE_COD, cod); } catch(e){}
+
+    cargarFirebase(function(ok){
+      if (!ok) {
+        nube.estado = "mal";
+        nube.error = "No se pudo cargar Firebase (¿sin señal?). La planilla sigue funcionando en este equipo.";
+        pintarNube(); return;
+      }
+      try {
+        nube.ref = firebase.database().ref("parteObra/" + cod);
+      } catch(e){
+        nube.estado = "mal"; nube.error = String(e); pintarNube(); return;
+      }
+      nube.ref.on("value", function(snap){
+        var v = snap.val();
+        nube.estado = "ok"; pintarNube();
+        if (!v) { subirTodo(); return; }   // primera vez: sube lo que hay
+        bajarDeNube(v);
+      }, function(err){
+        nube.estado = "mal";
+        nube.error = (err && err.code === "PERMISSION_DENIED")
+          ? "Firebase rechaza la conexión: falta publicar la regla «parteObra» en la consola (Realtime Database → Reglas)."
+          : (err && err.message ? err.message : String(err));
+        pintarNube();
+      });
+    });
+  }
+
+  function desconectarNube(){
+    if (nube.ref) { try { nube.ref.off(); } catch(e){} }
+    nube = { ref: null, codigo: "", estado: "off", ultimo: "" };
+    try { localStorage.removeItem(CLAVE_COD); } catch(e){}
+    if (location.search) history.replaceState(null, "", location.pathname);
+    pintarNube();
+  }
+
+  document.getElementById("btnNube").addEventListener("click", abrirNube);
+
+  function abrirNube(){
+    var h = '<h2>Compartir la planilla</h2>';
+    if (nube.codigo) {
+      h += '<div class="ayuda">Cualquiera que abra este link ve y edita la misma planilla, sin usuario ni contraseña. ' +
+           'Mandáselo sólo a quien tiene que cargar el parte.</div>' +
+           (nube.estado === "mal"
+             ? '<div class="aviso rojo"><b>No está sincronizando.</b><br>' + escapar(nube.error || "") + '</div>'
+             : '<div class="aviso">Estado: ' + (nube.estado === "ok" ? "sincronizando bien." : "conectando…") + '</div>') +
+           '<div class="link-caja" id="linkObra"></div>' +
+           '<button class="btn full primario-wa" id="btnLinkWA">Mandar el link por WhatsApp</button>' +
+           '<button class="btn full" id="btnLinkCopiar">Copiar el link</button>' +
+           '<button class="btn ghost full" id="btnLinkOff">Dejar de sincronizar en este equipo</button>';
+    } else {
+      h += '<div class="ayuda">Hoy la planilla se guarda sólo en este equipo. Si la activás, se copia a la nube ' +
+           'y podés abrirla desde otra compu o celular con el mismo link.</div>' +
+           '<div class="aviso rojo"><b>Ojo:</b> el link es la única llave. No pide contraseña, así que ' +
+           'cualquiera que lo tenga ve y edita la nómina completa, con nombres y CUIL.</div>' +
+           '<button class="btn full primario-wa" id="btnLinkOn">Activar y generar el link</button>' +
+           '<div class="ayuda" style="margin-top:12px">¿Ya tenés un link de otra planilla? Abrilo directamente en este equipo y se conecta solo.</div>';
+    }
+    abrirModal(h);
+
+    if (nube.codigo) {
+      var link = linkDeObra(nube.codigo);
+      document.getElementById("linkObra").textContent = link;
+      document.getElementById("btnLinkWA").addEventListener("click", function(){
+        window.open("https://wa.me/?text=" + encodeURIComponent("Planilla de parte de obra: " + link), "_blank");
+      });
+      document.getElementById("btnLinkCopiar").addEventListener("click", function(){ copiarTexto(link); });
+      document.getElementById("btnLinkOff").addEventListener("click", function(){
+        if (!confirm("¿Dejar de sincronizar en ESTE equipo?\n\nLos datos que ya están en la nube no se borran, y podés volver a entrar con el link.")) return;
+        desconectarNube(); cerrarModal(); toast("Desconectado");
+      });
+    } else {
+      document.getElementById("btnLinkOn").addEventListener("click", function(){
+        var cod = generarCodigo();
+        history.replaceState(null, "", location.pathname + "?o=" + cod);
+        conectarNube(cod);
+        cerrarModal();
+        setTimeout(abrirNube, 400);
+      });
+    }
+  }
+
+  function escapar(t){
+    var d = document.createElement("div");
+    d.textContent = String(t);
+    return d.innerHTML;
+  }
+
   /* ---- Personal (nómina) ---- */
   var filtroPersonal = "todos";
   document.getElementById("btnPersonal").addEventListener("click", abrirPersonal);
@@ -1198,7 +1413,12 @@
       } catch(e){ /* si el guardado está roto, se queda con lo que ya dibujó */ }
     }
     guardar();
-  }).catch(function(){ guardar(); });
+  }).catch(function(){ guardar(); }).then(function(){
+    pintarNube();
+    var cod = codigoDeURL();
+    if (!cod) { try { cod = localStorage.getItem(CLAVE_COD) || ""; } catch(e){} }
+    if (cod) conectarNube(cod);
+  });
 
 })();
 </script>
