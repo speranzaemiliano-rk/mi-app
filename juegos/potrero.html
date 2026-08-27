@@ -20,7 +20,7 @@
 
   /* --- Marcador: chapa de estadio, tipografía condensada --- */
   #marcador {
-    width: 1000px; display: flex; align-items: stretch; justify-content: center;
+    width: 1080px; display: flex; align-items: stretch; justify-content: center;
     gap: 0; margin: 6px 0 6px;
     font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
     background: linear-gradient(180deg,#161b24,#0f131a);
@@ -156,7 +156,7 @@
   </div>
 </div>
 <div id="wrap" tabindex="0">
-  <canvas id="c" width="1000" height="660"></canvas>
+  <canvas id="c" width="1080" height="740"></canvas>
   <div id="barraPotenciaBg"><div id="barraPotencia"></div></div>
   <div id="clicTeclado">Hacé clic en la cancha para jugar con el teclado</div>
   <div id="mute" title="Silenciar">🔊</div>
@@ -181,7 +181,7 @@
    ============================================================ */
 const cv  = document.getElementById('c');
 const ctx = cv.getContext('2d');
-const W = 1000, H = 660;
+const W = 1080, H = 740;
 const DPR = Math.min(window.devicePixelRatio || 1, 2);
 cv.width = W*DPR; cv.height = H*DPR;
 cv.style.width = W+'px'; cv.style.height = H+'px';
@@ -216,7 +216,10 @@ ajustarEscala();
 /* ============================================================
    MEDIDAS DE LA CANCHA
    ============================================================ */
-const CANCHA = { x0: 62, y0: 30, x1: 938, y1: 630 };
+/* La zona jugable mide lo mismo que antes (876x600): sólo se corrió dentro
+   de un lienzo más grande para que entre el estadio alrededor sin cambiar
+   una coma del balance ya medido. */
+const CANCHA = { x0: 102, y0: 70, x1: 978, y1: 670 };
 CANCHA.w = CANCHA.x1 - CANCHA.x0;
 CANCHA.h = CANCHA.y1 - CANCHA.y0;
 CANCHA.cx = (CANCHA.x0 + CANCHA.x1)/2;
@@ -1092,200 +1095,540 @@ function actualizar(dt){
 /* ============================================================
    DIBUJO
    ============================================================ */
-function dibujarCancha(){
-  // fuera de juego
-  ctx.fillStyle = '#0d1f14';
-  ctx.fillRect(0,0,W,H);
+/* ============================================================
+   FONDO PRE-RENDERIZADO
+   Estadio, césped y líneas se dibujan UNA sola vez a un lienzo aparte.
+   Así se puede meter muchísimo detalle (miles de briznas, gente en la
+   tribuna) sin pagarlo en cada cuadro: en el bucle es un solo drawImage.
+   ============================================================ */
+function rr(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);     c.arcTo(x,y,x+w,y,r);
+  c.closePath();
+}
+// Azar con semilla: el césped tiene que verse igual en cada partida
+function azar(semilla){
+  let z = semilla;
+  return ()=> (z = (z*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+}
 
-  // franjas de corte de césped
-  const franjas = 12, fw = CANCHA.w/franjas;
+const LUZ = { x: 0.42, y: 0.90 };     // de dónde viene la luz, para las sombras
+
+function construirFondo(){
+  const cvF = document.createElement('canvas');
+  cvF.width = W; cvF.height = H;
+  const g = cvF.getContext('2d');
+  const rnd = azar(20260826);
+  const { x0, y0, x1, y1, w:cw, h:ch, cx, cy } = CANCHA;
+
+  /* ---------- Estructura del estadio ---------- */
+  g.fillStyle = '#0a0d12'; g.fillRect(0,0,W,H);
+
+  // Tribunas: filas de gente, más apretadas y oscuras cuanto más lejos
+  const FILAS = 7;
+  function tribuna(bx, by, bw, bh, horizontal, sesgo){
+    const grad = g.createLinearGradient(bx, by, horizontal?bx:bx+bw, horizontal?by+bh:by);
+    grad.addColorStop(0, '#12161d'); grad.addColorStop(1, '#1b212b');
+    g.fillStyle = grad; g.fillRect(bx, by, bw, bh);
+    const paso = (horizontal ? bh : bw)/FILAS;
+    for(let f=0; f<FILAS; f++){
+      const t = f/FILAS;                       // 0 = pegado a la cancha
+      const luz = 0.35 + (1-t)*0.65;           // las de adelante se ven mejor
+      const largo = horizontal ? bw : bh;
+      const paso2 = 7 + t*2;
+      for(let i=0; i<largo/paso2; i++){
+        if(rnd() < 0.12) continue;             // huecos: no está lleno
+        const a = bx + (horizontal ? i*paso2 + rnd()*3 : f*paso + rnd()*2);
+        const b = by + (horizontal ? f*paso + rnd()*2 : i*paso2 + rnd()*3);
+        // mezcla de colores de hinchada según el sector
+        const r2 = rnd();
+        let col;
+        // La mayoría de la gente se ve como una mancha neutra; sólo unos
+        // pocos con el color del equipo. Con todos de color era confeti.
+        if(r2 < sesgo*0.30)                    col = ['#2c5f92','#356f a9'.replace(' ',''),'#22506f'][(i+f)%3];
+        else if(r2 < sesgo*0.30 + 0.14)        col = ['#8e3129','#a03b30','#742620'][(i+f)%3];
+        else col = ['#3c434e','#4a525f','#2f3640','#565e6c','#404855'][(i*3+f)%5];
+        g.globalAlpha = luz*(0.40 + rnd()*0.35);
+        g.fillStyle = col;
+        g.beginPath(); g.arc(a, b, 1.7 + rnd()*1.1, 0, Math.PI*2); g.fill();
+      }
+    }
+    g.globalAlpha = 1;
+    // baranda
+    g.strokeStyle = 'rgba(150,165,185,0.22)'; g.lineWidth = 1.5;
+    g.beginPath();
+    if(horizontal){ g.moveTo(bx, by + (by < cy ? bh : 0)); g.lineTo(bx+bw, by + (by < cy ? bh : 0)); }
+    else { g.moveTo(bx + (bx < cx ? bw : 0), by); g.lineTo(bx + (bx < cx ? bw : 0), by+bh); }
+    g.stroke();
+  }
+  tribuna(0, 0, W, y0-26, true, 0.55);           // norte: más hinchada local
+  tribuna(0, y1+26, W, H-(y1+26), true, 0.30);   // sur
+  tribuna(0, y0-26, x0-26, ch+52, false, 0.5);
+  tribuna(x1+26, y0-26, W-(x1+26), ch+52, false, 0.5);
+
+  /* ---------- Publicidad al borde del campo ---------- */
+  const LEMAS = ['POTRERO','· RK ·','BARRIO','FÚTBOL','· 5 ·','PICADO'];
+  function cartelera(bx, by, bw, bh, vertical){
+    const largo = vertical ? bh : bw;
+    const panel = 92;
+    for(let i=0; i*panel < largo; i++){
+      const off = i*panel;
+      const px = vertical ? bx : bx + off;
+      const py = vertical ? by + off : by;
+      const pw = vertical ? bw : Math.min(panel, largo-off);
+      const ph = vertical ? Math.min(panel, largo-off) : bh;
+      const base = ['#132033','#1b2430','#2a1416','#1a2b1e'][i%4];
+      const gg = g.createLinearGradient(px, py, px, py+ph);
+      gg.addColorStop(0, base); gg.addColorStop(1, '#0b0f16');
+      g.fillStyle = gg; g.fillRect(px, py, pw, ph);
+      g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 1; g.strokeRect(px+0.5, py+0.5, pw-1, ph-1);
+      if(!vertical && pw > 60){
+        g.save();
+        g.fillStyle = ['#f5c542','#e8eef7','#4da3ff','#e8443a'][i%4];
+        g.globalAlpha = 0.85;
+        g.font = '700 11px Oswald, Arial Narrow, sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(LEMAS[i%LEMAS.length], px+pw/2, py+ph/2);
+        g.restore();
+      }
+      // reflejo del cartel sobre el césped, abajo
+      if(!vertical && by > cy){
+        const rg = g.createLinearGradient(px, py+ph, px, py+ph+10);
+        rg.addColorStop(0,'rgba(255,255,255,0.05)'); rg.addColorStop(1,'rgba(255,255,255,0)');
+        g.fillStyle = rg; g.fillRect(px, py+ph, pw, 10);
+      }
+    }
+  }
+  /* ---------- Perímetro de césped fuera de las líneas ----------
+     Va ANTES que la publicidad: dibujado después la tapaba entera. */
+  g.fillStyle = '#317347';
+  g.fillRect(x0-30, y0-30, cw+60, ch+60);
+
+  // se dejan libres los extremos: ahí van las torres de luz y tapaban el texto
+  cartelera(x0+16, y0-30, cw-32, 20, false);
+  cartelera(x0+16, y1+10, cw-32, 20, false);
+  cartelera(x0-30, y0-30, 20, ch+60, true);
+  cartelera(x1+10, y0-30, 20, ch+60, true);
+
+  /* ---------- CÉSPED ---------- */
+  // 1. franjas de corte
+  const franjas = 14, fw = cw/franjas;
   for(let i=0;i<franjas;i++){
-    ctx.fillStyle = i%2===0 ? '#3d8f57' : '#36824e';
-    ctx.fillRect(CANCHA.x0 + i*fw, CANCHA.y0, fw+1, CANCHA.h);
+    const claro = i%2===0;
+    const gg = g.createLinearGradient(x0 + i*fw, y0, x0 + i*fw, y1);
+    if(claro){ gg.addColorStop(0,'#3f9459'); gg.addColorStop(0.5,'#3a8b53'); gg.addColorStop(1,'#357f4b'); }
+    else     { gg.addColorStop(0,'#357f4b'); gg.addColorStop(0.5,'#307747'); gg.addColorStop(1,'#2c6d41'); }
+    g.fillStyle = gg;
+    g.fillRect(x0 + i*fw, y0, fw+1, ch);
   }
 
-  // luz de los reflectores: cuatro focos desde las esquinas
-  [[0.16,0.10],[0.84,0.10],[0.16,0.90],[0.84,0.90]].forEach(([fx,fy])=>{
-    const x = CANCHA.x0 + fx*CANCHA.w, y = CANCHA.y0 + fy*CANCHA.h;
-    const g = ctx.createRadialGradient(x,y,10,x,y,340);
-    g.addColorStop(0,'rgba(255,255,225,0.20)');
-    g.addColorStop(0.5,'rgba(255,255,220,0.05)');
-    g.addColorStop(1,'rgba(255,255,220,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(CANCHA.x0, CANCHA.y0, CANCHA.w, CANCHA.h);
+  // 2. manchones grandes: el césped nunca es parejo
+  for(let i=0;i<170;i++){
+    const px = x0 + rnd()*cw, py = y0 + rnd()*ch;
+    const r = 26 + rnd()*90;
+    const gg = g.createRadialGradient(px,py,1,px,py,r);
+    const osc = rnd() < 0.5;
+    gg.addColorStop(0, osc ? 'rgba(20,52,30,0.10)' : 'rgba(150,205,150,0.07)');
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gg;
+    g.beginPath(); g.arc(px,py,r,0,Math.PI*2); g.fill();
+  }
+
+  // 3. briznas: miles de rayitas cortas, es lo que da la textura
+  for(let i=0;i<30000;i++){
+    const px = x0 + rnd()*cw, py = y0 + rnd()*ch;
+    const largo = 1.6 + rnd()*3.2;
+    const incl = -0.5 + rnd()*1.0;
+    const claro = rnd();
+    g.strokeStyle = claro > 0.78 ? 'rgba(170,215,165,0.10)'
+                  : claro > 0.46 ? 'rgba(34,74,44,0.10)'
+                                 : 'rgba(80,150,96,0.08)';
+    g.lineWidth = 0.9;
+    g.beginPath();
+    g.moveTo(px, py);
+    g.lineTo(px + incl*largo, py - largo);
+    g.stroke();
+  }
+
+  // 4. zonas gastadas: bocas de arco, punto central y penales
+  function pelado(px, py, rx, ry, fuerza){
+    const gg = g.createRadialGradient(px,py,1,px,py,Math.max(rx,ry));
+    gg.addColorStop(0, 'rgba(126,104,62,' + fuerza + ')');
+    gg.addColorStop(0.55, 'rgba(112,110,64,' + (fuerza*0.5) + ')');
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.save(); g.translate(px,py); g.scale(rx/Math.max(rx,ry), ry/Math.max(rx,ry));
+    g.fillStyle = gg;
+    g.beginPath(); g.arc(0,0,Math.max(rx,ry),0,Math.PI*2); g.fill();
+    g.restore();
+  }
+  pelado(x0 + 42, cy, 62, ARCO_ALTO*0.62, 0.30);
+  pelado(x1 - 42, cy, 62, ARCO_ALTO*0.62, 0.30);
+  pelado(cx, cy, 34, 26, 0.22);
+  pelado(x0 + AREA_ANCHO*0.72, cy, 22, 18, 0.20);
+  pelado(x1 - AREA_ANCHO*0.72, cy, 22, 18, 0.20);
+
+  /* ---------- Luz de los reflectores ---------- */
+  [[0.13,0.08],[0.87,0.08],[0.13,0.92],[0.87,0.92]].forEach(([fx,fy])=>{
+    const px = x0 + fx*cw, py = y0 + fy*ch;
+    const gg = g.createRadialGradient(px,py,10,px,py,430);
+    gg.addColorStop(0,'rgba(255,252,225,0.13)');
+    gg.addColorStop(0.45,'rgba(255,250,215,0.05)');
+    gg.addColorStop(1,'rgba(255,250,215,0)');
+    g.fillStyle = gg; g.fillRect(0,0,W,H);
+  });
+  // sombra suave hacia los bordes del campo
+  const bordes = g.createRadialGradient(cx, cy, ch*0.36, cx, cy, cw*0.72);
+  bordes.addColorStop(0,'rgba(0,0,0,0)');
+  bordes.addColorStop(1,'rgba(0,0,0,0.26)');
+  g.fillStyle = bordes; g.fillRect(x0, y0, cw, ch);
+
+  /* ---------- Torres de luz ---------- */
+  [[x0-14, y0-14],[x1+14, y0-14],[x0-14, y1+14],[x1+14, y1+14]].forEach(([tx,ty])=>{
+    const halo = g.createRadialGradient(tx,ty,2,tx,ty,54);
+    halo.addColorStop(0,'rgba(255,253,235,0.55)');
+    halo.addColorStop(0.22,'rgba(255,248,200,0.22)');
+    halo.addColorStop(1,'rgba(255,248,200,0)');
+    g.fillStyle = halo;
+    g.beginPath(); g.arc(tx,ty,54,0,Math.PI*2); g.fill();
+    g.fillStyle = '#2a3038';
+    rr(g, tx-13, ty-9, 26, 18, 3); g.fill();
+    g.fillStyle = 'rgba(255,251,225,0.92)';
+    for(let a=0;a<3;a++) for(let b2=0;b2<2;b2++)
+      g.fillRect(tx-10 + a*7.5, ty-6 + b2*7, 5.5, 5);
   });
 
-  // líneas
-  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(CANCHA.x0, CANCHA.y0, CANCHA.w, CANCHA.h);
-  ctx.beginPath();
-  ctx.moveTo(CANCHA.cx, CANCHA.y0); ctx.lineTo(CANCHA.cx, CANCHA.y1); ctx.stroke();
-  ctx.beginPath(); ctx.arc(CANCHA.cx, CANCHA.cy, CIRCULO_R, 0, Math.PI*2); ctx.stroke();
-  ctx.beginPath(); ctx.arc(CANCHA.cx, CANCHA.cy, 4, 0, Math.PI*2);
-  ctx.fillStyle = 'rgba(255,255,255,0.72)'; ctx.fill();
-
-  // áreas y arcos
+  /* ---------- Líneas de cal ---------- */
+  // La cal no es un trazo perfecto: se dibuja con un halo suave y variación
+  function cal(fn, ancho){
+    g.save();
+    g.strokeStyle = 'rgba(255,255,255,0.14)'; g.lineWidth = (ancho||4)+4;
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    fn();
+    g.strokeStyle = 'rgba(248,252,255,0.88)'; g.lineWidth = ancho||4;
+    fn();
+    g.restore();
+  }
+  cal(()=>{ g.beginPath(); g.rect(x0, y0, cw, ch); g.stroke(); });
+  cal(()=>{ g.beginPath(); g.moveTo(cx, y0); g.lineTo(cx, y1); g.stroke(); });
+  cal(()=>{ g.beginPath(); g.arc(cx, cy, CIRCULO_R, 0, Math.PI*2); g.stroke(); });
   [0,1].forEach(lado=>{
     const izq = lado === 0;
-    const xLinea = izq ? CANCHA.x0 : CANCHA.x1;
-    const s = izq ? 1 : -1;
-    ctx.strokeRect(izq ? CANCHA.x0 : CANCHA.x1 - AREA_ANCHO, CANCHA.cy - AREA_ALTO/2,
-                   AREA_ANCHO, AREA_ALTO);
-    ctx.strokeRect(izq ? CANCHA.x0 : CANCHA.x1 - AREA_ANCHO*0.42, CANCHA.cy - AREA_ALTO*0.42,
-                   AREA_ANCHO*0.42, AREA_ALTO*0.42);
-    // punto de penal
-    ctx.beginPath(); ctx.arc(xLinea + s*AREA_ANCHO*0.72, CANCHA.cy, 3.5, 0, Math.PI*2); ctx.fill();
-
-    // red
-    const rx = izq ? CANCHA.x0 - ARCO_FONDO : CANCHA.x1;
-    ctx.fillStyle = 'rgba(238,244,252,0.13)';
-    ctx.fillRect(rx, ARCO_Y0, ARCO_FONDO, ARCO_ALTO);
-    ctx.strokeStyle = 'rgba(238,244,252,0.34)';
-    ctx.lineWidth = 1;
-    for(let i=1;i<7;i++){
-      const gx = rx + i*ARCO_FONDO/7;
-      ctx.beginPath(); ctx.moveTo(gx, ARCO_Y0); ctx.lineTo(gx, ARCO_Y1); ctx.stroke();
-    }
-    for(let i=1;i<11;i++){
-      const gy = ARCO_Y0 + i*ARCO_ALTO/11;
-      ctx.beginPath(); ctx.moveTo(rx, gy); ctx.lineTo(rx+ARCO_FONDO, gy); ctx.stroke();
-    }
-    // postes
-    ctx.strokeStyle = '#f2f5fa'; ctx.lineWidth = 5; ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(xLinea, ARCO_Y0); ctx.lineTo(xLinea, ARCO_Y1);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,0.72)'; ctx.lineWidth = 3; ctx.lineCap = 'butt';
+    const ax = izq ? x0 : x1 - AREA_ANCHO;
+    cal(()=>{ g.beginPath(); g.rect(ax, cy - AREA_ALTO/2, AREA_ANCHO, AREA_ALTO); g.stroke(); });
   });
+  // área chica, bien
+  [0,1].forEach(lado=>{
+    const izq = lado === 0;
+    const aw = AREA_ANCHO*0.42, ah = AREA_ALTO*0.46;
+    const ax = izq ? x0 : x1 - aw;
+    cal(()=>{ g.beginPath(); g.rect(ax, cy - ah/2, aw, ah); g.stroke(); }, 3.5);
+  });
+  // puntos: central y de penal
+  g.fillStyle = 'rgba(248,252,255,0.9)';
+  [[cx,cy,4.5],
+   [x0 + AREA_ANCHO*0.72, cy, 4],
+   [x1 - AREA_ANCHO*0.72, cy, 4]].forEach(([px,py,r])=>{
+    g.beginPath(); g.arc(px,py,r,0,Math.PI*2); g.fill();
+  });
+  // arcos de esquina
+  [[x0,y0,0,Math.PI/2],[x1,y0,Math.PI/2,Math.PI],[x1,y1,Math.PI,Math.PI*1.5],[x0,y1,Math.PI*1.5,Math.PI*2]]
+    .forEach(([px,py,a0,a1])=> cal(()=>{ g.beginPath(); g.arc(px,py,13,a0,a1); g.stroke(); }, 3));
+
+  /* ---------- Arcos con red ---------- */
+  [0,1].forEach(lado=>{
+    const izq = lado === 0;
+    const xLinea = izq ? x0 : x1;
+    const sg = izq ? -1 : 1;                     // hacia afuera
+    const fondo = xLinea + sg*ARCO_FONDO;
+    // La red se dibuja en trapecio: el fondo un poco más chico que la boca,
+    // que es lo que le da volumen a un arco visto desde arriba.
+    const yF0 = ARCO_Y0 + 13, yF1 = ARCO_Y1 - 13;
+    g.save();
+    g.beginPath();
+    g.moveTo(xLinea, ARCO_Y0); g.lineTo(fondo, yF0);
+    g.lineTo(fondo, yF1); g.lineTo(xLinea, ARCO_Y1);
+    g.closePath();
+    const rg = g.createLinearGradient(xLinea, 0, fondo, 0);
+    rg.addColorStop(0,'rgba(18,26,36,0.42)');
+    rg.addColorStop(1,'rgba(12,18,26,0.62)');
+    g.fillStyle = rg; g.fill();
+    g.clip();
+    g.strokeStyle = 'rgba(226,238,252,0.55)'; g.lineWidth = 0.8;
+    for(let i=0;i<=13;i++){
+      const t = i/13;
+      g.beginPath();
+      g.moveTo(xLinea + sg*ARCO_FONDO*t, ARCO_Y0 + (yF0-ARCO_Y0)*t);
+      g.lineTo(xLinea + sg*ARCO_FONDO*t, ARCO_Y1 + (yF1-ARCO_Y1)*t);
+      g.stroke();
+    }
+    for(let i=0;i<=18;i++){
+      const t = i/18;
+      g.beginPath();
+      g.moveTo(xLinea, ARCO_Y0 + ARCO_ALTO*t);
+      g.lineTo(fondo,  yF0 + (yF1-yF0)*t);
+      g.stroke();
+    }
+    g.restore();
+    // sombra de la red sobre el piso
+    g.fillStyle = 'rgba(0,0,0,0.20)';
+    g.beginPath();
+    g.moveTo(xLinea, ARCO_Y0); g.lineTo(fondo, yF0);
+    g.lineTo(fondo, yF1); g.lineTo(xLinea, ARCO_Y1);
+    g.closePath(); g.fill();
+    // postes, con brillo
+    g.lineCap = 'round';
+    g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 8;
+    g.beginPath(); g.moveTo(xLinea, ARCO_Y0); g.lineTo(xLinea, ARCO_Y1); g.stroke();
+    g.strokeStyle = '#eef3fa'; g.lineWidth = 6;
+    g.beginPath(); g.moveTo(xLinea, ARCO_Y0); g.lineTo(xLinea, ARCO_Y1); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(xLinea - sg*1.4, ARCO_Y0+2); g.lineTo(xLinea - sg*1.4, ARCO_Y1-2); g.stroke();
+    g.lineCap = 'butt';
+  });
+
+  /* ---------- Viñeta, horneada acá ---------- */
+  const vin = g.createRadialGradient(W/2, H/2, H*0.50, W/2, H/2, W*0.78);
+  vin.addColorStop(0, 'rgba(0,0,0,0)');
+  vin.addColorStop(1, 'rgba(0,0,0,0.34)');
+  g.fillStyle = vin; g.fillRect(0,0,W,H);
+
+  return cvF;
+}
+let FONDO = null;
+
+function dibujarCancha(){
+  if(!FONDO) FONDO = construirFondo();
+  ctx.drawImage(FONDO, 0, 0);
 }
 
+/* ============================================================
+   JUGADORES
+   Con piernas y brazos que se mueven: verlos correr es lo que más
+   cambia la lectura, mucho más que cualquier detalle de la camiseta.
+   ============================================================ */
 const PIELES = ['#e8b98f','#c98d5f','#8d5a34','#f0cfae','#a9703f'];
+const PELOS  = ['#2a1d14','#12100e','#5b3a1e','#1c1712','#3d2a18'];
+
+/* Los jugadores se pre-renderizan mirando a la derecha, en varios cuadros
+   del ciclo de carrera, y en el bucle sólo se rota la imagen.
+   Dibujarlos de cero cada cuadro costaba 15 ms los diez juntos (el cuadro
+   entero): el recorte de las franjas y el texto del número son caros. */
+const CUADROS_CARRERA = 10;
+const SPRITE_LADO = Math.ceil(R_JUG*4.2);
+const spritesJugador = new Map();
+
+function construirSpriteJugador(eq_i, esArq, num, ciclo){
+  const S = SPRITE_LADO;
+  const cvS = document.createElement('canvas');
+  cvS.width = S; cvS.height = S;
+  const g = cvS.getContext('2d');
+  const eq = EQUIPOS[eq_i];
+  const camiseta = esArq ? eq.arquero : eq.camiseta;
+  const oscuro   = esArq ? '#b8902a' : eq.franja;
+  const piel = PIELES[(num*2 + eq_i) % PIELES.length];
+  const pelo = PELOS[(num + eq_i*3) % PELOS.length];
+
+  const R = R_JUG;
+  const cx = S/2, cy = S/2;
+  // dentro del sprite el jugador mira siempre hacia +x
+  const fx = 1, fy = 0, rx = 0, ry = 1;
+
+  // piernas
+  for(const lado of [-1, 1]){
+    const paso = ciclo*lado;
+    const px = cx + rx*lado*R*0.30 + fx*paso*R*0.52;
+    const py = cy + ry*lado*R*0.30 + fy*paso*R*0.52;
+    g.fillStyle = piel;
+    g.beginPath(); g.ellipse(px, py, R*0.24, R*0.40, 0, 0, Math.PI*2); g.fill();
+    g.fillStyle = '#111418';
+    g.beginPath(); g.ellipse(px + fx*R*0.34, py + fy*R*0.34, R*0.20, R*0.14, 0, 0, Math.PI*2); g.fill();
+  }
+
+  // short
+  g.fillStyle = eq.short;
+  g.beginPath(); g.ellipse(cx - fx*R*0.14, cy - fy*R*0.14, R*0.62, R*0.52, 0, 0, Math.PI*2); g.fill();
+
+  // brazos, al revés que las piernas
+  for(const lado of [-1, 1]){
+    const paso = -ciclo*lado;
+    const ax = cx + rx*lado*R*0.74 + fx*paso*R*0.34;
+    const ay = cy + ry*lado*R*0.74 + fy*paso*R*0.34;
+    g.fillStyle = piel;
+    g.beginPath(); g.ellipse(ax, ay, R*0.20, R*0.30, 0, 0, Math.PI*2); g.fill();
+    if(esArq){
+      g.fillStyle = '#f2f6fb';
+      g.beginPath(); g.ellipse(ax + fx*R*0.22, ay + fy*R*0.22, R*0.19, R*0.16, 0, 0, Math.PI*2); g.fill();
+    }
+  }
+
+  // torso
+  const gt = g.createLinearGradient(cx, cy - R, cx, cy + R);
+  gt.addColorStop(0, oscuro); gt.addColorStop(0.40, camiseta); gt.addColorStop(1, oscuro);
+  g.fillStyle = gt;
+  g.beginPath(); g.ellipse(cx, cy, R*0.66, R*0.82, 0, 0, Math.PI*2); g.fill();
+
+  g.save();
+  g.beginPath(); g.ellipse(cx, cy, R*0.66, R*0.82, 0, 0, Math.PI*2); g.clip();
+  g.fillStyle = 'rgba(255,255,255,0.34)';
+  for(const d of [-0.40, 0.40]){
+    g.beginPath(); g.ellipse(cx, cy + d*R, R*1.1, R*0.15, 0, 0, Math.PI*2); g.fill();
+  }
+  g.fillStyle = 'rgba(0,0,0,0.22)';
+  g.beginPath(); g.ellipse(cx + R*0.28, cy, R*0.26, R*0.42, 0, 0, Math.PI*2); g.fill();
+  g.restore();
+  g.strokeStyle = 'rgba(0,0,0,0.42)'; g.lineWidth = 1.2;
+  g.beginPath(); g.ellipse(cx, cy, R*0.66, R*0.82, 0, 0, Math.PI*2); g.stroke();
+
+  // número en la espalda
+  g.save();
+  g.translate(cx - R*0.34, cy);
+  g.rotate(Math.PI/2);
+  g.fillStyle = 'rgba(255,255,255,0.94)';
+  g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 2;
+  g.font = '700 9.5px Oswald, Arial Narrow, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.strokeText(num, 0, 0); g.fillText(num, 0, 0);
+  g.restore();
+
+  // cabeza
+  const hx = cx + R*0.22, hy = cy - 1.5;
+  g.fillStyle = 'rgba(0,0,0,0.20)';
+  g.beginPath(); g.arc(hx + 1.2, hy + 1.6, R*0.42, 0, Math.PI*2); g.fill();
+  const gh = g.createRadialGradient(hx - R*0.14, hy - R*0.16, 1, hx, hy, R*0.44);
+  gh.addColorStop(0, '#ffffff'); gh.addColorStop(0.28, piel); gh.addColorStop(1, 'rgba(0,0,0,0.35)');
+  g.fillStyle = gh;
+  g.beginPath(); g.arc(hx, hy, R*0.42, 0, Math.PI*2); g.fill();
+  g.fillStyle = pelo;
+  g.beginPath(); g.arc(hx, hy, R*0.43, Math.PI*0.36, Math.PI*1.64); g.closePath(); g.fill();
+
+  return cvS;
+}
+
+function spriteDe(p, cuadro){
+  const esArq = p.rol === 'ARQ';
+  const clave = p.eq + '|' + (esArq?'a':'j') + '|' + p.num + '|' + cuadro;
+  let spr = spritesJugador.get(clave);
+  if(!spr){
+    const ciclo = cuadro === CUADROS_CARRERA
+      ? 0                                             // parado
+      : Math.sin(cuadro/CUADROS_CARRERA*Math.PI*2);
+    spr = construirSpriteJugador(p.eq, esArq, p.num, ciclo);
+    spritesJugador.set(clave, spr);
+  }
+  return spr;
+}
 
 function dibujarJugador(p){
-  const eq = EQUIPOS[p.eq];
-  const esArq = p.rol === 'ARQ';
-  const color  = esArq ? eq.arquero : eq.camiseta;
-  const oscuro = esArq ? '#b8902a' : eq.franja;
-  const bal = Math.sin(p.paso)*1.5;            // balanceo al correr
-  const cx = p.x, cy = p.y + bal;
-  const ang = p.mira;
-  const fx = Math.cos(ang), fy = Math.sin(ang);
+  const R = R_JUG;
+  const corriendo = Math.hypot(p.vx, p.vy) > 12;
+  const fase = p.paso*2.2;
+  const cuadro = corriendo
+    ? ((Math.floor(fase/(Math.PI*2)*CUADROS_CARRERA) % CUADROS_CARRERA) + CUADROS_CARRERA) % CUADROS_CARRERA
+    : CUADROS_CARRERA;
+  const rebote = corriendo ? Math.abs(Math.sin(fase))*1.2 : 0;
 
-  // sombra
-  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  // sombra: en el piso, en la dirección de la luz, sin rotar con el jugador
+  ctx.fillStyle = 'rgba(0,0,0,0.34)';
   ctx.beginPath();
-  ctx.ellipse(p.x + 3.5, p.y + 6, R_JUG*0.95, R_JUG*0.52, 0, 0, Math.PI*2);
+  ctx.ellipse(p.x + LUZ.x*5, p.y + LUZ.y*5, R*0.92, R*0.56, 0, 0, Math.PI*2);
   ctx.fill();
 
-  // aro del jugador que manejás
   if(p === controlado){
-    ctx.strokeStyle = 'rgba(245,197,66,0.95)';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, R_JUG + 6, (R_JUG + 6)*0.55, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(245,197,66,0.9)'; ctx.lineWidth = 2.6;
+    ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, R + 7, (R + 7)*0.52, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = 'rgba(245,197,66,0.20)';
+    ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, R + 7, (R + 7)*0.52, 0, 0, Math.PI*2); ctx.fill();
   }
 
-  // piernas / short, atrás del cuerpo
-  ctx.fillStyle = eq.short;
-  ctx.beginPath();
-  ctx.ellipse(cx - fx*R_JUG*0.42, cy - fy*R_JUG*0.42, R_JUG*0.72, R_JUG*0.58, ang, 0, Math.PI*2);
-  ctx.fill();
-
-  // torso: elipse más ancha de hombro a hombro que de pecho a espalda
-  const g = ctx.createLinearGradient(cx - fy*R_JUG, cy + fx*R_JUG, cx + fy*R_JUG, cy - fx*R_JUG);
-  g.addColorStop(0, oscuro); g.addColorStop(0.42, color); g.addColorStop(1, oscuro);
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, R_JUG*0.86, R_JUG, ang, 0, Math.PI*2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.40)'; ctx.lineWidth = 1.4; ctx.stroke();
-
-  // franja de la camiseta, en el sentido del cuerpo
+  const spr = spriteDe(p, cuadro);
   ctx.save();
-  ctx.beginPath(); ctx.ellipse(cx, cy, R_JUG*0.86, R_JUG, ang, 0, Math.PI*2); ctx.clip();
-  ctx.fillStyle = 'rgba(255,255,255,0.30)';
-  ctx.beginPath();
-  ctx.ellipse(cx - fy*R_JUG*0.42, cy + fx*R_JUG*0.42, R_JUG*0.20, R_JUG*1.1, ang, 0, Math.PI*2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(cx + fy*R_JUG*0.42, cy - fx*R_JUG*0.42, R_JUG*0.20, R_JUG*1.1, ang, 0, Math.PI*2);
-  ctx.fill();
+  ctx.translate(p.x, p.y - rebote);
+  ctx.rotate(p.mira);
+  ctx.drawImage(spr, -SPRITE_LADO/2, -SPRITE_LADO/2);
   ctx.restore();
 
-  // número, sobre la espalda
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = '700 9px Oswald, Arial Narrow, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(p.num, cx - fx*R_JUG*0.30, cy - fy*R_JUG*0.30);
-
-  // cabeza, corrida hacia adelante
-  const hx = cx + fx*R_JUG*0.18, hy = cy + fy*R_JUG*0.18;
-  ctx.fillStyle = PIELES[(p.num + p.eq*2) % PIELES.length];
-  ctx.beginPath(); ctx.arc(hx, hy, R_JUG*0.44, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
-  // pelo: media luna del lado de atrás
-  ctx.fillStyle = 'rgba(30,22,16,0.72)';
-  ctx.beginPath();
-  ctx.arc(hx, hy, R_JUG*0.44, ang + Math.PI*0.42, ang + Math.PI*1.58);
-  ctx.closePath(); ctx.fill();
-
-  // botín adelante
-  ctx.fillStyle = esArq ? '#1d2027' : eq.short;
-  ctx.beginPath();
-  ctx.ellipse(cx + fx*(R_JUG*0.92), cy + fy*(R_JUG*0.92), 4.2, 3, ang, 0, Math.PI*2);
-  ctx.fill();
-
-  if(esArq){   // guantes, para distinguirlo de un vistazo
-    ctx.fillStyle = '#f2f5fa';
-    ctx.beginPath();
-    ctx.arc(cx + fx*R_JUG*0.30 - fy*R_JUG*0.80, cy + fy*R_JUG*0.30 + fx*R_JUG*0.80, 3.2, 0, Math.PI*2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + fx*R_JUG*0.30 + fy*R_JUG*0.80, cy + fy*R_JUG*0.30 - fx*R_JUG*0.80, 3.2, 0, Math.PI*2);
-    ctx.fill();
-  }
-
   if(p.barrida > 0){
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, R_JUG + 5, ang + 2.2, ang + 4.1);
-    ctx.stroke();
+    const fx = Math.cos(p.mira), fy = Math.sin(p.mira);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.arc(p.x, p.y, R + 6, p.mira + 2.2, p.mira + 4.1); ctx.stroke();
+    ctx.fillStyle = 'rgba(214,226,206,0.30)';
+    for(let i=0;i<4;i++){
+      ctx.beginPath();
+      ctx.arc(p.x - fx*(R + i*4) + (Math.random()-0.5)*7,
+              p.y - fy*(R + i*4) + (Math.random()-0.5)*7, 3 - i*0.5, 0, Math.PI*2);
+      ctx.fill();
+    }
   }
 }
 
+/* ============================================================
+   PELOTA — gajos de verdad, giro y estela al viajar rápido
+   ============================================================ */
 function dibujarPelota(){
   const b = pelota;
-  const esc = 1 + b.z*0.006;          // más grande cuanto más alto vuela
+  const vel = Math.hypot(b.vx, b.vy);
+  const esc = 1 + b.z*0.0055;
+  const by = b.y - b.z*0.55;
 
-  // estela
-  for(let i=0;i<estelaPelota.length;i++){
-    const e = estelaPelota[i];
-    ctx.fillStyle = 'rgba(255,255,255,' + (i/estelaPelota.length*0.20) + ')';
-    ctx.beginPath(); ctx.arc(e.x, e.y - e.z*0.55, R_PEL*0.75, 0, Math.PI*2); ctx.fill();
+  // estela: se ve sólo cuando va rápido
+  if(vel > 150*RITMO){
+    for(let i=0;i<estelaPelota.length;i++){
+      const e = estelaPelota[i];
+      const a = (i/estelaPelota.length);
+      ctx.fillStyle = 'rgba(255,255,255,' + (a*a*0.22) + ')';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y - e.z*0.55, R_PEL*(0.35 + a*0.55), 0, Math.PI*2);
+      ctx.fill();
+    }
   }
 
-  // sombra en el piso: se separa y se agranda con la altura
-  ctx.fillStyle = 'rgba(0,0,0,' + (0.34 - Math.min(0.22, b.z*0.0016)) + ')';
+  // sombra: se separa y crece con la altura
+  const dz = Math.min(0.24, b.z*0.0018);
+  ctx.fillStyle = 'rgba(0,0,0,' + (0.36 - dz) + ')';
   ctx.beginPath();
-  ctx.ellipse(b.x + 2 + b.z*0.05, b.y + 4, R_PEL*(1 + b.z*0.004), R_PEL*0.62*(1 + b.z*0.004), 0, 0, Math.PI*2);
+  ctx.ellipse(b.x + LUZ.x*(4 + b.z*0.10), b.y + LUZ.y*(4 + b.z*0.10),
+              R_PEL*(1 + b.z*0.0038), R_PEL*0.6*(1 + b.z*0.0038), 0, 0, Math.PI*2);
   ctx.fill();
 
-  const by = b.y - b.z*0.55;
-  const g = ctx.createRadialGradient(b.x - 2, by - 2.5, 0.6, b.x, by, R_PEL*esc);
-  g.addColorStop(0, '#ffffff'); g.addColorStop(0.72, '#eef1f5'); g.addColorStop(1, '#b9c1cc');
-  ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(b.x, by, R_PEL*esc, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = 'rgba(20,26,34,0.45)'; ctx.lineWidth = 1; ctx.stroke();
+  const r = R_PEL*esc;
+  // cuerpo
+  const gg = ctx.createRadialGradient(b.x - r*0.36, by - r*0.42, r*0.05, b.x, by, r);
+  gg.addColorStop(0, '#ffffff'); gg.addColorStop(0.55, '#f2f5f9');
+  gg.addColorStop(0.86, '#cdd5df'); gg.addColorStop(1, '#98a3b0');
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(b.x, by, r, 0, Math.PI*2); ctx.fill();
 
-  // parches que giran, para que se note el rodar
-  ctx.fillStyle = 'rgba(24,30,40,0.82)';
-  for(let i=0;i<3;i++){
-    const a = b.giro + i*Math.PI*2/3;
-    const rx = b.x + Math.cos(a)*R_PEL*0.45*esc;
-    const ry = by  + Math.sin(a)*R_PEL*0.45*esc;
-    ctx.beginPath(); ctx.arc(rx, ry, R_PEL*0.26*esc, 0, Math.PI*2); ctx.fill();
+  // gajos: un pentágono al centro y cinco alrededor, girando
+  ctx.save();
+  ctx.beginPath(); ctx.arc(b.x, by, r, 0, Math.PI*2); ctx.clip();
+  ctx.translate(b.x, by);
+  ctx.rotate(b.giro*0.5);
+  ctx.fillStyle = 'rgba(26,32,42,0.88)';
+  function pentagono(px, py, rad, rot){
+    ctx.beginPath();
+    for(let i=0;i<5;i++){
+      const a = rot + i*Math.PI*2/5 - Math.PI/2;
+      const vx = px + Math.cos(a)*rad, vy = py + Math.sin(a)*rad;
+      if(i===0) ctx.moveTo(vx,vy); else ctx.lineTo(vx,vy);
+    }
+    ctx.closePath(); ctx.fill();
   }
+  pentagono(-r*0.16, -r*0.10, r*0.34, 0.3);
+  for(let i=0;i<5;i++){
+    const a = b.giro*0.22 + i*Math.PI*2/5;
+    pentagono(Math.cos(a)*r*0.92, Math.sin(a)*r*0.92, r*0.30, a);
+  }
+  ctx.restore();
+
+  // brillo especular
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(b.x - r*0.34, by - r*0.40, r*0.28, r*0.20, -0.6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(24,30,40,0.35)'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.arc(b.x, by, r, 0, Math.PI*2); ctx.stroke();
 }
 
 function dibujar(){
@@ -1308,11 +1651,6 @@ function dibujar(){
   }
   ctx.globalAlpha = 1;
 
-  // viñeta de estadio
-  const v = ctx.createRadialGradient(W/2, H/2, H*0.56, W/2, H/2, W*0.80);
-  v.addColorStop(0, 'rgba(0,0,0,0)');
-  v.addColorStop(1, 'rgba(0,0,0,0.30)');
-  ctx.fillStyle = v; ctx.fillRect(0,0,W,H);
 
   ctx.restore();
 }
