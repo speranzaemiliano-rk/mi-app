@@ -4,47 +4,65 @@
 //  Este es el ÚNICO archivo que hay que tocar para cambiar a qué proyecto
 //  de Firebase sincroniza la planilla. No hace falta abrir index.html.
 //
-//  ⚠️ Conviene usar un proyecto de Firebase SEPARADO del sistema de gestión.
-//  El nodo de la obra es de lectura y escritura abierta para cualquiera que
-//  tenga el código del link (no hay login, es a propósito). En un proyecto
-//  aparte, un error en esas reglas no puede tocar la contabilidad.
+//  ⚠️ Usa un proyecto de Firebase SEPARADO del sistema de gestión, a
+//  propósito. En el proyecto del sistema las reglas le dan lectura de
+//  `empresas` a cualquiera que tenga rol, aunque sea `lector`: darle
+//  cuenta ahí al capataz le abriría toda la contabilidad. Acá no.
 //
 //  Cómo conseguir estos valores:
 //    Firebase Console → el proyecto → ⚙️ Configuración del proyecto →
 //    "Tus apps" → app web → SDK de Firebase → "Configuración".
-//    De todo lo que muestra, acá sólo hacen falta estos tres.
 //
 //  Estos valores NO son secretos: viajan igual al navegador de cualquiera
-//  que abra la página. Lo que protege los datos son las reglas de Firebase.
+//  que abra la página. Lo que protege los datos son las reglas y el login.
 //
-//  Reglas que hay que publicar en ESE proyecto (Realtime Database → Reglas):
+//  ── Qué hay que hacer en ese proyecto ────────────────────────────────
 //
-//    {
-//      "rules": {
-//        ".read": false,
-//        ".write": false,
-//        "parteObra": {
-//          "$codigo": {
-//            ".read":  "$codigo.length >= 20",
-//            ".write": "$codigo.length >= 20",
-//            "$seccion": {
-//              ".validate": "$seccion === 'gremios' || $seccion === 'personal' || $seccion === 'dias'"
-//            }
-//          }
-//        }
-//      }
-//    }
+//  1) Authentication → Sign-in method → habilitar "Correo electrónico/
+//     contraseña". Las cuentas se crean a mano desde Authentication →
+//     Users → "Agregar usuario". No hay alta pública en la planilla.
 //
-//  Si este archivo falta o queda vacío, la planilla funciona igual: guarda
-//  en el equipo y el botón ☁ avisa que falta configurar la base.
+//  2) Realtime Database → Reglas → publicar esto:
+//
+//     {
+//       "rules": {
+//         ".read": false,
+//         ".write": false,
+//         "permitidos": {
+//           "$uid": { ".read": "auth != null && auth.uid === $uid" }
+//         },
+//         "parteObra": {
+//           "$obra": {
+//             ".read":  "auth != null && root.child('permitidos').child(auth.uid).exists()",
+//             ".write": "auth != null && root.child('permitidos').child(auth.uid).exists()",
+//             "$seccion": {
+//               ".validate": "$seccion === 'gremios' || $seccion === 'personal' || $seccion === 'dias'"
+//             }
+//           }
+//         }
+//       }
+//     }
+//
+//     `permitidos` no tiene `.write`, así que sólo se edita desde la
+//     consola. Tener cuenta NO alcanza: hay que estar en esa lista. Si
+//     alguien lograra registrarse igual, sin entrada ahí no ve nada.
+//
+//  3) Por cada persona que use la planilla: crearle el usuario en
+//     Authentication, copiar su UID, e ir a Realtime Database → Datos →
+//     crear `permitidos/<UID>` con el valor true.
+//
+//  Si falta la apiKey o la databaseURL, la planilla funciona igual:
+//  guarda en el equipo y el botón ☁ avisa que falta configurar.
 // ════════════════════════════════════════════════════════════════════════
 window.OBRA_CONFIG = {
   firebase: {
     // Proyecto "control-caja", separado del sistema de gestión.
-    // apiKey sólo hace falta si algún día se agrega login: la Realtime
-    // Database se maneja con la databaseURL y las reglas.
+    // La apiKey hace falta para el login (Authentication).
     apiKey:      "",
     databaseURL: "https://control-caja-965ad-default-rtdb.firebaseio.com",
     projectId:   "control-caja-965ad"
-  }
+  },
+  // Nodo donde se guarda esta obra. Si algún día hay más de una obra en el
+  // mismo proyecto, cada una lleva el suyo ("obra1", "obra2"…).
+  obraId: "obra1"
 };
