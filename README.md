@@ -20,10 +20,11 @@ PWA (Progressive Web App) de gestión administrativa y contable para **múltiple
 8. [Flujo de facturación ARCA](#-flujo-de-facturación-arca)
 9. [Integraciones externas](#-integraciones-externas)
 10. [PWA y modo offline](#-pwa-y-modo-offline)
-11. [Despliegue (deploy)](#-despliegue-deploy)
-12. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
-13. [Guía rápida de uso](#-guía-rápida-de-uso)
-14. [Trabajo pendiente](#-trabajo-pendiente)
+11. [Parte de obra (`obra/`)](#-parte-de-obra-obra)
+12. [Despliegue (deploy)](#-despliegue-deploy)
+13. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
+14. [Guía rápida de uso](#-guía-rápida-de-uso)
+15. [Trabajo pendiente](#-trabajo-pendiente)
 
 ---
 
@@ -64,6 +65,10 @@ mi-app/
 │   ├── icon-512.png
 │   └── icon.svg
 ├── logo png_*.png      # Logo de la marca.
+├── obra/               # Planilla de parte diario de obra (independiente de la app).
+│   ├── index.html      # Toda la planilla (HTML+CSS+JS, sin Firebase ni login).
+│   ├── manifest.json   # Manifiesto PWA propio (instalable en el celular).
+│   └── sw.js           # Service Worker propio, alcance sólo /obra/.
 └── functions/          # Backend.
     ├── server.js       # ★ Servidor Express activo (Railway): ARCA + Belvo + Prometeo.
     ├── index.js        # Variante para Firebase Cloud Functions (solo ARCA).
@@ -282,6 +287,18 @@ Así viaja una factura desde que se emite hasta que llega por mail. La pieza cla
   - **Network-first** para `index.html` (siempre baja la última versión); **cache-first** para el resto del shell.
   - **No cachea** (siempre red) las llamadas a Firebase, Railway, Google APIs/Fonts y EmailJS.
   - Sin conexión: sirve desde caché y, como fallback, `index.html`.
+
+---
+
+## 🏗 Parte de obra (`obra/`)
+
+Planilla para que **el capataz cargue en el celular, desde la obra, cuánta gente hay por gremio y qué está haciendo cada uno**, y mande el parte del día por WhatsApp.
+
+- **URL**: `https://speranzaemiliano-rk.github.io/mi-app/obra/` — se comparte tal cual; conviene que la agreguen a la pantalla de inicio del celular.
+- **No pide usuario ni contraseña** y **no toca Firebase**: es un archivo suelto. Los datos quedan en el `localStorage` **del celular donde se carga**, no se sincronizan con la app ni entre teléfonos. Cambiar de teléfono o borrar los datos del navegador borra el historial.
+- Como no hay login, **cualquiera con el link entra**. Por eso no debe cargarse ahí nada sensible: es sólo el conteo de personal y la tarea del día.
+- **Funciona sin señal**: `obra/sw.js` cachea la planilla (red primero, caché de respaldo). Su alcance es sólo `/obra/`, así que no se pisa con el `sw.js` de la app principal.
+- Qué hace: lista fija de gremios reutilizable todos los días, tareas con contador +/− y marca de "no vino", nota por gremio, historial por fecha (cada día arrastra las tareas del anterior), envío del parte por WhatsApp o portapapeles, y exportación del historial a CSV para Excel.
 
 ---
 
