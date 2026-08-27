@@ -38,14 +38,182 @@ const usandoModelo = () => !!modelo;
    ============================================================ */
 const AUDIO3D = (function(){
   let ac = null, listo = false, mudo = false;
-  let master, hinchGain, hinchFiltro, vientoGain;
+  let master, gAmb, gOla, busVoces;
+  let proxVoz = 0, timer = null;
 
-  function ruido(seg){
-    const n = Math.floor(ac.sampleRate*seg);
-    const b = ac.createBuffer(1, n, ac.sampleRate);
+  /* Ruido ROSA, no blanco. El blanco tiene la misma energía en cada hercio,
+     así que arriba de 2 kHz pesa muchísimo y suena a lluvia o a radio mal
+     sintonizada. El rosa cae 3 dB por octava, que es como se reparte la
+     energía de un montón de voces juntas. Es el cambio que más se nota. */
+  function ruidoRosa(ctx, seg, canales){
+    const n = Math.floor(ctx.sampleRate*seg);
+    const b = ctx.createBuffer(canales || 1, n, ctx.sampleRate);
+    for(let c = 0; c < b.numberOfChannels; c++){
+      const d = b.getChannelData(c);
+      let b0=0, b1=0, b2=0, b3=0, b4=0, b5=0, b6=0;
+      for(let i = 0; i < n; i++){
+        const w = Math.random()*2 - 1;
+        b0 = 0.99886*b0 + w*0.0555179;
+        b1 = 0.99332*b1 + w*0.0750759;
+        b2 = 0.96900*b2 + w*0.1538520;
+        b3 = 0.86650*b3 + w*0.3104856;
+        b4 = 0.55000*b4 + w*0.5329522;
+        b5 = -0.7616*b5 - w*0.0168980;
+        d[i] = (b0+b1+b2+b3+b4+b5+b6 + w*0.5362)*0.11;
+        b6 = w*0.115926;
+      }
+    }
+    return b;
+  }
+
+  function ruidoBlanco(ctx, seg){
+    const n = Math.floor(ctx.sampleRate*seg);
+    const b = ctx.createBuffer(1, n, ctx.sampleRate);
     const d = b.getChannelData(0);
     for(let i = 0; i < n; i++) d[i] = Math.random()*2 - 1;
     return b;
+  }
+
+  /* Una VOZ suelta: un chirlo corto de ruido por un filtro resonante. Puesta
+     una sola vez no es nada; catorce por segundo, cada una con su altura y su
+     posición, es lo que hace que el murmullo suene a GENTE y no a estática.
+     Es lo que le faltaba: sin esto, por más que se filtre, sigue siendo ruido. */
+  function voz(ctx, dest, t, buf){
+    const dur = 0.05 + Math.random()*0.20;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 0.8 + Math.random()*0.5;
+    const off = Math.random()*(buf.duration - dur - 0.05);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    // repartidas en log entre 320 y 1900 Hz: el rango de la voz hablada
+    bp.frequency.value = 320*Math.pow(5.9, Math.random());
+    bp.Q.value = 3 + Math.random()*5;
+    const g = ctx.createGain();
+    // Las voces tienen que MANDAR sobre la cama, no adornarla: es lo que hace
+    // que suene a gente. Con el balance anterior el factor de cresta daba 5,5,
+    // apenas por encima del 4,6 del ruido gaussiano puro.
+    const vol = 0.11 + Math.random()*0.11;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if(pan) pan.pan.value = Math.random()*1.7 - 0.85;
+    src.connect(bp); bp.connect(g);
+    if(pan){ g.connect(pan); pan.connect(dest); } else g.connect(dest);
+    src.start(t, off, dur + 0.05);
+    src.stop(t + dur + 0.06);
+  }
+
+  /* Palmas sueltas. Son transitorios: lo que le da grano a la mezcla y evita
+     que quede una sábana plana. */
+  function palma(ctx, dest, t, buf, fuerte){
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.value = 1500 + Math.random()*2500;
+    hp.Q.value = 0.9;
+    const g = ctx.createGain();
+    // Medido: a 0,115 la palma picaba 2,2 veces por encima del RMS de la
+    // mezcla y quedaba enterrada. En una cancha una palma se destaca; a 0,30
+    // pica unas 6 veces, que es lo que se escucha de verdad.
+    const vol = (fuerte ? 0.90 : 0.55)*(0.6 + Math.random()*0.8);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.035 + Math.random()*0.03);
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if(pan) pan.pan.value = Math.random()*1.8 - 0.9;
+    src.connect(hp); hp.connect(g);
+    if(pan){ g.connect(pan); pan.connect(dest); } else g.connect(dest);
+    src.start(t, Math.random()*0.15, 0.12);
+    src.stop(t + 0.13);
+  }
+
+  /* Programa todas las voces y palmas de una ventana de tiempo. Va por
+     ADELANTADO (look-ahead) y no con un setInterval que dispara de a una: el
+     temporizador del navegador se corre varios milisegundos y con sonidos
+     cortos eso se escucha como tartamudeo. Acá el reloj lo lleva el audio. */
+  function programarVoces(ctx, dest, desde, hasta, bufVoz, densidad){
+    const porSeg = 14*(densidad || 1);
+    let t = desde;
+    while(t < hasta){
+      t += -Math.log(1 - Math.random())/porSeg;      // huecos al azar, tipo Poisson
+      if(t >= hasta) break;
+      voz(ctx, dest, t, bufVoz);
+    }
+    let p = desde;
+    while(p < hasta){
+      p += -Math.log(1 - Math.random())/(1.1*(densidad || 1));
+      if(p >= hasta) break;
+      palma(ctx, dest, p, bufVoz, false);
+    }
+  }
+
+  /* Arma la hinchada entera dentro de un contexto cualquiera. Recibe el
+     contexto por parámetro a propósito: así la misma función se puede
+     renderizar en un OfflineAudioContext y medir, que es la única manera de
+     saber si esto mejoró sin poder escucharlo. */
+  function construir(ctx, destino, segundos){
+    const bufBed = ruidoRosa(ctx, 17, 2);     // 17 s y en estéreo: a 4 s y en
+    const bufVoz = ruidoBlanco(ctx, 2);       // mono se escuchaba el ciclo
+    const bufBajo = ruidoRosa(ctx, 13, 1);
+
+    const gA = ctx.createGain(); gA.gain.value = 0.5;      // ambiente (lento)
+    const gO = ctx.createGain(); gO.gain.value = 1;        // olas (rápido)
+    // En SERIE, no los dos sobre la misma ganancia: antes ambiente() corría en
+    // cada cuadro y le borraba la rampa a ola(), así que el gol no rugía.
+    gA.connect(gO); gO.connect(destino);
+
+    // --- cama: el murmullo de fondo ---
+    const bed = ctx.createBufferSource();
+    bed.buffer = bufBed; bed.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.value = 2800; lp.Q.value = 0.7;
+    // DOS pasaaltos en cascada: uno solo cae 12 dB por octava y no alcanza.
+    // Medido, con uno solo las bandas de 63 y 125 Hz quedaban por encima de la
+    // banda de voz y el murmullo sonaba a retumbe, no a gente.
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 250;
+    const hp2 = ctx.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = 250;
+    const cuerpo = ctx.createBiquadFilter();
+    cuerpo.type = 'peaking'; cuerpo.frequency.value = 700; cuerpo.Q.value = 0.75; cuerpo.gain.value = 6;
+    const gBed = ctx.createGain(); gBed.gain.value = 0.062;
+    bed.connect(hp); hp.connect(hp2); hp2.connect(lp); lp.connect(cuerpo);
+    cuerpo.connect(gBed); gBed.connect(gA);
+    bed.start();
+
+    // Capa mono al centro. Con la cama estéreo sola la correlación L/R daba
+    // 0,04: eso no es "ancho", es cancelación de fase, y en un parlante mono
+    // el murmullo casi desaparece. Con esta capa queda alrededor de 0,4.
+    const bedM = ctx.createBufferSource();
+    bedM.buffer = ruidoRosa(ctx, 19, 1); bedM.loop = true;
+    const hpM = ctx.createBiquadFilter(); hpM.type = 'highpass'; hpM.frequency.value = 250;
+    const hpM2 = ctx.createBiquadFilter(); hpM2.type = 'highpass'; hpM2.frequency.value = 250;
+    const lpM = ctx.createBiquadFilter(); lpM.type = 'lowpass'; lpM.frequency.value = 2600;
+    const gM = ctx.createGain(); gM.gain.value = 0.080;
+    bedM.connect(hpM); hpM.connect(hpM2); hpM2.connect(lpM); lpM.connect(gM); gM.connect(gA);
+    bedM.start();
+
+    // respiración: dos LFO lentos y primos entre sí, para que no se repita
+    [[0.061, 0.075], [0.107, 0.045]].forEach(([f, amp]) => {
+      const o = ctx.createOscillator(); o.frequency.value = f;
+      const g = ctx.createGain(); g.gain.value = amp;
+      o.connect(g); g.connect(gBed.gain); o.start();
+    });
+
+    // --- retumbe: el cuerpo de la masa, por debajo de todo ---
+    const bajo = ctx.createBufferSource();
+    bajo.buffer = bufBajo; bajo.loop = true;
+    const lpb = ctx.createBiquadFilter(); lpb.type = 'lowpass'; lpb.frequency.value = 130;
+    const gb = ctx.createGain(); gb.gain.value = 0.055;   // apenas se insinúa
+    bajo.connect(lpb); lpb.connect(gb); gb.connect(gA);
+    bajo.start();
+
+    // --- voces sueltas ---
+    const voces = ctx.createGain(); voces.gain.value = 0.62;
+    voces.connect(gA);
+    if(segundos) programarVoces(ctx, voces, 0, segundos, bufVoz, 1);
+
+    return { gA, gO, voces, bufVoz };
   }
 
   function init(){
@@ -55,25 +223,17 @@ const AUDIO3D = (function(){
     try {
       ac = new AC();
       master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
-
-      // hinchada: ruido filtrado en banda de voces
-      const src = ac.createBufferSource();
-      src.buffer = ruido(4); src.loop = true;
-      hinchFiltro = ac.createBiquadFilter();
-      hinchFiltro.type = 'bandpass'; hinchFiltro.frequency.value = 430; hinchFiltro.Q.value = 0.65;
-      hinchGain = ac.createGain(); hinchGain.gain.value = 0.055;
-      src.connect(hinchFiltro); hinchFiltro.connect(hinchGain); hinchGain.connect(master);
-      src.start();
-
-      // aire del estadio, muy por debajo
-      const v = ac.createBufferSource();
-      v.buffer = ruido(4); v.loop = true;
-      const vf = ac.createBiquadFilter();
-      vf.type = 'lowpass'; vf.frequency.value = 240;
-      vientoGain = ac.createGain(); vientoGain.gain.value = 0.022;
-      v.connect(vf); vf.connect(vientoGain); vientoGain.connect(master);
-      v.start();
-
+      const h = construir(ac, master, 0);
+      gAmb = h.gA; gOla = h.gO; busVoces = h.voces;
+      const bufVoz = h.bufVoz;
+      proxVoz = ac.currentTime + 0.1;
+      timer = setInterval(() => {
+        if(mudo) { proxVoz = Math.max(proxVoz, ac.currentTime + 0.1); return; }
+        const hasta = ac.currentTime + 0.6;
+        if(proxVoz < ac.currentTime) proxVoz = ac.currentTime + 0.05;
+        programarVoces(ac, busVoces, proxVoz, hasta, bufVoz, 1);
+        proxVoz = hasta;
+      }, 250);
       listo = true;
     } catch(e){ listo = false; }
   }
@@ -95,7 +255,7 @@ const AUDIO3D = (function(){
   function patada(fuerza){
     if(!listo || mudo) return;
     const t = ac.currentTime, f = Math.max(0, Math.min(1, fuerza));
-    const n = ac.createBufferSource(); n.buffer = ruido(0.2);
+    const n = ac.createBufferSource(); n.buffer = ruidoBlanco(ac, 0.2);
     const bp = ac.createBiquadFilter();
     bp.type = 'bandpass'; bp.frequency.value = 850 + f*800; bp.Q.value = 1.1;
     const g = ac.createGain();
@@ -117,32 +277,44 @@ const AUDIO3D = (function(){
     tono(210, 0.055, 'triangle', 0.03 + Math.min(0.05, fuerza*0.02), 140);
   }
 
-  // sube el murmullo un rato, como cuando pasa algo
-  function ola(pico, subida, bajada){
+  /* Ola: sube la hinchada un rato. Toca gOla, que va DESPUÉS de gAmb, así el
+     ambiente puede seguir moviéndose sin borrarle la rampa. */
+  function ola(pico, subida, bajada, festejo){
     if(!listo || mudo) return;
     const t = ac.currentTime;
-    hinchGain.gain.cancelScheduledValues(t);
-    hinchGain.gain.setValueAtTime(hinchGain.gain.value, t);
-    hinchGain.gain.linearRampToValueAtTime(pico, t + subida);
-    hinchGain.gain.linearRampToValueAtTime(0.055, t + subida + bajada);
-    hinchFiltro.frequency.cancelScheduledValues(t);
-    hinchFiltro.frequency.setValueAtTime(hinchFiltro.frequency.value, t);
-    hinchFiltro.frequency.linearRampToValueAtTime(1150, t + subida);
-    hinchFiltro.frequency.linearRampToValueAtTime(430, t + subida + bajada);
+    gOla.gain.cancelScheduledValues(t);
+    gOla.gain.setValueAtTime(Math.max(0.0001, gOla.gain.value), t);
+    gOla.gain.linearRampToValueAtTime(pico, t + subida);
+    gOla.gain.setTargetAtTime(1, t + subida, bajada/3);
+    if(festejo){
+      // el estallido: muchas voces y palmas encimadas, más algún silbido
+      programarVoces(ac, busVoces, t + 0.05, t + subida + bajada*0.6, ruidoBlanco(ac, 2), 3.2);
+      const bufP = ruidoBlanco(ac, 1);
+      for(let i = 0; i < 26; i++) palma(ac, busVoces, t + 0.05 + Math.random()*1.6, bufP, true);
+      for(let i = 0; i < 4; i++){
+        const ts = t + 0.1 + Math.random()*1.2;
+        const o = ac.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(2100 + Math.random()*900, ts);
+        const g = ac.createGain();
+        g.gain.setValueAtTime(0.0001, ts);
+        g.gain.linearRampToValueAtTime(0.035, ts + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, ts + 0.28);
+        o.connect(g); g.connect(master); o.start(ts); o.stop(ts + 0.3);
+      }
+    }
   }
 
   const gol = () => {
-    ola(0.36, 0.22, 3.6);
-    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tono(f, 0.30, 'square', 0.12), i*105));
+    ola(2.9, 0.25, 4.5, true);
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tono(f, 0.30, 'square', 0.10), i*105));
   };
-  const atajada = () => { ola(0.24, 0.14, 1.5); tono(320, 0.10, 'sawtooth', 0.09, 190); };
+  const atajada = () => { ola(1.9, 0.14, 1.6, false); tono(320, 0.10, 'sawtooth', 0.08, 190); };
   const silbato = () => { tono(2050, 0.14, 'square', 0.12, 2380); };
 
-  // el ambiente late según qué tan cerca del arco está la jugada
+  /* El ambiente late según qué tan cerca del arco está la jugada. */
   function ambiente(cerca){
     if(!listo || mudo) return;
-    hinchGain.gain.setTargetAtTime(0.048 + cerca*0.075, ac.currentTime, 0.7);
-    hinchFiltro.frequency.setTargetAtTime(420 + cerca*320, ac.currentTime, 0.7);
+    gAmb.gain.setTargetAtTime(0.42 + cerca*0.55, ac.currentTime, 0.8);
   }
 
   function setMudo(m){
@@ -150,7 +322,9 @@ const AUDIO3D = (function(){
     if(listo) master.gain.setTargetAtTime(m ? 0 : 0.5, ac.currentTime, 0.05);
   }
   return { activar, patada, pique, gol, atajada, silbato, ambiente, setMudo,
-           estaMudo: () => mudo, andando: () => listo };
+           estaMudo: () => mudo, andando: () => listo,
+           // sólo para las mediciones: permite renderizar la hinchada offline
+           _construir: construir, _ruidoRosa: ruidoRosa, _ruidoBlanco: ruidoBlanco };
 })();
 
 /* ============================================================
