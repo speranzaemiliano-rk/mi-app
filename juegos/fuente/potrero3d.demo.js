@@ -532,11 +532,14 @@ function crearEscena(){
   escena.add(pelota);
 
   // ---- jugadores ----
-  jugador = crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#f2f5fa', '10', '#e8b98f', '#241a12');
+  // Las medias eran casi blancas (#f2f5fa) sobre piel clara: a la distancia de
+  // la cámara la pierna era una sola mancha del short al botín. En oscuro se
+  // le ve el corte y la pierna se lee.
+  jugador = crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#16406f', '10', '#e8b98f', '#241a12');
   jugador.position.set(-3, 0, 2);
   escena.add(jugador);
 
-  arquero = crearFutbolista('#f0c53c', '#b8902a', '#22201a', '#f7f2dd', '1', '#c98d5f', '#12100e');
+  arquero = crearFutbolista('#f0c53c', '#b8902a', '#22201a', '#33301c', '1', '#c98d5f', '#12100e');
   arquero.position.set(CANCHA_LARGO/2 - 2.0, 0, 0);
   arquero.rotation.y = -Math.PI/2;
   escena.add(arquero);
@@ -741,8 +744,11 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
   const matManga  = new THREE.MeshStandardMaterial({ color: colCamisetaA, roughness: 0.78 });
 
   // --- cadera: raíz del esqueleto ---
+  // Medido contra el canon anatómico: la cadera estaba al 49% de la altura y
+  // va al 53%, si no las piernas quedan cortas y el muñeco rechoncho. Sube
+  // 7 cm, y el cuello baja otro tanto para que el total siga siendo 1,80.
   const cadera = new THREE.Group();
-  cadera.position.y = 0.92;
+  cadera.position.y = 0.991;
   G.add(cadera);
 
   // --- torso: perfil con hombros, pecho, cintura y cadera ---
@@ -755,18 +761,23 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
   // Con el máximo abajo el tronco era un huevo, el hombro no existía y la
   // esfera del deltoide asomaba cuatro centímetros por fuera de la camiseta:
   // de ahí la bola pegada al costado.
+  // Dos cambios: se angosta en la cintura (antes crecía parejo de abajo a
+  // arriba y el tronco era un huevo sin talle), y el hombro baja de 0,191 a
+  // 0,183 porque medía 2,32 cabezas de ancho contra las 2,0 del canon.
+  // El pico sigue estando A LA ALTURA DEL HOMBRO: es lo que evita que el
+  // deltoide asome por fuera de la camiseta.
   const pecho = tronco([
-    [-0.020, 0.140], [ 0.010, 0.150], [ 0.045, 0.152],
-    [ 0.105, 0.144], [ 0.180, 0.148], [ 0.270, 0.163], [ 0.360, 0.176],
-    [ 0.440, 0.186], [ 0.500, 0.191], [ 0.545, 0.180], [ 0.578, 0.148],
-    [ 0.600, 0.100], [ 0.614, 0.048], [ 0.620, 0.018]
+    [-0.020, 0.150], [ 0.010, 0.152], [ 0.060, 0.147],
+    [ 0.120, 0.140], [ 0.190, 0.142], [ 0.270, 0.156], [ 0.350, 0.170],
+    [ 0.430, 0.180], [ 0.492, 0.183],
+    [ 0.528, 0.168], [ 0.552, 0.120], [ 0.566, 0.060], [ 0.572, 0.018]
   ], matCam, 1.30, 0.76);
   torso.add(pecho);
 
   // trapecio: sin esto el cuello sale del torso como un caño de una caja
   const trapecio = esf(0.112, matCam);
-  trapecio.scale.set(1.72, 0.36, 0.70);          // llega hasta el nacimiento del brazo
-  trapecio.position.y = 0.500;
+  trapecio.scale.set(1.66, 0.36, 0.70);          // llega hasta el nacimiento del brazo
+  trapecio.position.y = 0.494;
   trapecio.castShadow = true;
   torso.add(trapecio);
 
@@ -774,12 +785,14 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     new THREE.PlaneGeometry(0.215, 0.215),
     new THREE.MeshStandardMaterial({ map: texturaDorsal(numero), transparent: true, roughness: 0.85 })
   );
-  dorsal.position.set(0, 0.33, 0.142);
+  dorsal.position.set(0, 0.305, 0.128);
   torso.add(dorsal);
 
   // --- cuello y cabeza ---
+  // Del hombro a la coronilla sobraban 8 cm: el cuello era una columna y la
+  // cabeza quedaba demasiado arriba del tronco.
   const cuello = new THREE.Group();
-  cuello.position.y = 0.585;
+  cuello.position.y = 0.503;
   torso.add(cuello);
   const gCuello = miembro([[0, 0.050], [1, 0.058]], 0.06, matPiel, 1, 0.92);
   gCuello.position.y = 0.055;
@@ -846,7 +859,7 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
   const brazos = [];
   [-1, 1].forEach(lado => {
     const hombro = new THREE.Group();
-    hombro.position.set(lado*0.208, 0.492, 0);
+    hombro.position.set(lado*0.180, 0.492, 0);
     torso.add(hombro);
     // El deltoide es la TAPA del brazo, no una bola en el eje de giro: va un
     // poco más abajo y del ancho del brazo, así continúa el bíceps en vez de
@@ -856,28 +869,32 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     deltoide.position.y = -0.016;
     hombro.add(deltoide);
     const sup = miembro([[0, 0.058], [0.30, 0.056], [0.70, 0.048], [1, 0.042]],
-                        0.28, matManga, 1, 0.94);
+                        0.332, matManga, 1, 0.94);   // 0,186 de la altura, como el canon
     hombro.add(sup);
     // borde de la manga
     const manga = miembro([[0, 0.062], [1, 0.058]], 0.11, matCam, 1, 0.94);
     hombro.add(manga);
 
     const codo = new THREE.Group();
-    codo.position.y = -0.28;
+    codo.position.y = -0.332;
     hombro.add(codo);
-    const rotula = esf(0.0415, matPiel);       // igual que la rodilla: redondo y por dentro del brazo
-    rotula.scale.set(0.98, 0.82, 0.96);
+    const rotula = esf(0.0415, matPiel);       // mismo criterio que la rodilla
+    rotula.scale.set(0.95, 0.64, 0.93);
     codo.add(rotula);
-    const ante = miembro([[0, 0.043], [0.35, 0.041], [1, 0.031]], 0.26, matPiel, 1, 0.92);
+    const ante = miembro([[0, 0.043], [0.35, 0.041], [1, 0.031]], 0.278, matPiel, 1, 0.92);
     codo.add(ante);
     const mano = new THREE.Group();
-    mano.position.y = -0.278;
+    // El canon pone la punta de los dedos al 38% de la altura, pero eso es con
+    // la mano ABIERTA; el muñeco corre con el puño cerrado, así que lo correcto
+    // acá es ~42%. Con el brazo anterior quedaba en 44%: la mano a la altura de
+    // la cadera en vez de a media pierna.
+    mano.position.y = -0.293;
     const palma = esf(0.040, matPiel);
-    palma.scale.set(0.80, 1.25, 0.48);
+    palma.scale.set(0.82, 1.55, 0.50);
     mano.add(palma);
     const dedos = esf(0.034, matPiel);          // el puño cerrado al correr
     dedos.scale.set(0.90, 0.80, 0.62);
-    dedos.position.y = -0.040;
+    dedos.position.y = -0.052;
     mano.add(dedos);
     const pulgar = esf(0.017, matPiel);
     pulgar.scale.set(1, 1.5, 1);
@@ -901,7 +918,7 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     caderaP.position.set(lado*0.098, -0.03, 0);
     cadera.add(caderaP);
     const muslo = miembro([[0, 0.098], [0.25, 0.092], [0.60, 0.080], [1, 0.068]],
-                          0.42, matPiel, 1, 0.95);
+                          0.4555, matPiel, 1, 0.95);
     caderaP.add(muslo);
     const shortP = miembro([[0, 0.106], [0.60, 0.101], [0.94, 0.093], [1, 0.098]],
                            0.21, matShort, 1, 0.97);
@@ -909,28 +926,31 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     caderaP.add(shortP);
 
     const rodilla = new THREE.Group();
-    rodilla.position.y = -0.42;
+    rodilla.position.y = -0.4555;
     caderaP.add(rodilla);
     // La rodilla es de PIEL y del mismo ancho que el muslo: antes era una
     // esfera blanca que sobresalía del perfil y se veía como una pelota
     // pegada. La media arranca más abajo, como en la cancha.
-    // Aplastada (0,56 de alto) la rótula tenía el borde muy filoso justo en la
-    // silueta, y el reflejo la dibujaba como un disco pegado. Más redonda y un
-    // poco más angosta que el muslo: rellena el hueco al doblar sin asomar.
+    // Medida: la rótula tiene 129 mm de ancho contra 136 del muslo, o sea que
+    // NO sobresale. Lo que se veía como bola era el sombreado: en una esfera
+    // la normal barre media vuelta en diez centímetros y agarra un brillo que
+    // el tronco de cono de al lado no tiene. Achatada baja ese barrido; muy
+    // achatada (0,56) el canto vuelve a caer en la silueta y se ve como disco.
+    // 0,62 es el punto medio entre las dos cosas.
     const rot = esf(0.066, matPiel);
-    rot.scale.set(0.98, 0.80, 0.96);
+    rot.scale.set(0.95, 0.62, 0.93);
     rodilla.add(rot);
     const pant = miembro([[0, 0.067], [0.22, 0.072], [0.55, 0.058], [1, 0.036]],
-                         0.40, matPiel, 1, 0.95);
+                         0.4355, matPiel, 1, 0.95);
     rodilla.add(pant);
     // media, superpuesta sobre la parte baja de la pierna
     const media = miembro([[0, 0.074], [0.06, 0.070], [0.45, 0.062], [1, 0.039]],
-                          0.30, matMedias, 1, 0.96);
+                          0.335, matMedias, 1, 0.96);
     media.position.y = -0.10;
     rodilla.add(media);
 
     const tobillo = new THREE.Group();
-    tobillo.position.y = -0.40;
+    tobillo.position.y = -0.4355;
     rodilla.add(tobillo);
     // botín: empeine que se afina en la punta, suela y talón
     const empeine = esf(0.058, matBotin);
@@ -955,7 +975,7 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
 
   G.userData = {
     cadera, torso, cuello, brazos, piernas,
-    paso: 0, patada: -1, alturaBase: 0.92,
+    paso: 0, patada: -1, alturaBase: 0.991,
     v: new THREE.Vector3()
   };
   return G;
@@ -1066,7 +1086,7 @@ function animarFutbolista(J, dt, velocidad){
                                   : mez(-0.34, 0.40, sua(Math.min(1, (k - 0.30)/0.40)));
       u.cadera.rotation.y = giroPelvis*peso;
       u.cadera.rotation.z = -0.10*carga*peso;          // cae del lado del apoyo
-      u.cadera.position.y = 0.92 - (0.045*carga)*peso; // el cuerpo baja al plantar
+      u.cadera.position.y = 0.991 - (0.045*carga)*peso; // el cuerpo baja al plantar
 
       const giroTorso = k < 0.36 ? -0.26*sua(k/0.36)
                                  : mez(-0.26, 0.34, sua(Math.min(1, (k - 0.36)/0.44)));
@@ -1091,7 +1111,7 @@ function animarFutbolista(J, dt, velocidad){
     }
   }
   u.cadera.rotation.y = 0; u.cadera.rotation.z = 0;
-  u.cadera.position.y = 0.92; u.torso.rotation.z = 0;
+  u.cadera.position.y = 0.991; u.torso.rotation.z = 0;
   return -1;
 }
 
@@ -1459,10 +1479,12 @@ function botonGolpe(id, tipo){
 /* Tres formas de golpear la pelota. Cambian fuerza y cuánto se eleva:
    el tiro va fuerte y a media altura, el pase bajo va rasante, y el pase
    alto sale despacio pero muy arriba. */
+// La pelota salía disparada: cruzaba media cancha antes de que uno llegara a
+// mirarla. Baja un 25% en los tres golpes.
 const GOLPES = {
-  tiro: { fuerza: 15.5, alto: 4.6, nombre: 'REMATE' },
-  bajo: { fuerza: 10.0, alto: 0.5, nombre: 'PASE BAJO' },
-  alto: { fuerza:  8.2, alto: 9.2, nombre: 'PASE ALTO' }
+  tiro: { fuerza: 11.6, alto: 4.2, nombre: 'REMATE' },
+  bajo: { fuerza:  7.4, alto: 0.5, nombre: 'PASE BAJO' },
+  alto: { fuerza:  6.3, alto: 8.4, nombre: 'PASE ALTO' }
 };
 let tipoGolpe = 'tiro';
 
@@ -1536,7 +1558,7 @@ function actualizar(dt){
     // el latigazo justo cuando el pie pasa por la pelota
     const dir = adelante.clone().normalize();
     const G = GOLPES[tipoGolpe] || GOLPES.tiro;
-    const fuerza = G.fuerza + Math.min(vel, 7)*0.75;
+    const fuerza = G.fuerza + Math.min(vel, 7)*0.55;
     P.v.set(dir.x*fuerza, G.alto + Math.random()*0.6, dir.z*fuerza);
     P.giro.set(-dir.z*14, 0, dir.x*14);
     P.pegado = 0.55;
@@ -1575,11 +1597,12 @@ function actualizar(dt){
       // El frenado horizontal va SOLO en el pique. Aplicado en cada cuadro
       // que toca el piso, a 60 por segundo, mataba cualquier pelotazo en
       // medio segundo y la pelota nunca llegaba al arco.
-      P.v.x *= 0.94; P.v.z *= 0.94;   // un pique casi no frena el avance
+      P.v.x *= 0.90; P.v.z *= 0.90;   // un pique frena un poco el avance
     } else P.v.y = 0;
   }
   if(pelota.position.y <= 0.115){
-    const f = Math.pow(0.90, dt);        // rodar sobre césped
+    // Rodaba casi sin frenarse y la pelota suelta se iba sola hasta el fondo.
+    const f = Math.pow(0.62, dt);        // rodar sobre césped
     P.v.x *= f; P.v.z *= f;
   }
   chequearAtajada(dt);
