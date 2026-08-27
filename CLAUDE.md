@@ -81,6 +81,10 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 `manifest.json` (scope `/mi-app/`, instalable) + `sw.js` (constante `CACHE`, se bumpea en cada cambio — no asumir un valor fijo, revisar el archivo; network-first para `index.html`, no cachea Firebase/Railway/Google/EmailJS). Al deployar una versión nueva, `sw.js` NO llama `skipWaiting()` en el install: el SW nuevo queda en espera y la app muestra un banner "🔄 Hay una versión nueva — Actualizar" para no recargar en medio del uso.
 
+## Parte de obra (`obra/`) — aparte de la app
+
+`obra/index.html` es una **planilla independiente** para el capataz: cuánta gente hay por gremio y qué hace cada uno, con envío del parte por WhatsApp. **No comparte nada con `index.html`**: sin Firebase, sin login, sin roles; el estado vive en `localStorage` (clave `parteObra_v2`, con migración desde `parteObra_v1`) del teléfono donde se carga. Tiene su propio `obra/manifest.json` y `obra/sw.js` (alcance sólo `/obra/`, network-first para el HTML) para que abra sin señal en la obra. Al editarla, cuidado con dos cosas: `_colPersist` y demás convenciones de la app **no aplican acá**, y el `<script>` inicial prueba `window.storage` (API de la vista previa de Claude) antes de caer a `localStorage` — en producción siempre usa `localStorage`.
+
 ## Despliegue
 
 - Frontend: estático (GitHub Pages en `/mi-app/`; también listo para Firebase Hosting vía `firebase.json`).
