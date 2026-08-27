@@ -20,6 +20,16 @@ let cancha = {};
 const teclas = {};
 let camaraModo = 0;           // 0 = transmisión (de costado), 1 = detrás del jugador
 let fps = 0, fpsAcum = 0, fpsCuadros = 0;
+let goles = 0, pausaGol = 0;
+
+/* Modelo externo (Mixamo): se carga arrastrando un .glb sobre la página.
+   No hace falta red: el archivo se lee con FileReader y se parsea en memoria. */
+let modelo = null, mezclador = null, giroModelo = Math.PI;
+let clipsCargados = [];                       // { clip, nombre }
+const roles = { correr: null, parado: null, patear: null };
+const acciones = { correr: null, parado: null, patear: null };
+let accionCorriendo = null, patadaModelo = -1;
+const usandoModelo = () => !!modelo;
 
 /* ============================================================
    TEXTURAS DIBUJADAS EN CANVAS
@@ -605,8 +615,15 @@ function animarFutbolista(J, dt, velocidad){
     b.hombro.rotation.z = b.lado*(0.14 + 0.06*amp);
     b.codo.rotation.x = -(0.45 + Math.max(0, f)*0.5)*amp - 0.15;
   });
+  // parado: respira y hace un leve balanceo, para que no quede congelado
+  if(!corriendo){
+    const r = Math.sin(u.paso*1.15);
+    u.torso.rotation.x = 0.05 + r*0.018;
+    u.cuello.rotation.y = Math.sin(u.paso*0.42)*0.16;
+    u.brazos.forEach((b, i) => { b.hombro.rotation.z = b.lado*(0.15 + r*0.02); });
+  }
   // el torso se inclina hacia adelante y rebota
-  u.torso.rotation.x = 0.06 + amp*0.16;
+  u.torso.rotation.x = corriendo ? (0.06 + amp*0.16) : u.torso.rotation.x;
   u.torso.rotation.y = -s*0.12*amp;
   u.cuello.rotation.x = -0.05 - amp*0.10;
   J.position.y = Math.abs(Math.sin(t))*0.045*amp;
@@ -639,6 +656,159 @@ function animarFutbolista(J, dt, velocidad){
 }
 
 /* ============================================================
+   CARGA DE UN MODELO CON ESQUELETO (.glb de Mixamo)
+   ============================================================ */
+function montarGLB(buffer, nombre){
+  const cargador = new THREE.GLTFLoader();
+  cargador.parse(buffer, '', gltf => {
+    const raiz = gltf.scene || gltf.scenes[0];
+    if(!modelo){
+      // primer archivo: además del esqueleto trae la malla
+      const caja = new THREE.Box3().setFromObject(raiz);
+      const alto = Math.max(0.001, caja.max.y - caja.min.y);
+      const k = 1.80 / alto;                    // llevarlo a 1,80 m
+      raiz.scale.setScalar(k);
+      raiz.position.y = -caja.min.y * k;        // apoyar los pies en el piso
+      raiz.rotation.y = giroModelo;
+      raiz.traverse(o => { if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; } });
+      modelo = raiz;
+      jugador.add(modelo);
+      jugador.userData.cadera.visible = false;  // guardar el muñeco propio
+      mezclador = new THREE.AnimationMixer(modelo);
+    }
+    (gltf.animations || []).forEach(c => {
+      clipsCargados.push({ clip: c, nombre: (c.name && c.name !== 'mixamo.com' ? c.name : nombre) });
+    });
+    // Mixamo nombra casi todo "mixamo.com", así que se adivina por el nombre
+    // del ARCHIVO, que es lo único que distingue una animación de otra.
+    clipsCargados.forEach((c, i) => {
+      const n = (c.nombre || '').toLowerCase();
+      if(!roles.correr && /run|corr|sprint/.test(n)) asignarRol(i, 'correr');
+      else if(!roles.parado && /idle|stand|parad|quiet/.test(n)) asignarRol(i, 'parado');
+      else if(!roles.patear && /kick|shoot|patea|soccer/.test(n)) asignarRol(i, 'patear');
+    });
+    if(!roles.correr && clipsCargados.length) asignarRol(0, 'correr');
+    pintarPanel();
+  }, err => {
+    document.getElementById('estadoModelo').innerHTML =
+      'No pude leer <b>' + nombre + '</b>. Tiene que ser un <b>.glb</b> ' +
+      '(glTF binario). Si bajaste un .fbx, pasalo por Blender.';
+  });
+}
+
+function asignarRol(indice, rol){
+  const c = clipsCargados[indice];
+  if(!c || !mezclador) return;
+  roles[rol] = indice;
+  const a = mezclador.clipAction(c.clip);
+  if(rol === 'patear'){ a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+  acciones[rol] = a;
+  pintarPanel();
+}
+
+function pintarPanel(){
+  const est = document.getElementById('estadoModelo');
+  const lista = document.getElementById('listaClips');
+  const volver = document.getElementById('volverMuneco');
+  if(!modelo){ return; }
+  est.innerHTML = 'Modelo cargado. Asigná cada animación a lo que corresponde:';
+  lista.innerHTML = '';
+  clipsCargados.forEach((c, i) => {
+    const fila = document.createElement('div');
+    fila.className = 'filaClip';
+    const nom = document.createElement('span');
+    nom.className = 'nom'; nom.textContent = c.nombre;
+    fila.appendChild(nom);
+    [['correr','CORRER'],['parado','PARADO'],['patear','PATEAR']].forEach(([rol, txt]) => {
+      const b = document.createElement('button');
+      b.textContent = txt;
+      if(roles[rol] === i) b.className = 'puesto';
+      b.addEventListener('click', () => asignarRol(i, rol));
+      fila.appendChild(b);
+    });
+    lista.appendChild(fila);
+  });
+  const girar = document.createElement('button');
+  girar.textContent = 'GIRAR 180°';
+  girar.style.cssText = 'margin-top:8px;width:100%;padding:6px;border-radius:6px;cursor:pointer;' +
+    'border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#aab5c4;' +
+    'font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;';
+  girar.addEventListener('click', () => {
+    giroModelo += Math.PI;
+    if(modelo) modelo.rotation.y = giroModelo;
+  });
+  lista.appendChild(girar);
+  volver.style.display = 'block';
+}
+
+function volverAlMuneco(){
+  if(modelo){ jugador.remove(modelo); modelo = null; mezclador = null; }
+  clipsCargados = [];
+  roles.correr = roles.parado = roles.patear = null;
+  acciones.correr = acciones.parado = acciones.patear = null;
+  accionCorriendo = null; patadaModelo = -1;
+  jugador.userData.cadera.visible = true;
+  document.getElementById('listaClips').innerHTML = '';
+  document.getElementById('volverMuneco').style.display = 'none';
+  document.getElementById('estadoModelo').innerHTML =
+    'Está corriendo el <b>muñeco propio</b>, con la animación escrita a mano.<br><br>' +
+    'Arrastrá acá un <b>.glb</b> de Mixamo y lo carga al toque, con sus animaciones.';
+}
+
+function prepararSoltar(){
+  const zona = document.getElementById('zonaSoltar');
+  let cuenta = 0;
+  window.addEventListener('dragenter', e => { e.preventDefault(); cuenta++; zona.classList.add('activa'); });
+  window.addEventListener('dragover',  e => { e.preventDefault(); });
+  window.addEventListener('dragleave', e => { e.preventDefault(); if(--cuenta <= 0) zona.classList.remove('activa'); });
+  window.addEventListener('drop', e => {
+    e.preventDefault(); cuenta = 0; zona.classList.remove('activa');
+    const archivos = [...(e.dataTransfer.files || [])];
+    archivos.filter(f => /\.glb$/i.test(f.name)).forEach(f => {
+      const fr = new FileReader();
+      fr.onload = () => montarGLB(fr.result, f.name.replace(/\.glb$/i, ''));
+      fr.readAsArrayBuffer(f);
+    });
+    if(archivos.length && !archivos.some(f => /\.glb$/i.test(f.name))){
+      document.getElementById('estadoModelo').innerHTML =
+        'Eso no es un <b>.glb</b>. Mixamo baja <b>.fbx</b>: abrilo en Blender ' +
+        'y exportá <b>glTF 2.0 (.glb)</b>.';
+    }
+  });
+  document.getElementById('volverMuneco').addEventListener('click', volverAlMuneco);
+}
+
+/* Mezcla de animaciones del modelo: correr y parado se cruzan según la
+   velocidad, y la patada se dispara una sola vez encima. */
+function animarModelo(dt, vel){
+  mezclador.update(dt);
+  const quiere = vel > 0.5 ? 'correr' : 'parado';
+  const a = acciones[quiere] || acciones.correr;
+  if(a && a !== accionCorriendo){
+    if(accionCorriendo) accionCorriendo.fadeOut(0.22);
+    a.reset().setEffectiveWeight(1).fadeIn(0.22).play();
+    accionCorriendo = a;
+  }
+  if(accionCorriendo){
+    accionCorriendo.setEffectiveTimeScale(
+      quiere === 'correr' ? Math.max(0.65, Math.min(1.8, vel/3.4)) : 1
+    );
+  }
+  if(patadaModelo >= 0){
+    const dur = acciones.patear ? acciones.patear.getClip().duration : 0.6;
+    patadaModelo += dt;
+    const k = patadaModelo/dur;
+    if(k >= 1){
+      patadaModelo = -1;
+      if(acciones.patear) acciones.patear.fadeOut(0.20);
+      return -1;
+    }
+    return k;
+  }
+  return -1;
+}
+
+/* ============================================================
    ENTRADA
    ============================================================ */
 const TECLAS_JUEGO = [' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
@@ -664,6 +834,14 @@ function botonTactil(id, tecla){
 }
 
 function patear(){
+  if(usandoModelo()){
+    if(patadaModelo >= 0) return;
+    patadaModelo = 0;
+    if(acciones.patear){
+      acciones.patear.reset(); acciones.patear.setEffectiveWeight(1); acciones.patear.play();
+    }
+    return;
+  }
   const u = jugador.userData;
   if(u.patada < 0) u.patada = 0;
 }
@@ -673,6 +851,10 @@ function patear(){
    ============================================================ */
 function actualizar(dt){
   const u = jugador.userData;
+  if(pausaGol > 0){
+    pausaGol -= dt;
+    if(pausaGol <= 0) reponer();
+  }
 
   // ---- mover al jugador ----
   let dx = 0, dz = 0;
@@ -697,7 +879,8 @@ function actualizar(dt){
   jugador.position.z = Math.max(-cancha.limZ, Math.min(cancha.limZ, jugador.position.z));
 
   const vel = Math.hypot(u.v.x, u.v.z);
-  const kPatada = animarFutbolista(jugador, dt, vel);
+  const kPatada = usandoModelo() ? animarModelo(dt, vel)
+                                 : animarFutbolista(jugador, dt, vel);
   animarFutbolista(arquero, dt, 0);
 
   // ---- contacto con la pelota ----
@@ -730,19 +913,30 @@ function actualizar(dt){
   pelota.position.addScaledVector(P.v, dt);
   if(pelota.position.y < 0.11){
     pelota.position.y = 0.11;
-    if(P.v.y < -0.6){ P.v.y = -P.v.y*0.55; }
-    else P.v.y = 0;
-    P.v.x *= 0.80; P.v.z *= 0.80;
+    if(P.v.y < -0.6){
+      P.v.y = -P.v.y*0.55;
+      // El frenado horizontal va SOLO en el pique. Aplicado en cada cuadro
+      // que toca el piso, a 60 por segundo, mataba cualquier pelotazo en
+      // medio segundo y la pelota nunca llegaba al arco.
+      P.v.x *= 0.94; P.v.z *= 0.94;   // un pique casi no frena el avance
+    } else P.v.y = 0;
   }
   if(pelota.position.y <= 0.115){
-    const f = Math.pow(0.42, dt);
+    const f = Math.pow(0.90, dt);        // rodar sobre césped
     P.v.x *= f; P.v.z *= f;
   }
-  // paredes: rebota en el límite del campo
+  // paredes: rebota en el límite del campo, salvo por la boca del arco
   const LX = CANCHA_LARGO/2 - 1.0, LZ = CANCHA_ANCHO/2 - 1.0;
-  if(Math.abs(pelota.position.x) > LX){
+  const enBoca = Math.abs(pelota.position.z) < ARCO_ANCHO/2 - 0.12 &&
+                 pelota.position.y < ARCO_ALTO - 0.05;
+  if(Math.abs(pelota.position.x) > LX && !enBoca){
     pelota.position.x = Math.sign(pelota.position.x)*LX;
     P.v.x *= -0.62;
+  }
+  if(enBoca && pausaGol <= 0 && Math.abs(pelota.position.x) > LX - 0.15) gol3d();
+  if(Math.abs(pelota.position.x) > LX + 1.7){       // fondo de la red
+    pelota.position.x = Math.sign(pelota.position.x)*(LX + 1.7);
+    P.v.x *= -0.15; P.v.z *= 0.5;
   }
   if(Math.abs(pelota.position.z) > LZ){
     pelota.position.z = Math.sign(pelota.position.z)*LZ;
@@ -781,6 +975,21 @@ function actualizar(dt){
   luzSol.target.updateMatrixWorld();
 }
 
+function gol3d(){
+  goles++;
+  document.getElementById('golesTxt').textContent = goles;
+  document.getElementById('avisoGol').style.display = 'flex';
+  pausaGol = 1.9;
+}
+
+function reponer(){
+  pelota.position.set(0, 0.11, 0);
+  pelota.userData.v.set(0, 0, 0);
+  jugador.position.set(-3, 0, 1.5);
+  jugador.userData.v.set(0, 0, 0);
+  document.getElementById('avisoGol').style.display = 'none';
+}
+
 function bucle(){
   const dt = Math.min(reloj.getDelta(), 0.05);
   actualizar(dt);
@@ -817,6 +1026,7 @@ function arrancar(){
   ajustar();
   window.addEventListener('resize', ajustar);
 
+  prepararSoltar();
   botonTactil('btPatear3d', ' ');
   botonTactil('btArriba', 'arrowup');
   botonTactil('btAbajo', 'arrowdown');
