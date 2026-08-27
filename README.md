@@ -298,7 +298,11 @@ Planilla para que **el capataz cargue en el celular, desde la obra, cuánta gent
 - **No pide usuario ni contraseña** y **no toca Firebase**: es un archivo suelto. Los datos quedan en el `localStorage` **del celular donde se carga**, no se sincronizan con la app ni entre teléfonos. Cambiar de teléfono o borrar los datos del navegador borra el historial.
 - Como no hay login, **cualquiera con el link entra**. Por eso no debe cargarse ahí nada sensible: es sólo el conteo de personal y la tarea del día.
 - **Funciona sin señal**: `obra/sw.js` cachea la planilla (red primero, caché de respaldo). Su alcance es sólo `/obra/`, así que no se pisa con el `sw.js` de la app principal.
-- Qué hace: lista fija de gremios reutilizable todos los días, tareas con contador +/− y marca de "no vino", nota por gremio, historial por fecha (cada día arrastra las tareas del anterior), envío del parte por WhatsApp o portapapeles, y exportación del historial a CSV para Excel.
+- Qué hace: nómina de personal con nombre y apellido, asignación de gremio y tarea por persona, marca de "vino / no vino" por día, control de quién está o no dado de alta en la ART, nota por gremio, historial por fecha, envío del parte por WhatsApp o portapapeles, y exportación del historial a CSV para Excel.
+- **Personal** (botón «Personal»): la lista de gente, fija y reutilizable todos los días. Por persona: gremio (selector), tarea, y si tiene ART o no. Se puede filtrar por «sin gremio» y «sin ART», agregar gente a mano y borrar.
+- **Importar nómina de ART**: dentro de «Personal». Se pega el listado tal como llega de la ART (`APELLIDO NOMBRE•CUIL: 20-…•Inicio de cobertura: dd/mm/aaaa•…`) y `parsearNomina()` saca nombre, CUIL y fecha de alta. Si alguien ya está cargado lo actualiza en vez de duplicarlo (empareja por CUIL; si no hay, por nombre). **La nómina NO está escrita en el repo**: se carga una vez desde el teléfono y queda sólo en su `localStorage` — son datos personales y esta página es pública y sin login.
+- **Quién no tiene ART** se ve en tres lugares: chip rojo "SIN ART" al lado del nombre, chapa roja en el tablero de arriba, y un bloque `*** EN OBRA SIN ART ***` al final del parte que se manda por WhatsApp.
+- El conteo por gremio sale de la gente presente. Se mantienen las **filas sin nombre** (una cantidad y una tarea, el modo original) para changas o subcontratos que no están en la nómina; al importar, la planilla avisa si quedaron cargadas para no contar dos veces.
 
 ---
 
