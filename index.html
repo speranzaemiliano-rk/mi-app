@@ -281,6 +281,34 @@
             --vidrio:     none;            /* desenfoque de las superficies (sólo en oscuro) */
         }
 
+        /* ══════════ PANTALLA DENSA (estructura «planilla») ══════════
+           Grilla compacta + panel de detalle al costado, en vez de abrir un modal por cada
+           comprobante. Pensada para trabajar muchas filas seguidas sin sacar las manos del teclado. */
+        .c-split { display: flex; gap: 16px; align-items: flex-start; }
+        .c-split > .table-card { flex: 1; min-width: 0; }
+        .c-panel {
+            width: 320px; flex: 0 0 320px; position: sticky; top: 16px;
+            background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 16px; box-shadow: var(--shadow); backdrop-filter: var(--vidrio);
+        }
+        .c-panel-vacio { color: var(--text-3); font-size: 12.5px; line-height: 1.6; }
+        .c-kv { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+        .c-kv span:first-child { font-size: 11.5px; color: var(--text-3); }
+        .c-kv span:last-child  { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+        /* Filas compactas: entra el triple en la misma pantalla. */
+        .c-dense table td, .c-dense table th { padding: 6px 10px; font-size: 12px; }
+        .c-dense table tbody tr { cursor: pointer; }
+        .c-dense table tbody tr.c-sel { background: var(--gold-pale); box-shadow: inset 2px 0 0 var(--gold); }
+        .c-dense table tbody tr.c-total { cursor: default; }
+        .c-atajos { display: flex; gap: 16px; padding: 8px 14px; border-top: 1px solid var(--border);
+                    font-size: 11px; color: var(--text-3); flex-wrap: wrap; }
+        .c-atajos b { color: var(--text-2); border: 1px solid var(--border); border-radius: 4px;
+                      padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; }
+        @media (max-width: 1100px) {
+            .c-split { flex-direction: column; }
+            .c-panel { width: 100%; flex: 1 1 auto; position: static; }
+        }
+
         /* ══════════ TEMA OSCURO · «vidrio profundo» ══════════
            Negro con violeta adentro, superficies translúcidas y acento lavanda.
            Se activa con data-theme="oscuro" en <html>. Sólo redefine tokens: el resto
@@ -4139,7 +4167,8 @@
                     </div>
                 </div>
 
-                <div class="table-card">
+                <div class="c-split">
+                <div class="table-card c-dense">
                     <div class="table-card-head">
                         <h3>Comprobantes pendientes de pago</h3>
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -4170,7 +4199,13 @@
                             <tbody id="provPendientesBody"></tbody>
                         </table>
                     </div>
+                    <div class="c-atajos">
+                        <span><b>↑</b><b>↓</b> moverse</span><span><b>Enter</b> pagar</span>
+                        <span><b>/</b> buscar</span><span><b>N</b> cargar comprobante</span><span><b>Esc</b> soltar</span>
+                    </div>
                 </div>
+                <aside class="c-panel" id="provPendPanel"></aside>
+                </div><!-- /c-split -->
             </div><!-- /panelProveedores -->
 
             <!-- TAB: FACTURAS -->
@@ -14224,16 +14259,20 @@
             return true;
         });
         rows.sort(function(a, b) { return (a.fecha || '').localeCompare(b.fecha || ''); });
+        // Se guardan para el panel de detalle y el teclado: la fila seleccionada es un índice acá.
+        _provPendRows = rows;
         if (!rows.length) {
             tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay comprobantes pendientes que coincidan con el filtro.</td></tr>';
+            _provPendSel = -1; _provPendPintarPanel();
             return;
         }
+        if (_provPendSel >= rows.length) _provPendSel = rows.length - 1;
         var totalSaldo = rows.reduce(function(s, r) { return s + (r.mon === '$' ? r.saldo : 0); }, 0);
-        var html = rows.map(function(r) {
+        var html = rows.map(function(r, i) {
             var pill = r.tipo === 'ARCA'
                 ? '<span class="pill" style="background:#e6f4ea;color:#137333;">ARCA</span>'
                 : '<span class="pill" style="background:#fce8e6;color:#c5221f;">X</span>';
-            return '<tr>'
+            return '<tr data-cpi="' + i + '" onclick="provPendSeleccionar(' + i + ')"' + (i === _provPendSel ? ' class="c-sel"' : '') + '>'
                 + '<td>' + (r.fecha ? formatearFecha(r.fecha) : '—') + '</td>'
                 + '<td>' + pill + '</td>'
                 + '<td><strong>' + escHtml(r.prov || '—') + '</strong></td>'
@@ -14245,10 +14284,95 @@
                 + '<td><button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Pagar</button></td>'
                 + '</tr>';
         }).join('');
-        html += '<tr><td colspan="7" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
+        html += '<tr class="c-total"><td colspan="7" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
              + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">$' + (totalSaldo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td><td></td></tr>';
         tbody.innerHTML = html;
+        _provPendPintarPanel();
     }
+
+    // ── Panel de detalle y teclado de la pantalla de comprobantes ──
+    var _provPendRows = [];
+    var _provPendSel = -1;
+    window.provPendSeleccionar = function(i) {
+        _provPendSel = i;
+        var tb = document.getElementById('provPendientesBody');
+        if (tb) Array.prototype.forEach.call(tb.querySelectorAll('tr[data-cpi]'), function(tr) {
+            tr.classList.toggle('c-sel', parseInt(tr.getAttribute('data-cpi'), 10) === i);
+        });
+        _provPendPintarPanel();
+    };
+    function _provPendPintarPanel() {
+        var box = document.getElementById('provPendPanel'); if (!box) return;
+        var r = _provPendRows[_provPendSel];
+        if (!r) {
+            box.innerHTML = '<div class="c-panel-vacio">Elegí un comprobante de la lista para ver su detalle acá, '
+                          + 'sin abrir ninguna ventana.<br><br>También podés moverte con <b>↑</b> <b>↓</b> y pagar con <b>Enter</b>.</div>';
+            return;
+        }
+        var f = function(n){ return r.mon + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var kv = function(k, v, col){ return '<div class="c-kv"><span>' + k + '</span><span' + (col ? ' style="color:' + col + ';"' : '') + '>' + v + '</span></div>'; };
+        // El saldo del proveedor sale del maestro: sirve para decidir si conviene pagar todo junto.
+        var pv = (typeof buscarProveedorPorNombre === 'function') ? buscarProveedorPorNombre(r.prov) : null;
+        var otros = _provPendRows.filter(function(x){ return x !== r && (x.prov || '') === (r.prov || ''); });
+        var otrosTot = otros.reduce(function(t, x){ return t + (x.saldo || 0); }, 0);
+        box.innerHTML =
+            '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);">SELECCIONADO</div>'
+            + '<div style="font-size:16px;font-weight:700;margin-top:5px;line-height:1.25;">' + escHtml(r.prov || '—') + '</div>'
+            + '<div style="font-size:11.5px;color:var(--text-3);font-family:var(--font-mono);">' + escHtml(r.num || '—') + '</div>'
+            + (r.desc ? '<div style="font-size:12px;color:var(--text-2);margin-top:8px;line-height:1.45;">' + escHtml(r.desc) + '</div>' : '')
+            + '<div style="margin-top:12px;">'
+            + kv('Tipo', r.tipo) + kv('Fecha', r.fecha ? formatearFecha(r.fecha) : '—')
+            + kv('Importe', f(r.imp)) + kv('Pagado', f(r.pag))
+            + kv('Saldo', f(r.saldo), 'var(--danger)')
+            + (pv && pv.cuit ? kv('CUIT', escHtml(pv.cuit)) : '')
+            + (pv && pv.rubro ? kv('Rubro', escHtml(pv.rubro)) : '')
+            + '</div>'
+            + (puedeEditar
+                ? '<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">'
+                  + '<button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Registrar pago</button>'
+                  + (pv ? '<button class="btn btn-outline btn-sm" onclick="verFichaProveedor(\'' + (r.prov || '').replace(/'/g, "\\'") + '\')">👁 Ver ficha del proveedor</button>' : '')
+                  + '</div>'
+                : '')
+            + (otros.length
+                ? '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);">'
+                  + '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);margin-bottom:6px;">MISMO PROVEEDOR</div>'
+                  + kv(otros.length + ' comprobante(s) más', f(otrosTot), 'var(--danger)')
+                  + '<div style="font-size:11px;color:var(--text-3);margin-top:6px;line-height:1.45;">Se pueden pagar todos juntos con una sola orden de pago.</div></div>'
+                : '');
+    }
+    // Teclado: sólo cuando se está mirando Proveedores y no se está escribiendo en un campo.
+    document.addEventListener('keydown', function(e) {
+        var panel = document.getElementById('panelProveedores');
+        if (!panel || panel.offsetParent === null) return;
+        if (document.querySelector('.modal.active')) return;
+        var t = e.target, esCampo = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+        if (e.key === '/' && !esCampo) {
+            e.preventDefault();
+            var b = document.getElementById('provPendBuscador'); if (b) { b.focus(); b.select(); }
+            return;
+        }
+        if (e.key === 'Escape' && esCampo) { t.blur(); return; }
+        if (esCampo) return;
+        if (!_provPendRows.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var n = _provPendSel + (e.key === 'ArrowDown' ? 1 : -1);
+            if (n < 0) n = 0;
+            if (n > _provPendRows.length - 1) n = _provPendRows.length - 1;
+            provPendSeleccionar(n);
+            var fila = document.querySelector('#provPendientesBody tr[data-cpi="' + n + '"]');
+            if (fila && fila.scrollIntoView) fila.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && _provPendRows[_provPendSel] && puedeEditar) {
+            // Se dispara el botón de la propia fila en vez de evaluar el texto del onclick:
+            // así hay un solo lugar que sabe cómo se paga cada tipo de comprobante.
+            e.preventDefault();
+            var btn = document.querySelector('#provPendientesBody tr[data-cpi="' + _provPendSel + '"] button');
+            if (btn) btn.click();
+        } else if ((e.key === 'n' || e.key === 'N') && puedeEditar) {
+            e.preventDefault();
+            if (typeof abrirCargarComprobante === 'function') abrirCargarComprobante();
+        }
+    });
 
     const tarjetasAbiertas = {};
     function toggleProvCard(nombre) {
