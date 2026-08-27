@@ -5100,7 +5100,8 @@
                         <div class="stat-card" style="border-left:4px solid var(--danger);"><div class="stat-label">Retenciones</div><div class="stat-value" id="pagTotalRet">$0</div></div>
                         <div class="stat-card" style="border-left:4px solid var(--success);"><div class="stat-label">Neto pagado</div><div class="stat-value" id="pagTotalNeto">$0</div></div>
                     </div>
-                    <div class="table-card">
+                    <div class="c-split">
+                    <div class="table-card c-dense">
                         <div class="table-card-head">
                             <h3>💳 Pagos a Proveedores</h3>
                             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
@@ -5130,7 +5131,13 @@
                             </tr></thead>
                             <tbody id="pagosBody"></tbody>
                         </table></div>
+                        <div class="c-atajos">
+                            <span><b>↑</b><b>↓</b> moverse</span><span><b>Enter</b> imprimir OP</span>
+                            <span><b>/</b> buscar</span><span><b>N</b> registrar pago</span><span><b>Esc</b> soltar</span>
+                        </div>
                     </div>
+                    <aside class="c-panel" id="pagosPanel"></aside>
+                    </div><!-- /c-split -->
                 </div>
             </div><!-- /panelPagos -->
 
@@ -10205,7 +10212,8 @@
         sel('pagTotalRet',fmt(tR));sel('pagTotalNeto',fmt(tN));
         var cnt=document.getElementById('pagContador');if(cnt) cnt.textContent=rows.length+' pago'+(rows.length!==1?'s':'');
         rows.sort(function(a,b){return (b.fecha||'').localeCompare(a.fecha||'');});
-        if(!rows.length){tbody.innerHTML='<tr><td colspan="11" class="empty-msg">No hay pagos registrados.</td></tr>';return;}
+        _pagosRows = [];
+        if(!rows.length){tbody.innerHTML='<tr><td colspan="11" class="empty-msg">No hay pagos registrados.</td></tr>';_pagosSel=-1;_pagosPintarPanel();return;}
         rows.forEach(function(r){
             var modB=r.mod==='A'?'<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>':'<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
             var tipB=r.esEmit?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Comprob. emitido</span>':r.esDoc?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Documento</span>':r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
@@ -10228,11 +10236,110 @@
             }
             var btnV=_btnVerComprobantePago(r);
             var tr=document.createElement('tr');
-            _filaMovClickeable(tr, r.esEmit?'emitido':(r.esDoc?'documento':(r.esFact?'factura':'presupuesto')), r.di);
+            // Índice de la fila: lo usan el panel de detalle y el teclado.
+            var _i = _pagosRows.length;
+            r._tipoOrigen = r.esEmit?'emitido':(r.esDoc?'documento':(r.esFact?'factura':'presupuesto'));
+            _pagosRows.push(r);
+            tr.setAttribute('data-pgi', _i);
+            if (_i === _pagosSel) tr.className = 'c-sel';
+            // El clic ahora SELECCIONA (el detalle se ve en el panel). Antes abría la operación
+            // para editar: con el panel al lado eso ya no hace falta y evita tocar un pago sin querer.
+            // Abrirla sigue disponible, como botón explícito dentro del panel.
+            tr.style.cursor = 'pointer';
+            tr.title = 'Clic para ver el detalle al costado';
+            tr.addEventListener('click', function(ev){
+                if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return;
+                pagosSeleccionar(_i);
+            });
             tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnV+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
+        if (_pagosSel >= _pagosRows.length) _pagosSel = _pagosRows.length - 1;
+        _pagosPintarPanel();
     }
+
+    // ── Panel de detalle y teclado de Pagos ──
+    var _pagosRows = [];
+    var _pagosSel = -1;
+    window.pagosSeleccionar = function(i) {
+        _pagosSel = i;
+        var tb = document.getElementById('pagosBody');
+        if (tb) Array.prototype.forEach.call(tb.querySelectorAll('tr[data-pgi]'), function(tr) {
+            tr.classList.toggle('c-sel', parseInt(tr.getAttribute('data-pgi'), 10) === i);
+        });
+        _pagosPintarPanel();
+    };
+    function _pagosPintarPanel() {
+        var box = document.getElementById('pagosPanel'); if (!box) return;
+        var r = _pagosRows[_pagosSel];
+        if (!r) {
+            box.innerHTML = '<div class="c-panel-vacio">Elegí un pago de la lista para ver su detalle acá.'
+                          + '<br><br>Con <b>↑</b> <b>↓</b> te movés y con <b>Enter</b> imprimís su orden de pago.</div>';
+            return;
+        }
+        var f = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var kv = function(k, v, col){ return '<div class="c-kv"><span>' + k + '</span><span' + (col ? ' style="color:' + col + ';"' : '') + '>' + v + '</span></div>'; };
+        var tipo = r.esEmit ? 'Comprobante emitido' : r.esDoc ? 'Comprobante X' : r.esFact ? 'Factura' : 'Presupuesto';
+        box.innerHTML =
+            '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);">PAGO SELECCIONADO</div>'
+            + '<div style="font-size:16px;font-weight:700;margin-top:5px;line-height:1.25;">' + escHtml(r.prov || '—') + '</div>'
+            + '<div style="font-size:12px;color:var(--text-2);margin-top:3px;line-height:1.4;">' + escHtml(r.concepto || '—') + '</div>'
+            + '<div style="margin-top:12px;">'
+            + kv('Fecha', r.fecha ? formatearFecha(r.fecha) : '—')
+            + kv('Tipo', tipo)
+            + kv('Modalidad', r.mod === 'A' ? 'Banco' : 'Efectivo')
+            + (r.capital ? kv('Capital', f(r.capital)) : '')
+            + (r.mayores ? kv('Mayores costos', f(r.mayores), 'var(--warn)') : '')
+            + kv('Total', f(r.total))
+            + (r.ret ? kv('Retenciones', '− ' + f(r.ret), 'var(--danger)') : '')
+            + kv('Neto al proveedor', f(r.neto), 'var(--success)')
+            + '</div>'
+            + '<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">'
+            + '<button class="btn btn-outline btn-sm" onclick="pagosAbrirOrigen()">📂 Abrir la operación</button></div>'
+            + '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);">'
+            + '<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:var(--text-3);margin-bottom:6px;">COMPROBANTE DE TRANSFERENCIA</div>'
+            + (r.comprobanteId
+                ? '<div style="font-size:12px;color:var(--success);">✓ Adjunto: ' + escHtml(r.comprobanteNombre || 'comprobante') + '</div>'
+                : '<div style="font-size:12px;color:var(--text-3);">Sin adjuntar. Usá 📎+ en la fila para subirlo.</div>')
+            + '</div>';
+    }
+    // Abre la factura/documento/presupuesto del que salió el pago seleccionado.
+    window.pagosAbrirOrigen = function() {
+        var r = _pagosRows[_pagosSel]; if (!r) return;
+        if (typeof abrirOrigenMovimiento === 'function') abrirOrigenMovimiento(r._tipoOrigen, r.di);
+    };
+    // Teclado de Pagos: mismas reglas que en Comprobantes.
+    document.addEventListener('keydown', function(e) {
+        var panel = document.getElementById('panelPagos');
+        if (!panel || panel.offsetParent === null) return;
+        if (document.querySelector('.modal.active')) return;
+        var t = e.target, esCampo = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+        if (e.key === '/' && !esCampo) {
+            e.preventDefault();
+            var b = document.getElementById('pagBuscador'); if (b) { b.focus(); b.select(); }
+            return;
+        }
+        if (e.key === 'Escape' && esCampo) { t.blur(); return; }
+        if (esCampo || !_pagosRows.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            var n = _pagosSel + (e.key === 'ArrowDown' ? 1 : -1);
+            if (n < 0) n = 0;
+            if (n > _pagosRows.length - 1) n = _pagosRows.length - 1;
+            pagosSeleccionar(n);
+            var fila = document.querySelector('#pagosBody tr[data-pgi="' + n + '"]');
+            if (fila && fila.scrollIntoView) fila.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && _pagosRows[_pagosSel]) {
+            // Primer botón de la fila = imprimir la orden de pago.
+            e.preventDefault();
+            var btn = document.querySelector('#pagosBody tr[data-pgi="' + _pagosSel + '"] .action-btns button');
+            if (btn) btn.click();
+        } else if ((e.key === 'n' || e.key === 'N') && puedeEditar) {
+            e.preventDefault();
+            if (typeof abrirPagoFD === 'function') abrirPagoFD();
+        }
+    });
+
     function imprimirPagoPresup(di,pi){var d=datos[di];if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;var desglose={capital:p.capital||p.montoPagado||0,mayores:p.mayores||0};imprimirReciboDato(d,(p.capital||p.montoPagado||0)+(p.mayores||0),p.fecha,desglose,p.modalidad,p.retenciones||[],p.totalRet||0,p.nroComprobante);}
     function imprimirPagoFact(fi,pi){var f=facturas[fi];if(!f)return;var p=(f.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(f,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
     function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante);}
