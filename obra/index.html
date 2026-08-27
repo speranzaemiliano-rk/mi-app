@@ -221,6 +221,8 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- La base a la que sincroniza se define en config.js, al lado de este archivo. -->
+<script src="config.js"></script>
 <!-- ============ INICIO SCRIPT PRINCIPAL ============ -->
 <script>
 (function(){
@@ -851,11 +853,10 @@
      día cuando hay conexión.
      OJO: cualquiera con el link lee y escribe estos datos.
   ========================================================= */
-  var FB = {
-    apiKey: "AIzaSyBfLKi3a6kZqkMKPQ8wRADQlUu3_NacXAA",
-    databaseURL: "https://modo-prueba-bb8c2-default-rtdb.firebaseio.com",
-    projectId: "modo-prueba-bb8c2"
-  };
+  // La base sale de config.js. Sin config no hay sincronización, pero la
+  // planilla funciona igual guardando en el equipo.
+  var FB = (window.OBRA_CONFIG && window.OBRA_CONFIG.firebase) || {};
+  function hayBase(){ return !!(FB.apiKey && FB.databaseURL && FB.projectId); }
   var CLAVE_COD = "parteObra_codigo";
   var nube = { ref: null, codigo: "", estado: "off", ultimo: "" };
 
@@ -890,6 +891,7 @@
     if (nube.estado === "ok")        t.textContent = "Sincronizado — se ve en otros equipos";
     else if (nube.estado === "yendo")t.textContent = "Conectando…";
     else if (nube.estado === "mal")  t.textContent = "No sincroniza — tocá para ver por qué";
+    else if (!hayBase())             t.textContent = "Sin sincronizar — falta configurar la base";
     else                             t.textContent = "Sin sincronizar — sólo en este equipo";
   }
 
@@ -949,6 +951,11 @@
 
   function conectarNube(cod){
     if (!cod) return;
+    if (!hayBase()) {
+      nube.estado = "mal";
+      nube.error = "Falta cargar los datos de la base en obra/config.js. Sin eso la planilla no puede sincronizar, pero sigue guardando en este equipo.";
+      pintarNube(); return;
+    }
     nube.codigo = cod;
     nube.estado = "yendo"; pintarNube();
     try { localStorage.setItem(CLAVE_COD, cod); } catch(e){}
@@ -1001,6 +1008,11 @@
            '<button class="btn full primario-wa" id="btnLinkWA">Mandar el link por WhatsApp</button>' +
            '<button class="btn full" id="btnLinkCopiar">Copiar el link</button>' +
            '<button class="btn ghost full" id="btnLinkOff">Dejar de sincronizar en este equipo</button>';
+    } else if (!hayBase()) {
+      h += '<div class="ayuda">Para sincronizar entre equipos falta indicar a qué base de datos se conecta.</div>' +
+           '<div class="aviso"><b>Qué falta:</b> cargar los datos del proyecto de Firebase en el archivo ' +
+           '<b>obra/config.js</b> (apiKey, databaseURL y projectId), y publicar la regla <b>parteObra</b> ' +
+           'en ese proyecto.<br><br>Mientras tanto la planilla anda igual: guarda en este equipo.</div>';
     } else {
       h += '<div class="ayuda">Hoy la planilla se guarda sólo en este equipo. Si la activás, se copia a la nube ' +
            'y podés abrirla desde otra compu o celular con el mismo link.</div>' +
@@ -1023,7 +1035,9 @@
         desconectarNube(); cerrarModal(); toast("Desconectado");
       });
     } else {
-      document.getElementById("btnLinkOn").addEventListener("click", function(){
+      // Sin base configurada el modal no dibuja este botón: sólo explica qué falta.
+      var bOn = document.getElementById("btnLinkOn");
+      if (bOn) bOn.addEventListener("click", function(){
         var cod = generarCodigo();
         history.replaceState(null, "", location.pathname + "?o=" + cod);
         conectarNube(cod);
