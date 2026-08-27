@@ -891,7 +891,7 @@
     return c;
   }
 
-  var nube = { ref: null, estado: "off", ultimo: "", usuario: null, error: "" };
+  var nube = { ref: null, estado: "off", ultimo: "", usuario: null, uid: "", error: "", motivo: "" };
 
   function pintarNube(){
     var b = document.getElementById("btnNube");
@@ -913,7 +913,9 @@
       t.textContent = "Sin señal — sincroniza cuando vuelva";
     } else if (nube.estado === "mal") {
       if (i) i.textContent = "⚠";
-      t.textContent = "No sincroniza — tocá acá";
+      t.textContent = (nube.motivo === "permiso")
+        ? "Falta habilitar tu cuenta — tocá acá"
+        : "No sincroniza — tocá acá";
     } else if (!hayBase()) {
       if (i) i.textContent = "☁";
       t.textContent = "Sin sincronizar — falta configurar";
@@ -963,12 +965,8 @@
     var payload = paraNube();
     nube.ultimo = JSON.stringify(payload);
     nube.ref.set(payload).then(function(){
-      nube.estado = "ok"; pintarNube();
-    }).catch(function(e){
-      nube.estado = "mal";
-      nube.error = mensajeError(e);
-      pintarNube();
-    });
+      nube.estado = "ok"; nube.motivo = ""; pintarNube();
+    }).catch(marcarError);
   }
 
   function escribiendo(){
@@ -990,6 +988,14 @@
     if (escribiendo()) actualizarTablero(); else render();
   }
 
+  function marcarError(e){
+    var c = e && e.code ? e.code : "";
+    nube.motivo = (c === "PERMISSION_DENIED" || c === "permission-denied") ? "permiso" : "otro";
+    nube.error  = mensajeError(e);
+    nube.estado = "mal";
+    pintarNube();
+  }
+
   function mensajeError(e){
     var c = e && e.code ? e.code : "";
     if (c === "PERMISSION_DENIED" || c === "permission-denied")
@@ -1007,18 +1013,14 @@
   function conectarDatos(){
     try {
       nube.ref = firebase.database().ref("parteObra/" + OBRA_ID);
-    } catch(e){
-      nube.estado = "mal"; nube.error = mensajeError(e); pintarNube(); return;
-    }
+    } catch(e){ marcarError(e); return; }
     nube.estado = "yendo"; pintarNube();
     nube.ref.on("value", function(snap){
       var v = snap.val();
-      nube.estado = "ok"; pintarNube();
+      nube.estado = "ok"; nube.motivo = ""; pintarNube();
       if (!v) { subirTodo(); return; }    // primera vez: sube lo que hay
       bajarDeNube(v);
-    }, function(err){
-      nube.estado = "mal"; nube.error = mensajeError(err); pintarNube();
-    });
+    }, marcarError);
   }
 
   function soltarDatos(){
@@ -1039,9 +1041,11 @@
       firebase.auth().onAuthStateChanged(function(u){
         if (u) {
           nube.usuario = u.email || "";
+          nube.uid     = u.uid || "";
           conectarDatos();
         } else {
           nube.usuario = null;
+          nube.uid = "";
           soltarDatos();
           nube.estado = "off";
           pintarNube();
@@ -1087,6 +1091,33 @@
         '<b>No perdés nada</b>: todo lo que cargues queda guardado en este equipo y sube solo ' +
         'cuando vuelva la señal.</div>' +
         '<div class="ayuda">No hace falta que hagas nada.</div>');
+      return;
+    }
+
+    if (nube.estado === "mal" && nube.motivo === "permiso") {
+      abrirModal('<h2>Falta habilitar tu cuenta</h2>' +
+        '<div class="aviso rojo">Entraste bien como <b>' + escapar(nube.usuario || "") + '</b>, ' +
+        'pero esta cuenta todavía no está habilitada para la obra.</div>' +
+        '<div class="ayuda">Copiá este código y cargalo en Firebase → Realtime Database → Datos, ' +
+        'dentro de <b>permitidos</b>, con el valor <b>true</b>. Es un paso que se hace una sola vez ' +
+        'por persona.</div>' +
+        '<div class="link-caja" id="uidCaja"></div>' +
+        '<button class="btn full primario-wa" id="btnCopiarUid">Copiar el código</button>' +
+        '<div class="ayuda">Si ya lo cargaste, tocá acá: cuando Firebase rechaza la conexión la corta, ' +
+        'y hay que volver a engancharla.</div>' +
+        '<button class="btn full" id="btnReintentar">Ya lo cargué — reintentar</button>' +
+        '<button class="btn ghost full" id="btnSalir">Cerrar sesión</button>');
+      document.getElementById("uidCaja").textContent = nube.uid || "(sin código)";
+      document.getElementById("btnCopiarUid").addEventListener("click", function(){ copiarTexto(nube.uid || ""); });
+      document.getElementById("btnReintentar").addEventListener("click", function(){
+        cerrarModal(); toast("Reintentando…");
+        soltarDatos();
+        nube.motivo = ""; nube.error = "";
+        conectarDatos();
+      });
+      document.getElementById("btnSalir").addEventListener("click", function(){
+        salir(); cerrarModal(); toast("Sesión cerrada");
+      });
       return;
     }
 
