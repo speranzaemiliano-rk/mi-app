@@ -17190,6 +17190,10 @@
     // ══════════════════════════════════════════════════════════
     var _leerFactArchivoDB64 = null;
     var _leerFactArchivoTipo = null;
+    // Cola de archivos cuando se eligen varios: se procesan de a uno, mostrando cada factura
+    // para que el usuario la confirme antes de guardarla. NO se guardan solas: un dato mal
+    // leído por la IA que entra sin mirar es un asiento contable equivocado.
+    var _lfCola = [], _lfColaIdx = 0;
 
     function abrirLeerFacturaPDF() {
         try {
@@ -17200,9 +17204,33 @@
             document.getElementById('leerFactEstado').textContent = '';
             _leerFactArchivoDB64 = null;
             _leerFactArchivoTipo = null;
+            _lfCola = []; _lfColaIdx = 0;
         } catch (e) { console.error('abrirLeerFacturaPDF (preparación):', e); }
         document.body.classList.remove('printing-rv');
         document.getElementById('modalLeerFactPDF').classList.add('active');
+    }
+
+    // Pasa al siguiente archivo de la cola. Se llama DESPUÉS de guardar, nunca al cancelar:
+    // si el usuario cierra el modal a mano, la cola queda ahí y se descarta al volver a abrirlo.
+    function _lfAvanzarCola() {
+        if (!_lfCola.length) return;
+        _lfColaIdx++;
+        if (_lfColaIdx >= _lfCola.length) {
+            var n = _lfCola.length;
+            _lfCola = []; _lfColaIdx = 0;
+            if (n > 1) alert('✅ Listo: se procesaron los ' + n + ' archivos.');
+            return;
+        }
+        var falta = _lfCola.length - _lfColaIdx;
+        var sig = _lfCola[_lfColaIdx];
+        if (!confirm('Quedan ' + falta + ' archivo(s) por cargar.\n\nSigue: ' + sig.name + '\n\n¿Continuar?')) {
+            _lfCola = []; _lfColaIdx = 0;
+            return;
+        }
+        document.getElementById('modalLeerFactPDF').classList.add('active');
+        document.getElementById('leerFactPaso1').style.display = '';
+        document.getElementById('leerFactPaso2').style.display = 'none';
+        procesarFacturaPDF(sig);
     }
 
     function cerrarLeerFactPDF() {
@@ -17477,16 +17505,22 @@
         lfChequearProvNuevo();
     }
 
-    async function procesarFacturaPDF() {
+    async function procesarFacturaPDF(_archivoDeLaCola) {
         var fileInput = document.getElementById('leerFactArchivo');
-        var file = fileInput.files && fileInput.files[0];
-        if (!file) { alert('Seleccioná un archivo PDF o imagen.'); return; }
+        var file = _archivoDeLaCola;
+        if (!file) {
+            var _sel = (fileInput && fileInput.files) ? Array.prototype.slice.call(fileInput.files) : [];
+            if (!_sel.length) { alert('Seleccioná uno o más archivos PDF o imagen.'); return; }
+            _lfCola = _sel; _lfColaIdx = 0;
+            file = _lfCola[0];
+        }
 
         var MAX_MB = 20;
-        if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo supera los ' + MAX_MB + ' MB.'); return; }
+        if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo «' + file.name + '» supera los ' + MAX_MB + ' MB.'); return; }
 
         var estadoEl = document.getElementById('leerFactEstado');
-        estadoEl.textContent = '⏳ Leyendo el archivo…';
+        var _pos = _lfCola.length > 1 ? ('(' + (_lfColaIdx + 1) + ' de ' + _lfCola.length + ') ') : '';
+        estadoEl.textContent = '⏳ ' + _pos + 'Leyendo ' + file.name + '…';
 
         try {
             // Leer como base64
@@ -17500,7 +17534,7 @@
             _leerFactArchivoDB64 = b64;
             _leerFactArchivoTipo = file.type || 'application/pdf';
 
-            estadoEl.textContent = '🤖 Enviando a Gemini para análisis…';
+            estadoEl.textContent = '🤖 ' + _pos + 'Enviando a Gemini para análisis…';
 
             var mimeType = file.type || 'application/pdf';
 
@@ -17901,6 +17935,7 @@
                     '\nNeto al proveedor: $' + (montoPago-totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) : '');
                 alert('✅ Factura y pago registrados (' + nroCorr + ').\n' + msgPago + '\n\nSe imprime la factura + la Orden de Pago.');
                 imprimirFacturaMasOP(nueva, montoPago, fechaPago, mod, retenciones, totalRet, nroCorr, nroComprobante);
+                _lfAvanzarCola();
                 if (totalRet > 0) {
                     var _tp = _tiposRetPago(nuevoPago.retenciones);
                     if (confirm('¿Imprimir el/los comprobante(s) de retención (Ganancias y/o SUSS)?')) {
@@ -17911,6 +17946,7 @@
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
                 cerrarLeerFactPDF();
                 alert('✅ Factura guardada correctamente.');
+                _lfAvanzarCola();
             }
         }
 
@@ -39765,10 +39801,11 @@
       <div id="leerFactPaso1">
         <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;">
           Subí el PDF de la factura. El sistema va a extraer los datos automáticamente para que los confirmes antes de guardar. Funciona con facturas electrónicas AFIP y la mayoría de formatos estándar.
+          <br><strong>Podés elegir varias de una vez</strong>: se leen y se cargan una atrás de otra, mostrándote cada una para que la confirmes.
         </p>
         <div class="form-group">
-          <label>Archivo PDF de la factura *</label>
-          <input type="file" id="leerFactArchivo" accept=".pdf,image/*" style="font-size:14px;">
+          <label>Archivo(s) PDF de la/s factura/s *</label>
+          <input type="file" id="leerFactArchivo" accept=".pdf,image/*" multiple style="font-size:14px;">
         </div>
         <div id="leerFactEstado" style="margin-top:12px;font-size:13px;color:var(--text-3);min-height:20px;"></div>
         <div class="modal-footer" style="margin-top:20px;">
