@@ -956,8 +956,66 @@
     })();
   }
 
+  /* ---------------------------------------------------------
+     Firebase NO conserva los arreglos: si tienen huecos los
+     devuelve como objeto con claves numéricas, y si quedan
+     vacíos borra la clave entera. Todo lo que entra y sale de
+     la nube pasa por acá, así el resto del código siempre ve
+     arreglos de verdad.
+  --------------------------------------------------------- */
+  function aArray(x){
+    if (Array.isArray(x)) return x.filter(function(i){ return i != null; });
+    if (x && typeof x === "object") {
+      return Object.keys(x)
+        .sort(function(a, b){ return (+a) - (+b); })
+        .map(function(k){ return x[k]; })
+        .filter(function(i){ return i != null; });
+    }
+    return [];
+  }
+
+  function normPersona(p){
+    p = p || {};
+    return { id: p.id || uid(), nombre: p.nombre || "", cuil: p.cuil || "",
+             gremioId: p.gremioId || "", tarea: p.tarea || "",
+             art: p.art !== false, artDesde: p.artDesde || "", activo: p.activo !== false };
+  }
+  function normItem(i){
+    i = i || {};
+    var n = parseInt(i.cant, 10);
+    return { id: i.id || uid(), cant: isNaN(n) ? 0 : n,
+             tarea: i.tarea || "", presente: i.presente !== false };
+  }
+  function normBloque(b){
+    b = b || {};
+    return { gid: b.gid || "", nombre: b.nombre || "", nota: b.nota || "",
+             items: aArray(b.items).map(normItem) };
+  }
+
+  function normalizar(v){
+    v = v || {};
+    var d = {
+      gremios: aArray(v.gremios).map(function(g){
+        g = g || {};
+        return { id: g.id || uid(), nombre: g.nombre || "" };
+      }),
+      personal: aArray(v.personal).map(normPersona),
+      dias: {}
+    };
+    var dias = v.dias || {};
+    Object.keys(dias).forEach(function(f){
+      var x = dias[f] || {};
+      var a = x.asistencia || {}, limpia = {};
+      Object.keys(a).forEach(function(k){ limpia[k] = a[k] === true; });
+      d.dias[f] = { bloques: aArray(x.bloques).map(normBloque), asistencia: limpia };
+    });
+    return d;
+  }
+
+  // Los dos lados de la comparación pasan por la misma normalización,
+  // así el eco de la nube no se confunde con un cambio real.
   function paraNube(){
-    return { gremios: datos.gremios, personal: datos.personal, dias: datos.dias };
+    return normalizar({ gremios: datos.gremios, personal: datos.personal, dias: datos.dias });
   }
 
   function subirTodo(){
@@ -975,17 +1033,25 @@
   }
 
   function bajarDeNube(v){
-    var entrante = JSON.stringify({ gremios: v.gremios || [], personal: v.personal || [], dias: v.dias || {} });
-    if (entrante === nube.ultimo) return;                 // eco de lo que acabamos de subir
-    if (entrante === JSON.stringify(paraNube())) return;
+    var n = normalizar(v);
+    var entrante = JSON.stringify(n);
+    if (entrante === nube.ultimo) return;      // ya procesamos exactamente esto
     nube.ultimo = entrante;
-    datos.gremios  = v.gremios  || [];
-    datos.personal = v.personal || [];
-    datos.dias     = v.dias     || {};
-    escribir(CLAVE, JSON.stringify(datos));
-    asegurarDia(fechaActual);
-    // Si está tipeando no le arrebato el foco: sólo actualizo los números.
-    if (escribiendo()) actualizarTablero(); else render();
+    if (entrante === JSON.stringify(paraNube())) return;   // ya lo tenemos igual
+
+    // Si algo viniera mal formado, no se cae la planilla: se queda con lo local.
+    try {
+      datos.gremios  = n.gremios;
+      datos.personal = n.personal;
+      datos.dias     = n.dias;
+      escribir(CLAVE, JSON.stringify(datos));
+      asegurarDia(fechaActual);
+      // Si está tipeando no le arrebato el foco: sólo actualizo los números.
+      if (escribiendo()) actualizarTablero(); else render();
+      guardar();   // sube lo que haya reconciliado asegurarDia()
+    } catch(e) {
+      if (window.console) console.error("No pude aplicar lo que bajó de la nube:", e);
+    }
   }
 
   function marcarError(e){
@@ -1544,8 +1610,9 @@
       try {
         var d = JSON.parse(txt);
         if (d && d.dias) {
-          datos = { wa: d.wa || "", gremios: d.gremios || [],
-                    personal: d.personal || [], dias: d.dias };
+          var n = normalizar(d);
+          datos = { wa: d.wa || "", gremios: n.gremios,
+                    personal: n.personal, dias: n.dias };
           preparar();
         }
       } catch(e){ /* si el guardado está roto, se queda con lo que ya dibujó */ }
