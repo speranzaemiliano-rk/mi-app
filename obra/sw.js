@@ -2,10 +2,11 @@
 // Vive dentro de /obra/, así que su alcance (scope) es sólo esta carpeta:
 // no se pisa con el sw.js de la app principal, que cubre la raíz.
 // Objetivo: que la planilla abra en la obra aunque no haya señal.
-const CACHE = 'parte-obra-v3';
+const CACHE = 'parte-obra-v4';
 // La ruta base se deriva de dónde está servido este archivo (ej. /mi-app/obra/sw.js → /mi-app/obra/).
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
-const SHELL = [BASE, BASE + 'index.html', BASE + 'config.js', BASE + 'manifest.json'];
+const SHELL = [BASE, BASE + 'index.html', BASE + 'config.js', BASE + 'manifest.json',
+               BASE + '../assets/mess-logo.svg'];
 
 self.addEventListener('install', function(e) {
   e.waitUntil(
