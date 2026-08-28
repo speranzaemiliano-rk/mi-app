@@ -294,7 +294,8 @@ Así viaja una factura desde que se emite hasta que llega por mail. La pieza cla
 
 Planilla para que **el capataz cargue en el celular, desde la obra, cuánta gente hay por gremio y qué está haciendo cada uno**, y mande el parte del día por WhatsApp.
 
-- **URL**: `https://speranzaemiliano-rk.github.io/mi-app/obra/` — se comparte tal cual; conviene que la agreguen a la pantalla de inicio del celular.
+- **Cómo se entra**: desde el **selector de módulos** del sistema (Sistema · Caja · Obra), que aparece al iniciar sesión, o directo por su URL. Quién ve cada módulo sale de `usuarios/<uid>/modulos`; sin configurar, se ven todos. Ojo: como el filtro toma la ausencia de la clave como habilitado, un usuario que hoy tenga `{caja:true, sistema:false}` **también** va a ver Obra — para ocultársela hay que poner `modulos/obra: false`.
+- **URL directa**: `https://speranzaemiliano-rk.github.io/mi-app/obra/` — se comparte tal cual; conviene que la agreguen a la pantalla de inicio del celular.
 - **No pide usuario ni contraseña.** Por defecto los datos quedan sólo en el `localStorage` del equipo donde se cargan.
 - **Sincronizar entre equipos (opcional), con login.** Botón ☁ del encabezado: se entra con mail y contraseña y los datos espejan a `parteObra/<obraId>` en la Realtime Database. La sesión queda abierta en el equipo, así que se entra una sola vez. El `localStorage` sigue siendo la fuente local: la planilla abre y se usa sin señal, y sincroniza cuando hay. El SDK de Firebase se descarga **sólo si hay configuración** (sin configurar, la página no pide nada a la red).
   - **Proyecto de Firebase SEPARADO del sistema de gestión** (`control-caja-965ad`), configurado en `obra/config.js`. La separación es deliberada: en el proyecto del sistema las reglas dan lectura de `empresas` a cualquiera que tenga rol, aunque sea `lector`, así que crearle cuenta ahí al capataz le abriría toda la contabilidad.
