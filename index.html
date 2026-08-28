@@ -4695,6 +4695,7 @@
                                 <button class="btn btn-gold btn-sm" onclick="abrirModalAlquiler()" id="btnAgregarAlquiler">➕ Nuevo Contrato</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirCalcIPC()" title="Calcular cuánto queda un monto actualizado por inflación (IPC INDEC) entre dos fechas">🧮 Calculadora IPC</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirResumenAlquileres()">📊 Resumen</button>
+                                <button class="btn btn-outline btn-sm" onclick="revisarCobrosDuplicados()" title="Buscar cobros repetidos (mismo inquilino, período e importe) y borrar el que sobra">🔍 Revisar duplicados</button>
                                 <button class="btn btn-outline btn-sm" onclick="abrirMoverAlquileres()" title="Mover todos los alquileres de este proyecto a otra empresa/proyecto">🔀 Mover a otro proyecto</button>
                                 <button class="btn btn-outline btn-sm" onclick="revisarAlquileresMail(this)" title="Revisar ahora y mandar el aviso por mail al inquilino y a la empresa de las cuotas por vencer">📧 Avisar cuotas por mail</button>
                             </div>
@@ -25502,6 +25503,85 @@
     // ══════════════════════════════════════════════════════════
     var _raCharts = {};
     function _raDestroy(){ Object.keys(_raCharts).forEach(function(k){ if(_raCharts[k]){_raCharts[k].destroy();delete _raCharts[k];} }); }
+
+    // ── Detector de cobros duplicados ─────────────────────────────────────
+    // Un cobro cargado dos veces (el doble clic que se corrigió, o carga manual repetida) infla
+    // lo cobrado y descuadra el plan de pagos. Se agrupan por inquilino + concepto + período +
+    // importe: si hay más de uno, es candidato a duplicado. NO se borra nada solo: se muestran
+    // para que la persona decida, porque dos cobros iguales el mismo mes también pueden ser reales.
+    window.revisarCobrosDuplicados = function() {
+        var grupos = {};
+        (alquileres || []).forEach(function(a, idx) {
+            (a.cobrosHistorial || []).forEach(function(c, ci) {
+                var clave = [idx, c.concepto || 'alquiler', c.periodo || c.fecha || '', Math.round((c.monto || 0) * 100)].join('|');
+                if (!grupos[clave]) grupos[clave] = [];
+                grupos[clave].push({ a: a, idx: idx, c: c, ci: ci });
+            });
+        });
+        var sospechosos = [];
+        Object.keys(grupos).forEach(function(k) { if (grupos[k].length > 1) sospechosos.push(grupos[k]); });
+        if (!sospechosos.length) { alert('No se encontraron cobros duplicados.'); return; }
+
+        var fmt = function(n) { return '$' + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var html = '<div style="font-size:12.5px;color:var(--text-2);margin-bottom:14px;line-height:1.55;">'
+            + 'Cobros con el <strong>mismo inquilino, concepto, periodo e importe</strong>. Casi siempre el que sobra es el '
+            + 'que <strong>no tiene recibo ni factura</strong>: aparece marcado. Revisa antes de borrar, porque dos cobros '
+            + 'iguales en el mismo mes tambien pueden ser reales.</div>';
+        sospechosos.forEach(function(g) {
+            html += '<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px;">'
+                 + '<div style="font-weight:700;font-size:13px;margin-bottom:8px;">' + escHtml(g[0].a.inquilino || '-')
+                 + ' <span style="color:var(--text-3);font-weight:400;">' + escHtml(g[0].a.unidad || g[0].a.direccion || '') + '</span></div>';
+            g.forEach(function(o) {
+                var sinPapel = !o.c.nroRecibo && !o.c.facturaId;
+                html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--border-soft);">'
+                     + '<div style="flex:1;min-width:0;font-size:12.5px;"><strong>' + fmt(o.c.monto) + '</strong>'
+                     + '<span style="color:var(--text-2);"> · ' + (o.c.fecha ? formatearFecha(o.c.fecha) : 'sin fecha')
+                     + (o.c.periodo ? ' · ' + escHtml(o.c.periodo) : '')
+                     + (o.c.nroRecibo ? ' · recibo ' + escHtml(o.c.nroRecibo) : '')
+                     + (o.c.facturaId ? ' · con factura' : '') + '</span>'
+                     + (sinPapel ? '<div style="font-size:11px;color:var(--danger);margin-top:2px;">Sin recibo ni factura: probablemente el duplicado</div>' : '')
+                     + '</div>'
+                     + '<button class="btn btn-danger-sm" onclick="_dupBorrar(' + o.idx + ',' + o.ci + ')">Borrar</button></div>';
+            });
+            html += '</div>';
+        });
+        _dupMostrar(html);
+    };
+
+    function _dupMostrar(html) {
+        var prev = document.getElementById('dupOverlay');
+        if (prev) prev.remove();
+        var ov = document.createElement('div');
+        ov.id = 'dupOverlay';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+        var caja = document.createElement('div');
+        caja.style.cssText = 'background:var(--card);color:var(--text-1);border:1px solid var(--border);border-radius:var(--radius);max-width:620px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);backdrop-filter:var(--vidrio);';
+        var cab = document.createElement('div');
+        cab.style.cssText = 'padding:14px 18px;border-bottom:1px solid var(--border);font-weight:700;';
+        cab.textContent = 'Cobros duplicados';
+        var cuerpo = document.createElement('div');
+        cuerpo.style.cssText = 'padding:16px 18px;overflow:auto;flex:1;';
+        cuerpo.innerHTML = html;
+        var pie = document.createElement('div');
+        pie.style.cssText = 'padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;';
+        var cerrar = document.createElement('button');
+        cerrar.className = 'btn btn-outline btn-sm';
+        cerrar.textContent = 'Cerrar';
+        cerrar.onclick = function() { ov.remove(); };
+        pie.appendChild(cerrar);
+        caja.appendChild(cab); caja.appendChild(cuerpo); caja.appendChild(pie);
+        ov.appendChild(caja);
+        document.body.appendChild(ov);
+        ov.onclick = function(e) { if (e.target === ov) ov.remove(); };
+    }
+
+    // Borra un cobro desde el detector y vuelve a correr la revision, para ver como quedo.
+    window._dupBorrar = function(idx, ci) {
+        var ov = document.getElementById('dupOverlay');
+        if (ov) ov.remove();
+        eliminarCobroAlquiler(idx, ci);   // pide confirmacion y libera el numero de recibo
+        setTimeout(revisarCobrosDuplicados, 150);
+    };
 
     function abrirResumenAlquileres(){
         if(!alquileres.length){ alert('No hay contratos de alquiler cargados.'); return; }
