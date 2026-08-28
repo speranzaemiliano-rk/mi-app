@@ -20,7 +20,13 @@ let cancha = {};
 const teclas = {};
 let camaraModo = 0;           // 0 = transmisión (de costado), 1 = detrás del jugador
 let fps = 0, fpsAcum = 0, fpsCuadros = 0;
-let goles = 0, pausaGol = 0, atajadas = 0;
+let pausaGol = 0, atajadas = 0;
+let golesRK = 0, golesRIV = 0;
+let tiempoPartido = 0, estadoPartido = 'jugando';
+const DURACION_PARTIDO = 240;          // 4 minutos reales, reloj 0'-90'
+let companeros = [], rivales = [], todos = [], porteros = [];
+let controlado = null, anillo = null, poseedorActual = null;
+let IA_ACTIVA = true;                  // las pruebas la apagan para aislar al humano
 
 /* Modelo externo (Mixamo): se carga arrastrando un .glb sobre la página.
    No hace falta red: el archivo se lee con FileReader y se parsea en memoria. */
@@ -750,14 +756,59 @@ function crearEscena(){
   // Las medias eran casi blancas (#f2f5fa) sobre piel clara: a la distancia de
   // la cámara la pierna era una sola mancha del short al botín. En oscuro se
   // le ve el corte y la pierna se lee.
-  jugador = crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#16406f', '10', '#e8b98f', '#241a12');
-  jugador.position.set(-3, 0, 2);
-  escena.add(jugador);
+  // RK (azul) ataca hacia +x; el rival (rojo) hacia -x.
+  const alta = (m, eq, rol, cx, cz) => {
+    const u = m.userData;
+    u.eq = eq; u.rol = rol; u.casa = { x: cx, z: cz };
+    u.decidir = Math.random()*0.2;
+    u.objetivo = new THREE.Vector3(cx, 0, cz);
+    m.position.set(cx, 0, cz);
+    m.rotation.y = eq === 0 ? -Math.PI/2 : Math.PI/2;   // mirando al rival
+    escena.add(m);
+    todos.push(m);
+    return m;
+  };
+  jugador = alta(crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#16406f', '10', '#e8b98f', '#241a12'),
+                 0, 'DEL', -3, 2);
+  companeros = [
+    alta(crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#16406f', '5', '#c98d5f', '#12100e'),
+         0, 'DEF', -14, -3),
+    alta(crearFutbolista('#3f8ee0', '#1c4f8a', '#101a2c', '#16406f', '8', '#8a5a3a', '#1a120a'),
+         0, 'MED', -7, 4)
+  ];
+  rivales = [
+    alta(crearFutbolista('#e04848', '#8e1f1f', '#17181f', '#571b1b', '2', '#e8b98f', '#241a12'),
+         1, 'DEF', 14, 3),
+    alta(crearFutbolista('#e04848', '#8e1f1f', '#17181f', '#571b1b', '8', '#c98d5f', '#12100e'),
+         1, 'MED', 7, -4),
+    alta(crearFutbolista('#e04848', '#8e1f1f', '#17181f', '#571b1b', '9', '#8a5a3a', '#1a120a'),
+         1, 'DEL', 3, -2)
+  ];
+  controlado = jugador;
 
+  // porteros: el amarillo defiende el arco de +x (ataja lo de RK); el verde, el nuestro
   arquero = crearFutbolista('#f0c53c', '#b8902a', '#22201a', '#33301c', '1', '#c98d5f', '#12100e');
   arquero.position.set(CANCHA_LARGO/2 - 2.0, 0, 0);
   arquero.rotation.y = -Math.PI/2;
   escena.add(arquero);
+  const arqueroRK = crearFutbolista('#4fbf6e', '#1f7a3c', '#101a15', '#123322', '1', '#e8b98f', '#241a12');
+  arqueroRK.position.set(-(CANCHA_LARGO/2 - 2.0), 0, 0);
+  arqueroRK.rotation.y = Math.PI/2;
+  escena.add(arqueroRK);
+  porteros = [{ malla: arquero, lado: 1 }, { malla: arqueroRK, lado: -1 }];
+  [arquero, arqueroRK].forEach(a => {
+    const A = a.userData;
+    A.vuelo = -1; A.ladoVuelo = 0; A.zObjetivo = 0; A.leyoRemate = false; A.espera = 0; A.error = 0;
+  });
+
+  // anillo bajo el jugador controlado
+  anillo = new THREE.Mesh(
+    new THREE.RingGeometry(0.52, 0.68, 28),
+    new THREE.MeshBasicMaterial({ color: 0xf5c542, transparent: true, opacity: 0.85,
+                                  side: THREE.DoubleSide, depthWrite: false }));
+  anillo.rotation.x = -Math.PI/2;
+  anillo.position.y = 0.02;
+  escena.add(anillo);
 }
 
 function crearVallas(){
@@ -841,7 +892,7 @@ function crearTribunas(){
   });
 }
 
-/* Pantalla gigante sobre una cabecera: marca goles y atajadas. */
+/* Pantalla gigante sobre una cabecera: el marcador del partido. */
 let pantallaCtx = null, pantallaTex = null;
 function crearPantalla(){
   const c = document.createElement('canvas');
@@ -871,13 +922,13 @@ function pantalla3dActualizar(){
   x.fillText('· RK · POTRERO 3D ·', w/2, 44);
   x.font = '700 64px Oswald, Arial Narrow, sans-serif';
   x.fillStyle = '#ffffff';
-  x.fillText(String(goles), w/2 - 130, 128);
-  x.fillStyle = '#8be36b';
-  x.fillText(String(atajadas), w/2 + 130, 128);
+  x.fillText(String(golesRK), w/2 - 130, 128);
+  x.fillStyle = '#e07070';
+  x.fillText(String(golesRIV), w/2 + 130, 128);
   x.font = '600 22px Oswald, Arial Narrow, sans-serif';
   x.fillStyle = '#93a0b2';
-  x.fillText('GOLES', w/2 - 130, 155);
-  x.fillText('ATAJADAS', w/2 + 130, 155);
+  x.fillText('RK', w/2 - 130, 155);
+  x.fillText('RIVAL', w/2 + 130, 155);
   x.fillStyle = '#3a4552';
   x.fillRect(w/2 - 2, 78, 4, 66);
   pantallaTex.needsUpdate = true;
@@ -1499,7 +1550,7 @@ function montarGLB(buffer, nombre){
       raiz.rotation.y = giroModelo;
       raiz.traverse(o => { if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; } });
       modelo = raiz;
-      jugador.add(modelo);
+      controlado.add(modelo);
       jugador.userData.cadera.visible = false;  // guardar el muñeco propio
       mezclador = new THREE.AnimationMixer(modelo);
     }
@@ -1569,7 +1620,7 @@ function pintarPanel(){
 }
 
 function volverAlMuneco(){
-  if(modelo){ jugador.remove(modelo); modelo = null; mezclador = null; }
+  if(modelo){ controlado.remove(modelo); modelo = null; mezclador = null; }
   clipsCargados = [];
   roles.correr = roles.parado = roles.patear = null;
   acciones.correr = acciones.parado = acciones.patear = null;
@@ -1625,16 +1676,17 @@ const ARQ3D = {
 };
 
 function iniciarArquero(){
-  arquero.position.set(ARQ3D.lineaX, 0, 0);
-  arquero.rotation.y = -Math.PI/2;          // mirando a la cancha
-  const A = arquero.userData;
-  A.vuelo = -1; A.ladoVuelo = 0; A.zObjetivo = 0;
-  A.espera = 0; A.error = 0; A.leyoRemate = false;
-  A.zBase = 0;
+  porteros.forEach(pt => {
+    pt.malla.position.set(pt.lado*ARQ3D.lineaX, 0, 0);
+    pt.malla.rotation.y = -pt.lado*Math.PI/2;   // mirando a la cancha
+    const A = pt.malla.userData;
+    A.vuelo = -1; A.ladoVuelo = 0; A.zObjetivo = 0;
+    A.espera = 0; A.error = 0; A.leyoRemate = false;
+  });
 }
 
-function animarArquero(dt){
-  const u = arquero.userData;
+function animarArquero(port, dt){
+  const u = port.userData;
   u.paso += dt*1.5;
   const respira = Math.sin(u.paso*1.8)*0.02;
 
@@ -1645,7 +1697,7 @@ function animarArquero(dt){
     const rol = u.ladoVuelo * (0.35 + 1.15*Math.min(1, k*2.2));
     u.cadera.rotation.z = rol;
     u.cadera.rotation.x = -0.25*arco;
-    u.cadera.position.y = 0.92 + arco*0.55 - k*k*0.45;
+    u.cadera.position.y = 0.991 + arco*0.55 - k*k*0.45;
     u.torso.rotation.x = 0.10;
     u.torso.rotation.z = 0;
     // los dos brazos van hacia el lado de la estirada, estirados
@@ -1667,7 +1719,7 @@ function animarArquero(dt){
   // ---- postura de espera: agachado, piernas abiertas, brazos afuera ----
   u.cadera.rotation.z = 0;
   u.cadera.rotation.x = 0;
-  u.cadera.position.y = 0.80 + respira;
+  u.cadera.position.y = 0.875 + respira;
   u.torso.rotation.x = 0.26 + respira*0.5;
   u.torso.rotation.y = 0;
   u.torso.rotation.z = 0;
@@ -1685,28 +1737,198 @@ function animarArquero(dt){
   });
 }
 
-function actualizarArquero(dt){
-  const u = arquero.userData;
+/* ============================================================
+   IA DE CAMPO — portada del juego 2D, que ya la tenía medida
+   ============================================================ */
+const IA = {
+  vel: 4.05, velPunta: 5.4,          // apenas por debajo del humano: 4,4 / 7,2
+  radioPelota: 1.15,                 // desde dónde puede tocarla
+  quite: 1.05,                       // desde dónde se la roba a otro
+  cadencia: 0.16,                    // cada cuánto vuelve a decidir
+  pase: 13.5, remate: 15.0
+};
+const dist2D = (a, b) => Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+const arcoDe = eq => (eq === 0 ? 1 : -1)*(CANCHA_LARGO/2);   // arco al que ATACA
+
+/* ¿Hay línea libre entre dos puntos, sin rivales en el medio? Se mide la
+   distancia perpendicular de cada rival al segmento. Es lo mismo que usa el
+   2D para decidir si el pase o el remate tienen sentido. */
+function lineaLibre(ax, az, bx, bz, equipoPropio, margen){
+  const vx = bx - ax, vz = bz - az;
+  const largo2 = vx*vx + vz*vz;
+  if(largo2 < 0.01) return true;
+  for(const o of todos){
+    if(o.userData.eq === equipoPropio) continue;
+    let t = ((o.position.x - ax)*vx + (o.position.z - az)*vz)/largo2;
+    t = Math.max(0, Math.min(1, t));
+    const px = ax + vx*t, pz = az + vz*t;
+    if(Math.hypot(o.position.x - px, o.position.z - pz) < (margen || 1.1)) return false;
+  }
+  return true;
+}
+
+/* El punto del arco menos cubierto por el arquero: si se apunta siempre al
+   centro, el arquero ataja todo. */
+function mejorPuntoArco(eq){
+  const gx = arcoDe(eq);
+  const port = porteros.find(pt => pt.lado === Math.sign(gx));
+  const pz = port ? port.malla.position.z : 0;
+  const borde = ARCO_ANCHO/2 - 0.55;
+  return { x: gx, z: pz > 0 ? -borde : borde };
+}
+
+function poseedor(){
+  let mejor = null, dm = 1e9;
+  for(const o of todos){
+    const d = dist2D(o, pelota);
+    if(d < dm){ dm = d; mejor = o; }
+  }
+  return dm < 1.35 ? mejor : null;
+}
+
+function iaJugador(j, dt){
+  const u = j.userData;
   const P = pelota.userData;
-  const gx = CANCHA_LARGO/2 - 1.2;                    // línea de gol
+  const dPelota = dist2D(j, pelota);
+  const gx = arcoDe(u.eq);
+  const propio = -gx;
+
+  u.decidir -= dt;
+  const duenoPelota = poseedorActual;
+  const nuestra = duenoPelota && duenoPelota.userData.eq === u.eq;
+
+  // ---- ¿a dónde ir? se recalcula cada `cadencia`, no en cada cuadro ----
+  if(u.decidir <= 0){
+    u.decidir = IA.cadencia;
+    // El más cercano del equipo va a la pelota. Se EXCLUYE al que maneja la
+    // persona: si no, en tu equipo el más cercano siempre sos vos, ningún
+    // compañero sale a presionar y el rival te ataca con uno de más.
+    const compis = todos.filter(o => o.userData.eq === u.eq && o !== controlado);
+    let masCerca = compis[0], dmc = 1e9;
+    for(const o of compis){ const d = dist2D(o, pelota); if(d < dmc){ dmc = d; masCerca = o; } }
+    const voyYo = (j === masCerca) || (dPelota < 1.6);
+
+    if(voyYo){
+      u.objetivo.set(pelota.position.x, 0, pelota.position.z);
+    } else if(nuestra){
+      // ataque: subir a campo rival, abierto y por delante de la pelota
+      const avance = pelota.position.x + Math.sign(gx)*7;
+      u.objetivo.set(
+        lim(avance, -CANCHA_LARGO/2 + 4, CANCHA_LARGO/2 - 4), 0,
+        lim(u.casa.z*1.5 + pelota.position.z*0.25, -CANCHA_ANCHO/2 + 2, CANCHA_ANCHO/2 - 2));
+    } else {
+      // defensa: replegar entre la pelota y el arco propio
+      u.objetivo.set(
+        lim(pelota.position.x*0.55 + propio*0.30, -CANCHA_LARGO/2 + 3, CANCHA_LARGO/2 - 3), 0,
+        lim(pelota.position.z*0.5 + u.casa.z*0.6, -CANCHA_ANCHO/2 + 2, CANCHA_ANCHO/2 - 2));
+    }
+  }
+
+  // ---- caminar hacia el objetivo ----
+  let hx = u.objetivo.x - j.position.x, hz = u.objetivo.z - j.position.z;
+  const d = Math.hypot(hx, hz);
+  const rapido = dPelota < 6 || (nuestra && Math.abs(pelota.position.x - propio) < 12);
+  const velMax = rapido ? IA.velPunta : IA.vel;
+  if(d > 0.35){
+    hx /= d; hz /= d;
+    u.v.x += (hx*velMax - u.v.x)*Math.min(1, dt*6);
+    u.v.z += (hz*velMax - u.v.z)*Math.min(1, dt*6);
+  } else {
+    u.v.x *= Math.pow(0.05, dt);
+    u.v.z *= Math.pow(0.05, dt);
+  }
+  j.position.x = lim(j.position.x + u.v.x*dt, -cancha.limX, cancha.limX);
+  j.position.z = lim(j.position.z + u.v.z*dt, -cancha.limZ, cancha.limZ);
+
+  const vel = Math.hypot(u.v.x, u.v.z);
+  // mira a donde va, salvo que tenga la pelota: ahí mira al arco
+  let mirarX = u.v.x, mirarZ = u.v.z;
+  if(dPelota < IA.radioPelota){
+    const obj = mejorPuntoArco(u.eq);
+    mirarX = obj.x - j.position.x; mirarZ = obj.z - j.position.z;
+  }
+  if(Math.hypot(mirarX, mirarZ) > 0.1) j.rotation.y = Math.atan2(mirarX, mirarZ) - Math.PI;
+  animarFutbolista(j, dt, vel);
+
+  // ---- tocar la pelota ----
+  if(dPelota > IA.radioPelota || P.pegado > 0 || pelota.position.y > 0.55) return;
+  const alArco = Math.abs(gx - j.position.x);
+  const obj = mejorPuntoArco(u.eq);
+
+  // remate si está cerca y con línea
+  if(alArco < 15 && lineaLibre(j.position.x, j.position.z, obj.x, obj.z, u.eq, 0.85)){
+    const dx = obj.x - j.position.x, dz = obj.z - j.position.z;
+    const n = Math.hypot(dx, dz) || 1;
+    P.v.set(dx/n*IA.remate, 3.4 + Math.random()*1.2, dz/n*IA.remate);
+    P.pegado = 0.55; u.patada = 0;
+    AUDIO3D.patada(1);
+    return;
+  }
+  // si no, pase al compañero mejor ubicado
+  const compis = todos.filter(o => o.userData.eq === u.eq && o !== j);
+  let mejor = null, puntaje = -1e9;
+  for(const o of compis){
+    if(!lineaLibre(j.position.x, j.position.z, o.position.x, o.position.z, u.eq, 0.9)) continue;
+    const avanza = (o.position.x - j.position.x)*Math.sign(gx);
+    const p = avanza - dist2D(j, o)*0.25;
+    if(p > puntaje){ puntaje = p; mejor = o; }
+  }
+  if(mejor && puntaje > -3){
+    const dx = mejor.position.x - j.position.x, dz = mejor.position.z - j.position.z;
+    const n = Math.hypot(dx, dz) || 1;
+    const f = Math.min(IA.pase, 5.2 + n*0.85);
+    P.v.set(dx/n*f, 0.5, dz/n*f);
+    P.pegado = 0.5; u.patada = 0;
+    AUDIO3D.patada(0.45);
+    return;
+  }
+  // nadie libre: conducir hacia el arco
+  const dx = obj.x - j.position.x, dz = obj.z - j.position.z;
+  const n = Math.hypot(dx, dz) || 1;
+  P.v.x += (dx/n*(vel + 2.2) - P.v.x)*Math.min(1, dt*9);
+  P.v.z += (dz/n*(vel + 2.2) - P.v.z)*Math.min(1, dt*9);
+}
+
+/* Que no se amontonen ni se atraviesen: empujón suave entre cuerpos. */
+function separarCuerpos(){
+  for(let i = 0; i < todos.length; i++){
+    for(let k = i + 1; k < todos.length; k++){
+      const a = todos[i], b = todos[k];
+      let dx = b.position.x - a.position.x, dz = b.position.z - a.position.z;
+      let d = Math.hypot(dx, dz);
+      if(d > 0.92 || d < 1e-4) continue;
+      const empuje = (0.92 - d)/2;
+      dx /= d; dz /= d;
+      a.position.x -= dx*empuje; a.position.z -= dz*empuje;
+      b.position.x += dx*empuje; b.position.z += dz*empuje;
+    }
+  }
+}
+
+function actualizarArquero(dt){
+  porteros.forEach(pt => actualizarPortero(pt.malla, pt.lado, dt));
+}
+
+function actualizarPortero(port, lado, dt){
+  const u = port.userData;
+  const P = pelota.userData;
+  const gx = lado*(CANCHA_LARGO/2 - 1.2);             // SU línea de gol
   const medioArco = ARCO_ANCHO/2;
 
   if(u.vuelo >= 0){
     u.vuelo += dt;
-    // se desplaza hacia donde se tiró
-    const objetivo = u.zObjetivo;
-    arquero.position.z += (objetivo - arquero.position.z) * Math.min(1, dt*5.5);
+    port.position.z += (u.zObjetivo - port.position.z) * Math.min(1, dt*5.5);
     if(u.vuelo > 1.15){                               // se levanta
       u.vuelo = -1; u.leyoRemate = false;
-      arquero.position.z = lim(arquero.position.z, -medioArco, medioArco);
+      port.position.z = lim(port.position.z, -medioArco, medioArco);
     }
-    animarArquero(dt);
+    animarArquero(port, dt);
     return;
   }
 
-  // ¿viene un remate al arco?
+  // ¿viene un remate a ESTE arco? Todo espejado por `lado`.
   let remate = false, tCruce = 0, zCruce = 0, yCruce = 0;
-  if(P.v.x > 3 && pelota.position.x < gx){
+  if(P.v.x*lado > 3 && pelota.position.x*lado < gx*lado){
     tCruce = (gx - pelota.position.x)/P.v.x;
     if(tCruce > 0 && tCruce < 1.6){
       zCruce = pelota.position.z + P.v.z*tCruce;
@@ -1724,58 +1946,60 @@ function actualizarArquero(dt){
 
   let destinoZ;
   if(remate){
-    if(u.espera > 0){ u.espera -= dt; destinoZ = arquero.position.z; }
+    if(u.espera > 0){ u.espera -= dt; destinoZ = port.position.z; }
     else {
       destinoZ = lim(zCruce + u.error, -medioArco - 0.3, medioArco + 0.3);
-      // si no llega caminando, se tira
-      const falta = Math.abs(destinoZ - arquero.position.z);
+      const falta = Math.abs(destinoZ - port.position.z);
       if(falta > ARQ3D.velLateral*tCruce*0.9 + 0.15 && tCruce < 0.85){
         u.vuelo = 0;
-        u.ladoVuelo = Math.sign(destinoZ - arquero.position.z) || 1;
+        u.ladoVuelo = Math.sign(destinoZ - port.position.z) || 1;
         u.zObjetivo = destinoZ;
       }
     }
   } else {
-    // posicionamiento: acompaña la pelota sin salirse del arco
     destinoZ = lim(pelota.position.z*0.45, -medioArco + 0.25, medioArco - 0.25);
   }
 
   if(u.vuelo < 0){
     const paso = ARQ3D.velLateral*dt;
-    const d = destinoZ - arquero.position.z;
-    arquero.position.z += Math.abs(d) < paso ? d : Math.sign(d)*paso;
-    arquero.position.x += (ARQ3D.lineaX - arquero.position.x) * Math.min(1, dt*3);
+    const d = destinoZ - port.position.z;
+    port.position.z += Math.abs(d) < paso ? d : Math.sign(d)*paso;
+    port.position.x += (lado*ARQ3D.lineaX - port.position.x) * Math.min(1, dt*3);
   }
-  animarArquero(dt);
+  animarArquero(port, dt);
 }
 
 /* ¿Llegó a la pelota? El alcance crece cuando está estirado. */
 function chequearAtajada(dt){
   const P = pelota.userData;
   if(P.atajada > 0){ P.atajada = Math.max(0, P.atajada - dt); return; }
-  const u = arquero.userData;
-  const dx = pelota.position.x - arquero.position.x;
-  if(dx < -0.95 || dx > 0.50) return;
-  const dz = Math.abs(pelota.position.z - arquero.position.z);
-  const alcance = u.vuelo >= 0 ? ARQ3D.alcanceVuelo : ARQ3D.alcance;
-  if(dz > alcance) return;
-  const altoMax = u.vuelo >= 0 ? 2.05 : 1.95;
-  if(pelota.position.y > altoMax) return;
-  if(Math.hypot(P.v.x, P.v.z) < 2) return;
+  for(const pt of porteros){
+    const port = pt.malla, lado = pt.lado;
+    const u = port.userData;
+    // dx espejado: negativo = del lado de la cancha, positivo = detrás del arquero
+    const dx = (pelota.position.x - port.position.x)*lado;
+    if(dx < -0.95 || dx > 0.50) continue;
+    const dz = Math.abs(pelota.position.z - port.position.z);
+    const alcance = u.vuelo >= 0 ? ARQ3D.alcanceVuelo : ARQ3D.alcance;
+    if(dz > alcance) continue;
+    const altoMax = u.vuelo >= 0 ? 2.05 : 1.95;
+    if(pelota.position.y > altoMax) continue;
+    if(Math.hypot(P.v.x, P.v.z) < 2) continue;
 
-  // rechaza hacia afuera y arriba
-  const haciaAfuera = Math.sign(pelota.position.z - arquero.position.z) || (Math.random() < 0.5 ? -1 : 1);
-  const vel = Math.hypot(P.v.x, P.v.z);
-  P.v.x = -Math.abs(P.v.x)*0.45;
-  P.v.z = haciaAfuera*Math.max(2.5, vel*0.4);
-  P.v.y = 2.6 + Math.random()*1.8;
-  P.atajada = 0.5;
-  P.pegado = 0.5;
-  atajadas++;
-  document.getElementById('atajadasTxt').textContent = atajadas;
-  pantalla3dActualizar();
-  AUDIO3D.atajada();
-  mostrarAviso3d('¡ATAJÓ!', '#8be36b', 1.1);
+    // rechaza hacia la cancha, afuera y arriba
+    const haciaAfuera = Math.sign(pelota.position.z - port.position.z) || (Math.random() < 0.5 ? -1 : 1);
+    const vel = Math.hypot(P.v.x, P.v.z);
+    P.v.x = -lado*Math.abs(P.v.x)*0.45;
+    P.v.z = haciaAfuera*Math.max(2.5, vel*0.4);
+    P.v.y = 2.6 + Math.random()*1.8;
+    P.atajada = 0.5;
+    P.pegado = 0.5;
+    atajadas++;
+    pantalla3dActualizar();
+    AUDIO3D.atajada();
+    mostrarAviso3d('¡ATAJÓ!', '#8be36b', 1.1);
+    return;
+  }
 }
 
 /* Mezcla de animaciones del modelo: correr y parado se cruzan según la
@@ -1811,7 +2035,7 @@ function animarModelo(dt, vel){
 /* ============================================================
    ENTRADA
    ============================================================ */
-const TECLAS_JUEGO = [' ', 'z', 'x', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+const TECLAS_JUEGO = [' ', 'z', 'x', 'tab', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if(TECLAS_JUEGO.indexOf(k) >= 0) e.preventDefault();
@@ -1821,6 +2045,7 @@ window.addEventListener('keydown', e => {
     if(k === 'z') patear('bajo');
     if(k === 'x') patear('alto');
     if(k === 'c') camaraModo = (camaraModo + 1) % 2;
+    if(k === 'tab') cambiarJugador();
   }
   teclas[k] = true;
 });
@@ -1866,7 +2091,7 @@ function patear(tipo){
     }
     return;
   }
-  const u = jugador.userData;
+  const u = controlado.userData;      // se patea con el que estás manejando
   if(u.patada < 0) u.patada = 0;
 }
 
@@ -1874,7 +2099,14 @@ function patear(tipo){
    BUCLE
    ============================================================ */
 function actualizar(dt){
+  const jugador = controlado;              // el humano maneja a UNO del equipo
   const u = jugador.userData;
+  poseedorActual = poseedor();
+  if(estadoPartido === 'jugando'){
+    tiempoPartido += dt;
+    actualizarReloj();
+    if(tiempoPartido >= DURACION_PARTIDO) finalizarPartido();
+  }
   if(pausaGol > 0){
     pausaGol -= dt;
     if(pausaGol <= 0) reponer();
@@ -1909,7 +2141,10 @@ function actualizar(dt){
   const vel = Math.hypot(u.v.x, u.v.z);
   const kPatada = usandoModelo() ? animarModelo(dt, vel)
                                  : animarFutbolista(jugador, dt, vel);
+  if(IA_ACTIVA) for(const o of todos) if(o !== jugador) iaJugador(o, dt);
+  separarCuerpos();
   actualizarArquero(dt);
+  anillo.position.set(jugador.position.x, 0.02, jugador.position.z);
 
   // ---- contacto con la pelota ----
   const P = pelota.userData;
@@ -1983,7 +2218,9 @@ function actualizar(dt){
     pelota.position.x = Math.sign(pelota.position.x)*LX;
     P.v.x *= -0.62;
   }
-  if(enBoca && pausaGol <= 0 && Math.abs(pelota.position.x) > LX - 0.15) gol3d();
+  // el arco de +x es el del rival: si entra ahí, gol de RK
+  if(enBoca && pausaGol <= 0 && Math.abs(pelota.position.x) > LX - 0.15)
+    gol3d(pelota.position.x > 0 ? 0 : 1);
   if(Math.abs(pelota.position.x) > LX + 1.7){       // fondo de la red
     pelota.position.x = Math.sign(pelota.position.x)*(LX + 1.7);
     P.v.x *= -0.15; P.v.z *= 0.5;
@@ -2045,22 +2282,59 @@ function mostrarAviso3d(texto, color, seg){
   avisoTimer3d = seg || 1.9;
 }
 
-function gol3d(){
-  goles++;
-  document.getElementById('golesTxt').textContent = goles;
+function gol3d(equipo){
+  if(equipo === 0){ golesRK++; mostrarAviso3d('¡GOL DE RK!', '#f5c542', 1.9); }
+  else { golesRIV++; mostrarAviso3d('GOL DEL RIVAL', '#e07070', 1.9); }
+  document.getElementById('golesTxt').textContent = golesRK;
+  document.getElementById('atajadasTxt').textContent = golesRIV;
   pantalla3dActualizar();
-  mostrarAviso3d('¡GOL!', '#f5c542', 1.9);
   AUDIO3D.gol();
   pausaGol = 1.9;
+  ultimoGol = equipo;
+}
+let ultimoGol = 1;
+
+function actualizarReloj(){
+  const min = Math.floor(tiempoPartido/DURACION_PARTIDO*90);
+  const e = document.getElementById('relojTxt');
+  if(e) e.textContent = min + "'";
+}
+
+function finalizarPartido(){
+  estadoPartido = 'fin';
+  AUDIO3D.silbato();
+  const r = golesRK > golesRIV ? '¡GANASTE!' : (golesRK < golesRIV ? 'PERDISTE' : 'EMPATE');
+  mostrarAviso3d(r + '  ' + golesRK + ' - ' + golesRIV,
+                 golesRK >= golesRIV ? '#f5c542' : '#e07070', 8);
+  if(golesRK > golesRIV) AUDIO3D.gol();
 }
 
 function reponer(){
   AUDIO3D.silbato();
   pelota.position.set(0, 0.11, 0);
   pelota.userData.v.set(0, 0, 0);
-  jugador.position.set(-3, 0, 1.5);
-  jugador.userData.v.set(0, 0, 0);
+  pelota.userData.pegado = 0; pelota.userData.atajada = 0;
+  // cada uno a su lugar; saca el que recibió el gol
+  for(const o of todos){
+    const c = o.userData.casa;
+    // el que saca queda al lado de la pelota
+    const saca = (o.userData.eq !== ultimoGol) && o.userData.rol === 'DEL';
+    o.position.set(saca ? -Math.sign(arcoDe(o.userData.eq))*0.8 : c.x, 0, saca ? 0 : c.z);
+    o.userData.v.set(0, 0, 0);
+    o.userData.patada = -1;
+    o.userData.objetivo.set(o.position.x, 0, o.position.z);
+  }
+  iniciarArquero();
+  controlado = jugador;
   document.getElementById('avisoGol').style.display = 'none';
+}
+
+/* Cambia al jugador de campo más cercano a la pelota (el clásico TAB). */
+function cambiarJugador(){
+  const opciones = [jugador].concat(companeros).filter(o => o !== controlado);
+  let mejor = opciones[0], dm = 1e9;
+  for(const o of opciones){ const d = dist2D(o, pelota); if(d < dm){ dm = d; mejor = o; } }
+  if(mejor) controlado = mejor;
 }
 
 function bucle(){
@@ -2112,6 +2386,10 @@ function arrancar(){
   document.addEventListener('pointerdown', () => {
     try { window.focus(); } catch(e){}
     AUDIO3D.activar();
+  });
+  const tp = document.getElementById('tituloPanel');
+  if(tp) tp.addEventListener('click', () => {
+    document.getElementById('panelModelo').classList.toggle('plegado');
   });
   const bm = document.getElementById('btMute3d');
   if(bm) bm.addEventListener('click', () => {
