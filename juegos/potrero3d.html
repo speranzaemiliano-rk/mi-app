@@ -4933,11 +4933,28 @@ function crearEscena(){
   // la cámara la pierna era una sola mancha del short al botín. En oscuro se
   // le ve el corte y la pierna se lee.
   // RK (azul) ataca hacia +x; el rival (rojo) hacia -x.
+  // Cada jugador con su FÍSICO y sus ATRIBUTOS. Antes los seis medían lo
+  // mismo y corrían exactamente igual: cambiaba la camiseta y nada más, y a
+  // la distancia de la cámara eso se lee como seis copias del mismo muñeco.
+  // Los tres roles tienen contexturas distintas, más una variación propia.
+  const FISICO = {
+    DEF: { alto: 1.045, ancho: 1.07, vel: 0.94 },   // grandote y más lento
+    MED: { alto: 0.985, ancho: 0.96, vel: 1.02 },   // chico y movedizo
+    DEL: { alto: 1.005, ancho: 0.99, vel: 1.08 }    // el rápido
+  };
   const alta = (m, eq, rol, cx, cz) => {
     const u = m.userData;
     u.eq = eq; u.rol = rol; u.casa = { x: cx, z: cz };
     u.decidir = Math.random()*0.2;
     u.objetivo = new THREE.Vector3(cx, 0, cz);
+    u.festejo = 0;
+    const F = FISICO[rol];
+    const az = 0.97 + Math.random()*0.06;             // que no sean clones ni de a pares
+    u.alto = F.alto*az;
+    m.scale.setScalar(u.alto);
+    u.cadera.scale.set(F.ancho, 1, F.ancho);
+    u.velTope  = IA.vel*F.vel*(0.97 + Math.random()*0.06);
+    u.velPunta = IA.velPunta*F.vel*(0.97 + Math.random()*0.06);
     m.position.set(cx, 0, cz);
     m.rotation.y = eq === 0 ? -Math.PI/2 : Math.PI/2;   // mirando al rival
     escena.add(m);
@@ -5616,6 +5633,30 @@ function animarFutbolista(J, dt, velocidad){
   u.cuello.rotation.x = -0.05 - amp*0.10;
   J.position.y = Math.abs(Math.sin(t))*0.045*amp;
 
+  // ---- festejo: brazos arriba y saltitos, pisa todo lo demás ----
+  if(u.festejo > 0){
+    u.festejo = Math.max(0, u.festejo - dt);
+    const f = u.paso*7;
+    const salto = Math.max(0, Math.sin(f));
+    J.position.y = salto*0.16;
+    u.brazos.forEach((b, i) => {
+      b.hombro.rotation.x = -2.5 - 0.25*Math.sin(f + i);
+      b.hombro.rotation.z = b.lado*(0.55 + 0.18*Math.sin(f + i*1.7));
+      b.codo.rotation.x = -0.35;
+    });
+    u.torso.rotation.x = -0.10;
+    u.torso.rotation.y = Math.sin(u.paso*2.2)*0.18;
+    u.cuello.rotation.x = -0.22;
+    u.piernas.forEach(p => {
+      p.caderaP.rotation.x = -0.10 - salto*0.45;
+      p.rodilla.rotation.x = -0.15 - salto*0.75;
+      p.tobillo.rotation.x = 0.20 + salto*0.30;
+    });
+    u.cadera.rotation.y = 0; u.cadera.rotation.z = 0;
+    u.cadera.position.y = 0.991;
+    return -1;
+  }
+
   // ---- patada: pisa por encima del ciclo de carrera ----
   if(u.patada >= 0){
     u.patada += dt;
@@ -5964,6 +6005,14 @@ function poseedor(){
 
 function iaJugador(j, dt){
   const u = j.userData;
+  if(u.festejo > 0){                       // festejando no se juega
+    const vel = Math.hypot(u.v.x, u.v.z);
+    u.v.x *= Math.pow(0.08, dt); u.v.z *= Math.pow(0.08, dt);
+    j.position.x += u.v.x*dt; j.position.z += u.v.z*dt;
+    u.paso += dt*1.6;
+    animarFutbolista(j, dt, vel);
+    return;
+  }
   const P = pelota.userData;
   const dPelota = dist2D(j, pelota);
   const gx = arcoDe(u.eq);
@@ -6004,7 +6053,7 @@ function iaJugador(j, dt){
   let hx = u.objetivo.x - j.position.x, hz = u.objetivo.z - j.position.z;
   const d = Math.hypot(hx, hz);
   const rapido = dPelota < 6 || (nuestra && Math.abs(pelota.position.x - propio) < 12);
-  const velMax = rapido ? IA.velPunta : IA.vel;
+  const velMax = rapido ? u.velPunta : u.velTope;      // cada uno con lo suyo
   if(d > 0.35){
     hx /= d; hz /= d;
     u.v.x += (hx*velMax - u.v.x)*Math.min(1, dt*6);
@@ -6299,7 +6348,10 @@ function actualizar(dt){
   if(teclas['arrowup']    || teclas['w']) dz -= 1;
   if(teclas['arrowdown']  || teclas['s']) dz += 1;
   const m = Math.hypot(dx, dz);
-  const corre = teclas['shift'] ? 7.2 : 4.4;
+  // El humano corre con los atributos del jugador que está manejando: cambiar
+  // con TAB a un defensor grandote se NOTA. Se escala sobre la base 4,4/7,2.
+  const factor = (u.velTope || IA.vel)/IA.vel;
+  const corre = (teclas['shift'] ? 7.2 : 4.4)*factor;
   if(m > 0){
     dx /= m; dz /= m;
     u.v.x += (dx*corre - u.v.x) * Math.min(1, dt*7);
@@ -6459,6 +6511,8 @@ function mostrarAviso3d(texto, color, seg){
 }
 
 function gol3d(equipo){
+  // los del equipo que convirtió salen a festejar
+  for(const o of todos) if(o.userData.eq === equipo) o.userData.festejo = 1.9;
   if(equipo === 0){ golesRK++; mostrarAviso3d('¡GOL DE RK!', '#f5c542', 1.9); }
   else { golesRIV++; mostrarAviso3d('GOL DEL RIVAL', '#e07070', 1.9); }
   document.getElementById('golesTxt').textContent = golesRK;
