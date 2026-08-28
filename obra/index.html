@@ -192,6 +192,44 @@
   .filtro button{flex:1;border:1px solid var(--linea);background:#fff;border-radius:4px;padding:8px 4px;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--lapiz);cursor:pointer}
   .filtro button.on{background:var(--tinta);border-color:var(--tinta);color:var(--casco)}
 
+  /* --- Exportar a PDF --- */
+  .grupo{border:1px solid var(--linea);border-radius:5px;padding:11px 12px;margin-bottom:11px}
+  .grupo h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--lapiz);margin-bottom:9px}
+  .op{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:14px;cursor:pointer}
+  .op input{width:18px;height:18px;flex:0 0 auto;accent-color:var(--casco-osc)}
+  .fechas{display:flex;gap:8px;margin-top:8px}
+  .fechas input{flex:1;min-width:0;border:1px solid var(--linea);border-radius:4px;background:#F6F4F1;
+                font-family:inherit;font-size:14px;padding:8px;color:var(--tinta)}
+  .fechas input:focus{outline:none;border-color:var(--casco);background:#fff}
+  .cuenta-sel{font-size:12px;color:var(--lapiz);margin-top:8px}
+
+  /* El reporte sólo existe al imprimir. */
+  #reporte{display:none}
+  @media print{
+    body.imprimiendo{background:#fff;color:#000;padding:0}
+    body.imprimiendo > header,
+    body.imprimiendo > .wrap,
+    body.imprimiendo > .barra,
+    body.imprimiendo > .modal,
+    body.imprimiendo > .toast{display:none !important}
+    body.imprimiendo #reporte{display:block !important}
+    @page{margin:14mm}
+  }
+  #reporte{font-size:11pt;color:#000}
+  #reporte h1{font-size:15pt;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2mm}
+  #reporte .sub{font-size:10pt;color:#444;margin-bottom:6mm}
+  #reporte .dia{margin-bottom:7mm;page-break-inside:avoid}
+  #reporte .dia > h2{font-size:12pt;border-bottom:1.5pt solid #000;padding-bottom:1mm;margin-bottom:3mm}
+  #reporte .gr{margin:0 0 4mm;page-break-inside:avoid}
+  #reporte .gr > h3{font-size:10.5pt;margin-bottom:1.5mm}
+  #reporte table{width:100%;border-collapse:collapse;font-size:9.5pt}
+  #reporte th{text-align:left;border-bottom:1pt solid #000;padding:1.2mm 2mm 1.2mm 0;font-size:8.5pt;
+              text-transform:uppercase;letter-spacing:.06em}
+  #reporte td{border-bottom:.4pt solid #bbb;padding:1.2mm 2mm 1.2mm 0;vertical-align:top}
+  #reporte .no{color:#777;text-decoration:line-through}
+  #reporte .alerta{font-weight:700}
+  #reporte .pie{margin-top:6mm;padding-top:2mm;border-top:.5pt solid #999;font-size:8.5pt;color:#555}
+
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:74px;z-index:50;background:var(--tinta);color:var(--casco);padding:10px 16px;border-radius:4px;font-size:13px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s}
   .toast.show{opacity:1}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -245,6 +283,9 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Se arma sólo al exportar; en pantalla no se ve. -->
+<div id="reporte"></div>
 
 <!-- La base a la que sincroniza se define en config.js, al lado de este archivo. -->
 <script src="config.js"></script>
@@ -1569,7 +1610,250 @@
     render();
   }
 
+  /* =========================================================
+     EXPORTAR A PDF
+     Antes de exportar se elige qué entra: qué días, qué
+     gremios, qué columnas y si van los ausentes.
+     Sale por la impresión del navegador ("Guardar como PDF"),
+     así no hace falta bajar ninguna librería y anda sin señal.
+  ========================================================= */
+  var pdfCfg = {
+    rango: "dia",            // 'dia' | 'entre' | 'todos'
+    desde: "", hasta: "",
+    gremios: null,           // null = todos; si no, { gid: true }
+    sinGremio: true,
+    ausentes: true,
+    cols: { tarea: true, cuil: false, art: true, estado: true }
+  };
+
+  function diasDisponibles(){
+    return Object.keys(datos.dias).sort();
+  }
+
+  function diasElegidos(){
+    var todos = diasDisponibles();
+    if (pdfCfg.rango === "dia")   return todos.indexOf(fechaActual) >= 0 ? [fechaActual] : [];
+    if (pdfCfg.rango === "todos") return todos;
+    var d = pdfCfg.desde || todos[0] || "";
+    var h = pdfCfg.hasta || todos[todos.length - 1] || "";
+    return todos.filter(function(f){ return f >= d && f <= h; });
+  }
+
+  function gremioElegido(gid){
+    if (!gid) return pdfCfg.sinGremio;
+    return !pdfCfg.gremios || pdfCfg.gremios[gid] !== false;
+  }
+
+  // Quién figura en un día: sólo los que tienen marca de asistencia ahí.
+  function estabaEse(f, pid){
+    var d = datos.dias[f];
+    return !!(d && d.asistencia && Object.prototype.hasOwnProperty.call(d.asistencia, pid));
+  }
+
+  function abrirExportar(){
+    var todos = diasDisponibles();
+    if (!todos.length) { toast("Todavía no hay días cargados"); return; }
+    if (!pdfCfg.desde) pdfCfg.desde = todos[0];
+    if (!pdfCfg.hasta) pdfCfg.hasta = todos[todos.length - 1];
+
+    var h = '<h2>Exportar a PDF</h2>' +
+      '<div class="ayuda">Elegí qué entra en el PDF. Después el navegador te va a ofrecer ' +
+      '«Guardar como PDF» en el destino de impresión.</div>' +
+
+      '<div class="grupo"><h3>Qué días</h3>' +
+        '<label class="op"><input type="radio" name="rg" value="dia">Sólo el día abierto (' + fechaLarga(fechaActual) + ')</label>' +
+        '<label class="op"><input type="radio" name="rg" value="entre">Entre dos fechas</label>' +
+        '<div class="fechas" id="cajaFechas">' +
+          '<input type="date" id="pdfDesde"><input type="date" id="pdfHasta">' +
+        '</div>' +
+        '<label class="op"><input type="radio" name="rg" value="todos">Todos los días cargados (' + todos.length + ')</label>' +
+      '</div>' +
+
+      '<div class="grupo"><h3>Qué gremios</h3><div id="pdfGremios"></div></div>' +
+
+      '<div class="grupo"><h3>Qué datos de cada persona</h3>' +
+        '<label class="op"><input type="checkbox" id="cTarea">Tarea que hizo</label>' +
+        '<label class="op"><input type="checkbox" id="cEstado">Si vino o no</label>' +
+        '<label class="op"><input type="checkbox" id="cArt">Si tiene ART</label>' +
+        '<label class="op"><input type="checkbox" id="cCuil">CUIL</label>' +
+        '<label class="op"><input type="checkbox" id="cAus">Incluir a los que no vinieron</label>' +
+      '</div>' +
+
+      '<div class="cuenta-sel" id="pdfCuenta"></div>' +
+      '<button class="btn full primario-wa" style="margin-top:10px" id="btnGenPDF">Generar el PDF</button>';
+    abrirModal(h);
+
+    // gremios (todos marcados por defecto)
+    var cont = document.getElementById("pdfGremios");
+    if (!datos.gremios.length) cont.innerHTML = '<div class="ayuda">No hay gremios cargados.</div>';
+    datos.gremios.forEach(function(g){
+      var l = document.createElement("label");
+      l.className = "op";
+      var c = document.createElement("input");
+      c.type = "checkbox"; c.checked = gremioElegido(g.id);
+      c.addEventListener("change", function(){
+        if (!pdfCfg.gremios) pdfCfg.gremios = {};
+        pdfCfg.gremios[g.id] = c.checked;
+        contarSel();
+      });
+      l.appendChild(c);
+      l.appendChild(document.createTextNode(g.nombre));
+      cont.appendChild(l);
+    });
+    var lsg = document.createElement("label");
+    lsg.className = "op";
+    var csg = document.createElement("input");
+    csg.type = "checkbox"; csg.checked = pdfCfg.sinGremio;
+    csg.addEventListener("change", function(){ pdfCfg.sinGremio = csg.checked; contarSel(); });
+    lsg.appendChild(csg);
+    lsg.appendChild(document.createTextNode("Sin gremio asignado"));
+    cont.appendChild(lsg);
+
+    // días
+    modalContenido.querySelectorAll('input[name="rg"]').forEach(function(r){
+      r.checked = (r.value === pdfCfg.rango);
+      r.addEventListener("change", function(){
+        pdfCfg.rango = r.value;
+        document.getElementById("cajaFechas").style.display = (r.value === "entre") ? "flex" : "none";
+        contarSel();
+      });
+    });
+    document.getElementById("cajaFechas").style.display = (pdfCfg.rango === "entre") ? "flex" : "none";
+    var dd = document.getElementById("pdfDesde"), hh = document.getElementById("pdfHasta");
+    dd.value = pdfCfg.desde; hh.value = pdfCfg.hasta;
+    dd.addEventListener("change", function(){ pdfCfg.desde = dd.value; contarSel(); });
+    hh.addEventListener("change", function(){ pdfCfg.hasta = hh.value; contarSel(); });
+
+    // columnas
+    var cajas = [["cTarea","tarea"], ["cEstado","estado"], ["cArt","art"], ["cCuil","cuil"]];
+    cajas.forEach(function(par){
+      var el = document.getElementById(par[0]);
+      el.checked = !!pdfCfg.cols[par[1]];
+      el.addEventListener("change", function(){ pdfCfg.cols[par[1]] = el.checked; });
+    });
+    var aus = document.getElementById("cAus");
+    aus.checked = pdfCfg.ausentes;
+    aus.addEventListener("change", function(){ pdfCfg.ausentes = aus.checked; contarSel(); });
+
+    document.getElementById("btnGenPDF").addEventListener("click", generarPDF);
+    contarSel();
+  }
+
+  function contarSel(){
+    var el = document.getElementById("pdfCuenta");
+    if (!el) return;
+    var ds = diasElegidos(), filas = 0;
+    ds.forEach(function(f){
+      personalActivo().forEach(function(p){
+        if (!estabaEse(f, p.id)) return;
+        if (!gremioElegido(p.gremioId)) return;
+        if (!pdfCfg.ausentes && !vinoEn(f, p.id)) return;
+        filas++;
+      });
+    });
+    el.textContent = ds.length
+      ? "Van a salir " + ds.length + (ds.length === 1 ? " día" : " días") + " y " + filas + (filas === 1 ? " línea" : " líneas") + "."
+      : "No hay ningún día en ese rango.";
+  }
+
+  function _td(t, clase){
+    return '<td' + (clase ? ' class="' + clase + '"' : '') + '>' + escapar(t == null ? "" : t) + '</td>';
+  }
+
+  function armarReporte(){
+    var ds = diasElegidos();
+    var L = [];
+    L.push('<h1>Parte de obra — Personal</h1>');
+    L.push('<div class="sub">' +
+      (ds.length === 1 ? fechaLarga(ds[0])
+                       : ds.length + ' días · ' + fechaLarga(ds[0]) + ' a ' + fechaLarga(ds[ds.length-1])) +
+      '</div>');
+
+    var cols = pdfCfg.cols;
+    ds.forEach(function(f){
+      var partes = [];
+      var totalDiaPDF = 0;
+
+      function seccion(titulo, gente, bloque){
+        var filas = gente.filter(function(p){
+          return pdfCfg.ausentes || vinoEn(f, p.id);
+        });
+        var sueltas = (bloque && bloque.items) ? bloque.items.filter(function(i){
+          return pdfCfg.ausentes ? (i.cant > 0 || i.tarea) : (i.presente && i.cant > 0);
+        }) : [];
+        if (!filas.length && !sueltas.length && !(bloque && bloque.nota)) return;
+
+        var presentes = gente.filter(function(p){ return vinoEn(f, p.id); }).length +
+                        (bloque ? bloque.items.reduce(function(s,i){ return s + (i.presente ? (i.cant||0) : 0); }, 0) : 0);
+        totalDiaPDF += presentes;
+
+        var t = ['<div class="gr"><h3>' + escapar(titulo) + ' — ' + presentes + ' en obra</h3><table><tr><th>Nombre</th>'];
+        if (cols.tarea)  t.push('<th>Tarea</th>');
+        if (cols.estado) t.push('<th>Estado</th>');
+        if (cols.art)    t.push('<th>ART</th>');
+        if (cols.cuil)   t.push('<th>CUIL</th>');
+        t.push('</tr>');
+
+        filas.forEach(function(p){
+          var vino = vinoEn(f, p.id);
+          t.push('<tr>' + _td(p.nombre, vino ? "" : "no"));
+          if (cols.tarea)  t.push(_td(p.tarea || ""));
+          if (cols.estado) t.push(_td(vino ? "En obra" : "No vino", vino ? "" : "no"));
+          if (cols.art)    t.push(_td(p.art === false ? "SIN ART" : "Sí", p.art === false ? "alerta" : ""));
+          if (cols.cuil)   t.push(_td(p.cuil || ""));
+          t.push('</tr>');
+        });
+        sueltas.forEach(function(i){
+          t.push('<tr>' + _td(i.cant + " (sin nombre)", i.presente ? "" : "no"));
+          if (cols.tarea)  t.push(_td(i.tarea || ""));
+          if (cols.estado) t.push(_td(i.presente ? "En obra" : "No vino", i.presente ? "" : "no"));
+          if (cols.art)    t.push(_td(""));
+          if (cols.cuil)   t.push(_td(""));
+          t.push('</tr>');
+        });
+        t.push('</table>');
+        if (bloque && bloque.nota) t.push('<div class="sub" style="margin:1mm 0 0">Nota: ' + escapar(bloque.nota) + '</div>');
+        t.push('</div>');
+        partes.push(t.join(""));
+      }
+
+      var dGuardado = datos.dias[f] || {};
+      var bloquesDe = {};
+      (dGuardado.bloques || []).forEach(function(b){ bloquesDe[b.gid] = b; });
+
+      datos.gremios.forEach(function(g){
+        if (!gremioElegido(g.id)) return;
+        seccion(g.nombre, personalDe(g.id).filter(function(p){ return estabaEse(f, p.id); }), bloquesDe[g.id]);
+      });
+      if (pdfCfg.sinGremio) {
+        seccion("Sin gremio asignado",
+                personalSinGremio().filter(function(p){ return estabaEse(f, p.id); }), null);
+      }
+
+      if (!partes.length) return;
+      L.push('<div class="dia"><h2>' + fechaLarga(f) + ' — ' + totalDiaPDF + ' en obra</h2>' + partes.join("") + '</div>');
+    });
+
+    L.push('<div class="pie">Generado el ' + fechaLarga(hoyISO()) + '.</div>');
+    return L.join("");
+  }
+
+  function generarPDF(){
+    var ds = diasElegidos();
+    if (!ds.length) { toast("No hay días en ese rango"); return; }
+    var rep = document.getElementById("reporte");
+    rep.innerHTML = armarReporte();
+    cerrarModal();
+    document.body.classList.add("imprimiendo");
+    // El navegador necesita un respiro para pintar el reporte antes de imprimir.
+    setTimeout(function(){
+      try { window.print(); } catch(e){}
+      setTimeout(function(){ document.body.classList.remove("imprimiendo"); }, 400);
+    }, 120);
+  }
+
   /* ---- Historial ---- */
+
   document.getElementById("btnHistorial").addEventListener("click", function(){
     var fechas = Object.keys(datos.dias).sort().reverse();
     var html = '<h2>Días cargados</h2>';
@@ -1585,7 +1869,8 @@
                   '<button class="icono" data-borrar="' + f + '">✕</button>' +
                 '</div>';
       });
-      html += '<button class="btn ghost full" style="margin-top:14px" id="btnCSV">Descargar historial (CSV para Excel)</button>';
+      html += '<button class="btn full primario-wa" style="margin-top:14px" id="btnPDF">Exportar a PDF</button>' +
+              '<button class="btn ghost full" id="btnCSV">Descargar historial (CSV para Excel)</button>';
     }
     abrirModal(html);
 
@@ -1607,6 +1892,8 @@
     });
     var csv = document.getElementById("btnCSV");
     if (csv) csv.addEventListener("click", exportarCSV);
+    var pdf = document.getElementById("btnPDF");
+    if (pdf) pdf.addEventListener("click", abrirExportar);
   });
 
   function exportarCSV(){
