@@ -22,19 +22,17 @@
 //     contraseña". Las cuentas se crean a mano desde Authentication →
 //     Users → "Agregar usuario". No hay alta pública en la planilla.
 //
-//  2) Realtime Database → Reglas → publicar esto:
+//  2) Realtime Database → Reglas → publicar esto, con los mails que
+//     tengan que entrar:
 //
 //     {
 //       "rules": {
 //         ".read": false,
 //         ".write": false,
-//         "permitidos": {
-//           "$uid": { ".read": "auth != null && auth.uid === $uid" }
-//         },
 //         "parteObra": {
 //           "$obra": {
-//             ".read":  "auth != null && root.child('permitidos').child(auth.uid).exists()",
-//             ".write": "auth != null && root.child('permitidos').child(auth.uid).exists()",
+//             ".read":  "auth != null && auth.token.email === 'alguien@ejemplo.com'",
+//             ".write": "auth != null && auth.token.email === 'alguien@ejemplo.com'",
 //             "$seccion": {
 //               ".validate": "$seccion === 'gremios' || $seccion === 'personal' || $seccion === 'dias'"
 //             }
@@ -43,13 +41,13 @@
 //       }
 //     }
 //
-//     `permitidos` no tiene `.write`, así que sólo se edita desde la
-//     consola. Tener cuenta NO alcanza: hay que estar en esa lista. Si
-//     alguien lograra registrarse igual, sin entrada ahí no ve nada.
-//
-//  3) Por cada persona que use la planilla: crearle el usuario en
-//     Authentication, copiar su UID, e ir a Realtime Database → Datos →
-//     crear `permitidos/<UID>` con el valor true.
+//     La lista de habilitados vive DENTRO de las reglas, no en un nodo de
+//     datos: tener cuenta no alcanza, el mail tiene que estar ahí. Para
+//     sumar gente se encadena con ||:
+//       "auth != null && (auth.token.email === 'a@x.com' || auth.token.email === 'b@x.com')"
+//     Antes esto se resolvía con un nodo `permitidos/<uid>`; se cambió
+//     porque crear ese nodo anidado a mano en la consola es fácil de
+//     equivocar, y esta forma no necesita tocar los datos.
 //
 //  Si falta la apiKey o la databaseURL, la planilla funciona igual:
 //  guarda en el equipo y el botón ☁ avisa que falta configurar.
