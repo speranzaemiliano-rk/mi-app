@@ -379,6 +379,29 @@
   function marcarVino(pid, v){ asistenciaDe(fechaActual)[pid] = !!v; }
   function sumarAHoy(pid){ asistenciaDe(fechaActual)[pid] = true; }
 
+  /* Cuando baja algo de la nube, los objetos de `datos` se reemplazan por
+     otros nuevos. Un botón dibujado antes que se guarde el objeto viejo le
+     escribiría a algo que ya no está en la lista, y el cambio se pierde
+     (había que hacerlo dos veces). Por eso todo handler resuelve por id
+     recién cuando lo tocan. */
+  function personaPorId(id){
+    for (var i = 0; i < datos.personal.length; i++)
+      if (datos.personal[i].id === id) return datos.personal[i];
+    return null;
+  }
+  function gremioPorId(id){
+    for (var i = 0; i < datos.gremios.length; i++)
+      if (datos.gremios[i].id === id) return datos.gremios[i];
+    return null;
+  }
+  function itemPorId(gid, iid){
+    var b = bloqueDe(gid);
+    if (!b) return null;
+    for (var i = 0; i < b.items.length; i++)
+      if (b.items[i].id === iid) return b.items[i];
+    return null;
+  }
+
   function bloqueDe(gid){
     var bs = dia().bloques;
     for (var i = 0; i < bs.length; i++) if (bs[i].gid === gid) return bs[i];
@@ -532,13 +555,18 @@
       nota.className = "nota"; nota.rows = 1;
       nota.placeholder = "Nota del día (ej: no vinieron por la lluvia)";
       nota.value = b.nota;
-      nota.addEventListener("input", function(){ b.nota = nota.value; guardar(); });
+      nota.addEventListener("input", function(){
+        var bl = bloqueDe(gr.id);
+        if (bl) { bl.nota = nota.value; guardar(); }
+      });
       card.appendChild(nota);
 
       var add = document.createElement("button");
       add.className = "add-item"; add.textContent = "+ Tarea sin nombre";
       add.addEventListener("click", function(){
-        b.items.push(it(1, ""));
+        var bl = bloqueDe(gr.id);
+        if (!bl) return;
+        bl.items.push(it(1, ""));
         guardar(); render();
         enfocarUltimaVacia();
       });
@@ -579,7 +607,10 @@
     tarea.className = "pt"; tarea.type = "text";
     tarea.value = p.tarea || "";
     tarea.placeholder = "Qué está haciendo";
-    tarea.addEventListener("input", function(){ p.tarea = tarea.value; guardar(); });
+    tarea.addEventListener("input", function(){
+      var x = personaPorId(p.id);
+      if (x) { x.tarea = tarea.value; guardar(); }
+    });
 
     d.appendChild(nom); d.appendChild(tarea);
 
@@ -614,38 +645,44 @@
     val.className = "val"; val.type = "text"; val.inputMode = "numeric"; val.value = item.cant;
     var mas = document.createElement("button"); mas.textContent = "+";
 
+    function elItem(){ return itemPorId(b.gid, item.id) || item; }
     menos.addEventListener("click", function(){
-      item.cant = Math.max(0, (item.cant||0) - 1);
-      val.value = item.cant; guardar(); actualizarTablero(); refrescarCuentas();
+      var i = elItem();
+      i.cant = Math.max(0, (i.cant||0) - 1);
+      val.value = i.cant; guardar(); actualizarTablero(); refrescarCuentas();
     });
     mas.addEventListener("click", function(){
-      item.cant = (item.cant||0) + 1;
-      val.value = item.cant; guardar(); actualizarTablero(); refrescarCuentas();
+      var i = elItem();
+      i.cant = (i.cant||0) + 1;
+      val.value = i.cant; guardar(); actualizarTablero(); refrescarCuentas();
     });
     val.addEventListener("input", function(){
       var n = parseInt(val.value.replace(/\D/g, ""), 10);
-      item.cant = isNaN(n) ? 0 : n;
+      elItem().cant = isNaN(n) ? 0 : n;
       guardar(); actualizarTablero(); refrescarCuentas();
     });
-    val.addEventListener("blur", function(){ val.value = item.cant; });
+    val.addEventListener("blur", function(){ val.value = elItem().cant; });
     step.appendChild(menos); step.appendChild(val); step.appendChild(mas);
 
     var tarea = document.createElement("input");
     tarea.className = "tarea"; tarea.type = "text"; tarea.value = item.tarea;
     tarea.placeholder = "Qué está haciendo";
-    tarea.addEventListener("input", function(){ item.tarea = tarea.value; guardar(); });
+    tarea.addEventListener("input", function(){ elItem().tarea = tarea.value; guardar(); });
 
     var pres = document.createElement("button");
     pres.className = "icono " + (item.presente ? "presente" : "ausente");
     pres.textContent = item.presente ? "✓" : "✕";
     pres.title = item.presente ? "Está en obra" : "No vino";
-    pres.addEventListener("click", function(){ item.presente = !item.presente; guardar(); render(); });
+    pres.addEventListener("click", function(){
+      var i = elItem(); i.presente = !i.presente; guardar(); render();
+    });
 
     var quitar = document.createElement("button");
     quitar.className = "icono"; quitar.textContent = "✕"; quitar.title = "Borrar tarea";
     quitar.style.fontSize = "12px";
     quitar.addEventListener("click", function(){
-      b.items = b.items.filter(function(x){ return x.id !== item.id; });
+      var bl = bloqueDe(b.gid) || b;
+      bl.items = bl.items.filter(function(x){ return x.id !== item.id; });
       guardar(); render();
     });
 
@@ -835,7 +872,9 @@
       var inp = document.createElement("input");
       inp.type = "text"; inp.value = gr.nombre;
       inp.addEventListener("input", function(){
-        gr.nombre = inp.value;
+        var g = gremioPorId(gr.id);
+        if (!g) return;
+        g.nombre = inp.value;
         // El nombre se actualiza en el día abierto también
         dia().bloques.forEach(function(b){ if (b.gid === gr.id) b.nombre = inp.value; });
         guardar();
@@ -1346,7 +1385,9 @@
       sel.appendChild(o);
     });
     sel.addEventListener("change", function(){
-      p.gremioId = sel.value;
+      var x = personaPorId(p.id);
+      if (!x) return;
+      x.gremioId = sel.value;
       guardar(); pintarPersonal(); render();
     });
     d.appendChild(sel);
@@ -1355,7 +1396,10 @@
     tarea.className = "n-tarea"; tarea.type = "text";
     tarea.value = p.tarea || "";
     tarea.placeholder = "Qué hace";
-    tarea.addEventListener("input", function(){ p.tarea = tarea.value; guardar(); });
+    tarea.addEventListener("input", function(){
+      var x = personaPorId(p.id);
+      if (x) { x.tarea = tarea.value; guardar(); }
+    });
     tarea.addEventListener("blur", render);
     d.appendChild(tarea);
 
@@ -1367,8 +1411,10 @@
     art.textContent = p.art === false ? "✕" : "✓";
     art.title = p.art === false ? "No tiene ART — tocá para marcar que sí" : "Tiene ART — tocá para marcar que no";
     art.addEventListener("click", function(){
-      p.art = (p.art === false);
-      if (p.art === false) p.artDesde = "";
+      var x = personaPorId(p.id);
+      if (!x) return;
+      x.art = (x.art === false);
+      if (x.art === false) x.artDesde = "";
       guardar(); pintarPersonal(); render();
     });
 
