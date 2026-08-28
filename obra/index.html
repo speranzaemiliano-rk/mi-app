@@ -1101,14 +1101,6 @@
     pintarNube();
   }
 
-  function marcarError(e){
-    var c = e && e.code ? e.code : "";
-    nube.motivo = (c === "PERMISSION_DENIED" || c === "permission-denied") ? "permiso" : "otro";
-    nube.error  = mensajeError(e);
-    nube.estado = "mal";
-    pintarNube();
-  }
-
   function mensajeError(e){
     var c = e && e.code ? e.code : "";
     if (c === "PERMISSION_DENIED" || c === "permission-denied")
@@ -1292,11 +1284,30 @@
 
   /* ---- Personal (nómina) ---- */
   var filtroPersonal = "todos";
+  var buscaPersonal = "";
+
+  // Sin tildes y en minúscula: buscar "albaniles" tiene que encontrar "Albañiles".
+  function _plano(t){
+    return String(t == null ? "" : t).toLowerCase()
+      .replace(/[áàäâ]/g, "a").replace(/[éèëê]/g, "e").replace(/[íìïî]/g, "i")
+      .replace(/[óòöô]/g, "o").replace(/[úùüû]/g, "u").replace(/ñ/g, "n");
+  }
+
+  // Busca en nombre, gremio, tarea y CUIL. Varias palabras: tienen que estar todas.
+  function coincide(p, texto){
+    var q = _plano(texto).split(/\s+/).filter(function(x){ return x; });
+    if (!q.length) return true;
+    var g = gremioPorId(p.gremioId);
+    var heno = _plano([p.nombre, g ? g.nombre : "", p.tarea, p.cuil].join(" "));
+    return q.every(function(t){ return heno.indexOf(t) >= 0; });
+  }
   document.getElementById("btnPersonal").addEventListener("click", abrirPersonal);
 
   function abrirPersonal(){
     abrirModal('<h2>Personal</h2>' +
       '<div class="ayuda" id="pResumen"></div>' +
+      '<input class="campo" type="search" id="buscarP" ' +
+        'placeholder="Buscar por nombre, gremio o tarea" autocomplete="off">' +
       '<div class="filtro">' +
         '<button data-f="todos">Todos</button>' +
         '<button data-f="singremio">Sin gremio</button>' +
@@ -1315,6 +1326,13 @@
         filtroPersonal = b.getAttribute("data-f");
         pintarPersonal();
       });
+    });
+    var busca = document.getElementById("buscarP");
+    busca.value = buscaPersonal;
+    // La caja vive fuera de #pLista, así que repintar la lista no le saca el foco.
+    busca.addEventListener("input", function(){
+      buscaPersonal = busca.value;
+      pintarPersonal();
     });
     document.getElementById("btnAddP").addEventListener("click", agregarPersonaManual);
     document.getElementById("nuevoP").addEventListener("keydown", function(e){
@@ -1344,11 +1362,19 @@
     if (filtroPersonal === "singremio") lista = sinG;
     if (filtroPersonal === "sinart")    lista = sinArt;
 
+    var enFiltro = lista.length;
+    if (buscaPersonal.trim()) {
+      lista = lista.filter(function(p){ return coincide(p, buscaPersonal); });
+      if (res) res.textContent = lista.length + " de " + enFiltro +
+                                 (enFiltro === 1 ? " persona" : " personas") + " coinciden";
+    }
+
     cont.innerHTML = "";
     if (!lista.length) {
       cont.innerHTML = '<div class="vacio">' +
-        (todos.length ? "Nadie en este filtro."
-                      : "Todavía no hay personal cargado.<br>Escribí un nombre abajo, o traé la lista completa con «Importar nómina de ART».") +
+        (buscaPersonal.trim() ? "Nadie coincide con «" + escapar(buscaPersonal.trim()) + "»."
+          : (todos.length ? "Nadie en este filtro."
+                          : "Todavía no hay personal cargado.<br>Escribí un nombre abajo, o traé la lista completa con «Importar nómina de ART».")) +
         '</div>';
       return;
     }
