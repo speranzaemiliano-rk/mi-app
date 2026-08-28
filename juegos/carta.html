@@ -108,6 +108,21 @@
       linear-gradient(158deg, var(--oroA) 0%, var(--oroB) 52%, var(--oroC) 100%);
   }
 
+  .escena { display: flex; gap: 34px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .panelRadar {
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 20px; padding: 18px 20px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .radarTitulo { font-size: 11px; font-weight: 600; letter-spacing: 4px; color: #7d8899; }
+  #radar { width: 340px; height: 340px; max-width: 86vw; max-height: 86vw; display: block; }
+  .radarMedia {
+    font-size: 12px; letter-spacing: 2.5px; color: #7d8899; font-weight: 500;
+    padding-bottom: 4px;
+  }
+  .radarMedia b { color: #f5c542; font-size: 15px; font-variant-numeric: tabular-nums; }
+
   .tiers { display: flex; gap: 10px; }
   .tiers button {
     font-family: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: 2px;
@@ -127,6 +142,7 @@
 <h1>Cartas de Potrero</h1>
 <p class="sub">Tocá el nombre, la valoración o los números para editarlos.</p>
 
+<div class="escena">
 <div class="fut-card" data-tier="oro" id="carta">
   <div class="cuerpo">
     <div class="arriba">
@@ -166,6 +182,13 @@
   </div>
 </div>
 
+<div class="panelRadar" aria-label="Radar de estadísticas">
+  <div class="radarTitulo">RADAR</div>
+  <canvas id="radar" width="360" height="360"></canvas>
+  <div class="radarMedia">MEDIA <b id="mediaTxt">—</b></div>
+</div>
+</div>
+
 <div class="tiers" role="group" aria-label="Tipo de carta">
   <button aria-pressed="true" data-tier="oro">ORO</button>
   <button aria-pressed="false" data-tier="plata">PLATA</button>
@@ -192,6 +215,118 @@
     });
     el.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); el.blur(); } });
   });
+  // ---------- RADAR ----------
+  // Lee los seis números de la propia carta y se redibuja al editarlos.
+  // Los colores salen del tier activo, así carta y radar son el mismo objeto.
+  var RADAR_ORDEN = ['RIT', 'TIR', 'PAS', 'REG', 'DEF', 'FIS'];
+  var RADAR_COL = {
+    oro:     { linea: '#f5c542', a: 'rgba(249,221,126,0.42)', b: 'rgba(201,126,34,0.30)' },
+    plata:   { linea: '#c3cbd6', a: 'rgba(242,245,248,0.38)', b: 'rgba(126,138,153,0.30)' },
+    bronce:  { linea: '#c98550', a: 'rgba(237,185,138,0.40)', b: 'rgba(126,76,34,0.30)' },
+    potrero: { linea: '#57c07a', a: 'rgba(87,192,122,0.40)',  b: 'rgba(18,74,42,0.34)' }
+  };
+  var statsPorEtiqueta = {};
+  document.querySelectorAll('.st').forEach(function(fila){
+    statsPorEtiqueta[fila.querySelector('span').textContent.trim()] = fila.querySelector('b');
+  });
+
+  function dibujarRadar(){
+    var cv = document.getElementById('radar');
+    var dpr = window.devicePixelRatio || 1;
+    var lado = cv.clientWidth || 340;
+    cv.width = lado*dpr; cv.height = lado*dpr;
+    var g = cv.getContext('2d');
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, lado, lado);
+
+    var cx = lado/2, cy = lado/2, R = lado/2 - 44;
+    var paso = Math.PI*2/RADAR_ORDEN.length, arranque = -Math.PI/2;
+    var col = RADAR_COL[document.getElementById('carta').dataset.tier] || RADAR_COL.oro;
+
+    var valores = RADAR_ORDEN.map(function(k){
+      var n = parseInt(statsPorEtiqueta[k].textContent, 10);
+      return isNaN(n) ? 0 : Math.max(0, Math.min(100, n));
+    });
+
+    // red de fondo
+    [20, 40, 60, 80, 100].forEach(function(nivel){
+      g.beginPath();
+      for(var i = 0; i < RADAR_ORDEN.length; i++){
+        var a = arranque + i*paso, r = nivel/100*R;
+        var x = cx + Math.cos(a)*r, y = cy + Math.sin(a)*r;
+        i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.closePath();
+      g.strokeStyle = 'rgba(255,255,255,0.08)';
+      g.lineWidth = 1;
+      g.stroke();
+    });
+    // ejes
+    g.beginPath();
+    for(var i = 0; i < RADAR_ORDEN.length; i++){
+      var a = arranque + i*paso;
+      g.moveTo(cx, cy);
+      g.lineTo(cx + Math.cos(a)*R, cy + Math.sin(a)*R);
+    }
+    g.strokeStyle = 'rgba(255,255,255,0.14)';
+    g.stroke();
+
+    // polígono del jugador
+    g.beginPath();
+    valores.forEach(function(v, i){
+      var a = arranque + i*paso, r = v/100*R;
+      var x = cx + Math.cos(a)*r, y = cy + Math.sin(a)*r;
+      i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    });
+    g.closePath();
+    var grad = g.createRadialGradient(cx, cy, 10, cx, cy, R);
+    grad.addColorStop(0, col.a);
+    grad.addColorStop(1, col.b);
+    g.fillStyle = grad;
+    g.fill();
+    g.strokeStyle = col.linea;
+    g.lineWidth = 2.5;
+    g.shadowBlur = 12; g.shadowColor = col.linea;
+    g.stroke();
+    g.shadowBlur = 0;
+    // vértices
+    valores.forEach(function(v, i){
+      var a = arranque + i*paso, r = v/100*R;
+      g.beginPath();
+      g.arc(cx + Math.cos(a)*r, cy + Math.sin(a)*r, 3, 0, Math.PI*2);
+      g.fillStyle = col.linea;
+      g.fill();
+    });
+
+    // etiquetas
+    RADAR_ORDEN.forEach(function(k, i){
+      var a = arranque + i*paso, r = R + 26;
+      var x = cx + Math.cos(a)*r, y = cy + Math.sin(a)*r;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = "600 13px Oswald, 'Arial Narrow', sans-serif";
+      g.fillStyle = '#cfd6e0';
+      g.fillText(k, x, y - 8);
+      g.font = "700 13px Oswald, 'Arial Narrow', sans-serif";
+      g.fillStyle = col.linea;
+      g.fillText(valores[i], x, y + 8);
+    });
+
+    var media = Math.round(valores.reduce(function(x, y){ return x + y; }, 0)/valores.length);
+    var mt = document.getElementById('mediaTxt');
+    mt.textContent = media;
+    mt.style.color = col.linea;
+    window.__radar = valores;                       // para las pruebas
+  }
+
+  document.querySelectorAll('[data-num]').forEach(function(el){
+    el.addEventListener('blur', dibujarRadar);
+    el.addEventListener('input', dibujarRadar);
+  });
+  botones.forEach(function(b){ b.addEventListener('click', dibujarRadar); });
+  window.addEventListener('resize', dibujarRadar);
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(dibujarRadar);
+  dibujarRadar();
+
   // nombre: mayúsculas y sin saltos de línea
   var nombre = document.querySelector('.nombre');
   nombre.addEventListener('blur', function(){
