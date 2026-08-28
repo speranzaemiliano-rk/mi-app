@@ -4296,6 +4296,35 @@ const AUDIO3D = (function(){
     src.stop(t + 0.13);
   }
 
+  /* El bombo de la tribuna. Un golpe grave con su chasquido, en el ritmo de
+     cancha de acá: negra, negra, dos corcheas, negra. Es lo que más rápido
+     dice "estadio" y no "ruido de fondo". */
+  function golpeBombo(ctx, dest, t, fuerte){
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(fuerte ? 88 : 80, t);
+    o.frequency.exponentialRampToValueAtTime(44, t + 0.09);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(fuerte ? 0.62 : 0.44, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.22);
+    const n = ctx.createBufferSource(); n.buffer = ruidoBlanco(ctx, 0.06);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.16, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.035);
+    n.connect(lp); lp.connect(ng); ng.connect(dest);
+    n.start(t); n.stop(t + 0.06);
+  }
+  const BOMBO_BPM = 116, BOMBO_CICLO = [0, 1, 2, 2.5, 3];   // en negras, ciclo de 4
+  function programarBombo(ctx, dest, desde, hasta){
+    const b = 60/BOMBO_BPM, ciclo = 4*b;
+    for(let c = Math.floor(desde/ciclo)*ciclo; c < hasta; c += ciclo)
+      for(const pos of BOMBO_CICLO){
+        const t = c + pos*b;
+        if(t >= desde && t < hasta) golpeBombo(ctx, dest, t, pos === 0);
+      }
+  }
+
   /* Programa todas las voces y palmas de una ventana de tiempo. Va por
      ADELANTADO (look-ahead) y no con un setInterval que dispara de a una: el
      temporizador del navegador se corre varios milisegundos y con sonidos
@@ -4380,7 +4409,12 @@ const AUDIO3D = (function(){
     voces.connect(gA);
     if(segundos) programarVoces(ctx, voces, 0, segundos, bufVoz, 1);
 
-    return { gA, gO, voces, bufVoz };
+    // --- bombo ---
+    const bombo = ctx.createGain(); bombo.gain.value = 0.40;
+    bombo.connect(gA);
+    if(segundos) programarBombo(ctx, bombo, 0, segundos);
+
+    return { gA, gO, voces, bufVoz, bombo };
   }
 
   function init(){
@@ -4392,14 +4426,19 @@ const AUDIO3D = (function(){
       master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
       const h = construir(ac, master, 0);
       gAmb = h.gA; gOla = h.gO; busVoces = h.voces;
-      const bufVoz = h.bufVoz;
+      const bufVoz = h.bufVoz, busBombo = h.bombo;
       proxVoz = ac.currentTime + 0.1;
       timer = setInterval(() => {
         if(mudo) { proxVoz = Math.max(proxVoz, ac.currentTime + 0.1); return; }
         const hasta = ac.currentTime + 0.6;
         if(proxVoz < ac.currentTime) proxVoz = ac.currentTime + 0.05;
         programarVoces(ac, busVoces, proxVoz, hasta, bufVoz, 1);
+        programarBombo(ac, busBombo, proxVoz, hasta);
         proxVoz = hasta;
+        // Cada tanto la hinchada se levanta sola un momento, sin que pase
+        // nada: una tribuna de verdad nunca está quieta. Una vez por minuto
+        // más o menos.
+        if(Math.random() < 0.004) ola(1.3 + Math.random()*0.45, 1.0, 2.2 + Math.random()*2, false);
       }, 250);
       listo = true;
     } catch(e){ listo = false; }
@@ -4855,6 +4894,8 @@ function crearEscena(){
 
   crearVallas();
   crearTribunas();
+  crearPantalla();
+  crearBanderas();
   crearFlashes();
   crearTorres();
   crearArco(-CANCHA_LARGO/2 + 1.2, 1);
@@ -4937,6 +4978,20 @@ function crearTribunas(){
     techo.position.set(0, 14.5, lado*(CANCHA_ANCHO/2 + 16));
     escena.add(techo);
   });
+  // esquinas: gradas en diagonal que cierran el anillo. Sin ellas el estadio
+  // eran cuatro tribunas sueltas y por los huecos se veía el vacío.
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx, sz]) => {
+    // Más afuera y más bajas que las tribunas: la cámara de transmisión pasa
+    // cerca del lado +z y una esquina alta ahí se metía en cuadro como una
+    // cuña oscura.
+    const px = sx*(CANCHA_LARGO/2 + 10.5), pz = sz*(CANCHA_ANCHO/2 + 14);
+    const grada = new THREE.Mesh(new THREE.BoxGeometry(15, 8, 13), caras(4));
+    grada.position.set(px, 3.2, pz);
+    grada.rotation.y = Math.atan2(pz, -px) + Math.PI;   // la cara -z mira al campo
+    grada.rotation.x = 0.20;
+    escena.add(grada);
+  });
+
   // cabeceras: cara visible = -x si está del lado +x
   [-1, 1].forEach(lado => {
     // Antes medía CANCHA_ANCHO + 34 de ancho y se metía dentro de las
@@ -4951,6 +5006,84 @@ function crearTribunas(){
     techo.position.set(lado*(CANCHA_LARGO/2 + 13), 13.2, 0);
     escena.add(techo);
   });
+}
+
+/* Pantalla gigante sobre una cabecera: marca goles y atajadas. */
+let pantallaCtx = null, pantallaTex = null;
+function crearPantalla(){
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 168;
+  pantallaCtx = c.getContext('2d');
+  pantallaTex = new THREE.CanvasTexture(c);
+  pantallaTex.anisotropy = 4;
+  const marco = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3.6, 11.2),
+    new THREE.MeshStandardMaterial({ color: 0x10141b, roughness: 0.85 }));
+  marco.position.set(-(CANCHA_LARGO/2 + 10.5), 12.1, 0);
+  escena.add(marco);
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(10.6, 3.1),
+    new THREE.MeshBasicMaterial({ map: pantallaTex }));   // emisivo: es una pantalla
+  panel.position.set(-(CANCHA_LARGO/2 + 10.2), 12.1, 0);
+  panel.rotation.y = Math.PI/2;
+  escena.add(panel);
+  pantalla3dActualizar();
+}
+function pantalla3dActualizar(){
+  if(!pantallaCtx) return;
+  const x = pantallaCtx, w = 512, h = 168;
+  x.fillStyle = '#070b12'; x.fillRect(0, 0, w, h);
+  x.strokeStyle = '#26303d'; x.lineWidth = 5; x.strokeRect(4, 4, w - 8, h - 8);
+  x.fillStyle = '#f5c542';
+  x.font = '700 30px Oswald, Arial Narrow, sans-serif';
+  x.textAlign = 'center';
+  x.fillText('· RK · POTRERO 3D ·', w/2, 44);
+  x.font = '700 64px Oswald, Arial Narrow, sans-serif';
+  x.fillStyle = '#ffffff';
+  x.fillText(String(goles), w/2 - 130, 128);
+  x.fillStyle = '#8be36b';
+  x.fillText(String(atajadas), w/2 + 130, 128);
+  x.font = '600 22px Oswald, Arial Narrow, sans-serif';
+  x.fillStyle = '#93a0b2';
+  x.fillText('GOLES', w/2 - 130, 155);
+  x.fillText('ATAJADAS', w/2 + 130, 155);
+  x.fillStyle = '#3a4552';
+  x.fillRect(w/2 - 2, 78, 4, 66);
+  pantallaTex.needsUpdate = true;
+}
+
+/* Banderas sobre el muro, flameando de verdad (se doblan los vértices). */
+const banderas = [];
+let tiempoBanderas = 0;
+function crearBanderas(){
+  const colores = [0x74b9e8, 0xf0c53c, 0x74b9e8, 0xd0d6de];
+  const matPalo = new THREE.MeshStandardMaterial({ color: 0x39424d, roughness: 0.8 });
+  [-1, 1].forEach(lado => {
+    [-15, -5, 5, 15].forEach((xx, i) => {
+      const palo = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 3.4, 6), matPalo);
+      palo.position.set(xx, 2.6 + 1.7, lado*(CANCHA_ANCHO/2 + 5.2));
+      escena.add(palo);
+      const g = new THREE.PlaneGeometry(1.35, 0.85, 7, 3);
+      g.translate(0.675, 0, 0);                       // ancla en el palo
+      const bandera = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+        color: colores[i], roughness: 0.9, side: THREE.DoubleSide }));
+      bandera.position.set(xx, 2.6 + 3.05, lado*(CANCHA_ANCHO/2 + 5.2));
+      bandera.rotation.y = lado > 0 ? Math.PI : 0;    // flamean hacia adentro
+      escena.add(bandera);
+      banderas.push({ malla: bandera, fase: i*1.7 + (lado + 1)*0.9 });
+    });
+  });
+}
+function actualizarBanderas(dt){
+  tiempoBanderas += dt;
+  const T = tiempoBanderas;
+  for(const b of banderas){
+    const pos = b.malla.geometry.attributes.position;
+    for(let i = 0; i < pos.count; i++){
+      const px = pos.getX(i);
+      // la onda crece hacia la punta; en el palo no se mueve
+      pos.setZ(i, Math.sin(px*5.2 + T*6.5 + b.fase)*0.10*(px/1.35));
+    }
+    pos.needsUpdate = true;
+  }
 }
 
 function crearTorres(){
@@ -5042,10 +5175,40 @@ function esf(r, mat){
    y se revoluciona. Con cilindros rectos el cuerpo se leía como Playmobil;
    con perfil, el muslo engorda en la cadera, el gemelo tiene panza y el
    antebrazo se afina hacia la muñeca. */
-function miembro(perfil, largo, mat, anchoX, anchoZ){
+function miembro(perfil, largo, mat, anchoX, anchoZ, comba){
+  // Los puntos van en y ASCENDENTE. Con el perfil bajando (0 -> -largo) el
+  // bobinado del lathe queda invertido: las caras miran hacia ADENTRO, la
+  // pared exterior se descarta por backface y lo que se ve es el interior de
+  // la pared de atrás. Nadie lo notaba porque es del mismo color... hasta que
+  // hubo que poner una media SOBRE la pierna: el interior de la pierna (radio
+  // menor) siempre quedaba delante del interior de la media, y la media no se
+  // veía con ningún radio. Verificado con raycast: pegaba en x = centro - r.
   const pts = perfil.map(([t, r]) =>
-    new THREE.Vector2(Math.max(0.004, r), -t*largo));
+    new THREE.Vector2(Math.max(0.004, r), -t*largo)).reverse();
   const g = new THREE.LatheGeometry(pts, 16);
+  // comba: [[t, dz], ...] — corre el CENTRO de cada anillo en z. Una superficie
+  // de revolución es simétrica adelante/atrás por construcción: no hay gemelo,
+  // ni cuádriceps, ni bíceps, y de perfil todo son caños. En el muñeco el
+  // frente es -z, así que dz positivo abulta hacia atrás.
+  if(comba && comba.length){
+    const pos = g.attributes.position, v = new THREE.Vector3();
+    for(let i = 0; i < pos.count; i++){
+      v.fromBufferAttribute(pos, i);
+      const t = largo > 0 ? -v.y/largo : 0;
+      let dz = comba[0][1];
+      if(t >= comba[comba.length-1][0]) dz = comba[comba.length-1][1];
+      else for(let j = 0; j < comba.length-1; j++){
+        const [t0,z0] = comba[j], [t1,z1] = comba[j+1];
+        if(t >= t0 && t <= t1){
+          const a = (t - t0)/(t1 - t0);
+          dz = z0 + (z1 - z0)*(a*a*(3 - 2*a));    // suave, sin quiebres
+          break;
+        }
+      }
+      pos.setZ(i, v.z + dz);
+    }
+    pos.needsUpdate = true;
+  }
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat);
   m.scale.set(anchoX || 1, 1, anchoZ || anchoX || 1);
@@ -5054,9 +5217,28 @@ function miembro(perfil, largo, mat, anchoX, anchoZ){
 }
 
 /* Igual pero de abajo hacia arriba, para el torso */
-function tronco(perfil, mat, anchoX, anchoZ){
+function tronco(perfil, mat, anchoX, anchoZ, comba){
   const pts = perfil.map(([y, r]) => new THREE.Vector2(Math.max(0.004, r), y));
   const g = new THREE.LatheGeometry(pts, 20);
+  if(comba && comba.length){
+    const pos = g.attributes.position, v = new THREE.Vector3();
+    for(let i = 0; i < pos.count; i++){
+      v.fromBufferAttribute(pos, i);
+      const y = v.y;
+      let dz = comba[0][1];
+      if(y >= comba[comba.length-1][0]) dz = comba[comba.length-1][1];
+      else for(let j = 0; j < comba.length-1; j++){
+        const [y0,z0] = comba[j], [y1,z1] = comba[j+1];
+        if(y >= y0 && y <= y1){
+          const a = (y - y0)/(y1 - y0);
+          dz = z0 + (z1 - z0)*(a*a*(3 - 2*a));
+          break;
+        }
+      }
+      pos.setZ(i, v.z + dz);
+    }
+    pos.needsUpdate = true;
+  }
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat);
   m.scale.set(anchoX || 1, 1, anchoZ || 1);
@@ -5112,7 +5294,10 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     [ 0.120, 0.140], [ 0.190, 0.142], [ 0.270, 0.156], [ 0.350, 0.170],
     [ 0.430, 0.180], [ 0.492, 0.183],
     [ 0.528, 0.168], [ 0.552, 0.120], [ 0.566, 0.060], [ 0.572, 0.018]
-  ], matCam, 1.30, 0.76);
+  ], matCam, 1.30, 0.76,
+  // pecho hacia adelante (-z) y la espalda queda más recta: el perfil deja
+  // de ser un huevo simétrico
+  [[-0.02, -0.004], [0.16, -0.007], [0.34, -0.013], [0.44, -0.009], [0.50, 0], [0.58, 0.003]]);
   torso.add(pecho);
 
   // trapecio: sin esto el cuello sale del torso como un caño de una caja
@@ -5210,7 +5395,8 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     deltoide.position.y = -0.016;
     hombro.add(deltoide);
     const sup = miembro([[0, 0.058], [0.30, 0.056], [0.70, 0.048], [1, 0.042]],
-                        0.332, matManga, 1, 0.94);   // 0,186 de la altura, como el canon
+                        0.332, matManga, 1, 0.94,
+                        [[0, 0], [0.45, -0.006], [1, -0.001]]);   // bíceps
     hombro.add(sup);
     // borde de la manga
     const manga = miembro([[0, 0.062], [1, 0.058]], 0.11, matCam, 1, 0.94);
@@ -5259,7 +5445,8 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     caderaP.position.set(lado*0.098, -0.03, 0);
     cadera.add(caderaP);
     const muslo = miembro([[0, 0.098], [0.25, 0.092], [0.60, 0.080], [1, 0.068]],
-                          0.4555, matPiel, 1, 0.95);
+                          0.4555, matPiel, 1, 0.95,
+                          [[0, 0], [0.40, -0.008], [1, -0.002]]);   // cuádriceps
     caderaP.add(muslo);
     const shortP = miembro([[0, 0.106], [0.60, 0.101], [0.94, 0.093], [1, 0.098]],
                            0.21, matShort, 1, 0.97);
@@ -5282,11 +5469,17 @@ function crearFutbolista(colCamisetaA, colCamisetaB, colShort, colMedias, numero
     rot.scale.set(0.95, 0.62, 0.93);
     rodilla.add(rot);
     const pant = miembro([[0, 0.067], [0.22, 0.072], [0.55, 0.058], [1, 0.036]],
-                         0.4355, matPiel, 1, 0.95);
+                         0.4355, matPiel, 1, 0.95,
+                         [[0, 0.002], [0.24, 0.013], [0.60, 0.005], [1, 0]]);  // gemelo
     rodilla.add(pant);
     // media, superpuesta sobre la parte baja de la pierna
-    const media = miembro([[0, 0.074], [0.06, 0.070], [0.45, 0.062], [1, 0.039]],
-                          0.335, matMedias, 1, 0.96);
+    // La media va con 4-6 mm de margen radial FRANCO sobre la pantorrilla.
+    // Con radios justos, como las filas de los dos perfiles caen a alturas
+    // distintas, la piel asomaba por fuera de la media en medio de la canilla
+    // (verificado con raycast: la piel quedaba 4 mm por delante).
+    const media = miembro([[0, 0.079], [0.10, 0.0755], [0.48, 0.0655], [1, 0.0415]],
+                          0.335, matMedias, 1, 0.97,
+                          [[0, 0.0135], [0.35, 0.0055], [1, 0]]);   // abraza el gemelo
     media.position.y = -0.10;
     rodilla.add(media);
 
@@ -5747,6 +5940,7 @@ function chequearAtajada(dt){
   P.pegado = 0.5;
   atajadas++;
   document.getElementById('atajadasTxt').textContent = atajadas;
+  pantalla3dActualizar();
   AUDIO3D.atajada();
   mostrarAviso3d('¡ATAJÓ!', '#8be36b', 1.1);
 }
@@ -5996,6 +6190,7 @@ function actualizar(dt){
   camara.lookAt(foco.x, camaraModo === 0 ? 1.1 : 1.2, foco.z);
 
   actualizarFlashes(dt);
+  actualizarBanderas(dt);
 
   // el murmullo sube cuando la jugada se acerca a un arco
   const cerca = Math.min(1, Math.max(0,
@@ -6020,6 +6215,7 @@ function mostrarAviso3d(texto, color, seg){
 function gol3d(){
   goles++;
   document.getElementById('golesTxt').textContent = goles;
+  pantalla3dActualizar();
   mostrarAviso3d('¡GOL!', '#f5c542', 1.9);
   AUDIO3D.gol();
   pausaGol = 1.9;
