@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v477</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v478</div>
         </div>
     </nav>
 
@@ -11017,6 +11017,15 @@
     // que se le retuvo al proveedor y se deposita a AFIP por su cuenta: cancela esa parte de la
     // factura igual que el neto transferido. Por eso cuenta como pago que salda la deuda.
     function _totalRetenidoHist(hist) { return (hist||[]).reduce(function(s,p){ return s + (p.totalRet||0); }, 0); }
+    // ── Fondo de reparo (garantía de obra) ────────────────────────────────────
+    // Se le retiene al proveedor al pagarle y se le devuelve al terminar la obra. NO es
+    // impositivo: no va al certificado de retención ni a los reportes de ARCA.
+    // Del comprobante se descuenta el MONTO COMPLETO del pago (el fondo ya está adentro),
+    // pero de la caja o el banco sale el monto MENOS el fondo, porque esa plata no se movió.
+    function _totalFRHist(hist) { return (hist||[]).reduce(function(s,p){ return s + (p.fondoReparo||0); }, 0); }
+    // Lo que realmente sale de la caja o del banco por un pago: ni la retención ni el fondo
+    // de reparo egresan. Un solo lugar, para que todas las pantallas cuenten lo mismo.
+    function _netoPagado(p) { return (p.monto||0) - (p.totalRet||0) - (p.fondoReparo||0); }
     // Suma de notas de crédito (registros propios en facturas[], esNotaCredito) aplicadas a un
     // comprobante puntual (factura o documento) por su id. Bajan su saldo pendiente.
     function _ncAplicadasA(itemId) {
@@ -11061,6 +11070,86 @@
     // Devuelve el CUERPO HTML (div.pg) de un comprobante de retención, o null si el pago no tiene
     // retenciones de ese tipo. Separado del window.open para poder combinar Ganancias + SUSS en una
     // sola ventana de impresión (en el celu el navegador bloquea el segundo popup).
+    // ── Certificado de fondo de reparo ────────────────────────────────────────
+    // Papel aparte del certificado de retención impositiva a propósito: esto NO es una
+    // retención de ARCA, es plata que se le retiene al proveedor en garantía y se le
+    // devuelve al terminar la obra. Mezclarlos haría que el proveedor lo presente como
+    // crédito fiscal, que es justo lo que no hay que dejar pasar.
+    function _frBodyHTML(provNombre, pago, nroComp) {
+        var fr = (pago && pago.fondoReparo) || 0;
+        if (!(fr > 0)) return null;
+        var emp = getEmpresaParaRecibo();
+        var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var nroDoc = pago.nroCorrelativo || pago.pagoId || '';
+        var fechaP = pago.fecha ? formatearFecha(pago.fecha) : '';
+        var _rh = buildReciboHeader('Certificado de Fondo de Reparo', nroDoc || null, fechaP, {
+            label: 'Proveedor / Contratista', nombre: provNombre || '—',
+            detalle: nroComp ? ('Comprobante ' + nroComp) : ''
+        });
+        return '<div class="pg">' + _rh
+            + '<table class="tbl">'
+            + '<thead><tr><th>Concepto</th><th class="tr">Importe</th></tr></thead>'
+            + '<tbody>'
+            + '<tr><td>Monto del pago</td><td class="tr">' + fmt(pago.monto || 0) + '</td></tr>'
+            + ((pago.totalRet || 0) > 0 ? '<tr><td>Retenciones impositivas</td><td class="tr">− ' + fmt(pago.totalRet) + '</td></tr>' : '')
+            + '<tr><td><strong>Fondo de reparo retenido</strong>' + (pago.fondoReparoPct ? ' (' + pago.fondoReparoPct + '% del pago)' : '') + '</td><td class="tr"><strong>− ' + fmt(fr) + '</strong></td></tr>'
+            + '</tbody>'
+            + '<tfoot><tr><td><strong>Importe abonado</strong></td><td class="tr">' + fmt((pago.monto||0) - (pago.totalRet||0) - fr) + '</td></tr></tfoot>'
+            + '</table>'
+            + '<div class="bottom">'
+            + '<div class="instrucciones"><div class="instr-titulo">Qué es este comprobante</div><div class="instr-body">'
+            + 'Deja constancia de que se retuvo el importe indicado en concepto de <strong>fondo de reparo</strong> '
+            + '(garantía de obra). El comprobante del proveedor se cancela por el monto total del pago; '
+            + 'el fondo retenido queda registrado como saldo a favor del proveedor, a devolver una vez '
+            + 'finalizada la obra según lo pactado.<br><br>'
+            + '<strong>No constituye una retención impositiva</strong>: no genera crédito fiscal ni se informa a ARCA.'
+            + '</div></div>'
+            + '<div class="totales">'
+            + '<div class="tot-row"><span>Monto del pago</span><span>' + fmt(pago.monto || 0) + '</span></div>'
+            + '<div class="tot-row ret"><span>Fondo de reparo</span><span>' + fmt(fr) + '</span></div>'
+            + '<div class="tot-final"><span>Retenido en garantía</span><span>' + fmt(fr) + '</span></div>'
+            + '</div></div>'
+            + '<div class="firmas"><div class="fi">Firma y sello del proveedor</div><div class="fi">Aclaración — ' + escHtml(provNombre || '—') + '</div></div>'
+            + '<div class="pie">Certificado de Fondo de Reparo ' + nroDoc + ' · Generado el ' + new Date().toLocaleDateString('es-AR') + ' · ' + escHtml(emp.nombre || '') + '</div>'
+            + '</div>';
+    }
+    function imprimirCertFondoReparo(provNombre, pago, nroComp) {
+        var body = _frBodyHTML(provNombre, pago, nroComp);
+        if (!body) { alert('Este pago no tiene fondo de reparo retenido.'); return; }
+        _retAbrirVentana(body, 'Certificado de Fondo de Reparo');
+    }
+    // Reimpresiones desde la cuenta corriente / historial de pagos.
+    function imprimirFRFact(fi, pi) {
+        var f = facturas[fi]; if (!f) return;
+        var p = (f.pagosHistorial || [])[pi]; if (!p) return;
+        imprimirCertFondoReparo(f.proveedor, p, f.numero);
+    }
+    function imprimirFRDoc(docId, pi) {
+        var d = (documentos || []).find(function(x){ return x.id === docId; }); if (!d) return;
+        var p = (d.pagosHistorial || [])[pi]; if (!p) return;
+        imprimirCertFondoReparo(d.proveedor, p, d.numero);
+    }
+    // Pago de varias facturas: un solo certificado por el fondo total del grupo.
+    function imprimirFRGrupoFact(grupoId) {
+        var fr = 0, p0 = null, prov = '', nros = [];
+        (facturas || []).forEach(function(f){
+            (f.pagosHistorial || []).forEach(function(p){
+                if (p.grupoPagoId !== grupoId || !(p.fondoReparo > 0)) return;
+                fr += p.fondoReparo; if (!p0) { p0 = p; prov = f.proveedor || ''; }
+                if (f.numero) nros.push(f.numero);
+            });
+        });
+        if (!p0) { alert('No se encontró el fondo de reparo de ese pago.'); return; }
+        var sint = { pagoId: p0.pagoId, fecha: p0.fecha, nroCorrelativo: p0.nroCorrelativo,
+                     monto: 0, totalRet: 0, fondoReparo: fr, fondoReparoPct: p0.fondoReparoPct };
+        (facturas || []).forEach(function(f){
+            (f.pagosHistorial || []).forEach(function(p){
+                if (p.grupoPagoId !== grupoId) return;
+                sint.monto += (p.monto || 0); sint.totalRet += (p.totalRet || 0);
+            });
+        });
+        imprimirCertFondoReparo(prov, sint, nros.join(', '));
+    }
     function _retBodyHTML(provNombre, pago, nroFact, tipo) {
         var fmt = function(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var emp = getEmpresaParaRecibo();
@@ -11171,6 +11260,7 @@
         document.getElementById('pagoFDRetNeto').textContent='$0';
         document.getElementById('pagoFDInfo').style.display='none';
         _pagoFDModo='una';
+        if (typeof _pagoFDFrLimpiar === 'function') _pagoFDFrLimpiar();
         pagoFDSelTab(tipo||'fact', true);
         pagoFDSelModo('una');
         _pagoFDPoblarItems(itemId);
@@ -11294,6 +11384,49 @@
         _pagoFDRetsManuales.forEach(function(r){if(r.activa)totalRet+=r.monto;});
         totalEl.textContent='$'+(totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
         netoEl.textContent='$'+(monto-totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+        if (typeof pagoFDFrRecalc === 'function') pagoFDFrRecalc();   // el fondo se descuenta además de esto
+    }
+    // ── Fondo de reparo en el modal de pago ───────────────────────────────────
+    // El % es una comodidad: escribe el monto. El monto es el dato que manda, así que
+    // se puede tocar a mano (hay obras donde el fondo no es un porcentaje redondo).
+    function _pagoFDRetTotalActual() {
+        if ((document.getElementById('pagoFDMod') || {}).value !== 'A') return 0;
+        var t = 0;
+        (_pagoFDRetsCalculadas || []).forEach(function(r){ if (r.activa) t += r.monto; });
+        (_pagoFDRetsManuales  || []).forEach(function(r){ if (r.activa) t += r.monto; });
+        return t;
+    }
+    window.pagoFDFrDesdePct = function() {
+        var pct = parseFloat((document.getElementById('pagoFDFrPct') || {}).value);
+        if (!isFinite(pct) || pct <= 0) { pagoFDFrRecalc(); return; }
+        var monto = parseFloat((document.getElementById('pagoFDMonto') || {}).value) || 0;
+        var el = document.getElementById('pagoFDFr');
+        if (el) el.value = Math.round(monto * pct) / 100;
+        pagoFDFrRecalc();
+    };
+    window.pagoFDFrRecalc = function() {
+        var monto = parseFloat((document.getElementById('pagoFDMonto') || {}).value) || 0;
+        var fr    = parseFloat((document.getElementById('pagoFDFr') || {}).value) || 0;
+        var ret   = _pagoFDRetTotalActual();
+        var neto  = monto - ret - fr;
+        var netoEl = document.getElementById('pagoFDFrNeto');
+        if (netoEl) {
+            netoEl.textContent = '$' + neto.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+            netoEl.style.color = (neto < 0) ? 'var(--danger)' : '';
+        }
+        var av = document.getElementById('pagoFDFrAviso');
+        if (av) {
+            av.textContent = (neto < 0)
+                ? 'El fondo de reparo más las retenciones superan el monto del pago: no quedaría nada para transferirle al proveedor.'
+                : '';
+            av.style.display = av.textContent ? '' : 'none';
+        }
+    };
+    // Deja el bloque en cero al abrir un pago nuevo (el modal se reusa).
+    function _pagoFDFrLimpiar() {
+        var a = document.getElementById('pagoFDFrPct'); if (a) a.value = '';
+        var b = document.getElementById('pagoFDFr');    if (b) b.value = '';
+        pagoFDFrRecalc();
     }
     function pagoFDToggleRet(idx) {
         if(_pagoFDRetsCalculadas[idx]) _pagoFDRetsCalculadas[idx].activa=!_pagoFDRetsCalculadas[idx].activa;
@@ -11551,7 +11684,21 @@
         }
     }
 
+    var _pagoFDGuardando = false;
     async function guardarPagoFD() {
+        // Entre el adjunto y el número de OP hay dos await: sin esta guarda, un segundo
+        // clic registraba el pago dos veces y consumía dos números de Orden de Pago.
+        if (_pagoFDGuardando) return;
+        _pagoFDGuardando = true;
+        var _btnFD = document.querySelector('#modalPagoFD .modal-footer .btn-success');
+        if (_btnFD) { _btnFD.disabled = true; _btnFD.textContent = 'Registrando…'; }
+        try { await _guardarPagoFDInterno(); }
+        finally {
+            _pagoFDGuardando = false;
+            if (_btnFD) { _btnFD.disabled = false; _btnFD.textContent = '💾 Registrar Pago'; }
+        }
+    }
+    async function _guardarPagoFDInterno() {
         var mod=document.getElementById('pagoFDMod').value;
         var fecha=document.getElementById('pagoFDFecha').value;
         var cuentaId=(document.getElementById('pagoFDCuenta')||{}).value||'';
@@ -11570,8 +11717,21 @@
                 .concat(_pagoFDRetsManuales.filter(function(r){return r.activa;}));
             totalRet=rets.reduce(function(s,r){return s+r.monto;},0);
         }
+        // Fondo de reparo: se descuenta de lo que sale de caja/banco, pero el comprobante
+        // se cancela por el monto completo. Vale tanto para pagos bancarios como en efectivo.
+        var _fr = parseFloat((document.getElementById('pagoFDFr')||{}).value) || 0;
+        if (_fr < 0) _fr = 0;
+        if (_fr > 0 && (monto - totalRet - _fr) < -0.005) {
+            alert('El fondo de reparo ($' + _fr.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ') más las retenciones superan el monto del pago.\n\nNo quedaría nada para transferirle al proveedor: revisá el monto o el porcentaje.');
+            return;
+        }
         var entry={pagoId:'FD-'+Date.now(),fecha:fecha,modalidad:mod,monto:monto,baseImponible:baseEste,
             retenciones:rets.map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc};}),totalRet:totalRet};
+        if (_fr > 0) {
+            entry.fondoReparo = Math.round(_fr * 100) / 100;
+            var _frPct = parseFloat((document.getElementById('pagoFDFrPct')||{}).value);
+            if (isFinite(_frPct) && _frPct > 0) entry.fondoReparoPct = _frPct;
+        }
         var nroCbteFD=(document.getElementById('pagoFDNroComprobante')||{}).value||'';
         if(mod==='A'&&cuentaId) entry.cuentaId=cuentaId;
         if(mod==='A'&&medio) entry.medioBancario=medio;
@@ -11619,6 +11779,11 @@
         else { _origId=itemImp.item.adjuntoId; _origNom=itemImp.item.adjuntoNombre; }
         if(_origId && confirm('¿Ver/imprimir también el comprobante original cargado'+(_origNom?' ('+_origNom+')':'')+'?')){
             descargarDoc(_origId, _origNom||'comprobante');
+        }
+        if((entry.fondoReparo||0)>0){
+            if(confirm('Se retuvieron $'+(entry.fondoReparo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+' de fondo de reparo.\n\n¿Imprimir el certificado para el proveedor?')){
+                imprimirCertFondoReparo(itemImp.item.proveedor, entry, itemImp.item.numero||'');
+            }
         }
         if(totalRet>0){
             var _tp=_tiposRetPago(entry.retenciones);
@@ -15138,7 +15303,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v477';
+    var APP_VER = 'v478';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -20618,14 +20783,14 @@
         sel('cbCuentasTotal',cuentasBancarias.length);
         var entradas=0,salidas=0;
         datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(_esPagoEspejo(p))return;if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
-        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=(p.monto||0)-(p.totalRet||0);});});
+        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=_netoPagado(p);});});
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
         ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
         // Se agrupa por la moneda en que ENTRÓ la plata (un alquiler en USD cobrado en pesos suma acá).
         alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&_alqCobroMoneda(a,c)!=='USD')entradas+=_alqCobroImporte(a,c);});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
-        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=(p.monto||0)-(p.totalRet||0);});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
+        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=_netoPagado(p);});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
         var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
         var saldoNeto=saldoIni+entradas-salidas;
         if(document.getElementById('cbIngresosBancarios'))document.getElementById('cbIngresosBancarios').textContent=fmt(entradas);
@@ -20641,8 +20806,8 @@
             var _porCta={};
             var _acu=function(cId,ent,sal){ if(!cId)return; var a=_porCta[cId]||(_porCta[cId]={ent:0,sal:0}); a.ent+=ent||0; a.sal+=sal||0; };
             datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.capital||0)+(p.mayores||0)||p.montoPagado||0);});});
-            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.monto||0)-(p.totalRet||0));});});
-            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.monto||0)-(p.totalRet||0));});});
+            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,_netoPagado(p));});});
+            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,_netoPagado(p));});});
             ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,esS?0:ig.monto||0,esS?ig.monto||0:0);});
             ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
             alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
@@ -20689,7 +20854,7 @@
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: (p.monto||0)-(p.totalRet||0), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
         }); });
         (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
             if (hist.length) {
@@ -20697,7 +20862,7 @@
                     if (p.modalidad !== 'A') return;
                     var cId = p.cuentaId||'';
                     var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: (p.monto||0)-(p.totalRet||0), srcTipo:'documento', srcRef:d.id });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'documento', srcRef:d.id });
                 });
             } else if ((d.pagado||0) > 0 && d.modalidad === 'A') {
                 movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id });
@@ -32430,7 +32595,7 @@
                     tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero+' — ':'') + (f.descripcion||'—') + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''),
                     origen: f.proveedor||'—',
                     medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
-                    monto: (p.monto||0)-(p.totalRet||0), esIngreso: false,
+                    monto: _netoPagado(p), esIngreso: false,
                     srcTipo: 'factura', srcRef: fIdx, grupoPagoId: p.grupoPagoId||''
                 });
             });
@@ -32447,7 +32612,7 @@
                         origen: d.proveedor||'—',
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
                         srcTipo: 'documento', srcRef: d.id,
-                        monto: (p.monto||0)-(p.totalRet||0), esIngreso: false,
+                        monto: _netoPagado(p), esIngreso: false,
                         docId: d.id, pagoId: p.pagoId||''
                     });
                 });
@@ -33203,7 +33368,7 @@
                     '<td style="text-align:right;">—</td>'+
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
-                    '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
+                    '<td style="text-align:right;color:var(--success);">'+fmtA(_netoPagado(p))+'</td>'+
                     '<td><div class="action-btns">'+retBtn+_btnVerComprobantePago(p)+editBtn+'</div></td>'+
                 '</tr>');
             });
@@ -33228,7 +33393,7 @@
                     '<td style="text-align:right;">—</td>'+
                     '<td style="text-align:right;font-weight:600;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;color:var(--danger);">'+fmtA(p.totalRet||0)+'</td>'+
-                    '<td style="text-align:right;color:var(--success);">'+fmtA((p.monto||0)-(p.totalRet||0))+'</td>'+
+                    '<td style="text-align:right;color:var(--success);">'+fmtA(_netoPagado(p))+'</td>'+
                     '<td><div class="action-btns">'+retBtn+_btnVerComprobantePago(p)+editBtn+'</div></td>'+
                 '</tr>');
             });
@@ -33365,6 +33530,14 @@
                     : ('imprimirPagoDoc(' + esc(m._op.ref) + ',' + m._op.pi + ')'));
             return { fn: fnOp, titulo: 'Ver / imprimir la Orden de Pago' };
         }
+        if (m._fr) {
+            var frId = (m._fr.t === 'fact') ? m._fr.ref : esc(m._fr.ref);
+            var fnFr = m._fr.grupo
+                ? ('imprimirFRGrupoFact(' + esc(m._fr.grupo) + ')')
+                : ((m._fr.t === 'fact') ? ('imprimirFRFact(' + m._fr.ref + ',' + m._fr.pi + ')')
+                                        : ('imprimirFRDoc(' + esc(m._fr.ref) + ',' + m._fr.pi + ')'));
+            return { fn: fnFr, titulo: 'Ver / imprimir el certificado de fondo de reparo' };
+        }
         if (m._ret) {
             var tipoArg = m._ret.tipo ? (',' + esc(m._ret.tipo)) : '';
             var fnRet;
@@ -33474,6 +33647,7 @@
             + _ccKpiHTML('Adeudado', fmtA(Math.max(0, cc.saldoComprob)), 'var(--danger)')
             + _ccKpiHTML('Pagado (neto)', fmtA(cc.totalPagado), 'var(--success)')
             + _ccKpiHTML('Retenciones', fmtA(cc.totalRet), 'var(--gold)')
+            + (cc.totalFR > 0.5 ? _ccKpiHTML('Fondo de reparo retenido', fmtA(cc.totalFR), 'var(--blue)') : '')
             + (cc.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(cc.creditos), 'var(--blue)') : '')
             + _ccKpiHTML('Saldo neto', fmtA(cc.saldoNeto), cc.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
             + '</div></div>';
@@ -33554,6 +33728,8 @@
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
+                } else if (m._fr) {
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--blue);" onclick="' + _vm.fn + '" title="Imprimir el certificado de fondo de reparo">🛡️ FR</button>';
                 }
                 var _trMov = _vm.fn ? (' class="fila-abrible" title="' + _vm.titulo + '" onclick="' + _ccGuard + _vm.fn + '"') : '';
                 return '<tr' + _trMov + '>'
@@ -33635,7 +33811,7 @@
         var movs = [];
         facts.forEach(function(f){ movs.push({ fecha: f.fecha || '', tipo: 'Factura', clase: 'debe', detalle: (f.numero || f.descripcion || 'Factura'), debe: (f.importe || 0), haber: 0, ref: { t: 'factura', id: facturas.indexOf(f) } }); });
         docs.forEach(function(d){ movs.push({ fecha: d.fecha || '', tipo: 'Comprob. X', clase: 'debe', detalle: (d.numero || d.descripcion || d.concepto || 'Comprobante'), debe: (d.importe || 0), haber: 0, ref: { t: 'documento', id: d.id } }); });
-        var totalPagado = 0, totalRet = 0, totalNC = 0;
+        var totalPagado = 0, totalRet = 0, totalNC = 0, totalFR = 0;
         // Notas de crédito: son HABER (bajan la deuda del proveedor, como un pago).
         notasCred.forEach(function(n){ movs.push({ fecha: n.fecha || '', tipo: 'Nota de Créd.', clase: 'haber', detalle: ('NC ' + (n.tipoComprobante || '') + ' ' + (n.numero || '')).trim(), debe: 0, haber: (n.importe || 0), ref: { t: 'factura', id: facturas.indexOf(n) }, _nc: n.id }); totalNC += (n.importe || 0); });
         // Recolectar TODOS los pagos (entries) de facturas + documentos. Se agrupan por grupoPagoId
@@ -33663,7 +33839,7 @@
             var fecha = p0.fecha || first.item.fecha || '';
             // Pago neto combinado (efectivo neto = monto − retenciones, sumado en todo el grupo).
             var netoTotal = 0;
-            es.forEach(function(e){ var m = (e.p.monto || 0) - (e.p.totalRet || 0); if (m > 0) netoTotal += m; });
+            es.forEach(function(e){ var m = _netoPagado(e.p); if (m > 0) netoTotal += m; });
             var esNCviejo = !!p0.esNC;
             var grupoId = p0.grupoPagoId || '';
             if (netoTotal > 0) {
@@ -33671,6 +33847,16 @@
                     detalle: esNCviejo ? (('NC ' + (p0.ncLetra || '') + ' ' + (p0.ncNumero || '')).trim()) : ((p0.nroCorrelativo ? ('OP ' + p0.nroCorrelativo) : 'Pago') + ' (neto)'),
                     debe: 0, haber: netoTotal, _op: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, grupo: grupoId } });
                 totalPagado += netoTotal;
+            }
+            // Fondo de reparo del grupo: cancela deuda del comprobante igual que el pago,
+            // pero no salió de la caja. Va en su propia fila para que se vea cuánto se retuvo.
+            var frTotal = 0;
+            es.forEach(function(e){ frTotal += (e.p.fondoReparo || 0); });
+            if (frTotal > 0) {
+                movs.push({ fecha: fecha, tipo: 'Fondo de reparo', clase: 'haber',
+                    detalle: 'Retenido en garantía' + (p0.fondoReparoPct ? (' (' + p0.fondoReparoPct + '%)') : '') + (p0.nroCorrelativo ? (' · OP ' + p0.nroCorrelativo) : ''),
+                    debe: 0, haber: frTotal, _fr: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, grupo: grupoId } });
+                totalFR += frTotal;
             }
             // Retenciones combinadas por régimen (mismo código sumado): una fila por régimen, no por factura.
             var retByCod = {}, ordenRet = [], conDetalle = false;
@@ -33705,10 +33891,13 @@
         };
         movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return _rank(a) - _rank(b); });
         var totalDebe = facts.reduce(function(s,f){ return s + (f.importe || 0); }, 0) + docs.reduce(function(s,d){ return s + (d.importe || 0); }, 0);
-        var totalHaber = totalPagado + totalRet + totalNC;   // las notas de crédito bajan la deuda como un pago
+        // El fondo de reparo cancela el comprobante igual que el pago (aunque no haya salido
+        // de la caja): si no entrara acá, la cuenta corriente mostraría una deuda que la
+        // factura ya da por saldada.
+        var totalHaber = totalPagado + totalRet + totalNC + totalFR;   // las notas de crédito bajan la deuda como un pago
         var saldoComprob = totalDebe - totalHaber;
         var creditos = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre) || 0) : 0;
-        return { movs: movs, totalDebe: totalDebe, totalHaber: totalHaber, totalPagado: totalPagado, totalRet: totalRet, creditos: creditos, saldoComprob: saldoComprob, saldoNeto: saldoComprob - creditos, nFact: facts.length, nDoc: docs.length };
+        return { movs: movs, totalDebe: totalDebe, totalHaber: totalHaber, totalPagado: totalPagado, totalRet: totalRet, totalFR: totalFR, creditos: creditos, saldoComprob: saldoComprob, saldoNeto: saldoComprob - creditos, nFact: facts.length, nDoc: docs.length };
     }
     function _ccKpiHTML(label, val, color) {
         return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + (color || 'var(--border)') + ';border-radius:8px;padding:10px 12px;text-align:center;">'
@@ -33731,6 +33920,7 @@
             + _ccKpiHTML('Adeudado', fmtA(Math.max(0, cc.saldoComprob)), 'var(--danger)')
             + _ccKpiHTML('Total pagado', fmtA(cc.totalPagado), 'var(--success)')
             + _ccKpiHTML('Retenciones', fmtA(cc.totalRet), 'var(--gold)')
+            + (cc.totalFR > 0.5 ? _ccKpiHTML('Fondo de reparo retenido', fmtA(cc.totalFR), 'var(--blue)') : '')
             + (cc.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(cc.creditos), 'var(--blue)') : '')
             + _ccKpiHTML('Saldo neto', fmtA(cc.saldoNeto), cc.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
             + '</div>';
@@ -33759,6 +33949,8 @@
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
+                } else if (m._fr) {
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--blue);" onclick="' + _vm.fn + '" title="Imprimir el certificado de fondo de reparo">🛡️ FR</button>';
                 }
                 return '<tr style="border-bottom:1px solid var(--border);"' + _trAbrir + '>'
                     + '<td style="padding:7px 10px;white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
@@ -36760,8 +36952,8 @@
             var ent = 0, sal = 0;
             var cid = cb.id || cb.banco;
             col.datos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.capital||0)+(p.mayores||0)||p.montoPagado||0; });});
-            col.facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.monto||0)-(p.totalRet||0); });});
-            col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += (p.monto||0)-(p.totalRet||0); });});
+            col.facturas.forEach(function(f){ (f.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += _netoPagado(p); });});
+            col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += _netoPagado(p); });});
             col.ingGeneral.forEach(function(ig){ if (!ig.esBancario || ig.cuentaId!==cid) return; if (ig.esEgreso||ig.tipo==='mov_banco_salida') sal += ig.monto||0; else ent += ig.monto||0; });
             col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
             col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
@@ -40405,7 +40597,7 @@
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="form-group">
           <label>Monto a pagar *</label>
-          <input type="number" id="pagoFDMonto" step="0.01" min="0" placeholder="0,00" oninput="pagoFDRecalcRet()">
+          <input type="number" id="pagoFDMonto" step="0.01" min="0" placeholder="0,00" oninput="pagoFDRecalcRet(); pagoFDFrDesdePct();">
         </div>
         <div class="form-group">
           <label>Fecha del pago *</label>
@@ -40426,6 +40618,27 @@
           <div class="ret-total-row"><span>Retención total</span><strong id="pagoFDRetTotal" style="color:var(--danger);">$0</strong></div>
           <div class="ret-total-row" style="margin-top:4px;"><span>Neto a pagar al proveedor</span><strong id="pagoFDRetNeto" class="neto-val">$0</strong></div>
         </div>
+      </div>
+      <div class="ret-panel" style="margin-top:12px;">
+        <div class="ret-panel-title">🛡️ Fondo de reparo (garantía de obra)</div>
+        <div class="form-hint" style="margin-bottom:10px;">
+          Se le retiene al proveedor y se le devuelve al terminar la obra. <strong>Del comprobante se
+          descuenta el monto completo del pago</strong> (queda saldado), pero de la caja o el banco sale
+          el monto <strong>menos</strong> el fondo, porque esa plata no se movió. <strong>No es impositivo</strong>:
+          no aparece en el certificado de retención ni en los reportes de ARCA.
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr;gap:10px;">
+          <div class="form-group" style="margin:0;">
+            <label style="font-size:11px;">% del pago</label>
+            <input type="number" id="pagoFDFrPct" step="0.01" min="0" max="100" placeholder="0" oninput="pagoFDFrDesdePct()">
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label style="font-size:11px;">Monto a retener</label>
+            <input type="number" id="pagoFDFr" step="0.01" min="0" placeholder="0,00" oninput="pagoFDFrRecalc()">
+          </div>
+        </div>
+        <div class="ret-total-row" style="margin-top:8px;"><span>Sale de caja / banco</span><strong id="pagoFDFrNeto" class="neto-val">$0</strong></div>
+        <div class="form-hint" id="pagoFDFrAviso" style="display:none;color:var(--warn);margin-top:6px;"></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarPagoFD()">Cancelar</button>
