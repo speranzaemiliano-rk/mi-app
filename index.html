@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v470</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v471</div>
         </div>
     </nav>
 
@@ -4131,7 +4131,7 @@
                                 <button id="presupVistaBtn_cerrados" class="presup-vista-btn" onclick="setPresupVista('cerrados')" title="Presupuestos pagados al 100%">Cerrados</button>
                                 <button id="presupVistaBtn_todos" class="presup-vista-btn" onclick="setPresupVista('todos')" title="Todos los presupuestos">Todos</button>
                             </div>
-                            <button class="btn btn-outline btn-sm" onclick="abrirLeerPresup()" title="Subir PDF o foto del presupuesto y extraer los datos automáticamente">📎 Leer con IA</button>
+                            <button class="btn btn-outline btn-sm" id="btnLeerPresup" onclick="abrirLeerPresup()" title="Subir PDF o foto del presupuesto y extraer los datos automáticamente">📎 Leer con IA</button>
                             <span class="results-count" id="filtroResultados"></span>
                         </div>
                     </div>
@@ -6534,7 +6534,7 @@
                     </div>
                     <div id="presupItemsLista"></div>
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; gap:8px; flex-wrap:wrap;">
-                        <button type="button" class="btn btn-outline btn-sm" onclick="presupAgregarItem()">➕ Agregar ítem</button>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="btn btn-outline btn-sm" onclick="presupAgregarItem()">➕ Agregar ítem</button><button type="button" class="btn btn-outline btn-sm" onclick="abrirPresupExcel()" title="Subir el cómputo en Excel y cargar los ítems de una">📊 Desde Excel</button><input type="file" id="presupExcelFile" accept=".xlsx,.xls,.csv" style="display:none;" onchange="_pxArchivoElegido(this)"></div>
                         <div style="font-size:13px;">Total ítems: <strong id="presupItemsTotal">$0</strong></div>
                     </div>
                 </div>
@@ -6583,7 +6583,7 @@
                 </div>
                 <div class="form-group">
                     <label>Documento adjunto (PDF o Word) — opcional</label>
-                    <input type="file" id="docArchivo" accept=".pdf,.doc,.docx" style="font-size:12px; padding:6px;">
+                    <input type="file" id="docArchivo" accept=".pdf,.doc,.docx,image/*" style="font-size:12px; padding:6px;">
                     <div class="form-hint" id="docEstado"></div>
                 </div>
                 <div class="form-group" id="presupVincularFactWrap">
@@ -6609,7 +6609,36 @@
 </div>
 
 <!-- ── MODAL: LEER PRESUPUESTO CON IA ── -->
-<div class="modal" id="modalLeerPresup">
+<div class="modal" id="modalPresupExcel">
+        <div class="modal-content" style="max-width:900px;">
+            <div class="modal-header">
+                <h2>📊 Cargar ítems desde Excel</h2>
+                <button class="modal-close" onclick="cerrarPresupExcel()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-hint" style="margin-bottom:10px;">Archivo: <strong id="pxArchivoNombre">—</strong>. Revisá que cada columna esté marcada con lo que es; si el sistema se equivocó, cambialo en el desplegable de arriba de cada una.</div>
+                <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+                    <div class="form-group" style="margin:0;">
+                        <label>Hoja</label>
+                        <select id="pxHoja" onchange="pxCambiarHoja()" style="width:auto;min-width:150px;"></select>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label>Fila del encabezado</label>
+                        <input type="number" id="pxFilaEnc" min="1" step="1" value="1" onchange="pxCambiarFilaEnc()" style="width:90px;">
+                    </div>
+                </div>
+                <div id="pxPreview" style="margin-bottom:10px;"></div>
+                <div id="pxResumen" style="font-size:13px;margin-bottom:12px;"></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+                    <button type="button" class="btn btn-outline" onclick="cerrarPresupExcel()">Cancelar</button>
+                    <button type="button" class="btn btn-outline" onclick="pxCargar(false)" title="Suma estos ítems a los que ya estén cargados">Agregar a los actuales</button>
+                    <button type="button" class="btn" id="pxBtnCargar" onclick="pxCargar(true)" title="Borra los ítems que haya y carga estos">Cargar ítems</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="modalLeerPresup">
     <div class="modal-box">
         <div class="modal-head">
             <h2>📎 Leer Presupuesto con IA</h2>
@@ -8582,6 +8611,269 @@
         if (cab) cab.style.display = filas.length ? 'grid' : 'none';
         if (filas.length > 0) { var pb = document.getElementById('presupuesto'); if (pb) pb.value = Math.round(total * 100) / 100; }
     };
+    // ══════════ Cargar los ítems de un presupuesto desde una planilla ══════════
+    // Cada proveedor manda el Excel a su manera, así que no se adivina: se detectan las
+    // columnas por el texto del encabezado, se muestra el resultado y el usuario corrige
+    // el mapeo antes de cargar nada.
+    var _pxFilas = [];      // todas las filas de la hoja elegida, como array de arrays
+    var _pxLibro = null;    // workbook, para poder cambiar de hoja sin releer el archivo
+    var _pxNombreArch = '';
+
+    // Encabezados típicos de un cómputo/presupuesto de obra. 'fuerte' es el nombre inequívoco
+    // y 'debil' el que también podría ser otra cosa: en "Item | Descripción de los trabajos"
+    // el detalle es la segunda columna, no la de numeritos.
+    var _PX_PATRONES = [
+        { campo: 'detalle',  fuerte: /(detalle|descrip|concepto|tarea|trabajo|design)/i, debil: /(item|ítem|rubro|art[ií]culo)/i },
+        { campo: 'cantidad', fuerte: /(cantidad|cant\.?\b|qty)/i,                        debil: /(unidades|superficie|m2|m²|metros|ml\b)/i },
+        { campo: 'precio',   fuerte: /(unitario|p\.?\s*unit|precio\s*unit|valor\s*unit)/i, debil: /(pu\b|precio|valor)/i },
+        { campo: 'subtotal', fuerte: /(subtotal|sub\s*total|importe|parcial)/i,          debil: /(total|monto|\$)/i }
+    ];
+
+    function _pxNum(v) {
+        if (v == null || v === '') return 0;
+        if (typeof v === 'number') return isFinite(v) ? v : 0;
+        var t = String(v).replace(/[^\d.,\-]/g, '').trim();
+        if (!t) return 0;
+        var neg = /^-/.test(t);
+        t = t.replace(/-/g, '');
+        var ic = t.lastIndexOf(','), ip = t.lastIndexOf('.');
+        if (ic > -1 && ip > -1) {
+            // Están los dos separadores: el último es el decimal, el otro son los miles.
+            if (ic > ip) t = t.replace(/\./g, '').replace(',', '.');
+            else         t = t.replace(/,/g, '');
+        } else if (ic > -1 || ip > -1) {
+            // Uno solo, y es ambiguo: "8.200" acá son ocho mil doscientos, no 8,2.
+            // Son miles si hay varios grupos ("1.234.567") o si el último tiene 3 dígitos.
+            var sep = (ic > -1) ? ',' : '.';
+            var partes = t.split(sep);
+            var ult = partes[partes.length - 1];
+            if (partes.length > 2 || (ult.length === 3 && partes[0].length <= 3)) t = partes.join('');
+            else t = partes.slice(0, -1).join('') + '.' + ult;
+        }
+        var n = parseFloat(t);
+        if (!isFinite(n)) return 0;
+        return neg ? -n : n;
+    }
+    function _pxTexto(v) { return (v == null) ? '' : String(v).trim(); }
+    // Una fila de totales no es un ítem: sumarla duplicaría el presupuesto.
+    function _pxEsFilaTotal(det) { return /^\s*(sub\s*)?total|^\s*son\s+pesos|^\s*iva\b|^\s*neto\b|^\s*descuento/i.test(det || ''); }
+    // El rótulo del total no siempre cae en la columna del detalle (suele ir corrido a la derecha),
+    // así que si la fila no tiene detalle se buscan rótulos en cualquier celda de texto.
+    function _pxFilaEsTotal(fila, colDet) {
+        var det = (colDet != null) ? _pxTexto(fila[colDet]) : '';
+        if (_pxEsFilaTotal(det)) return true;
+        if (det) return false;
+        for (var i = 0; i < fila.length; i++) {
+            var t = _pxTexto(fila[i]);
+            if (t && !_pxNum(t) && _pxEsFilaTotal(t)) return true;
+        }
+        return false;
+    }
+
+    function abrirPresupExcel() {
+        var inp = document.getElementById('presupExcelFile');
+        if (inp) { inp.value = ''; inp.click(); }
+    }
+    function _pxArchivoElegido(input) {
+        var file = input && input.files && input.files[0];
+        if (!file) return;
+        _pxNombreArch = file.name || 'planilla';
+        var fr = new FileReader();
+        fr.onload = function(e) {
+            try {
+                _pxLibro = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+            } catch (err) {
+                alert('No se pudo leer la planilla: ' + (err && err.message ? err.message : err));
+                return;
+            }
+            var hojas = _pxLibro.SheetNames || [];
+            if (!hojas.length) { alert('La planilla no tiene ninguna hoja.'); return; }
+            var sel = document.getElementById('pxHoja');
+            if (sel) {
+                sel.innerHTML = hojas.map(function(h, i){ return '<option value="' + i + '">' + escHtml(h) + '</option>'; }).join('');
+                sel.parentNode.style.display = (hojas.length > 1) ? '' : 'none';
+            }
+            var nom = document.getElementById('pxArchivoNombre');
+            if (nom) nom.textContent = _pxNombreArch;
+            _pxCargarHoja(0);
+            document.getElementById('modalPresupExcel').classList.add('active');
+        };
+        fr.onerror = function(){ alert('No se pudo leer el archivo.'); };
+        fr.readAsArrayBuffer(file);
+    }
+    window.pxCambiarHoja = function() {
+        var sel = document.getElementById('pxHoja');
+        _pxCargarHoja(sel ? (parseInt(sel.value, 10) || 0) : 0);
+    };
+    function _pxCargarHoja(i) {
+        var nombre = (_pxLibro.SheetNames || [])[i];
+        var hoja = _pxLibro.Sheets[nombre];
+        // defval:'' mantiene las columnas alineadas aunque haya celdas vacías.
+        _pxFilas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '', blankrows: false, raw: true });
+        var enc = _pxDetectarEncabezado();
+        var elEnc = document.getElementById('pxFilaEnc');
+        if (elEnc) elEnc.value = enc + 1;   // el usuario cuenta desde 1
+        _pxAutoMapear(enc);
+        _pxPintar();
+    }
+    // Fila de encabezado = la primera (de las 15 de arriba) donde más columnas matchean.
+    function _pxDetectarEncabezado() {
+        var mejor = 0, mejorPuntaje = 0;
+        for (var f = 0; f < Math.min(15, _pxFilas.length); f++) {
+            var p = 0;
+            (_pxFilas[f] || []).forEach(function(c) {
+                var t = _pxTexto(c);
+                if (!t) return;
+                _PX_PATRONES.forEach(function(pat){ if (pat.fuerte.test(t)) p += 2; else if (pat.debil.test(t)) p += 1; });
+            });
+            if (p > mejorPuntaje) { mejorPuntaje = p; mejor = f; }
+        }
+        return mejorPuntaje ? mejor : 0;
+    }
+    function _pxNumCols() {
+        var n = 0;
+        _pxFilas.forEach(function(f){ if (f && f.length > n) n = f.length; });
+        return n;
+    }
+    // Propone un campo por columna según el encabezado; si no encuentra ninguno, cae en
+    // una heurística: la primera columna de texto es el detalle, la última numérica el subtotal.
+    var _pxMapa = [];
+    function _pxAutoMapear(filaEnc) {
+        var nc = _pxNumCols();
+        _pxMapa = new Array(nc).fill('');
+        var enc = _pxFilas[filaEnc] || [];
+        var usados = {}, tomada = {};
+        // Cada campo se queda con la columna que MEJOR lo describe, no con la primera que pasa.
+        _PX_PATRONES.forEach(function(pat) {
+            var mejor = -1, mejorP = 0;
+            for (var c = 0; c < nc; c++) {
+                if (tomada[c]) continue;
+                var t = _pxTexto(enc[c]);
+                if (!t) continue;
+                var pts = pat.fuerte.test(t) ? 2 : (pat.debil.test(t) ? 1 : 0);
+                if (pts > mejorP) { mejorP = pts; mejor = c; }
+            }
+            if (mejor >= 0) { _pxMapa[mejor] = pat.campo; usados[pat.campo] = 1; tomada[mejor] = 1; }
+        });
+        if (!usados.detalle || (!usados.precio && !usados.subtotal)) {
+            var muestra = _pxFilas.slice(filaEnc + 1, filaEnc + 12);
+            var esTexto = [], esNum = [];
+            for (var c2 = 0; c2 < nc; c2++) {
+                var txt = 0, num = 0;
+                muestra.forEach(function(f) {
+                    var v = f ? f[c2] : '';
+                    if (v === '' || v == null) return;
+                    if (_pxNum(v)) num++; else if (_pxTexto(v).length > 2) txt++;
+                });
+                esTexto[c2] = txt; esNum[c2] = num;
+            }
+            if (!usados.detalle) {
+                var mejorT = -1, mejorTv = 0;
+                for (var c3 = 0; c3 < nc; c3++) if (esTexto[c3] > mejorTv) { mejorTv = esTexto[c3]; mejorT = c3; }
+                if (mejorT >= 0) { _pxMapa[mejorT] = 'detalle'; usados.detalle = 1; }
+            }
+            if (!usados.precio && !usados.subtotal) {
+                var ultN = -1;
+                for (var c4 = 0; c4 < nc; c4++) if (esNum[c4] > 0 && _pxMapa[c4] !== 'detalle') ultN = c4;
+                if (ultN >= 0) { _pxMapa[ultN] = 'subtotal'; usados.subtotal = 1; }
+            }
+        }
+    }
+    window.pxSetMapa = function(col, valor) {
+        // Un mismo campo no puede estar en dos columnas.
+        if (valor) _pxMapa.forEach(function(v, i){ if (v === valor && i !== col) _pxMapa[i] = ''; });
+        _pxMapa[col] = valor;
+        _pxPintar();
+    };
+    window.pxCambiarFilaEnc = function() {
+        var el = document.getElementById('pxFilaEnc');
+        var f = Math.max(1, parseInt(el && el.value, 10) || 1) - 1;
+        _pxAutoMapear(f);
+        _pxPintar();
+    };
+    // Convierte las filas de datos en ítems, completando lo que falte:
+    // sin precio unitario se usa el subtotal (cantidad 1); sin subtotal se multiplica.
+    function _pxItems() {
+        var el = document.getElementById('pxFilaEnc');
+        var filaEnc = Math.max(1, parseInt(el && el.value, 10) || 1) - 1;
+        var col = {};
+        _pxMapa.forEach(function(v, i){ if (v) col[v] = i; });
+        var items = [], saltadas = 0;
+        for (var f = filaEnc + 1; f < _pxFilas.length; f++) {
+            var fila = _pxFilas[f] || [];
+            var det = (col.detalle != null) ? _pxTexto(fila[col.detalle]) : '';
+            var cant = (col.cantidad != null) ? _pxNum(fila[col.cantidad]) : 0;
+            var pu   = (col.precio   != null) ? _pxNum(fila[col.precio])   : 0;
+            var sub  = (col.subtotal != null) ? _pxNum(fila[col.subtotal]) : 0;
+            if (!det && !cant && !pu && !sub) continue;                    // fila vacía
+            if (_pxFilaEsTotal(fila, col.detalle)) { saltadas++; continue; } // fila de totales
+            if (!pu && sub) { if (cant > 0) pu = sub / cant; else { cant = 1; pu = sub; } }
+            if (!cant && pu) cant = 1;
+            if (!det && !pu) continue;
+            items.push({ detalle: det || '(sin detalle)', cantidad: Math.round(cant * 10000) / 10000, precioUnit: Math.round(pu * 100) / 100 });
+        }
+        return { items: items, saltadas: saltadas };
+    }
+    function _pxPintar() {
+        var cont = document.getElementById('pxPreview');
+        if (!cont) return;
+        var nc = _pxNumCols();
+        if (!nc) { cont.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-3);">La hoja está vacía.</div>'; return; }
+        var el = document.getElementById('pxFilaEnc');
+        var filaEnc = Math.max(1, parseInt(el && el.value, 10) || 1) - 1;
+        var opts = [['','(ignorar)'],['detalle','Detalle'],['cantidad','Cantidad'],['precio','P. unitario'],['subtotal','Subtotal']];
+        var h = '<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:12px;white-space:nowrap;">';
+        h += '<tr>';
+        for (var c = 0; c < nc; c++) {
+            h += '<td style="padding:3px 4px;border:1px solid var(--border);"><select onchange="pxSetMapa(' + c + ',this.value)" style="font-size:11px;padding:3px;min-width:96px;">'
+                + opts.map(function(o){ return '<option value="' + o[0] + '"' + (_pxMapa[c] === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+                + '</select></td>';
+        }
+        h += '</tr>';
+        var hasta = Math.min(_pxFilas.length, filaEnc + 9);
+        for (var f = filaEnc; f < hasta; f++) {
+            var esEnc = (f === filaEnc);
+            h += '<tr style="' + (esEnc ? 'background:var(--surface-2);font-weight:700;' : '') + '">';
+            for (var c2 = 0; c2 < nc; c2++) {
+                var v = _pxTexto((_pxFilas[f] || [])[c2]);
+                if (v.length > 28) v = v.substring(0, 28) + '…';
+                h += '<td style="padding:3px 6px;border:1px solid var(--border);color:' + (_pxMapa[c2] ? 'inherit' : 'var(--text-3)') + ';">' + escHtml(v) + '</td>';
+            }
+            h += '</tr>';
+        }
+        h += '</table></div>';
+        cont.innerHTML = h;
+
+        var r = _pxItems();
+        var total = r.items.reduce(function(a, i){ return a + i.cantidad * i.precioUnit; }, 0);
+        var res = document.getElementById('pxResumen');
+        if (res) {
+            var falta = (_pxMapa.indexOf('detalle') < 0) ? ' — <span style="color:var(--warn);">elegí qué columna es el Detalle</span>' : '';
+            res.innerHTML = '<strong>' + r.items.length + '</strong> ítem(s) · Total <strong>$' + total.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong>'
+                + (r.saltadas ? ' · <span style="color:var(--text-3);">' + r.saltadas + ' fila(s) de totales salteadas</span>' : '')
+                + falta;
+        }
+        var btn = document.getElementById('pxBtnCargar');
+        if (btn) { btn.disabled = !r.items.length; btn.textContent = r.items.length ? ('Cargar ' + r.items.length + ' ítem(s)') : 'Nada para cargar'; }
+    }
+    window.pxCargar = function(reemplazar) {
+        var r = _pxItems();
+        if (!r.items.length) return;
+        var cont = document.getElementById('presupItemsLista');
+        if (!cont) return;
+        if (reemplazar) cont.innerHTML = '';
+        r.items.forEach(function(it){ presupAgregarItem(it); });
+        cerrarPresupExcel();
+    };
+    function cerrarPresupExcel() {
+        var m = document.getElementById('modalPresupExcel');
+        if (m) m.classList.remove('active');
+        _pxLibro = null; _pxFilas = []; _pxMapa = [];
+    }
+    window.abrirPresupExcel = abrirPresupExcel;
+    window._pxArchivoElegido = _pxArchivoElegido;
+    window.cerrarPresupExcel = cerrarPresupExcel;
+
     function _leerPresupItems() {
         var items = [];
         document.querySelectorAll('#presupItemsLista .presup-item-fila').forEach(function(f) {
@@ -14625,7 +14917,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v470';
+    var APP_VER = 'v471';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -15116,7 +15408,7 @@
 
     function aplicarPermisos() {
         const show = puedeEditar ? '' : 'none';
-        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv'].forEach(id => {
+        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv','btnLeerPresup'].forEach(id => {
             const el = document.getElementById(id); if (el) el.style.display = show;
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
