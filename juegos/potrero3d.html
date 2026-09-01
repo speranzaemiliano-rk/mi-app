@@ -4203,6 +4203,9 @@ const DURACION_PARTIDO = 240;          // 4 minutos reales, reloj 0'-90'
 let companeros = [], rivales = [], todos = [], porteros = [];
 let controlado = null, anillo = null, poseedorActual = null;
 let IA_ACTIVA = true;                  // las pruebas la apagan para aislar al humano
+let ultimoToque = -1;                  // qué equipo tocó la pelota por última vez
+let reposicion = 0;                    // segundos de pausa por saque o falta
+let saque = null;                      // { tipo, equipo, x, z }
 
 /* Modelo externo (Mixamo): se carga arrastrando un .glb sobre la página.
    No hace falta red: el archivo se lee con FileReader y se parsea en memoria. */
@@ -4947,7 +4950,7 @@ function crearEscena(){
     u.eq = eq; u.rol = rol; u.casa = { x: cx, z: cz };
     u.decidir = Math.random()*0.2;
     u.objetivo = new THREE.Vector3(cx, 0, cz);
-    u.festejo = 0;
+    u.festejo = 0; u.cabezazo = 0;
     const F = FISICO[rol];
     const az = 0.97 + Math.random()*0.06;             // que no sean clones ni de a pares
     u.alto = F.alto*az;
@@ -5633,6 +5636,14 @@ function animarFutbolista(J, dt, velocidad){
   u.cuello.rotation.x = -0.05 - amp*0.10;
   J.position.y = Math.abs(Math.sin(t))*0.045*amp;
 
+  // ---- cabezazo: el cuello va hacia adelante un instante ----
+  if(u.cabezazo > 0){
+    u.cabezazo = Math.max(0, u.cabezazo - dt);
+    const k = 1 - u.cabezazo/0.34;
+    u.cuello.rotation.x = -0.55*Math.sin(k*Math.PI);
+    u.torso.rotation.x = 0.10 + 0.30*Math.sin(k*Math.PI);
+  }
+
   // ---- festejo: brazos arriba y saltitos, pisa todo lo demás ----
   if(u.festejo > 0){
     u.festejo = Math.max(0, u.festejo - dt);
@@ -6075,6 +6086,17 @@ function iaJugador(j, dt){
   if(Math.hypot(mirarX, mirarZ) > 0.1) j.rotation.y = Math.atan2(mirarX, mirarZ) - Math.PI;
   animarFutbolista(j, dt, vel);
 
+  // ---- cabecear si viene por el aire ----
+  if(dPelota < 1.35 && P.pegado <= 0 &&
+     pelota.position.y > 1.15 && pelota.position.y < 2.05){
+    const obj = mejorPuntoArco(u.eq);
+    const cerca = Math.abs(gx - j.position.x) < 13;
+    j.rotation.y = Math.atan2(obj.x - j.position.x, obj.z - j.position.z) - Math.PI;
+    cabecear(j, cerca ? 'tiro' : 'bajo');
+    u.patada = 0;
+    return;
+  }
+
   // ---- tocar la pelota ----
   if(dPelota > IA.radioPelota || P.pegado > 0 || pelota.position.y > 0.55) return;
   const alArco = Math.abs(gx - j.position.x);
@@ -6085,7 +6107,7 @@ function iaJugador(j, dt){
     const dx = obj.x - j.position.x, dz = obj.z - j.position.z;
     const n = Math.hypot(dx, dz) || 1;
     P.v.set(dx/n*IA.remate, 3.4 + Math.random()*1.2, dz/n*IA.remate);
-    P.pegado = 0.55; u.patada = 0;
+    P.pegado = 0.55; u.patada = 0; ultimoToque = u.eq;
     AUDIO3D.patada(1);
     return;
   }
@@ -6103,7 +6125,7 @@ function iaJugador(j, dt){
     const n = Math.hypot(dx, dz) || 1;
     const f = Math.min(IA.pase, 5.2 + n*0.85);
     P.v.set(dx/n*f, 0.5, dz/n*f);
-    P.pegado = 0.5; u.patada = 0;
+    P.pegado = 0.5; u.patada = 0; ultimoToque = u.eq;
     AUDIO3D.patada(0.45);
     return;
   }
@@ -6112,23 +6134,84 @@ function iaJugador(j, dt){
   const n = Math.hypot(dx, dz) || 1;
   P.v.x += (dx/n*(vel + 2.2) - P.v.x)*Math.min(1, dt*9);
   P.v.z += (dz/n*(vel + 2.2) - P.v.z)*Math.min(1, dt*9);
+  ultimoToque = u.eq;
 }
 
-/* Que no se amontonen ni se atraviesen: empujón suave entre cuerpos. */
-function separarCuerpos(){
+/* Que no se amontonen ni se atraviesen: empujón suave entre cuerpos.
+   Y de paso, acá se cobran las faltas: si un rival choca al que tiene la
+   pelota viniendo FUERTE Y DE ATRÁS, es falta. Se pide velocidad de
+   acercamiento alta y azar bajo para que no se cobre a cada roce: en una
+   cancha de este tamaño, con seis jugadores encima de la pelota, cobrar todo
+   contacto haría un partido de tiros libres. */
+// Medido sobre un partido: la velocidad de cierre topa en 6,0 y su mediana es
+// 4,84, así que un umbral de 4,6 agarraba el 56% de los contactos. Y hay 2734
+// CUADROS de contacto por partido: tirando el dado en cada cuadro, hasta una
+// probabilidad chica se cobra a cada rato. El dado va una sola vez POR CHOQUE,
+// en el cuadro en que empieza, y con el umbral arriba del percentil 90.
+const FALTA = { cierre: 5.0, prob: 0.22, cooldown: 3.5 };
+let esperaFalta = 0;
+const contactos = new Set();          // pares que ya venían tocándose
+
+function separarCuerpos(dt){
+  if(esperaFalta > 0) esperaFalta -= (dt || 0);
   for(let i = 0; i < todos.length; i++){
     for(let k = i + 1; k < todos.length; k++){
-      const a = todos[i], b = todos[k];
+      const a = todos[i], b = todos[k], par = i + '-' + k;
       let dx = b.position.x - a.position.x, dz = b.position.z - a.position.z;
-      let d = Math.hypot(dx, dz);
-      if(d > 0.92 || d < 1e-4) continue;
-      const empuje = (0.92 - d)/2;
-      dx /= d; dz /= d;
-      a.position.x -= dx*empuje; a.position.z -= dz*empuje;
-      b.position.x += dx*empuje; b.position.z += dz*empuje;
+      const d = Math.hypot(dx, dz);
+      if(d < 1e-4) continue;
+
+      // HISTÉRESIS: se entra en contacto a 0,92 pero recién se sale a 1,15.
+      // Sin esto el par entra y sale del contacto en cuadros alternos —la
+      // separación lo empuja justo hasta 0,92— y "el choque empieza" 974
+      // veces por partido en vez de unas ochenta.
+      const venia = contactos.has(par);
+      const tocando = venia ? d < 1.15 : d < 0.92;
+      if(!tocando){ contactos.delete(par); continue; }
+
+      if(!venia){
+        contactos.add(par);
+        if(a.userData.eq !== b.userData.eq && esperaFalta <= 0 &&
+           reposicion <= 0 && pausaGol <= 0 && estadoPartido === 'jugando'){
+          const conPelota = poseedorActual === a ? a : (poseedorActual === b ? b : null);
+          if(conPelota){
+            const otro = conPelota === a ? b : a;
+            const ux = dx/d, uz = dz/d, sg = conPelota === a ? 1 : -1;
+            const cierre = -sg*(otro.userData.v.x*ux + otro.userData.v.z*uz);
+            if(cierre > FALTA.cierre && Math.random() < FALTA.prob){
+              cobrarFalta(conPelota, otro);
+              return;
+            }
+          }
+        }
+      }
+
+      if(d < 0.92){
+        const empuje = (0.92 - d)/2;
+        dx /= d; dz /= d;
+        a.position.x -= dx*empuje; a.position.z -= dz*empuje;
+        b.position.x += dx*empuje; b.position.z += dz*empuje;
+      }
     }
   }
 }
+
+/* Tiro libre para el equipo del que recibió la falta, donde ocurrió. */
+function cobrarFalta(victima, infractor){
+  esperaFalta = FALTA.cooldown;
+  const eq = victima.userData.eq;
+  sacar('libre', lim(victima.position.x, -cancha.limX + 1.5, cancha.limX - 1.5),
+        lim(victima.position.z, -cancha.limZ + 1.5, cancha.limZ - 1.5), eq);
+  // el que hizo la falta se aleja: barrera mínima
+  const dx = infractor.position.x - victima.position.x;
+  const dz = infractor.position.z - victima.position.z;
+  const n = Math.hypot(dx, dz) || 1;
+  infractor.position.x = lim(victima.position.x + dx/n*3.2, -cancha.limX, cancha.limX);
+  infractor.position.z = lim(victima.position.z + dz/n*3.2, -cancha.limZ, cancha.limZ);
+  infractor.userData.v.set(0, 0, 0);
+  faltas++;
+}
+let faltas = 0;
 
 function actualizarArquero(dt){
   porteros.forEach(pt => actualizarPortero(pt.malla, pt.lado, dt));
@@ -6219,6 +6302,7 @@ function chequearAtajada(dt){
     P.v.y = 2.6 + Math.random()*1.8;
     P.atajada = 0.5;
     P.pegado = 0.5;
+    ultimoToque = lado > 0 ? 1 : 0;     // el arquero de +x es del equipo rival
     atajadas++;
     pantalla3dActualizar();
     AUDIO3D.atajada();
@@ -6306,6 +6390,22 @@ const GOLPES = {
 };
 let tipoGolpe = 'tiro';
 
+/* Cabezazo. El que cabecea le pega hacia donde mira, con menos fuerza que
+   con el pie y siempre con algo de altura: un cabezazo no sale raso. */
+function cabecear(j, tipo){
+  const P = pelota.userData, u = j.userData;
+  const dir = new THREE.Vector3(Math.sin(j.rotation.y + Math.PI), 0,
+                                Math.cos(j.rotation.y + Math.PI)).normalize();
+  const fuerte = tipo === 'tiro';
+  const f = fuerte ? 9.2 : 6.4;
+  P.v.set(dir.x*f, fuerte ? 1.6 : 3.2, dir.z*f);
+  P.giro.set(-dir.z*8, 0, dir.x*8);
+  P.pegado = 0.5;
+  ultimoToque = u.eq;
+  u.cabezazo = 0.34;                    // para la animación del cuello
+  AUDIO3D.pique(6);                     // el golpe seco de la frente
+}
+
 function patear(tipo){
   tipoGolpe = tipo || 'tiro';
   if(usandoModelo()){
@@ -6335,6 +6435,10 @@ function actualizar(dt){
   if(pausaGol > 0){
     pausaGol -= dt;
     if(pausaGol <= 0) reponer();
+  }
+  if(reposicion > 0){
+    reposicion -= dt;
+    if(reposicion <= 0){ pelota.userData.pegado = 0; saque = null; }
   }
   if(avisoTimer3d > 0){
     avisoTimer3d -= dt;
@@ -6370,7 +6474,7 @@ function actualizar(dt){
   const kPatada = usandoModelo() ? animarModelo(dt, vel)
                                  : animarFutbolista(jugador, dt, vel);
   if(IA_ACTIVA) for(const o of todos) if(o !== jugador) iaJugador(o, dt);
-  separarCuerpos();
+  separarCuerpos(dt);
   actualizarArquero(dt);
   anillo.position.set(jugador.position.x, 0.02, jugador.position.z);
 
@@ -6382,10 +6486,22 @@ function actualizar(dt){
   alPie.y = 0;
   const dist = alPie.length();
 
+  // ---- CABEZAZO: la pelota a la altura de la cabeza ----
+  // Sin esto el pase alto no servía para nada: la pelota por el aire no la
+  // podía tocar nadie y había que esperar a que cayera sola.
+  const ALTO_CABEZA = { min: 1.15, max: 2.05 };
+  if(kPatada >= 0.30 && kPatada <= 0.72 && dist < 1.35 && P.pegado <= 0 &&
+     pelota.position.y > ALTO_CABEZA.min && pelota.position.y < ALTO_CABEZA.max){
+    // No hace falta cortar el cuadro: esta rama y la de patada son
+    // excluyentes por la altura de la pelota.
+    cabecear(jugador, tipoGolpe);
+  }
+
   // `P.pegado <= 0`, NO `!P.pegado`: el contador baja hasta quedar en un
   // negativo chiquito y ahí se frena, y `!(-0.006)` es false. Con la
   // negación, después del primer pelotazo no se podía volver a patear nunca.
-  if(kPatada >= 0.42 && kPatada <= 0.60 && dist < 1.25 && P.pegado <= 0){
+  if(kPatada >= 0.42 && kPatada <= 0.60 && dist < 1.25 && P.pegado <= 0 &&
+     pelota.position.y < ALTO_CABEZA.min){
     // el latigazo justo cuando el pie pasa por la pelota
     const dir = adelante.clone().normalize();
     const G = GOLPES[tipoGolpe] || GOLPES.tiro;
@@ -6393,6 +6509,7 @@ function actualizar(dt){
     P.v.set(dir.x*fuerza, G.alto + Math.random()*0.6, dir.z*fuerza);
     P.giro.set(-dir.z*14, 0, dir.x*14);
     P.pegado = 0.55;
+    ultimoToque = u.eq;
     AUDIO3D.patada(tipoGolpe === 'tiro' ? 1 : (tipoGolpe === 'alto' ? 0.7 : 0.45));
   }
   if(P.pegado > 0) P.pegado = Math.max(0, P.pegado - dt);
@@ -6414,6 +6531,7 @@ function actualizar(dt){
       const k = Math.min(1, dt*10);
       P.v.x += (hacia.x*empuje - P.v.x)*k;
       P.v.z += (hacia.z*empuje - P.v.z)*k;
+      ultimoToque = u.eq;
     }
   }
 
@@ -6438,24 +6556,37 @@ function actualizar(dt){
   }
   chequearAtajada(dt);
 
-  // paredes: rebota en el límite del campo, salvo por la boca del arco
+  // ---- la pelota sale: lateral, saque de arco o córner ----
+  // Antes rebotaba en paredes invisibles tipo metegol y nunca salía.
   const LX = CANCHA_LARGO/2 - 1.0, LZ = CANCHA_ANCHO/2 - 1.0;
   const enBoca = Math.abs(pelota.position.z) < ARCO_ANCHO/2 - 0.12 &&
                  pelota.position.y < ARCO_ALTO - 0.05;
-  if(Math.abs(pelota.position.x) > LX && !enBoca){
-    pelota.position.x = Math.sign(pelota.position.x)*LX;
-    P.v.x *= -0.62;
-  }
   // el arco de +x es el del rival: si entra ahí, gol de RK
   if(enBoca && pausaGol <= 0 && Math.abs(pelota.position.x) > LX - 0.15)
     gol3d(pelota.position.x > 0 ? 0 : 1);
-  if(Math.abs(pelota.position.x) > LX + 1.7){       // fondo de la red
+
+  if(pausaGol <= 0 && reposicion <= 0){
+    if(Math.abs(pelota.position.z) > LZ){
+      // lateral: saca el equipo que NO la tocó último
+      const lz = Math.sign(pelota.position.z);
+      sacar('lateral', lim(pelota.position.x, -LX + 2, LX - 2), lz*(LZ - 0.15),
+            rivalDe(ultimoToque));
+    } else if(Math.abs(pelota.position.x) > LX && !enBoca){
+      const lx = Math.sign(pelota.position.x);
+      const defiende = lx > 0 ? 1 : 0;          // quién defiende ESE arco
+      if(ultimoToque === defiende){
+        // la sacó el que defendía: córner para el que ataca
+        sacar('corner', lx*(LX - 0.2),
+              (pelota.position.z >= 0 ? 1 : -1)*(LZ - 0.2), rivalDe(defiende));
+      } else {
+        sacar('arco', lx*(LX - 4.5), 0, defiende);
+      }
+    }
+  }
+  // red: si ya fue gol, que la pelota no se vaya al infinito
+  if(Math.abs(pelota.position.x) > LX + 1.7){
     pelota.position.x = Math.sign(pelota.position.x)*(LX + 1.7);
     P.v.x *= -0.15; P.v.z *= 0.5;
-  }
-  if(Math.abs(pelota.position.z) > LZ){
-    pelota.position.z = Math.sign(pelota.position.z)*LZ;
-    P.v.z *= -0.62;
   }
   // rodar: girar según cuánto se desplaza
   const vh = Math.hypot(P.v.x, P.v.z);
@@ -6539,11 +6670,61 @@ function finalizarPartido(){
   if(golesRK > golesRIV) AUDIO3D.gol();
 }
 
+/* El otro equipo. Si nadie tocó la pelota (arranque, o venía de un saque),
+   se la queda el que tenga al jugador más cerca. */
+function rivalDe(eq){
+  if(eq === 0) return 1;
+  if(eq === 1) return 0;
+  let mejor = 0, dm = 1e9;
+  for(const o of todos){
+    const d = dist2D(o, pelota);
+    if(d < dm){ dm = d; mejor = o.userData.eq; }
+  }
+  return mejor;
+}
+
+const NOMBRE_SAQUE = { lateral: 'LATERAL', corner: 'CÓRNER', arco: 'SAQUE DE ARCO',
+                       libre: 'TIRO LIBRE' };
+
+/* Pone la pelota donde va, para el juego un instante y acomoda al que saca.
+   La pelota queda intocable (`pegado` alto) hasta que se reanuda: si no, el
+   que saca la patea en el mismo cuadro y no se ve nunca el saque. */
+function sacar(tipo, x, z, equipo){
+  const P = pelota.userData;
+  reposicion = 1.15;
+  saque = { tipo: tipo, equipo: equipo, x: x, z: z };
+  pelota.position.set(x, 0.11, z);
+  P.v.set(0, 0, 0); P.pegado = 9; P.atajada = 0;
+  ultimoToque = -1;
+
+  // el que saca: el más cercano de su equipo, puesto al lado de la pelota
+  const mios = todos.filter(o => o.userData.eq === equipo);
+  let quien = mios[0], dm = 1e9;
+  for(const o of mios){
+    const d = Math.hypot(o.position.x - x, o.position.z - z);
+    if(d < dm){ dm = d; quien = o; }
+  }
+  // mirando hacia adentro de la cancha
+  const hx = -Math.sign(x)*0.55 || 0.55, hz = -Math.sign(z)*0.55 || 0;
+  quien.position.set(lim(x + hx, -cancha.limX, cancha.limX),
+                     0, lim(z + hz, -cancha.limZ, cancha.limZ));
+  quien.userData.v.set(0, 0, 0);
+  quien.userData.patada = -1;
+  quien.rotation.y = Math.atan2(x - quien.position.x, z - quien.position.z) - Math.PI;
+  // si el saque es de tu equipo, pasás a manejar al que saca
+  if(equipo === 0) controlado = (quien === jugador || companeros.indexOf(quien) >= 0)
+                                ? quien : controlado;
+  AUDIO3D.silbato();
+  mostrarAviso3d(NOMBRE_SAQUE[tipo] || 'SAQUE', equipo === 0 ? '#f5c542' : '#e07070',
+                 tipo === 'libre' ? 1.15 : 1.0);
+}
+
 function reponer(){
   AUDIO3D.silbato();
   pelota.position.set(0, 0.11, 0);
   pelota.userData.v.set(0, 0, 0);
   pelota.userData.pegado = 0; pelota.userData.atajada = 0;
+  reposicion = 0; saque = null; ultimoToque = -1;
   // cada uno a su lugar; saca el que recibió el gol
   for(const o of todos){
     const c = o.userData.casa;
