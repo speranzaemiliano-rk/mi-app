@@ -111,11 +111,19 @@ Que sean planas **no es cosmético**. En `obra/` la sincronización sube el docu
 
 **Eco de la nube.** `firma()` compara los registros con las claves ordenadas; sin eso, el mismo dato con las claves en otro orden parece un cambio y el tablero se repinta en ciclo. `pedirRender()` agrupa los repintados y, si el usuario está tipeando (`escribiendo()`), **reintenta** en vez de saltear: saltear perdía el cambio hasta el siguiente repintado.
 
-**Configuración.** `final-obra/config.js` apunta al **mismo proyecto** que `obra/` (`control-caja-965ad`, separado del sistema de gestión por la misma razón: allá `empresas` se lee con rol `lector`) pero a otro nodo, `finalObra/<obraId>`. Las reglas de ese nodo **hay que publicarlas a mano** y **sumarlas** a las de `parteObra` sin reemplazarlas; el texto está en los comentarios de `config.js`. El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`, así que `config.js` sólo aporta el valor inicial.
+**Configuración.** `final-obra/config.js` apunta a un proyecto de Firebase **propio del tablero** — ni el del sistema de gestión ni `control-caja` (que es **uno solo** para la caja diaria y el parte de personal; no son dos proyectos, confundirlos es fácil). El motivo es quién entra: al final de obra lo recorren la dirección de obra y los contratistas, y no tienen por qué estar a un error de reglas de los sueldos, los CUIL de la nómina o la contabilidad.
+
+Los cuatro valores de `firebase` vienen **vacíos**: cada instalación pone el suyo. Sin ellos el tablero funciona igual, guardando por equipo, y el botón ☁ lo dice. Las reglas **hay que publicarlas a mano**; el texto está en los comentarios de `config.js` y, mejor, lo muestra la propia app.
+
+`proyectoPropio` (bool) decide **cómo** se muestran esas reglas cuando falta el permiso: en `true` (el caso normal) manda el archivo **entero**, para reemplazar lo que haya — es lo más difícil de hacer mal. En `false`, si algún día la base se compartiera con otra app, manda **sólo** el nodo `finalObra` con coma al final, para insertar después de `"rules": {` sin llevarse puestas las reglas ajenas. Si se cambia de una base compartida a una propia, hay que tocar los dos: los valores de `firebase` y este flag.
+
+El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`, así que `config.js` sólo aporta el valor inicial.
 
 **Carga inicial.** `final-obra/datos-iniciales.js` (`window.FINAL_OBRA_SEED`) tiene las 39 unidades, los 13 espacios comunes y los 820 pendientes del relevamiento. Es la carga de arranque, **no la base**: se usa la primera vez en un equipo o con la nube vacía. Editarlo no cambia una obra en uso.
 
 **Semáforo**: por cantidad de pendientes — 0 terminada, 1-4 menores, 5-10 medios, 11+ críticos. Son los cortes del tablero original; si se tocan, hay que tocar `sevDe()` y los textos de `SEV`.
+
+**Permiso denegado con sesión abierta.** No abrir el formulario de ingreso: la cuenta ya entró bien, volver a entrar no cambia nada. `btnNube` tiene una rama propia para `estado === "mal" && nube.usuario` que muestra `bloqueReglas()` —las reglas con el mail de quien entró ya puesto— con botón de copiar y un «reintentar» que hace `soltarDatos()` + `conectarDatos()` sin recargar.
 
 **Informe**: `@media print` con `body.imprimiendo > *{display:none}` salvo `#reporte`. Se enumeraba qué esconder y cualquier bloque nuevo se colaba en la hoja.
 
