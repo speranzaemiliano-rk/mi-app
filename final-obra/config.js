@@ -4,13 +4,15 @@
 //  Es el ÚNICO archivo que hay que tocar para cambiar a qué proyecto de
 //  Firebase sincroniza el tablero. No hace falta abrir index.html.
 //
-//  ⚠️ Usa un proyecto de Firebase PROPIO, sólo para este tablero. Ni el
-//  del sistema de gestión ni el de la caja / parte de personal
-//  (`control-caja`, que es uno solo para los dos). El motivo es que acá
-//  entra otra gente: al final de obra lo recorren la dirección de obra y
-//  los contratistas, y no tienen por qué estar a un error de reglas de
-//  los sueldos, los CUIL de la nómina o la contabilidad. Con base propia,
-//  una regla mal escrita acá no puede tocar nada de lo otro.
+//  ⚠️ Usa un proyecto de Firebase PROPIO, sólo para este tablero, como
+//  cada una de las otras apps: el sistema tiene "Sistema RK", la caja
+//  diaria "Caja RK Final" y el parte de personal "Control Personal Obra"
+//  (cuyo id, control-caja-965ad, engaña: NO es el de la caja).
+//
+//  El motivo es que acá entra otra gente: al final de obra lo recorren la
+//  dirección de obra y los contratistas, mientras que el parte de personal
+//  guarda la nómina con nombre y CUIL. Con base propia, una regla mal
+//  escrita acá no puede tocar nada de lo otro.
 //
 //  Cómo conseguir estos valores:
 //    Firebase Console → el proyecto → ⚙️ Configuración del proyecto →

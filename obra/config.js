@@ -54,7 +54,9 @@
 // ════════════════════════════════════════════════════════════════════════
 window.OBRA_CONFIG = {
   firebase: {
-    // Proyecto "control-caja", separado del sistema de gestión.
+    // Proyecto "Control Personal Obra", separado del sistema de gestión.
+    // ⚠️ El id dice "control-caja" pero NO es el de la caja diaria: ésa
+    // tiene el suyo. El id quedó de un nombre viejo y confunde.
     // La apiKey hace falta para el login (Authentication).
     apiKey:      "AIzaSyA8GzV2O8GTwCatLmSdfII8vL1-QN2EiH0",
     databaseURL: "https://control-caja-965ad-default-rtdb.firebaseio.com",
