@@ -83,13 +83,13 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 ## Qué proyecto de Firebase usa cada cosa
 
-⚠️ **El `projectId` no dice para qué es el proyecto.** `control-caja-965ad` se llama **«Control Personal Obra»** y es el del **parte de personal**, no el de la caja: la caja diaria tiene el suyo. Guiarse por el id lleva a conclusiones falsas sobre qué datos conviven con qué.
+⚠️ **El `projectId` no dice para qué es el proyecto.** Firebase no deja cambiar el id, así que queda el del nombre con el que se creó. `control-caja-965ad` se llama **«Control Personal Obra»** y es el del **parte de personal**, no el de la caja (que tiene el suyo); `dash-rk` se llama **«Final de Obra»** y no tiene nada que ver con ningún dashboard. Guiarse por el id lleva a conclusiones falsas sobre qué datos conviven con qué.
 
 | App | Proyecto (nombre en la consola) | `projectId` | Config |
 |---|---|---|---|
 | Sistema de gestión (`index.html`) | Sistema RK | `modo-prueba-bb8c2` | `config.js` |
 | Parte de personal (`obra/`) | Control Personal Obra | `control-caja-965ad` | `obra/config.js` |
-| Final de obra (`final-obra/`) | *(uno propio, a crear)* | — | `final-obra/config.js` |
+| Final de obra (`final-obra/`) | Final de Obra | `dash-rk` ⚠️ | `final-obra/config.js` |
 | Caja diaria (**otro repo**) | Caja RK Final | `rk-cajadiaria-5-6` | fuera de acá |
 
 Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad.
