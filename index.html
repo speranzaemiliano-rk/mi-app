@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v474</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v475</div>
         </div>
     </nav>
 
@@ -7198,7 +7198,7 @@
                     <div id="factItemsCabecera" style="display:none; grid-template-columns:minmax(110px,1fr) 60px 100px 110px 38px 30px; gap:6px; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
                         <span>Detalle</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Suma o resta">±</span><span></span>
                     </div>
-                    <div id="factItemsLista"></div>
+                    <div id="factItemsLista" data-items-ctx="fact"></div>
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; gap:8px; flex-wrap:wrap;">
                         <button type="button" class="btn btn-outline btn-sm" onclick="factAgregarItem()">➕ Agregar ítem</button>
                         <div style="font-size:13px;">Total del detalle: <strong id="factItemsTotal">$0,00</strong></div>
@@ -8893,62 +8893,77 @@
     window.abrirPresupExcel = abrirPresupExcel;
     window._pxArchivoElegido = _pxArchivoElegido;
     window.cerrarPresupExcel = cerrarPresupExcel;
-
     // ══════════ Detalle del comprobante: ítems que suman y que restan ══════════
     // Una factura de proveedor no siempre es un solo importe: trae trabajos, materiales,
     // y también descuentos, bonificaciones o anticipos ya entregados que RESTAN. Cada fila
-    // lleva su signo y el total neto completa el "Importe total".
-    function _factItemHTML(it) {
+    // lleva su signo y el total neto completa el importe.
+    // El mismo motor sirve para dos pantallas: la carga manual ('fact') y la revisión de lo
+    // que leyó la IA ('lf'). Sólo cambian los ids de los elementos.
+    var _ITEMS_CTX = {
+        fact: { lista:'factItemsLista', cab:'factItemsCabecera', total:'factItemsTotal', aviso:'factItemsAviso', importe:'factImporte' },
+        lf:   { lista:'lfItemsLista',   cab:'lfItemsCabecera',   total:'lfItemsTotal',   aviso:'lfItemsAviso',   importe:'leerFactImporte' }
+    };
+    var _ITEMS_COLS = 'minmax(110px,1fr) 60px 100px 110px 38px 30px';
+    function _itemsCtxDe(el) {
+        var cont = el.closest('[data-items-ctx]');
+        return (cont && cont.getAttribute('data-items-ctx')) || 'fact';
+    }
+    function _factItemHTML(it, ctx) {
         it = it || {};
+        ctx = ctx || 'fact';
         var neg = (Number(it.signo) === -1);
-        return '<div class="fact-item-fila" style="display:grid; grid-template-columns:minmax(110px,1fr) 60px 100px 110px 38px 30px; gap:6px; margin-bottom:6px; align-items:center;">' +
+        return '<div class="fact-item-fila" style="display:grid; grid-template-columns:' + _ITEMS_COLS + '; gap:6px; margin-bottom:6px; align-items:center;">' +
             '<input type="text" class="fi-detalle" placeholder="Detalle" value="' + escHtml(it.detalle || '') + '">' +
-            '<input type="number" class="fi-cant" min="0" step="0.01" placeholder="Cant." value="' + (it.cantidad != null ? it.cantidad : '') + '" oninput="factRecalcItems()">' +
-            '<input type="number" class="fi-precio" min="0" step="0.01" placeholder="P. unit." value="' + (it.precioUnit != null ? it.precioUnit : '') + '" oninput="factRecalcItems()">' +
+            '<input type="number" class="fi-cant" min="0" step="0.01" placeholder="Cant." value="' + (it.cantidad != null ? it.cantidad : '') + '" oninput="factRecalcItems(\'' + ctx + '\')">' +
+            '<input type="number" class="fi-precio" min="0" step="0.01" placeholder="P. unit." value="' + (it.precioUnit != null ? it.precioUnit : '') + '" oninput="factRecalcItems(\'' + ctx + '\')">' +
             '<input type="text" class="fi-subtotal" readonly tabindex="-1" style="background:var(--surface-2); text-align:right;" value="">' +
             '<button type="button" class="fi-signo btn btn-outline btn-sm" data-signo="' + (neg ? '-1' : '1') + '" onclick="factToggleSigno(this)" title="Tocá para que este ítem sume o reste al total" style="padding:4px 0;">' + (neg ? '➖' : '➕') + '</button>' +
             '<button type="button" class="btn btn-danger-sm" onclick="factQuitarItem(this)" title="Quitar ítem">✕</button>' +
             '</div>';
     }
-    window.factAgregarItem = function(item) {
-        var cont = document.getElementById('factItemsLista');
+    window.factAgregarItem = function(item, ctx) {
+        ctx = ctx || 'fact';
+        var cont = document.getElementById(_ITEMS_CTX[ctx].lista);
         if (!cont) return;
-        cont.insertAdjacentHTML('beforeend', _factItemHTML(item || {}));
-        factRecalcItems();
+        cont.insertAdjacentHTML('beforeend', _factItemHTML(item || {}, ctx));
+        factRecalcItems(ctx);
     };
     window.factQuitarItem = function(btn) {
+        var ctx = _itemsCtxDe(btn);
         var fila = btn.closest('.fact-item-fila');
         if (fila) fila.remove();
-        factRecalcItems();
+        factRecalcItems(ctx);
     };
     window.factToggleSigno = function(btn) {
         var neg = btn.getAttribute('data-signo') === '-1';
         btn.setAttribute('data-signo', neg ? '1' : '-1');
         btn.textContent = neg ? '➕' : '➖';
-        factRecalcItems();
+        factRecalcItems(_itemsCtxDe(btn));
     };
-    window.factRecalcItems = function() {
-        var total = 0, hayResta = false;
-        var filas = document.querySelectorAll('#factItemsLista .fact-item-fila');
+    window.factRecalcItems = function(ctx) {
+        ctx = ctx || 'fact';
+        var cfg = _ITEMS_CTX[ctx]; if (!cfg) return;
+        var cont = document.getElementById(cfg.lista); if (!cont) return;
+        var total = 0;
+        var filas = cont.querySelectorAll('.fact-item-fila');
         filas.forEach(function(f) {
             var c  = parseFloat(f.querySelector('.fi-cant').value) || 0;
             var pu = parseFloat(f.querySelector('.fi-precio').value) || 0;
             var sg = (f.querySelector('.fi-signo').getAttribute('data-signo') === '-1') ? -1 : 1;
-            if (sg === -1) hayResta = true;
             var st = sg * c * pu;
             var sub = f.querySelector('.fi-subtotal');
             sub.value = st ? ((st < 0 ? '-$' : '$') + Math.abs(st).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})) : '';
             sub.style.color = (st < 0) ? 'var(--danger)' : '';
             total += st;
         });
-        var totEl = document.getElementById('factItemsTotal');
+        var totEl = document.getElementById(cfg.total);
         if (totEl) {
             totEl.textContent = (total < 0 ? '-$' : '$') + Math.abs(total).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
             totEl.style.color = (total < 0) ? 'var(--danger)' : '';
         }
-        var cab = document.getElementById('factItemsCabecera');
+        var cab = document.getElementById(cfg.cab);
         if (cab) cab.style.display = filas.length ? 'grid' : 'none';
-        var aviso = document.getElementById('factItemsAviso');
+        var aviso = document.getElementById(cfg.aviso);
         if (aviso) {
             aviso.textContent = (filas.length && total < 0)
                 ? 'El total quedó negativo. Si el comprobante devuelve plata, cargalo como Nota de Crédito en vez de una factura con ítems negativos.'
@@ -8957,16 +8972,21 @@
         }
         // Sólo pisa el importe si realmente hay ítems: si no, manda lo que se tipeó a mano.
         if (filas.length > 0) {
-            var imp = document.getElementById('factImporte');
+            var imp = document.getElementById(cfg.importe);
             if (imp) {
                 imp.value = Math.round(total * 100) / 100;
-                if (typeof onFactImporteChange === 'function') onFactImporteChange();
+                // Dispara el oninput que tenga ese campo (retenciones, avisos, etc.).
+                try { imp.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
             }
         }
     };
-    function _leerFactItems() {
+    function _leerFactItems(ctx) {
+        ctx = ctx || 'fact';
+        var cfg = _ITEMS_CTX[ctx];
+        var cont = cfg && document.getElementById(cfg.lista);
         var items = [];
-        document.querySelectorAll('#factItemsLista .fact-item-fila').forEach(function(f) {
+        if (!cont) return items;
+        cont.querySelectorAll('.fact-item-fila').forEach(function(f) {
             var detalle = (f.querySelector('.fi-detalle').value || '').trim();
             var cant    = parseFloat(f.querySelector('.fi-cant').value) || 0;
             var precio  = parseFloat(f.querySelector('.fi-precio').value) || 0;
@@ -8977,11 +8997,31 @@
         });
         return items;
     }
-    function _renderFactItems(items) {
-        var cont = document.getElementById('factItemsLista');
+    function _renderFactItems(items, ctx) {
+        ctx = ctx || 'fact';
+        var cfg = _ITEMS_CTX[ctx];
+        var cont = cfg && document.getElementById(cfg.lista);
         if (!cont) return;
-        cont.innerHTML = (items && items.length) ? items.map(_factItemHTML).join('') : '';
-        factRecalcItems();
+        cont.innerHTML = (items && items.length) ? items.map(function(it){ return _factItemHTML(it, ctx); }).join('') : '';
+        factRecalcItems(ctx);
+    }
+    // Los ítems que devuelve la IA vienen con nombres variables y a veces sin precio unitario.
+    // Se normalizan al formato de la app; un importe negativo es un ítem que RESTA.
+    function _normItemsIA(arr) {
+        if (!Array.isArray(arr)) return [];
+        return arr.map(function(r) {
+            if (!r || typeof r !== 'object') return null;
+            var det = String(r.detalle || r.descripcion || r.concepto || '').trim();
+            var cant = Number(r.cantidad != null ? r.cantidad : r.cant) || 0;
+            var pu   = Number(r.precioUnitario != null ? r.precioUnitario : (r.precioUnit != null ? r.precioUnit : r.precio)) || 0;
+            var imp  = Number(r.importe != null ? r.importe : r.subtotal) || 0;
+            if (!pu && imp) { if (cant > 0) pu = imp / cant; else { cant = 1; pu = imp; } }
+            if (!cant && pu) cant = 1;
+            if (!det && !pu) return null;
+            var signo = (imp < 0 || pu < 0) ? -1 : 1;
+            return { detalle: det || '(sin detalle)', cantidad: Math.abs(cant),
+                     precioUnit: Math.round(Math.abs(pu) * 100) / 100, signo: signo };
+        }).filter(Boolean);
     }
 
     function _leerPresupItems() {
@@ -15027,7 +15067,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v474';
+    var APP_VER = 'v475';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18018,13 +18058,15 @@
                 '  "importeIVA": importe del IVA numérico, o null si no figura,\n' +
                 '  "importe": importe total numérico sin símbolo de moneda (ej: 15000.50),\n' +
                 '  "moneda": "ARS o USD",\n' +
-                '  "descripcion": "descripción breve del concepto o servicio facturado"\n' +
+                '  "descripcion": "descripción breve del concepto o servicio facturado",\n' +
+                '  "items": [ { "detalle": "descripción de la línea", "cantidad": número, "precioUnitario": número, "importe": número } ]\n' +
                 '}\n' +
                 'Si el documento es un VEP (Volante Electrónico de Pago) de ARCA/AFIP para pagar impuestos, ' +
                 'tratalo igual como una factura pero completá así: "proveedor":"ARCA", "numero": el número de VEP con el prefijo "VEP " (ej: "VEP 1654174369"), ' +
                 '"fecha": la fecha de generación del VEP, "vencimiento": el día de expiración del VEP, "tipoComprobante":"X", ' +
                 '"cuit", "condicionIva" y "direccion": null, "importe": el importe total a pagar, "moneda":"ARS", ' +
                 '"descripcion": el tipo de pago + concepto/subconcepto + período (ej: "SICORE - Retenciones Ganancias - Pago a cuenta - Período 2026-07").\n' +
+                'El campo "items" es el detalle línea por línea del comprobante: una entrada por renglón facturado. Los descuentos, bonificaciones y anticipos que se descuentan van con "importe" NEGATIVO. Si el comprobante no tiene un detalle discriminado, devolvé "items": []. ' +
                 'Si algún campo no está disponible usá null. Respondé SOLO el JSON, sin texto adicional.';
 
             var body = {
@@ -18034,7 +18076,7 @@
                         { text: prompt }
                     ]
                 }],
-                generationConfig: { temperature: 0, maxOutputTokens: 2048 }
+                generationConfig: { temperature: 0, maxOutputTokens: 8192 }
             };
 
             var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
@@ -18046,7 +18088,7 @@
                 }
                 // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
                 // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
+                body.generationConfig = { temperature: 0, maxOutputTokens: 8192 };
                 if (MODELOS_PDF[_mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
                 resp = await _geminiProxy(MODELOS_PDF[_mi], body);
                 if (resp.ok) { lastErrMsg = null; break; }
@@ -18093,6 +18135,8 @@
 
 
     function _mostrarPreviewFactura(datos) {
+        // Detalle línea por línea que leyó la IA (queda editable antes de guardar).
+        _renderFactItems(_normItemsIA(datos.items), 'lf');
         // Poblar datalist de proveedores (input libre + sugerencias)
         var inp  = document.getElementById('leerFactProv');
         var dl   = document.getElementById('leerFactProvList');
@@ -18318,6 +18362,7 @@
             vencimiento:      venc || '',
             descripcion:      desc,
             importe:          importe,
+            items:            _leerFactItems('lf'),   // detalle del comprobante: cada ítem suma o resta
             moneda:           moneda,
             pagado:           0,
             estado:           'pendiente',
@@ -20101,7 +20146,8 @@
             '  "vencimientoCae": "fecha de vencimiento del CAE en formato YYYY-MM-DD, o null",\n' +
             '  "importe": importe total numérico sin símbolo (ej: 15000.50),\n' +
             '  "moneda": "ARS o USD",\n' +
-            '  "descripcion": "descripción breve del concepto facturado"\n' +
+            '  "descripcion": "descripción breve del concepto facturado",\n' +
+            '  "items": [ { "detalle": "descripción de la línea", "cantidad": número, "precioUnitario": número, "importe": número } ]\n' +
             '}\n' +
             'Si el documento es un VEP (Volante Electrónico de Pago) de ARCA/AFIP para pagar impuestos, ' +
             'tratalo igual como una factura pero completá así: "proveedor":"ARCA", "numero": el número de VEP con el prefijo "VEP " (ej: "VEP 1654174369"), ' +
@@ -20115,7 +20161,7 @@
                     { inline_data: { mime_type: mime, data: b64 } },
                     { text: prompt }
                 ]}],
-                generationConfig: { temperature: 0, maxOutputTokens: 2048 }
+                generationConfig: { temperature: 0, maxOutputTokens: 8192 }
             };
             var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, errData, lastErr;
@@ -20126,7 +20172,7 @@
                 }
                 // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
                 // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
+                body.generationConfig = { temperature: 0, maxOutputTokens: 8192 };
                 if (MODELOS[mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
                 resp = await _geminiProxy(MODELOS[mi], body);
                 if (resp.ok) { lastErr = null; break; }
@@ -22759,6 +22805,7 @@
                 '  "moneda": "ARS o USD",\n' +
                 '  "descripcion": "descripción breve del servicio facturado (ej: Factura de electricidad, período tal)"\n' +
                 '}\n' +
+                'El campo "items" es el detalle línea por línea del comprobante: una entrada por renglón facturado. Los descuentos, bonificaciones y anticipos que se descuentan van con "importe" NEGATIVO. Si el comprobante no tiene un detalle discriminado, devolvé "items": []. ' +
                 'Si algún campo no está disponible usá null. Respondé SOLO el JSON, sin texto adicional.';
 
             var body = {
@@ -40689,6 +40736,20 @@
           <div class="form-group" style="grid-column:1/-1;">
             <label>Descripción / Concepto</label>
             <input type="text" id="leerFactDesc" placeholder="Ej: Materiales de obra">
+          </div>
+
+          <div class="form-group" style="grid-column:1/-1;">
+            <label>Detalle del comprobante</label>
+            <div class="form-hint" style="margin-bottom:6px;">Los ítems que leyó la IA. Corregilos o agregá los que falten; con ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong>. El total completa el importe.</div>
+            <div id="lfItemsCabecera" style="display:none; grid-template-columns:minmax(110px,1fr) 60px 100px 110px 38px 30px; gap:6px; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
+              <span>Detalle</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Suma o resta">±</span><span></span>
+            </div>
+            <div id="lfItemsLista" data-items-ctx="lf"></div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-outline btn-sm" onclick="factAgregarItem(null,'lf')">➕ Agregar ítem</button>
+              <div style="font-size:13px;">Total del detalle: <strong id="lfItemsTotal">$0,00</strong></div>
+            </div>
+            <div class="form-hint" id="lfItemsAviso" style="display:none;color:var(--warn);margin-top:6px;"></div>
           </div>
         </div>
         <div id="leerFactAlerta" style="display:none;margin-top:8px;padding:10px 12px;background:var(--warn-bg);border-left:3px solid var(--warn);font-size:12px;color:var(--warn);"></div>
