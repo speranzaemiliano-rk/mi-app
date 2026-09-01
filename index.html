@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v468</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v469</div>
         </div>
     </nav>
 
@@ -14625,7 +14625,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v468';
+    var APP_VER = 'v469';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -32726,6 +32726,42 @@
     // Editar un comprobante DESDE la ficha, sin salir de ella: el modal de edición se abre ENCIMA
     // de la ficha (que queda abierta debajo) y al cerrarlo la ficha se refresca en el mismo lugar,
     // sin cambiar de pestaña. ref = índice (factura/presupuesto) o id (documento).
+    // ── Ver un comprobante (NO editarlo) ──
+    // Tocar la fila de una cuenta corriente abre el comprobante para mirarlo: si tiene el
+    // PDF que se cargó (docId → REF_DOCS), lo abre en una pestaña nueva; si no, imprime el
+    // comprobante que arma el sistema. Para editar está el botón ✏.
+    window.verComprobante = function(tipo, ref) {
+        if (tipo === 'factura') {
+            var f = (facturas || [])[ref];
+            if (!f) { alert('No se encontró la factura.'); return; }
+            if (f.docId) { descargarDoc(f.docId, f.docNombre || 'factura'); return; }
+            imprimirComprobanteFacturaItem(ref);
+            return;
+        }
+        if (tipo === 'documento') {
+            var d = (documentos || []).find(function(x){ return x.id === ref; });
+            // El propio documento es el archivo (REF_DOCS guarda el base64 en 'contenido').
+            if (!d) { descargarDoc(ref, 'comprobante'); return; }
+            if (d.docId)     { descargarDoc(d.docId, d.docNombre || 'comprobante'); return; }
+            if (d.contenido) { descargarDoc(d.id, d.nombre || 'comprobante'); return; }
+            imprimirDocumento(ref);
+            return;
+        }
+        if (tipo === 'presupuesto') {
+            var p = (datos || [])[ref];
+            if (p && p.docId) { descargarDoc(p.docId, p.docNombre || 'presupuesto'); return; }
+            // Un presupuesto sin archivo no tiene comprobante que mostrar: se abre la fila.
+            editarFila(ref);
+        }
+    };
+    // Las notas de crédito viven en 'facturas' pero las filas las referencian por id.
+    window.verNotaCredito = function(ncId) {
+        var i = -1;
+        (facturas || []).forEach(function(x, k){ if (i < 0 && x.id === ncId) i = k; });
+        if (i < 0) { alert('No se encontró la nota de crédito.'); return; }
+        window.verComprobante('factura', i);
+    };
+
     window._fichaEditarComprob = function(tipo, ref) {
         window._compEditDesdeFicha = true;
         if (tipo === 'factura')          { editarFactura(ref); _fichaSubirModal('modalFact'); }
@@ -32818,7 +32854,7 @@
         // Comprobantes (facturas / comprobantes X)
         h += '<div class="table-card" style="margin-bottom:14px;"><div class="table-card-head"><h3>Facturas y comprobantes X'
             + (filtro === 'pend' ? ' — a pagar' : filtro === 'pag' ? ' — pagados' : '') + '</h3>'
-            + (puedeEd ? '<span style="font-size:12px;color:var(--blue);font-weight:600;">👆 Tocá una fila para abrir el comprobante</span>' : '')
+            + '<span style="font-size:12px;color:var(--blue);font-weight:600;">👆 Tocá una fila para ver el comprobante' + (puedeEd ? ' · ✏ para editarlo' : '') + '</span>'
             + '<span style="font-size:12px;color:var(--text-3);">' + compsF.length + ' de ' + comps.length + '</span></div>';
         if (!compsF.length) {
             h += '<div style="padding:22px;text-align:center;color:var(--text-3);">No hay comprobantes' + (filtro ? ' con ese filtro' : '') + '.</div>';
@@ -32833,7 +32869,7 @@
                     var _ncId = String(c.id).replace(/'/g,"\\'");
                     var abrirNCx = puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNotaCredito(\'' + _ncId + '\')" title="Editar nota de crédito">✏</button>' : '';
                     var borrarNCx = puedeEd ? '<button class="btn btn-danger-sm" onclick="eliminarNotaCredito(\'' + _ncId + '\')" title="Eliminar nota de crédito">✕</button>' : '';
-                    var _trNC = puedeEd ? (' class="fila-abrible" onclick="' + _ccGuard + 'editarNotaCredito(\'' + _ncId + '\')" title="Abrir la nota de crédito"') : '';
+                    var _trNC = ' class="fila-abrible" onclick="' + _ccGuard + 'verNotaCredito(\'' + _ncId + '\')" title="Ver la nota de crédito"';
                     h += '<tr style="background:rgba(30,142,62,.05);"' + _trNC + '>'
                         + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                         + '<td><span style="color:#1e8e3e;font-weight:600;">🧾 ' + escHtml(c.tipo) + '</span></td>'
@@ -32853,7 +32889,9 @@
                 var op = (c.pag > 0) ? '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('abrirHistorialPagosFactura(' + c.ref + ')') : ('abrirHistorialPagosDoc(' + refA + ')')) + '" title="Reimprimir Orden de Pago / retenciones">🧾</button>' : '';
                 var desap = (c.pag > 0 && puedeEd) ? '<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="' + (c.o==='fact' ? ('desaplicarPagoFactura(' + c.ref + ')') : ('desaplicarPagoDoc(' + refA + ')')) + '" title="Desaplicar el último pago (vuelve a Pendiente/Parcial y saca el movimiento)">↩️</button>' : '';
                 var borrar = puedeEd ? '<button class="btn btn-danger-sm" onclick="' + (c.o==='fact' ? ('eliminarFactura(' + c.ref + ')') : ('eliminarDoc(' + refA + ')')) + '" title="Eliminar">✕</button>' : '';
-                var _trComp = puedeEd ? (' class="fila-abrible" title="Abrir el comprobante" onclick="' + _ccGuard + abrir + '"') : '';
+                // La fila MUESTRA el comprobante; para editarlo esta el boton ✏.
+                var _verComp = (c.o === 'fact') ? ('verComprobante(\'factura\',' + c.ref + ')') : ('verComprobante(\'documento\',' + refA + ')');
+                var _trComp = ' class="fila-abrible" title="Ver el comprobante" onclick="' + _ccGuard + _verComp + '"';
                 h += '<tr' + _trComp + '>'
                     + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                     + '<td>' + escHtml(c.tipo) + '</td>'
@@ -32906,10 +32944,7 @@
                 var _trMov = '';
                 if (puedeEd && m.ref) {
                     var _rId = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
-                    var _abrirMov = (m.ref.t === 'factura') ? ('editarFactura(' + _rId + ')')
-                                  : (m.ref.t === 'documento') ? ('abrirModalDoc(' + _rId + ')')
-                                  : (m.ref.t === 'presupuesto') ? ('editarFila(' + _rId + ')') : '';
-                    if (_abrirMov) _trMov = ' class="fila-abrible" title="Abrir el comprobante" onclick="' + _ccGuard + _abrirMov + '"';
+                    _trMov = ' class="fila-abrible" title="Ver el comprobante" onclick="' + _ccGuard + 'verComprobante(\'' + m.ref.t + '\',' + _rId + ')"';
                 }
                 return '<tr' + _trMov + '>'
                     + '<td style="white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
@@ -33098,12 +33133,14 @@
                 saldo += (m.debe || 0) - (m.haber || 0);
                 var tipoColor = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
                 var acc = '', _trAbrir = '';
-                if (puedeEd && m.ref) {
+                if (m.ref) {
                     var r = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
-                    var _abrirM = '_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')';
-                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _abrirM + '" title="Abrir y editar">✏</button>';
-                    // Toda la fila abre el comprobante; el clic sobre un boton hace solo lo suyo.
-                    _trAbrir = ' class="fila-abrible" title="Abrir el comprobante" onclick="if(event.target.closest(\'button,a,input,select,textarea\'))return; ' + _abrirM + '"';
+                    // Toda la fila MUESTRA el comprobante (el PDF adjunto si lo tiene). Mirar no es
+                    // editar, asi que tambien lo puede hacer un lector; el ✏ sigue pidiendo permiso.
+                    _trAbrir = ' class="fila-abrible" title="Ver el comprobante" onclick="if(event.target.closest(\'button,a,input,select,textarea\'))return; verComprobante(\'' + m.ref.t + '\',' + r + ')"';
+                    if (puedeEd) {
+                        acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>';
+                    }
                 }
                 return '<tr style="border-bottom:1px solid var(--border);"' + _trAbrir + '>'
                     + '<td style="padding:7px 10px;white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
@@ -33113,7 +33150,7 @@
                     + '<td style="padding:7px 10px;text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(saldo) + '</td>'
                     + '<td style="padding:7px 10px;text-align:center;">' + acc + '</td></tr>';
             }).join('');
-            h += (puedeEd ? '<div style="font-size:12px;color:var(--blue);font-weight:600;margin-bottom:8px;">👆 Tocá una fila para abrir el comprobante</div>' : '');
+            h += '<div style="font-size:12px;color:var(--blue);font-weight:600;margin-bottom:8px;">👆 Tocá una fila para ver el comprobante' + (puedeEd ? ' · ✏ para editarlo' : '') + '</div>';
             h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
                 + '<thead><tr style="background:var(--surface-2);">'
                 + '<th style="padding:8px 10px;text-align:left;">Fecha</th><th style="padding:8px 10px;text-align:left;">Comprobante / Movimiento</th>'
