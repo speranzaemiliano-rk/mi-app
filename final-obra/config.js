@@ -64,15 +64,19 @@
 // ════════════════════════════════════════════════════════════════════════
 window.FINAL_OBRA_CONFIG = {
   firebase: {
-    // ⬇️ Los cuatro valores del proyecto PROPIO del tablero.
-    //    Salen de Firebase Console → ⚙️ Configuración del proyecto →
-    //    "Tus apps" → app web → SDK de Firebase → "Configuración".
-    //    Mientras estén vacíos, el tablero guarda sólo en cada equipo y el
-    //    botón ☁ lo dice; no se rompe nada.
+    // Proyecto "Final de Obra" (el id quedó como dash-rk de un nombre
+    // anterior: Firebase no deja cambiarlo, es sólo cosmético).
+    //
+    // ⬇️ FALTA la apiKey. Sale de Firebase Console → ⚙️ Configuración del
+    //    proyecto → "Tus apps" → agregar app **Web** (</>) → SDK de
+    //    Firebase → "Configuración". Mientras esté vacía el tablero guarda
+    //    sólo en cada equipo y el botón ☁ lo dice; no se rompe nada.
     apiKey:      "",
-    databaseURL: "",
-    projectId:   "",
-    authDomain:  ""
+    // Verificado contra el servidor: la base existe y está en la región de
+    // EE.UU. (por eso firebaseio.com y no firebasedatabase.app).
+    databaseURL: "https://dash-rk-default-rtdb.firebaseio.com",
+    projectId:   "dash-rk",
+    authDomain:  "dash-rk.firebaseapp.com"
   },
 
   // El proyecto de arriba es sólo de este tablero (no lo comparte con la
