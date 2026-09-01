@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v469</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v470</div>
         </div>
     </nav>
 
@@ -14625,7 +14625,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v469';
+    var APP_VER = 'v470';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -32754,6 +32754,41 @@
             editarFila(ref);
         }
     };
+    // Qué muestra una fila del extracto al tocarla: el comprobante, la Orden de Pago o el
+    // certificado de retención, según lo que tenga detrás. Devuelve la llamada JS y el título
+    // para el tooltip; { fn:'' } si esa fila no tiene nada que abrir.
+    // Las OP y retenciones se imprimen DIRECTO (imprimirPagoFact/Doc), no abriendo el historial:
+    // el caso de uso es "me piden una copia".
+    function _ccVerDeMov(m) {
+        var esc = function(v){ return "'" + String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + "'"; };
+        if (!m) return { fn: '', titulo: '' };
+        if (m.ref) {
+            var rId = (m.ref.t === 'documento') ? esc(m.ref.id) : m.ref.id;
+            return { fn: "verComprobante('" + m.ref.t + "'," + rId + ")", titulo: 'Ver el comprobante' };
+        }
+        if (m._op) {
+            var fnOp = m._op.grupo
+                ? ('imprimirPagoGrupoFact(' + esc(m._op.grupo) + ')')
+                : ((m._op.t === 'fact')
+                    ? ('imprimirPagoFact(' + m._op.ref + ',' + m._op.pi + ')')
+                    : ('imprimirPagoDoc(' + esc(m._op.ref) + ',' + m._op.pi + ')'));
+            return { fn: fnOp, titulo: 'Ver / imprimir la Orden de Pago' };
+        }
+        if (m._ret) {
+            var tipoArg = m._ret.tipo ? (',' + esc(m._ret.tipo)) : '';
+            var fnRet;
+            if (m._ret.grupo) {
+                fnRet = 'imprimirRetGrupoFact(' + esc(m._ret.grupo) + ',0' + tipoArg + ')';
+            } else {
+                var rf   = (m._ret.t === 'fact') ? 'imprimirRetFact' : 'imprimirRetDoc';
+                var rref = (m._ret.t === 'fact') ? m._ret.ref : esc(m._ret.ref);
+                fnRet = rf + '(' + rref + ',' + m._ret.pi + tipoArg + ')';
+            }
+            return { fn: fnRet, titulo: 'Ver / imprimir el certificado de retención' };
+        }
+        return { fn: '', titulo: '' };
+    }
+
     // Las notas de crédito viven en 'facturas' pero las filas las referencian por id.
     window.verNotaCredito = function(ncId) {
         var i = -1;
@@ -32915,37 +32950,21 @@
             var rows = cc.movs.map(function(m){
                 saldo += (m.debe || 0) - (m.haber || 0);
                 var col = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
-                // Acción: reimprimir la OP (fila de Pago) o el certificado de retención (fila de Retención).
+                // Toda la fila muestra lo que tenga detras: comprobante, Orden de Pago o retencion.
+                // El boton hace lo mismo que la fila; solo la nota de credito suma editar/eliminar.
+                var _vm = _ccVerDeMov(m);
                 var acc = '';
                 if (puedeEd && m._nc) {
                     var _ncIdE = String(m._nc).replace(/'/g,"\\'");
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="editarNotaCredito(\'' + _ncIdE + '\')" title="Editar nota de crédito">✏</button> '
                         + '<button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="eliminarNotaCredito(\'' + _ncIdE + '\')" title="Eliminar nota de crédito">✕</button>';
-                } else if (puedeEd && m._op) {
-                    // Si el pago fue de varias facturas (grupo), reimprime la ÚNICA OP combinada.
-                    var opFn = m._op.grupo
-                        ? ("imprimirPagoGrupoFact('" + String(m._op.grupo).replace(/'/g,"\\'") + "')")
-                        : ((m._op.t === 'fact') ? ('abrirHistorialPagosFactura(' + m._op.ref + ')') : ("abrirHistorialPagosDoc('" + String(m._op.ref).replace(/'/g,"\\'") + "')"));
-                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + opFn + '" title="Reimprimir Orden de Pago">🧾 OP</button>';
-                } else if (puedeEd && m._ret) {
-                    var tipoArg = m._ret.tipo ? (",'" + m._ret.tipo + "'") : '';
-                    var retFn;
-                    if (m._ret.grupo) {
-                        // Retención combinada del pago de varias facturas.
-                        retFn = "imprimirRetGrupoFact('" + String(m._ret.grupo).replace(/'/g,"\\'") + "',0" + tipoArg + ")";
-                    } else {
-                        var rf = (m._ret.t === 'fact') ? 'imprimirRetFact' : 'imprimirRetDoc';
-                        var rref = (m._ret.t === 'fact') ? m._ret.ref : ("'" + String(m._ret.ref).replace(/'/g,"\\'") + "'");
-                        retFn = rf + '(' + rref + ',' + m._ret.pi + tipoArg + ')';
-                    }
-                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + retFn + '" title="Imprimir comprobante de retención">🏛️ Ret.</button>';
+                } else if (m._op) {
+                    // Imprime la OP de ESTE pago (o la unica OP combinada, si el pago fue de varias facturas).
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
+                } else if (m._ret) {
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
                 }
-                // Toda la fila abre el comprobante de origen (factura / comprobante X / presupuesto).
-                var _trMov = '';
-                if (puedeEd && m.ref) {
-                    var _rId = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
-                    _trMov = ' class="fila-abrible" title="Ver el comprobante" onclick="' + _ccGuard + 'verComprobante(\'' + m.ref.t + '\',' + _rId + ')"';
-                }
+                var _trMov = _vm.fn ? (' class="fila-abrible" title="' + _vm.titulo + '" onclick="' + _ccGuard + _vm.fn + '"') : '';
                 return '<tr' + _trMov + '>'
                     + '<td style="white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
                     + '<td><span style="font-size:11px;font-weight:600;color:' + col + ';">' + m.tipo + '</span><br><span style="font-size:12px;">' + escHtml(m.detalle || '') + '</span></td>'
@@ -33132,15 +33151,23 @@
             var rows = cc.movs.map(function(m){
                 saldo += (m.debe || 0) - (m.haber || 0);
                 var tipoColor = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
+                // Toda la fila MUESTRA lo que tenga detras: el comprobante (con su PDF adjunto si lo
+                // tiene), la Orden de Pago o el certificado de retencion. Mirar o imprimir una copia
+                // no es editar, asi que tambien lo puede hacer un lector; el ✏ si pide permiso.
                 var acc = '', _trAbrir = '';
+                var _vm = _ccVerDeMov(m);
+                if (_vm.fn) {
+                    _trAbrir = ' class="fila-abrible" title="' + _vm.titulo + '" onclick="if(event.target.closest(\'button,a,input,select,textarea\'))return; ' + _vm.fn + '"';
+                }
                 if (m.ref) {
                     var r = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
-                    // Toda la fila MUESTRA el comprobante (el PDF adjunto si lo tiene). Mirar no es
-                    // editar, asi que tambien lo puede hacer un lector; el ✏ sigue pidiendo permiso.
-                    _trAbrir = ' class="fila-abrible" title="Ver el comprobante" onclick="if(event.target.closest(\'button,a,input,select,textarea\'))return; verComprobante(\'' + m.ref.t + '\',' + r + ')"';
                     if (puedeEd) {
                         acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>';
                     }
+                } else if (m._op) {
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
+                } else if (m._ret) {
+                    acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
                 }
                 return '<tr style="border-bottom:1px solid var(--border);"' + _trAbrir + '>'
                     + '<td style="padding:7px 10px;white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
@@ -33150,7 +33177,7 @@
                     + '<td style="padding:7px 10px;text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(saldo) + '</td>'
                     + '<td style="padding:7px 10px;text-align:center;">' + acc + '</td></tr>';
             }).join('');
-            h += '<div style="font-size:12px;color:var(--blue);font-weight:600;margin-bottom:8px;">👆 Tocá una fila para ver el comprobante' + (puedeEd ? ' · ✏ para editarlo' : '') + '</div>';
+            h += '<div style="font-size:12px;color:var(--blue);font-weight:600;margin-bottom:8px;">👆 Tocá una fila para ver el comprobante, la Orden de Pago o la retención' + (puedeEd ? ' · ✏ para editar' : '') + '</div>';
             h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
                 + '<thead><tr style="background:var(--surface-2);">'
                 + '<th style="padding:8px 10px;text-align:left;">Fecha</th><th style="padding:8px 10px;text-align:left;">Comprobante / Movimiento</th>'
