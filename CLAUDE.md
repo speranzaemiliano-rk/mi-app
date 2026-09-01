@@ -79,7 +79,7 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 ## PWA
 
-`manifest.json` (scope `/mi-app/`, instalable) + `sw.js` (constante `CACHE`, se bumpea en cada cambio — no asumir un valor fijo, revisar el archivo; network-first para `index.html`, no cachea Firebase/Railway/Google/EmailJS). Al deployar una versión nueva, `sw.js` NO llama `skipWaiting()` en el install: el SW nuevo queda en espera y la app muestra un banner "🔄 Hay una versión nueva — Actualizar" para no recargar en medio del uso.
+`manifest.json` (scope `/mi-app/`, instalable) + `sw.js` (constante `CACHE`, se bumpea en cada cambio; `obra/` y `final-obra/` tienen los suyos, con alcance sólo su carpeta — no asumir un valor fijo, revisar el archivo; network-first para `index.html`, no cachea Firebase/Railway/Google/EmailJS). Al deployar una versión nueva, `sw.js` NO llama `skipWaiting()` en el install: el SW nuevo queda en espera y la app muestra un banner "🔄 Hay una versión nueva — Actualizar" para no recargar en medio del uso.
 
 ## Parte de obra (`obra/`) — aparte de la app
 
@@ -88,6 +88,36 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 **Modelo de datos de la planilla.** `datos.gremios[]` y `datos.personal[]` son listas fijas que se usan todos los días; `datos.dias[fecha]` guarda lo de esa jornada. Cada persona lleva `gremioId`, `tarea`, `art` (bool) y `artDesde`. La asistencia **no** vive en la persona sino en `datos.dias[f].asistencia[personaId]`, y `vinoEn()` exige `=== true`: alguien dado de alta hoy no aparece retroactivamente en los partes de días anteriores. `asegurarDia()` inicializa la asistencia en `true` para toda la nómina **sólo cuando el día es nuevo**; las altas posteriores se suman al día abierto con `sumarAHoy()`. El conteo de un gremio = presentes de ese gremio + `totalBloque()` de las filas sin nombre (`bloques[].items`, el modo original, que se conserva para changas y subcontratos). ⚠️ **La nómina no se commitea**: son datos personales (nombre + CUIL) y `obra/` es público y sin login — se carga desde el teléfono con «Importar nómina de ART» (`parsearNomina()`) y queda sólo en `localStorage`.
 
 **Sincronización entre equipos (`obra/`).** Opcional y **con login**. Firebase Auth (mail + contraseña) sobre un **proyecto aparte del sistema** (`control-caja-965ad`), configurado en `obra/config.js` (`window.OBRA_CONFIG.firebase` + `obraId`); sin `apiKey` y `databaseURL` no hay sincronización y el botón ☁ lo dice. La separación es deliberada: en el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que una cuenta de capataz ahí abriría toda la contabilidad. Los datos espejan a `parteObra/<obraId>`; las reglas exigen `auth != null` **y** que `auth.token.email` esté en la lista de habilitados, que vive **dentro de las propias reglas** — tener cuenta no alcanza. (Al principio la lista era un nodo `permitidos/<uid>`; se movió a las reglas porque crear ese nodo anidado a mano en la consola resultó fácil de equivocar.) ⚠️ **Firebase no conserva los arreglos**: los devuelve como objeto con claves numéricas si tienen huecos, y borra la clave si quedan vacíos. Todo lo que entra y sale de la nube pasa por `normalizar()`/`aArray()`; los dos lados de la comparación del eco usan la misma normalización, si no la planilla se repinta en ciclo. Esas reglas **hay que publicarlas a mano** en el proyecto de la obra; su texto está comentado en `obra/config.js` junto con los pasos de Authentication. `mensajeError()` traduce los códigos de Firebase (`PERMISSION_DENIED` → "falta agregarte a permitidos", `auth/operation-not-allowed` → "falta habilitar mail y contraseña"), así que una configuración incompleta se ve en pantalla en vez de fallar en silencio. El `localStorage` sigue siendo la fuente local (funciona sin señal); `guardar()` sube con `set()` debounced y `on('value')` baja, con el eco filtrado comparando el JSON (`nube.ultimo`) y sin repintar si el usuario tiene el foco en un campo (`escribiendo()`). El SDK se carga por CDN sólo si hay configuración: sin ella, la página no hace ningún pedido a la red.
+
+## Tablero de final de obra (`final-obra/`) — aparte de la app
+
+`final-obra/index.html` es un **tablero independiente** para controlar qué falta en cada departamento antes de entregar: pendientes por unidad, por espacio común y por rubro, para tildarlos desde el celular recorriendo la obra. Nació de una planilla estática donde los datos vivían en el propio HTML y los tildes en `localStorage` con una clave por ítem (`item_<id>`); acá los datos son editables y sincronizables.
+
+**No comparte código con `index.html` ni con `obra/`**: `_colPersist` y demás convenciones de la app grande no aplican. Sigue el estilo de `obra/` (comillas dobles, `var`/`function`, todo dentro de un IIFE, helpers `leer`/`escribir` que prueban `window.storage` antes de `localStorage`) y su misma paleta.
+
+**Modelo de datos — tres colecciones planas indexadas por id**, no árboles anidados:
+
+```
+rubros[rid]    = { nombre, color, orden, m }
+entidades[eid] = { tipo:'unidad'|'comun', nombre, piso, icono, orden, del, m }
+items[iid]     = { ent, rubro, texto, ok, orden, del, m }
+```
+
+Que sean planas **no es cosmético**. En `obra/` la sincronización sube el documento entero con `set()` porque lo carga una sola persona; acá pueden estar dos o tres recorriendo unidades distintas a la vez, y subir todo junto haría que el último en guardar pise lo que el otro acaba de tildar. Cada cambio escribe **sólo su ruta** (`finalObra/<obraId>/items/<iid>`), y la bajada usa `child_added`/`child_changed`/`child_removed` sobre cada colección en vez de un `on('value')` de la raíz. `subirTodo()` (un `set()` de todo) queda sólo para dos casos: nube vacía y «volver a la carga inicial».
+
+⚠️ **Borrar marca `del`, no borra.** Un borrado real haría que un equipo que estuvo sin señal vuelva a subir lo que ya se había sacado en otro (`fusionar()` sube lo que sólo está en el equipo). Además deja «Deshacer» y la papelera de Ajustes. El borrado de verdad existe sólo al vaciar la papelera.
+
+⚠️ **`m` es la marca de modificación**, y la pone `subir()`, no quien llama. Es lo que resuelve la reconexión: en `fusionar()` gana el registro con `m` más alto, no el que llegó último. Si se agrega un campo nuevo, tiene que sobrevivir a `normRubro`/`normEnt`/`normItem` — lo que esas funciones no copian, se pierde al releer del equipo o de la nube.
+
+**Eco de la nube.** `firma()` compara los registros con las claves ordenadas; sin eso, el mismo dato con las claves en otro orden parece un cambio y el tablero se repinta en ciclo. `pedirRender()` agrupa los repintados y, si el usuario está tipeando (`escribiendo()`), **reintenta** en vez de saltear: saltear perdía el cambio hasta el siguiente repintado.
+
+**Configuración.** `final-obra/config.js` apunta al **mismo proyecto** que `obra/` (`control-caja-965ad`, separado del sistema de gestión por la misma razón: allá `empresas` se lee con rol `lector`) pero a otro nodo, `finalObra/<obraId>`. Las reglas de ese nodo **hay que publicarlas a mano** y **sumarlas** a las de `parteObra` sin reemplazarlas; el texto está en los comentarios de `config.js`. El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`, así que `config.js` sólo aporta el valor inicial.
+
+**Carga inicial.** `final-obra/datos-iniciales.js` (`window.FINAL_OBRA_SEED`) tiene las 39 unidades, los 13 espacios comunes y los 820 pendientes del relevamiento. Es la carga de arranque, **no la base**: se usa la primera vez en un equipo o con la nube vacía. Editarlo no cambia una obra en uso.
+
+**Semáforo**: por cantidad de pendientes — 0 terminada, 1-4 menores, 5-10 medios, 11+ críticos. Son los cortes del tablero original; si se tocan, hay que tocar `sevDe()` y los textos de `SEV`.
+
+**Informe**: `@media print` con `body.imprimiendo > *{display:none}` salvo `#reporte`. Se enumeraba qué esconder y cualquier bloque nuevo se colaba en la hoja.
 
 ## Despliegue
 

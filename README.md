@@ -21,10 +21,11 @@ PWA (Progressive Web App) de gestión administrativa y contable para **múltiple
 9. [Integraciones externas](#-integraciones-externas)
 10. [PWA y modo offline](#-pwa-y-modo-offline)
 11. [Parte de obra (`obra/`)](#-parte-de-obra-obra)
-12. [Despliegue (deploy)](#-despliegue-deploy)
-13. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
-14. [Guía rápida de uso](#-guía-rápida-de-uso)
-15. [Trabajo pendiente](#-trabajo-pendiente)
+12. [Final de obra (`final-obra/`)](#-final-de-obra-final-obra)
+13. [Despliegue (deploy)](#-despliegue-deploy)
+14. [Variables de entorno y configuración](#-variables-de-entorno-y-configuración)
+15. [Guía rápida de uso](#-guía-rápida-de-uso)
+16. [Trabajo pendiente](#-trabajo-pendiente)
 
 ---
 
@@ -67,8 +68,15 @@ mi-app/
 ├── logo png_*.png      # Logo de la marca.
 ├── obra/               # Planilla de parte diario de obra (independiente de la app).
 │   ├── index.html      # Toda la planilla (HTML+CSS+JS, sin Firebase ni login).
+│   ├── config.js       # Proyecto de Firebase de la obra (aparte del sistema).
 │   ├── manifest.json   # Manifiesto PWA propio (instalable en el celular).
 │   └── sw.js           # Service Worker propio, alcance sólo /obra/.
+├── final-obra/         # Tablero de pendientes de final de obra (independiente).
+│   ├── index.html      # Todo el tablero (HTML+CSS+JS).
+│   ├── datos-iniciales.js # Carga de arranque: unidades, espacios y pendientes.
+│   ├── config.js       # Mismo proyecto de Firebase que obra/, nodo aparte.
+│   ├── manifest.json   # Manifiesto PWA propio.
+│   └── sw.js           # Service Worker propio, alcance sólo /final-obra/.
 └── functions/          # Backend.
     ├── server.js       # ★ Servidor Express activo (Railway): ARCA + Belvo + Prometeo.
     ├── index.js        # Variante para Firebase Cloud Functions (solo ARCA).
@@ -310,6 +318,32 @@ Planilla para que **el capataz cargue en el celular, desde la obra, cuánta gent
 - **Importar nómina de ART**: dentro de «Personal». Se pega el listado tal como llega de la ART (`APELLIDO NOMBRE•CUIL: 20-…•Inicio de cobertura: dd/mm/aaaa•…`) y `parsearNomina()` saca nombre, CUIL y fecha de alta. Si alguien ya está cargado lo actualiza en vez de duplicarlo (empareja por CUIL; si no hay, por nombre). **La nómina NO está escrita en el repo**: se carga una vez desde el teléfono y queda sólo en su `localStorage` — son datos personales y esta página es pública y sin login.
 - **Quién no tiene ART** se ve en tres lugares: chip rojo "SIN ART" al lado del nombre, chapa roja en el tablero de arriba, y un bloque `*** EN OBRA SIN ART ***` al final del parte que se manda por WhatsApp.
 - El conteo por gremio sale de la gente presente. Se mantienen las **filas sin nombre** (una cantidad y una tarea, el modo original) para changas o subcontratos que no están en la nómina; al importar, la planilla avisa si quedaron cargadas para no contar dos veces.
+
+---
+
+## 🧱 Final de obra (`final-obra/`)
+
+Tablero para **controlar qué falta en cada departamento antes de entregar**: los pendientes de cada unidad y de cada espacio común, agrupados por rubro (albañilería, pintura, durlock, sanitarios…), para ir tildándolos desde el celular mientras se recorre la obra.
+
+Nació de una planilla estática (39 unidades, 13 espacios comunes, 820 pendientes del relevamiento de julio de 2026) que guardaba los tildes en el `localStorage` del teléfono donde se cargaba. Acá pasa a ser una app de verdad: los datos son editables, se sincronizan entre equipos y salen en un informe.
+
+- **Cómo se entra**: desde el **selector de módulos** del sistema (Sistema · Caja · Parte de personal · Final de obra), desde el encabezado del parte de personal, o directo por su URL.
+- **URL directa**: `https://speranzaemiliano-rk.github.io/mi-app/final-obra/` — se comparte tal cual; conviene agregarla a la pantalla de inicio del celular.
+- **Tres vistas**, en pestañas:
+  - **Departamentos** — una tarjeta por unidad, agrupadas por piso, con lo que falta, la barra de avance y un chip por rubro. Semáforo por cantidad de pendientes: 0 terminada · 1-4 menores · 5-10 medios · 11 o más críticos.
+  - **Espacios comunes** — SUM, terraza, palieres, cocheras, salas de máquinas, fachada…
+  - **Por rubro** — al revés: **qué le falta a cada gremio en todo el edificio**. Es la vista para mandarle a un contratista su lista completa de una sola vez.
+- **Filtros**: por estado, por rubro (se combinan) y buscador por unidad, rubro o texto del pendiente (sin tildes, así «albanileria» encuentra «Albañilería»).
+- **Editar de verdad**: tildar con un toque, corregir el texto tocándolo, agregar pendientes y rubros, dar de alta unidades y espacios nuevos, renombrar y borrar. **Borrar no borra**: marca el registro y lo manda a la papelera (Ajustes), con un «Deshacer» en el aviso del momento. Es a propósito — un borrado de verdad, en un equipo que estuvo sin señal, reaparecería al reconectar.
+- **Compartir por WhatsApp**: desde una unidad o desde un rubro, arma el texto con lo que falta (lo tildado no sale) y lo manda o lo copia.
+- **Informe imprimible**: se elige alcance (unidades, comunes o todo), rubros, si entra sólo lo pendiente y si van líneas de firma. Sale por la impresión del navegador («Guardar como PDF»), sin librerías, con encabezado de marca, un **resumen de cuánto falta por rubro** y el detalle lugar por lugar.
+- **Sincronizar entre equipos, con login.** Botón ☁ del encabezado. Mismo proyecto de Firebase que el parte de personal (`control-caja-965ad`, configurado en `final-obra/config.js`) y **misma cuenta**, pero en otro nodo: `finalObra/<obraId>`. Igual que allá, tener cuenta no alcanza: el mail tiene que estar en la lista de las reglas.
+  - ⚠️ **Hay que publicar las reglas del nodo `finalObra` a mano**, sumándolas a las de `parteObra` sin reemplazarlas. El texto está listo para copiar en los comentarios de `final-obra/config.js`. Si falta algo, el botón ☁ lo dice en pantalla en vez de fallar en silencio.
+  - **Escribe de a un registro, no el tablero entero.** Es la diferencia importante con el parte de personal: ahí sube todo junto porque lo carga una sola persona. Acá pueden estar dos o tres recorriendo unidades distintas al mismo tiempo, y subir todo junto haría que el último en guardar borre lo que el otro acaba de tildar. Por eso los datos son tres colecciones planas indexadas por id (`rubros`, `entidades`, `items`) y cada cambio escribe sólo su ruta.
+  - **Volver de estar sin señal**: cada registro lleva `m` (cuándo se modificó). Al reconectar gana el más nuevo, no «el que llegó último»; lo que sólo está en el equipo se sube y lo que sólo está en la nube se baja. Nada se pierde por haber trabajado sin datos.
+- **Nombre de la obra**: se cambia desde Ajustes y viaja a la nube, así que no hace falta publicar el sitio para corregirlo. `final-obra/config.js` sólo aporta el valor inicial.
+- **Funciona sin señal** (service worker propio, alcance sólo `/final-obra/`) y es **instalable** en el celular.
+- **La carga inicial** (`final-obra/datos-iniciales.js`) es sólo el arranque: se usa la primera vez que se abre en un equipo, o cuando la nube está vacía. Editar ese archivo **no** cambia una obra que ya está en uso; para eso está «Volver a la carga inicial» en Ajustes.
 
 ---
 
