@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v472</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v473</div>
         </div>
     </nav>
 
@@ -7193,8 +7193,22 @@
                     <input type="text" id="factDescripcion" placeholder="Ej: Materiales de obra Mayo 2026">
                 </div>
                 <div class="form-group">
+                    <label>Detalle del comprobante (opcional)</label>
+                    <div class="form-hint" style="margin-bottom:6px;">Cargá los ítems del comprobante. Con el botón ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong> (descuentos, bonificaciones, anticipos ya entregados). El total completa el importe.</div>
+                    <div id="factItemsCabecera" style="display:none; grid-template-columns:minmax(110px,1fr) 60px 100px 110px 38px 30px; gap:6px; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
+                        <span>Detalle</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Suma o resta">±</span><span></span>
+                    </div>
+                    <div id="factItemsLista"></div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; gap:8px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-outline btn-sm" onclick="factAgregarItem()">➕ Agregar ítem</button>
+                        <div style="font-size:13px;">Total del detalle: <strong id="factItemsTotal">$0,00</strong></div>
+                    </div>
+                    <div class="form-hint" id="factItemsAviso" style="display:none;color:var(--warn);margin-top:6px;"></div>
+                </div>
+                <div class="form-group">
                     <label>Importe total *</label>
                     <input type="number" id="factImporte" step="0.01" min="0" required oninput="onFactImporteChange()">
+                    <div class="form-hint">Si cargás ítems arriba, este monto se completa solo con el total neto. Si no, ingresalo a mano.</div>
                 </div>
                 <div class="form-group">
                     <label>Moneda</label>
@@ -8879,6 +8893,96 @@
     window.abrirPresupExcel = abrirPresupExcel;
     window._pxArchivoElegido = _pxArchivoElegido;
     window.cerrarPresupExcel = cerrarPresupExcel;
+
+    // ══════════ Detalle del comprobante: ítems que suman y que restan ══════════
+    // Una factura de proveedor no siempre es un solo importe: trae trabajos, materiales,
+    // y también descuentos, bonificaciones o anticipos ya entregados que RESTAN. Cada fila
+    // lleva su signo y el total neto completa el "Importe total".
+    function _factItemHTML(it) {
+        it = it || {};
+        var neg = (Number(it.signo) === -1);
+        return '<div class="fact-item-fila" style="display:grid; grid-template-columns:minmax(110px,1fr) 60px 100px 110px 38px 30px; gap:6px; margin-bottom:6px; align-items:center;">' +
+            '<input type="text" class="fi-detalle" placeholder="Detalle" value="' + escHtml(it.detalle || '') + '">' +
+            '<input type="number" class="fi-cant" min="0" step="0.01" placeholder="Cant." value="' + (it.cantidad != null ? it.cantidad : '') + '" oninput="factRecalcItems()">' +
+            '<input type="number" class="fi-precio" min="0" step="0.01" placeholder="P. unit." value="' + (it.precioUnit != null ? it.precioUnit : '') + '" oninput="factRecalcItems()">' +
+            '<input type="text" class="fi-subtotal" readonly tabindex="-1" style="background:var(--surface-2); text-align:right;" value="">' +
+            '<button type="button" class="fi-signo btn btn-outline btn-sm" data-signo="' + (neg ? '-1' : '1') + '" onclick="factToggleSigno(this)" title="Tocá para que este ítem sume o reste al total" style="padding:4px 0;">' + (neg ? '➖' : '➕') + '</button>' +
+            '<button type="button" class="btn btn-danger-sm" onclick="factQuitarItem(this)" title="Quitar ítem">✕</button>' +
+            '</div>';
+    }
+    window.factAgregarItem = function(item) {
+        var cont = document.getElementById('factItemsLista');
+        if (!cont) return;
+        cont.insertAdjacentHTML('beforeend', _factItemHTML(item || {}));
+        factRecalcItems();
+    };
+    window.factQuitarItem = function(btn) {
+        var fila = btn.closest('.fact-item-fila');
+        if (fila) fila.remove();
+        factRecalcItems();
+    };
+    window.factToggleSigno = function(btn) {
+        var neg = btn.getAttribute('data-signo') === '-1';
+        btn.setAttribute('data-signo', neg ? '1' : '-1');
+        btn.textContent = neg ? '➕' : '➖';
+        factRecalcItems();
+    };
+    window.factRecalcItems = function() {
+        var total = 0, hayResta = false;
+        var filas = document.querySelectorAll('#factItemsLista .fact-item-fila');
+        filas.forEach(function(f) {
+            var c  = parseFloat(f.querySelector('.fi-cant').value) || 0;
+            var pu = parseFloat(f.querySelector('.fi-precio').value) || 0;
+            var sg = (f.querySelector('.fi-signo').getAttribute('data-signo') === '-1') ? -1 : 1;
+            if (sg === -1) hayResta = true;
+            var st = sg * c * pu;
+            var sub = f.querySelector('.fi-subtotal');
+            sub.value = st ? ((st < 0 ? '-$' : '$') + Math.abs(st).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})) : '';
+            sub.style.color = (st < 0) ? 'var(--danger)' : '';
+            total += st;
+        });
+        var totEl = document.getElementById('factItemsTotal');
+        if (totEl) {
+            totEl.textContent = (total < 0 ? '-$' : '$') + Math.abs(total).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+            totEl.style.color = (total < 0) ? 'var(--danger)' : '';
+        }
+        var cab = document.getElementById('factItemsCabecera');
+        if (cab) cab.style.display = filas.length ? 'grid' : 'none';
+        var aviso = document.getElementById('factItemsAviso');
+        if (aviso) {
+            aviso.textContent = (filas.length && total < 0)
+                ? 'El total quedó negativo. Si el comprobante devuelve plata, cargalo como Nota de Crédito en vez de una factura con ítems negativos.'
+                : '';
+            aviso.style.display = aviso.textContent ? '' : 'none';
+        }
+        // Sólo pisa el importe si realmente hay ítems: si no, manda lo que se tipeó a mano.
+        if (filas.length > 0) {
+            var imp = document.getElementById('factImporte');
+            if (imp) {
+                imp.value = Math.round(total * 100) / 100;
+                if (typeof onFactImporteChange === 'function') onFactImporteChange();
+            }
+        }
+    };
+    function _leerFactItems() {
+        var items = [];
+        document.querySelectorAll('#factItemsLista .fact-item-fila').forEach(function(f) {
+            var detalle = (f.querySelector('.fi-detalle').value || '').trim();
+            var cant    = parseFloat(f.querySelector('.fi-cant').value) || 0;
+            var precio  = parseFloat(f.querySelector('.fi-precio').value) || 0;
+            if (!detalle && !cant && !precio) return;
+            var signo = (f.querySelector('.fi-signo').getAttribute('data-signo') === '-1') ? -1 : 1;
+            items.push({ detalle: detalle, cantidad: cant, precioUnit: precio, signo: signo,
+                         subtotal: Math.round(signo * cant * precio * 100) / 100 });
+        });
+        return items;
+    }
+    function _renderFactItems(items) {
+        var cont = document.getElementById('factItemsLista');
+        if (!cont) return;
+        cont.innerHTML = (items && items.length) ? items.map(_factItemHTML).join('') : '';
+        factRecalcItems();
+    }
 
     function _leerPresupItems() {
         var items = [];
@@ -14923,7 +15027,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v472';
+    var APP_VER = 'v473';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18327,6 +18431,7 @@
             document.getElementById('factFecha').valueAsDate = new Date();
             document.getElementById('factFechaPago').valueAsDate = new Date();
             document.getElementById('factArchivoEstado').textContent = 'Subí el PDF o imagen de la factura. Si es pesado se comprime automáticamente.';
+            _renderFactItems([]);   // reset() no borra las filas de ítems, que son HTML generado
             poblarSelectProveedoresFact();
             selFactTipo('presup');
             selFactPagoInmediato(true);
@@ -18358,6 +18463,7 @@
         document.getElementById('factFecha').value        = f.fecha || '';
         document.getElementById('factVencimiento').value  = f.vencimiento || '';
         document.getElementById('factDescripcion').value  = f.descripcion || '';
+        _renderFactItems(f.items || []);
         document.getElementById('factImporte').value      = f.importe || 0;
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
@@ -19258,6 +19364,7 @@
             vencimiento: document.getElementById('factVencimiento').value,
             descripcion: document.getElementById('factDescripcion').value.trim(),
             importe:     parseFloat(document.getElementById('factImporte').value) || 0,
+            items:       _leerFactItems(),   // detalle del comprobante: cada ítem suma o resta
             moneda:      document.getElementById('factMoneda').value,
             pagado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].pagado || 0) : 0,
             estado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].estado || 'pendiente') : 'pendiente',
