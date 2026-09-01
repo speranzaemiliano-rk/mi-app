@@ -281,6 +281,14 @@
   .rejilla button{font-family:inherit;font-size:12.5px;padding:4px 10px;border-radius:var(--radius-pill);
                   border:1px solid var(--border);background:transparent;color:var(--text-2);cursor:pointer}
   .rejilla button.act{background:var(--ink);color:#fff;border-color:var(--ink)}
+  /* Bloque para copiar (las reglas de Firebase). user-select:all para que en
+     el celular alcance con tocarlo para seleccionar todo. */
+  .codigo{background:var(--ink);color:#EAE4FF;border-radius:var(--radius-sm);padding:11px 12px;
+          font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;
+          line-height:1.5;white-space:pre;overflow-x:auto;margin-bottom:9px;
+          -webkit-user-select:all;user-select:all}
+  .pasos{font-size:13.5px;color:var(--text-2);line-height:1.5;margin:0 0 11px 17px}
+  .pasos li{margin-bottom:5px}
 
   #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(70px);
          background:var(--ink);color:#fff;padding:10px 18px;border-radius:var(--radius-pill);
@@ -1729,6 +1737,38 @@
     });
   }
 
+  // El pedazo de reglas que hay que insertar, con el mail de quien está
+  // adentro ya puesto. A propósito NO es el archivo entero: si lo fuera y
+  // alguien lo pegara reemplazando todo, se llevaría puestas las reglas del
+  // parte de personal, que viven en el mismo proyecto.
+  function bloqueReglas(){
+    var mail = nube.usuario || "tu-mail@ejemplo.com";
+    var cond = "auth != null && auth.token.email === '" + mail + "'";
+    return '"finalObra": {\n' +
+           '  "$obra": {\n' +
+           '    ".read":  "' + cond + '",\n' +
+           '    ".write": "' + cond + '"\n' +
+           '  }\n' +
+           '},';
+  }
+
+  function copiarTexto(txt){
+    var ta = document.createElement("textarea");
+    ta.value = txt;
+    ta.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(ta);
+    ta.select(); ta.setSelectionRange(0, 99999);
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch(e){}
+    ta.remove();
+    if (!ok && navigator.clipboard) {
+      navigator.clipboard.writeText(txt).then(function(){ toast("Copiado"); })
+        .catch(function(){ toast("No pude copiar — tocá el bloque y copialo a mano"); });
+      return;
+    }
+    toast(ok ? "Copiado" : "No pude copiar — tocá el bloque y copialo a mano");
+  }
+
   function entrar(mail, clave, cuando){
     cargarFirebase(function(ok){
       if (!ok) return cuando("No se pudo cargar Firebase. ¿Hay señal?");
@@ -1765,6 +1805,40 @@
       $("nSalir").addEventListener("click", function(){ salir(); cerrarModal(); toast("Sesión cerrada"); });
       return;
     }
+    // Permiso denegado con la sesión abierta: ofrecerle entrar de nuevo no
+    // arregla nada —ya está adentro—, lo que falta son las reglas. Así que se
+    // le muestra el bloque exacto, con SU mail ya puesto, listo para copiar.
+    if (nube.estado === "mal" && nube.usuario) {
+      abrirModal('<h2>Falta habilitar tu cuenta</h2>' +
+        '<div class="aviso mal">' + esc(nube.error || "No se pudo sincronizar.") + '</div>' +
+        (nube.motivo === "permiso"
+          ? '<div class="ayuda">Entraste bien como <b>' + esc(nube.usuario) + '</b>. Lo que falta es ' +
+              'autorizar esa cuenta en las reglas de la base. Es una sola vez, y lo hace quien tenga ' +
+              'acceso a la consola de Firebase:</div>' +
+            '<ol class="pasos">' +
+              '<li>Firebase Console → proyecto <b>' + esc(FB.projectId || "de la obra") + '</b>.</li>' +
+              '<li>Realtime Database → pestaña <b>Reglas</b>.</li>' +
+              '<li>Pegar esto <b>justo después</b> de la línea <code>"rules": {</code>, sin borrar ' +
+                'nada de lo que ya está:</li>' +
+            '</ol>' +
+            '<div class="codigo" id="nReglas">' + esc(bloqueReglas()) + '</div>' +
+            '<button class="bfull sec" id="nCopiar">Copiar el texto</button>' +
+            '<div class="ayuda" style="margin-top:11px">Para sumar a otra persona después, se encadena ' +
+              'con <code>||</code>: <code>auth.token.email === \'uno@x.com\' || auth.token.email === \'otro@x.com\'</code>.</div>'
+          : '<div class="ayuda">Mientras tanto el tablero anda igual: todo lo que cargues queda guardado ' +
+              'en este equipo.</div>') +
+        '<button class="bfull" id="nReintentar" style="margin-top:6px">Ya está publicado — reintentar</button>' +
+        '<button class="bfull sec" id="nSalir2" style="margin-top:8px">Entrar con otra cuenta</button>');
+      if ($("nCopiar")) $("nCopiar").addEventListener("click", function(){ copiarTexto(bloqueReglas()); });
+      $("nReintentar").addEventListener("click", function(){
+        cerrarModal(); toast("Probando de nuevo…");
+        soltarDatos(); nube.estado = "yendo"; nube.error = ""; pintarNube();
+        conectarDatos();
+      });
+      $("nSalir2").addEventListener("click", function(){ salir(); cerrarModal(); });
+      return;
+    }
+
     abrirModal('<h2>Entrar</h2>' +
       '<div class="ayuda">Con tu cuenta de la obra. Es la misma que usás en el parte de personal.</div>' +
       (nube.estado === "mal" && nube.error ? '<div class="aviso mal">' + esc(nube.error) + '</div>' : "") +
