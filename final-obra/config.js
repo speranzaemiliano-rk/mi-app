@@ -4,11 +4,13 @@
 //  Es el ÚNICO archivo que hay que tocar para cambiar a qué proyecto de
 //  Firebase sincroniza el tablero. No hace falta abrir index.html.
 //
-//  ⚠️ Usa el MISMO proyecto que la planilla de obra (`control-caja`), que
-//  está a propósito separado del sistema de gestión: allá las reglas le
-//  dan lectura de `empresas` a cualquiera que tenga rol, aunque sea
-//  `lector`, así que darle cuenta a un capataz o a un contratista le
-//  abriría toda la contabilidad. Acá no: este proyecto sólo tiene la obra.
+//  ⚠️ Usa un proyecto de Firebase PROPIO, sólo para este tablero. Ni el
+//  del sistema de gestión ni el de la caja / parte de personal
+//  (`control-caja`, que es uno solo para los dos). El motivo es que acá
+//  entra otra gente: al final de obra lo recorren la dirección de obra y
+//  los contratistas, y no tienen por qué estar a un error de reglas de
+//  los sueldos, los CUIL de la nómina o la contabilidad. Con base propia,
+//  una regla mal escrita acá no puede tocar nada de lo otro.
 //
 //  Cómo conseguir estos valores:
 //    Firebase Console → el proyecto → ⚙️ Configuración del proyecto →
@@ -17,21 +19,23 @@
 //  Estos valores NO son secretos: viajan igual al navegador de cualquiera
 //  que abra la página. Lo que protege los datos son las reglas y el login.
 //
-//  ── Qué hay que hacer en ese proyecto ────────────────────────────────
+//  ── Qué hay que hacer en ese proyecto (una sola vez) ─────────────────
 //
-//  1) Authentication → Sign-in method → habilitar "Correo electrónico/
+//  1) Realtime Database → "Crear base de datos". Cualquier región sirve;
+//     empezá en modo bloqueado, las reglas se pegan en el paso 3.
+//
+//  2) Authentication → Sign-in method → habilitar "Correo electrónico/
 //     contraseña". Las cuentas se crean a mano desde Authentication →
 //     Users → "Agregar usuario". No hay alta pública en el tablero.
 //
-//  2) Realtime Database → Reglas → publicar esto, SUMÁNDOLO a lo que ya
-//     esté publicado para `parteObra` (no lo reemplaces, o se cae la
-//     planilla de personal):
+//  3) Realtime Database → Reglas → pegar esto, con los mails que tengan
+//     que entrar. Como el proyecto es sólo del tablero, va el archivo
+//     ENTERO: se reemplaza lo que haya.
 //
 //     {
 //       "rules": {
 //         ".read": false,
 //         ".write": false,
-//         "parteObra": { "...lo que ya tenías, tal cual..." },
 //         "finalObra": {
 //           "$obra": {
 //             ".read":  "auth != null && auth.token.email === 'alguien@ejemplo.com'",
@@ -49,21 +53,33 @@
 //     sumar gente se encadena con ||:
 //       "auth != null && (auth.token.email === 'a@x.com' || auth.token.email === 'b@x.com')"
 //
-//     Conviene que sea la MISMA lista que `parteObra`: quien entra a la
-//     obra entra a las dos pantallas con la misma cuenta.
+//     No hace falta acordarse de nada de esto: si la cuenta entra pero las
+//     reglas no la dejan, el botón ☁ del tablero muestra el texto exacto
+//     —con el mail ya puesto— y un botón para copiarlo.
 //
 //  Si falta la apiKey o la databaseURL, el tablero funciona igual: guarda
 //  en el equipo y el botón ☁ avisa que falta configurar.
 // ════════════════════════════════════════════════════════════════════════
 window.FINAL_OBRA_CONFIG = {
   firebase: {
-    // Proyecto "control-caja", el mismo de la planilla de obra y separado
-    // del sistema de gestión. La apiKey hace falta para el login.
-    apiKey:      "AIzaSyA8GzV2O8GTwCatLmSdfII8vL1-QN2EiH0",
-    databaseURL: "https://control-caja-965ad-default-rtdb.firebaseio.com",
-    projectId:   "control-caja-965ad",
-    authDomain:  "control-caja-965ad.firebaseapp.com"
+    // ⬇️ Los cuatro valores del proyecto PROPIO del tablero.
+    //    Salen de Firebase Console → ⚙️ Configuración del proyecto →
+    //    "Tus apps" → app web → SDK de Firebase → "Configuración".
+    //    Mientras estén vacíos, el tablero guarda sólo en cada equipo y el
+    //    botón ☁ lo dice; no se rompe nada.
+    apiKey:      "",
+    databaseURL: "",
+    projectId:   "",
+    authDomain:  ""
   },
+
+  // El proyecto de arriba es sólo de este tablero (no lo comparte con la
+  // caja ni con el parte de personal). Con esto en true, la pantalla de
+  // "falta habilitar tu cuenta" muestra el archivo de reglas COMPLETO para
+  // reemplazar de una, que es lo más difícil de hacer mal. Si algún día se
+  // compartiera la base con otra app, poner false: ahí muestra sólo el
+  // bloque a insertar, para no llevarse puestas las reglas de la otra.
+  proyectoPropio: true,
   // Nodo donde se guarda esta obra: los datos viven en finalObra/<obraId>.
   // Si algún día hay más de una obra, cada una lleva el suyo ("obra1",
   // "obra2"…) y no se mezclan.
