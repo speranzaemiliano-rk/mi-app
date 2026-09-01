@@ -658,6 +658,10 @@
         .nav-block.sortable-ghost, .sub-block.sortable-ghost, .nav-sub.sortable-ghost { opacity: .3; }
         .nav-block.sortable-chosen, .sub-block.sortable-chosen, .nav-sub.sortable-chosen { box-shadow: 0 6px 18px rgba(20,20,40,.18); }
 
+        /* Filas de tabla que se abren con un clic (ej. cuenta corriente). */
+        tr.fila-abrible { cursor: pointer; }
+        tr.fila-abrible:hover > td { background: rgba(109, 74, 255, .10); }
+        tr.fila-abrible:active > td { background: rgba(109, 74, 255, .18); }
         .sidebar-footer {
             padding: 14px 12px;
             border-top: 1px solid var(--border-soft);
@@ -3460,6 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v467</div>
         </div>
     </nav>
 
@@ -14615,6 +14620,47 @@
         if (cfg.panel) cfg.panel(tr, cfg.sel, aside);
         else _densaPanelGenerico(cfg, tr, aside);
     }
+
+    // ── Versión de la app ──
+    // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
+    // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
+    // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
+    var APP_VER = 'v467';
+    function _verChequear() {
+        var el = document.getElementById('appVersion');
+        if (!el) return;
+        el.textContent = APP_VER;
+        el.title = 'Versión de la app cargada en este dispositivo';
+        var url = (location.pathname.replace(/[^/]*$/, '')) + 'sw.js?t=' + Date.now();
+        fetch(url, { cache: 'no-store' }).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
+            var m = /CACHE\s*=\s*'rk-(v\d+)'/.exec(t || '');
+            if (!m || m[1] === APP_VER) return;
+            el.innerHTML = APP_VER + ' → <b>' + m[1] + '</b>';
+            el.style.color = 'var(--danger)';
+            el.style.cursor = 'pointer';
+            el.title = 'Estás viendo la versión ' + APP_VER + ' y en el servidor ya está la ' + m[1] + '. Tocá acá para actualizar.';
+            el.onclick = function(){ _verForzarActualizar(); };
+        }).catch(function(){});
+    }
+    // Borra el caché del service worker y recarga, para no depender del Ctrl+Shift+R.
+    function _verForzarActualizar() {
+        var fin = function(){ location.reload(true); };
+        try {
+            var tareas = [];
+            if (window.caches && caches.keys) tareas.push(caches.keys().then(function(ks){
+                return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+            }));
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+                tareas.push(navigator.serviceWorker.getRegistrations().then(function(rs){
+                    return Promise.all(rs.map(function(r){ return r.unregister(); }));
+                }));
+            }
+            Promise.all(tareas).then(fin, fin);
+        } catch (e) { fin(); }
+    }
+    window.APP_VER = APP_VER;
+    window._verForzarActualizar = _verForzarActualizar;
+    document.addEventListener('DOMContentLoaded', _verChequear);
 
     function registrarDensa(cfg) {
         cfg.sel = -1;
@@ -32772,6 +32818,7 @@
         // Comprobantes (facturas / comprobantes X)
         h += '<div class="table-card" style="margin-bottom:14px;"><div class="table-card-head"><h3>Facturas y comprobantes X'
             + (filtro === 'pend' ? ' — a pagar' : filtro === 'pag' ? ' — pagados' : '') + '</h3>'
+            + (puedeEd ? '<span style="font-size:12px;color:var(--blue);font-weight:600;">👆 Tocá una fila para abrir el comprobante</span>' : '')
             + '<span style="font-size:12px;color:var(--text-3);">' + compsF.length + ' de ' + comps.length + '</span></div>';
         if (!compsF.length) {
             h += '<div style="padding:22px;text-align:center;color:var(--text-3);">No hay comprobantes' + (filtro ? ' con ese filtro' : '') + '.</div>';
@@ -32786,8 +32833,8 @@
                     var _ncId = String(c.id).replace(/'/g,"\\'");
                     var abrirNCx = puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNotaCredito(\'' + _ncId + '\')" title="Editar nota de crédito">✏</button>' : '';
                     var borrarNCx = puedeEd ? '<button class="btn btn-danger-sm" onclick="eliminarNotaCredito(\'' + _ncId + '\')" title="Eliminar nota de crédito">✕</button>' : '';
-                    var _trNC = puedeEd ? (' onclick="' + _ccGuard + 'editarNotaCredito(\'' + _ncId + '\')" title="Abrir la nota de crédito"') : '';
-                    h += '<tr style="background:rgba(30,142,62,.05);' + (puedeEd ? 'cursor:pointer;' : '') + '"' + _trNC + '>'
+                    var _trNC = puedeEd ? (' class="fila-abrible" onclick="' + _ccGuard + 'editarNotaCredito(\'' + _ncId + '\')" title="Abrir la nota de crédito"') : '';
+                    h += '<tr style="background:rgba(30,142,62,.05);"' + _trNC + '>'
                         + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                         + '<td><span style="color:#1e8e3e;font-weight:600;">🧾 ' + escHtml(c.tipo) + '</span></td>'
                         + '<td>' + escHtml(String(c.num)) + '</td>'
@@ -32806,7 +32853,7 @@
                 var op = (c.pag > 0) ? '<button class="btn btn-outline btn-sm" onclick="' + (c.o==='fact' ? ('abrirHistorialPagosFactura(' + c.ref + ')') : ('abrirHistorialPagosDoc(' + refA + ')')) + '" title="Reimprimir Orden de Pago / retenciones">🧾</button>' : '';
                 var desap = (c.pag > 0 && puedeEd) ? '<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="' + (c.o==='fact' ? ('desaplicarPagoFactura(' + c.ref + ')') : ('desaplicarPagoDoc(' + refA + ')')) + '" title="Desaplicar el último pago (vuelve a Pendiente/Parcial y saca el movimiento)">↩️</button>' : '';
                 var borrar = puedeEd ? '<button class="btn btn-danger-sm" onclick="' + (c.o==='fact' ? ('eliminarFactura(' + c.ref + ')') : ('eliminarDoc(' + refA + ')')) + '" title="Eliminar">✕</button>' : '';
-                var _trComp = puedeEd ? (' style="cursor:pointer;" title="Abrir el comprobante" onclick="' + _ccGuard + abrir + '"') : '';
+                var _trComp = puedeEd ? (' class="fila-abrible" title="Abrir el comprobante" onclick="' + _ccGuard + abrir + '"') : '';
                 h += '<tr' + _trComp + '>'
                     + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                     + '<td>' + escHtml(c.tipo) + '</td>'
