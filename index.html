@@ -3464,7 +3464,7 @@
             </div>
             <button class="btn-switch app-hidden" id="btnIrCaja" onclick="entrarAModulo('caja')">Ir a la Caja</button>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v473</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v474</div>
         </div>
     </nav>
 
@@ -15027,7 +15027,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v473';
+    var APP_VER = 'v474';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19587,13 +19587,45 @@
         var _rh = buildReciboHeader(titulo, nroDoc || null, d.fecha ? formatearFecha(d.fecha) : emision, {
             label: 'Proveedor / Emisor', nombre: d.proveedor || '—', detalle: (d.descripcion || '')
         });
+        // Si el comprobante tiene detalle cargado, se imprime ítem por ítem (los que restan,
+        // en negativo); si no, la fila única de siempre con la descripción.
+        var _its = (d.items || []).filter(function(i){ return i && (i.detalle || i.cantidad || i.precioUnit); });
+        var tablaHtml;
+        if (_its.length) {
+            var _sumaIts = 0;
+            var _filasIts = _its.map(function(i){
+                var sg = (Number(i.signo) === -1) ? -1 : 1;
+                var st = (i.subtotal != null && i.subtotal !== '')
+                    ? Number(i.subtotal)
+                    : sg * (Number(i.cantidad) || 0) * (Number(i.precioUnit) || 0);
+                _sumaIts += st;
+                var _cant = (i.cantidad != null && i.cantidad !== '')
+                    ? Number(i.cantidad).toLocaleString('es-AR', { maximumFractionDigits: 2 }) : '—';
+                return '<tr><td>' + escHtml(i.detalle || '—') + '</td>'
+                     + '<td class="tr">' + _cant + '</td>'
+                     + '<td class="tr">' + fmt(Number(i.precioUnit) || 0) + '</td>'
+                     + '<td class="tr">' + (st < 0 ? '-' : '') + fmt(Math.abs(st)) + '</td></tr>';
+            }).join('');
+            // El detalle tiene que cerrar con el importe del comprobante. Si no cierra (por
+            // ejemplo se editó el importe a mano después), se muestran los dos en vez de
+            // imprimir un papel cuyos números no suman.
+            var _difIts = Math.abs(_sumaIts - imp) > 0.5;
+            tablaHtml = '<table class="tbl">'
+                + '<thead><tr><th>Detalle</th><th class="tr">Cant.</th><th class="tr">P. unit.</th><th class="tr">Importe</th></tr></thead>'
+                + '<tbody>' + _filasIts + '</tbody>'
+                + '<tfoot><tr><td colspan="3"><strong>' + (_difIts ? 'Total del detalle' : 'Total') + '</strong></td><td class="tr">' + fmt(_sumaIts) + '</td></tr>'
+                + (_difIts ? '<tr><td colspan="3"><strong>Importe del comprobante</strong></td><td class="tr">' + fmt(imp) + '</td></tr>' : '')
+                + '</tfoot></table>';
+        } else {
+            tablaHtml = '<table class="tbl">'
+                + '<thead><tr><th>Descripción</th><th>N° Comprobante</th><th class="tr">Importe</th></tr></thead>'
+                + '<tbody><tr><td>' + (d.descripcion || '—') + '</td><td>' + (d.numero || d.nro || '—') + '</td><td class="tr">' + fmt(imp) + '</td></tr></tbody>'
+                + '<tfoot><tr><td colspan="2"><strong>Total</strong></td><td class="tr">' + fmt(imp) + '</td></tr></tfoot>'
+                + '</table>';
+        }
         var html =
             '<html><head><meta charset="UTF-8"><title>' + titulo + ' ' + nroDoc + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
-            '<table class="tbl">' +
-            '<thead><tr><th>Descripción</th><th>N° Comprobante</th><th class="tr">Importe</th></tr></thead>' +
-            '<tbody><tr><td>' + (d.descripcion || '—') + '</td><td>' + (d.numero || d.nro || '—') + '</td><td class="tr">' + fmt(imp) + '</td></tr></tbody>' +
-            '<tfoot><tr><td colspan="2"><strong>Total</strong></td><td class="tr">' + fmt(imp) + '</td></tr></tfoot>' +
-            '</table>' +
+            tablaHtml +
             '<div class="bottom">' +
             '<div class="instrucciones"><div class="instr-titulo">Datos del comprobante</div><div class="instr-body">' +
             'Tipo: ' + titulo +
