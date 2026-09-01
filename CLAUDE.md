@@ -113,8 +113,14 @@ Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una 
 ```
 rubros[rid]    = { nombre, color, orden, m }
 entidades[eid] = { tipo:'unidad'|'comun', nombre, piso, icono, orden, del, m }
-items[iid]     = { ent, rubro, texto, ok, orden, del, m }
+items[iid]     = { ent, rubro, texto, ok, orden, del, m, resp, por, cuando }
+personas[pid]  = { nombre, email, del, m }          ← responsables
+fotos[fid]     = { item, ent, rubro, nota, mime, por, del, m }   ← sólo la ficha
 ```
+
+`resp` apunta a `personas`; `por`/`cuando` los graba **el tilde**, no la edición: la pregunta que importa después es «¿quién controló esto?». Al destildar se limpian, para que no quede diciendo que alguien lo controló cuando ya no está hecho. Sin sesión abierta `por` queda vacío y `nombreDe("")` imprime «este equipo», así que igual queda constancia.
+
+⚠️ **Las fotos van partidas en dos.** `fotos/<fid>` es la ficha (liviana, viaja con el resto por `child_added`) y `fotosData/<fid> = { d }` son los bytes en base64, que **no** están en `COLS` y se bajan de a uno con `once()` cuando alguien abre la foto (`traerFoto`). Juntos, abrir el tablero en la obra se bajaría todas las fotos del edificio con datos del celular. Los bytes tampoco entran en `datos` ni en el JSON de `localStorage`: van a su propia clave (`finalObra_v1_foto_<fid>`), así sobreviven sin señal sin reventar la cuota del navegador. `comprimirImagen()` reduce a 1280px de lado y JPEG 0.72 antes de guardar.
 
 Que sean planas **no es cosmético**. En `obra/` la sincronización sube el documento entero con `set()` porque lo carga una sola persona; acá pueden estar dos o tres recorriendo unidades distintas a la vez, y subir todo junto haría que el último en guardar pise lo que el otro acaba de tildar. Cada cambio escribe **sólo su ruta** (`finalObra/<obraId>/items/<iid>`), y la bajada usa `child_added`/`child_changed`/`child_removed` sobre cada colección en vez de un `on('value')` de la raíz. `subirTodo()` (un `set()` de todo) queda sólo para dos casos: nube vacía y «volver a la carga inicial».
 

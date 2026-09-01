@@ -243,6 +243,22 @@
   }
   .modal-box .item{border-top:1px solid var(--border-soft);padding:9px 0}
   .modal-box .item .txt{font-size:14px}
+  .item-cuerpo{flex:1;min-width:0}
+  .item-pie{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+  .chip{
+    font-family:inherit;font-size:11px;font-weight:600;letter-spacing:.02em;
+    padding:2px 8px;border-radius:var(--radius-pill);border:1px solid var(--border);
+    background:var(--card);color:var(--text-2);cursor:pointer;white-space:nowrap;
+  }
+  .chip:active{background:var(--surface-2)}
+  .chip.resp{border-color:rgba(109,75,224,.32);color:var(--brand-mark);background:rgba(109,75,224,.06)}
+  .chip.hecho{border-color:rgba(26,127,55,.3);color:var(--listo);background:var(--listo-bg);cursor:default}
+  .chip.foto{border-color:rgba(0,113,227,.3);color:var(--acento);background:var(--acento-pale)}
+  .chip.vacio{color:var(--text-3);border-style:dashed}
+  .miniaturas{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+  .mini{width:62px;height:62px;border-radius:var(--radius-sm);object-fit:cover;border:1px solid var(--border);
+        background:var(--surface-2);cursor:pointer;display:block}
+  .foto-grande{width:100%;border-radius:var(--radius-sm);display:block;margin-bottom:10px}
   .item .marca{flex:0 0 auto;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);align-self:center}
 
   /* ── Vista por rubro ────────────────────────────────────────── */
@@ -335,6 +351,7 @@
   .rep-ru{font-size:9.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#444;margin:6px 0 2px}
   .rep-it{display:flex;gap:6px;padding:1.5px 0 1.5px 4px;font-size:10.5px;line-height:1.35}
   .rep-it .cj{flex:0 0 auto;width:9px;height:9px;border:1px solid #444;margin-top:2.5px}
+  .rep-it .rep-quien{margin-left:auto;padding-left:10px;font-size:9px;color:#666;white-space:nowrap;text-decoration:none}
   .rep-it.ok .cj{background:#444}
   .rep-it.ok span{text-decoration:line-through;color:#777}
   .rep-firmas{display:flex;gap:26px;margin-top:24px;font-size:9.5px;text-align:center;color:#555;page-break-inside:avoid}
@@ -481,7 +498,12 @@
      verdad, un equipo que estuvo sin señal volvería a subir lo
      que ya se había borrado en otro. Además deja deshacer.
   ========================================================= */
-  var datos = { obra:"", rubros:{}, entidades:{}, items:{} };
+  // fotos  → la ficha de cada foto (liviana, se sincroniza siempre)
+  // fotosData → los bytes en base64, APARTE y bajo demanda: si viajaran con el
+  //             resto, cada equipo se bajaría todas las fotos de la obra al abrir.
+  // personas → directorio de responsables, para elegir en vez de retipear.
+  var datos = { obra:"", rubros:{}, entidades:{}, items:{}, personas:{}, fotos:{} };
+  var fotosCache = {};   // id → base64 ya traído en esta sesión
   var CFG   = window.FINAL_OBRA_CONFIG || {};
 
   function uid(){ return Math.random().toString(36).slice(2, 9); }
@@ -496,11 +518,13 @@
   function sembrar(){
     var s = window.FINAL_OBRA_SEED;
     if (!s) return;
-    var nombre = datos.obra;              // volver a la carga inicial no borra el nombre
+    var nombre = datos.obra;              // volver a la carga inicial no borra
+    var personas = datos.personas || {};  // el nombre ni el directorio de gente
     datos = { obra: nombre || "",
               rubros: JSON.parse(JSON.stringify(s.rubros)),
               entidades: JSON.parse(JSON.stringify(s.entidades)),
-              items: JSON.parse(JSON.stringify(s.items)) };
+              items: JSON.parse(JSON.stringify(s.items)),
+              personas: personas, fotos: {} };
   }
 
   /* ---- Normalización -------------------------------------------------
@@ -532,17 +556,41 @@
               texto: String(v.texto || ""), ok: !!v.ok, orden: Number(v.orden) || 0,
               m: Number(v.m) || 0 };
     if (v.del) i.del = 1;
+    // Quién es el responsable de resolverlo (id de datos.personas).
+    if (v.resp) i.resp = String(v.resp);
+    // Quién lo dio por hecho y cuándo. Se graba al tildar, no al editar: la
+    // pregunta que importa después es "¿quién controló esto?".
+    if (v.por) i.por = String(v.por);
+    if (v.cuando) i.cuando = Number(v.cuando) || 0;
     return i;
+  }
+  function normPersona(v){
+    v = v || {};
+    var p = { nombre: String(v.nombre || ""), email: String(v.email || ""),
+              m: Number(v.m) || 0 };
+    if (v.del) p.del = 1;
+    return p;
+  }
+  // La foto se parte en dos: la ficha (esto) y los bytes (fotosData/<id>).
+  function normFoto(v){
+    v = v || {};
+    var f = { item: String(v.item || ""), ent: String(v.ent || ""), rubro: String(v.rubro || ""),
+              nota: String(v.nota || ""), mime: String(v.mime || "image/jpeg"),
+              por: String(v.por || ""), m: Number(v.m) || 0 };
+    if (v.del) f.del = 1;
+    return f;
   }
   function normalizar(v){
     v = v || {};
-    var out = { obra: String(v.obra || ""), rubros:{}, entidades:{}, items:{} };
+    var out = { obra: String(v.obra || ""), rubros:{}, entidades:{}, items:{}, personas:{}, fotos:{} };
     Object.keys(v.rubros    || {}).forEach(function(k){ out.rubros[k]    = normRubro(v.rubros[k]); });
     Object.keys(v.entidades || {}).forEach(function(k){ out.entidades[k] = normEnt(v.entidades[k]); });
     Object.keys(v.items     || {}).forEach(function(k){
       var i = normItem(v.items[k]);
       if (i.ent && i.rubro) out.items[k] = i;     // un ítem huérfano no se muestra en ningún lado
     });
+    Object.keys(v.personas  || {}).forEach(function(k){ out.personas[k] = normPersona(v.personas[k]); });
+    Object.keys(v.fotos     || {}).forEach(function(k){ out.fotos[k]    = normFoto(v.fotos[k]); });
     return out;
   }
 
@@ -580,9 +628,14 @@
 
   // Índice ítems por entidad y por rubro. Se rearma en cada pintada:
   // con 800 ítems es instantáneo y evita estados a medio actualizar.
-  var idx = { porEnt:{}, porRubro:{} };
+  var idx = { porEnt:{}, porRubro:{}, porItem:{} };
   function indexar(){
-    idx = { porEnt:{}, porRubro:{} };
+    idx = { porEnt:{}, porRubro:{}, porItem:{} };
+    Object.keys(datos.fotos).forEach(function(fid){
+      var f = datos.fotos[fid];
+      if (f.del || !f.item) return;
+      (idx.porItem[f.item] = idx.porItem[f.item] || []).push(fid);
+    });
     Object.keys(datos.items).forEach(function(iid){
       var it = datos.items[iid];
       if (it.del) return;
@@ -826,12 +879,44 @@
     if (histPuesto) { histPuesto = false; try { history.back(); } catch(e){} }
   }
 
+  function personaNom(pid){
+    var p = datos.personas[pid];
+    return p && !p.del ? (p.nombre || p.email || "?") : "";
+  }
+  function fechaCorta(ms){
+    if (!ms) return "";
+    var d = new Date(ms);
+    return d.getDate() + "/" + (d.getMonth() + 1);
+  }
+  // De un mail sale un nombre legible: no hace falta cargar a nadie para que el
+  // "controló" diga algo útil.
+  function nombreDe(mail){
+    if (!mail) return "este equipo";
+    var n = String(mail).split("@")[0].replace(/[._-]+/g, " ").trim();
+    return n ? n.charAt(0).toUpperCase() + n.slice(1) : mail;
+  }
+
   function filaItem(iid, conRubro){
     var it = datos.items[iid];
     if (it.ok && !verHechos) return "";
+    var fotos = (idx.porItem[iid] || []).length;
+    var pie = [];
+    if (it.resp && personaNom(it.resp))
+      pie.push('<button class="chip resp" data-acc="responsable">👤 ' + esc(personaNom(it.resp)) + '</button>');
+    else if (!it.ok)
+      pie.push('<button class="chip vacio" data-acc="responsable">👤 Asignar</button>');
+    if (it.ok && (it.por || it.cuando))
+      pie.push('<span class="chip hecho">✓ ' + esc(nombreDe(it.por)) +
+               (it.cuando ? ' · ' + fechaCorta(it.cuando) : "") + '</span>');
+    pie.push('<button class="chip' + (fotos ? " foto" : " vacio") + '" data-acc="fotos">📷' +
+             (fotos ? " " + fotos : "") + '</button>');
+
     return '<div class="item' + (it.ok ? " ok" : "") + '" data-item="' + esc(iid) + '">' +
       '<button class="tick" data-acc="tick" title="Marcar como hecho">✓</button>' +
-      '<span class="txt" data-acc="editar">' + esc(it.texto) + '</span>' +
+      '<div class="item-cuerpo">' +
+        '<span class="txt" data-acc="editar">' + esc(it.texto) + '</span>' +
+        '<div class="item-pie">' + pie.join("") + '</div>' +
+      '</div>' +
       (conRubro ? '<span class="marca" style="color:' + esc(rubroCol(it.rubro)) + '">' + esc(rubroNom(it.rubro)) + '</span>' : "") +
       '<button class="quitar" data-acc="borrar" title="Borrar">×</button>' +
     '</div>';
@@ -847,6 +932,7 @@
       '<button class="bt pri" data-acc="nuevoRubro">+ Rubro</button>' +
       '<button class="bt" data-acc="verHechos">' + (verHechos ? "Ocultar hechos" : "Ver hechos") + '</button>' +
       '<button class="bt" data-acc="compartir">Compartir</button>' +
+      '<button class="bt" data-acc="fotosEnt">📷 ' + fotosDeEntidad(eid).length + '</button>' +
       '<button class="bt" data-acc="editarEnt">Renombrar</button>' +
       '<button class="bt mal" data-acc="borrarEnt">Borrar</button>' +
     '</div>'];
@@ -953,7 +1039,7 @@
     var inp = document.createElement("input");
     inp.type = "text"; inp.className = "edit"; inp.value = it.texto;
     span.style.display = "none";
-    fila.insertBefore(inp, span.nextSibling);
+    span.parentElement.insertBefore(inp, span.nextSibling);
     inp.focus(); inp.select();
     var cerrado = false;
     function guardar(){
@@ -1127,6 +1213,13 @@
   }
 
   /* ---- Compartir: texto plano para WhatsApp o para copiar ---- */
+  // " (Juan)" si el pendiente tiene responsable. Al mandarlo por WhatsApp,
+  // saber de quién es cada cosa es la mitad del mensaje.
+  function _quien(iid){
+    var n = personaNom(datos.items[iid].resp);
+    return n ? " (" + n + ")" : "";
+  }
+
   function textoDe(tipo, id){
     var L = [], obra = nombreObra();
     if (tipo === "ent") {
@@ -1137,7 +1230,7 @@
         if (!pend.length) return;
         L.push("");
         L.push("*" + rubroNom(b.rubro) + "*");
-        pend.forEach(function(i){ L.push("• " + datos.items[i].texto); });
+        pend.forEach(function(i){ L.push("• " + datos.items[i].texto + _quien(i)); });
       });
       if (L.length === 1) L.push("", "Sin pendientes ✅");
     } else {
@@ -1152,7 +1245,7 @@
         var e = datos.entidades[eid];
         L.push("");
         L.push("*" + e.nombre + (e.piso ? " (Piso " + e.piso + ")" : "") + "*");
-        porEnt[eid].forEach(function(i){ L.push("• " + datos.items[i].texto); });
+        porEnt[eid].forEach(function(i){ L.push("• " + datos.items[i].texto + _quien(i)); });
       });
       if (L.length === 1) L.push("", "Sin pendientes ✅");
     }
@@ -1370,8 +1463,13 @@
         x.bloques.map(function(b){
           return '<div class="rep-ru">' + esc(rubroNom(b.rubro)) + '</div>' +
             b.items.map(function(i){
-              return '<div class="rep-it' + (datos.items[i].ok ? " ok" : "") + '">' +
-                     '<span class="cj"></span><span>' + esc(datos.items[i].texto) + '</span></div>';
+              var it = datos.items[i];
+              var quien = it.ok
+                ? "controló " + nombreDe(it.por) + (it.cuando ? " el " + fechaCorta(it.cuando) : "")
+                : (personaNom(it.resp) || "");
+              return '<div class="rep-it' + (it.ok ? " ok" : "") + '">' +
+                     '<span class="cj"></span><span>' + esc(it.texto) + '</span>' +
+                     (quien ? '<span class="rep-quien">' + esc(quien) + '</span>' : "") + '</div>';
             }).join("");
         }).join("") + '</div>');
     });
@@ -1459,10 +1557,17 @@
     var det = detalleAbierto || {};
 
     if (acc === "tick" && iid) {
-      tocarItem(iid, { ok: !datos.items[iid].ok });
+      var pasaAHecho = !datos.items[iid].ok;
+      // Al tildar queda quién y cuándo; al destildar se limpia, para que no
+      // quede diciendo que alguien lo controló cuando ya no está hecho.
+      tocarItem(iid, pasaAHecho
+        ? { ok: true, por: (nube.usuario || ""), cuando: Date.now() }
+        : { ok: false, por: "", cuando: 0 });
       render();
       return;
     }
+    if (acc === "responsable" && iid) { modalResponsable(iid); return; }
+    if (acc === "fotos" && iid) { modalFotos(iid); return; }
     if (acc === "editar" && iid) { editarEnLugar(fila); return; }
     if (acc === "borrar" && iid) {
       tocarItem(iid, { del: 1 });
@@ -1477,6 +1582,7 @@
     if (acc === "nuevoRubro") { modalNuevoRubro(det.id); return; }
     if (acc === "verHechos") { verHechos = !verHechos; pintarDetalle(); return; }
     if (acc === "compartir") { modalCompartir(det.tipo, det.id); return; }
+    if (acc === "fotosEnt") { modalFotosEntidad(det.id); return; }
     if (acc === "editarEnt") { modalEditarEntidad(det.id); return; }
     if (acc === "editarRubro") { modalEditarRubro(det.id); return; }
     if (acc === "borrarEnt") {
@@ -1497,6 +1603,7 @@
     var h = [];
     if (filtro.vista === "unidad")      h.push('<button class="bt pri" data-acc="nuevaUnidad">+ Unidad</button>');
     else if (filtro.vista === "comun")  h.push('<button class="bt pri" data-acc="nuevoEspacio">+ Espacio</button>');
+    h.push('<button class="bt" data-acc="foto">📷 Foto</button>');
     h.push('<button class="bt" data-acc="informe">Informe</button>');
     h.push('<button class="bt" data-acc="ajustes">Ajustes</button>');
     $("acciones").innerHTML = h.join("");
@@ -1506,6 +1613,7 @@
     var acc = b.getAttribute("data-acc");
     if (acc === "nuevaUnidad")  modalNuevaEntidad("unidad");
     if (acc === "nuevoEspacio") modalNuevaEntidad("comun");
+    if (acc === "foto")         modalFotoLibre();
     if (acc === "informe")      modalInforme();
     if (acc === "ajustes")      modalAjustes();
   });
@@ -1533,7 +1641,9 @@
   ========================================================= */
   var FB = CFG.firebase || {};
   var OBRA_ID = CFG.obraId || "obra1";
-  var COLS = ["rubros", "entidades", "items"];
+  // fotosData NO está acá a propósito: es lo pesado y se baja de a una foto,
+  // cuando alguien la abre (ver traerFoto()).
+  var COLS = ["rubros", "entidades", "items", "personas", "fotos"];
 
   function hayBase(){ return !!(FB.databaseURL && FB.apiKey); }
   function configFirebase(){
@@ -1602,9 +1712,9 @@
     if (!o || typeof o !== "object") return JSON.stringify(o);
     return JSON.stringify(Object.keys(o).sort().map(function(k){ return [k, o[k]]; }));
   }
-  function normDe(col, v){
-    return col === "items" ? normItem(v) : (col === "entidades" ? normEnt(v) : normRubro(v));
-  }
+  var NORM = { items: normItem, entidades: normEnt, rubros: normRubro,
+               personas: normPersona, fotos: normFoto };
+  function normDe(col, v){ return (NORM[col] || normRubro)(v); }
 
   function subir(col, id, v){
     v.m = Date.now();                 // marca de modificación, para reconectar
@@ -1757,7 +1867,8 @@
     var mail = nube.usuario || "tu-mail@ejemplo.com";
     var cond = "auth != null && auth.token.email === '" + mail + "'";
     var secciones = "$seccion === 'rubros' || $seccion === 'entidades' || " +
-                    "$seccion === 'items' || $seccion === 'obra'";
+                    "$seccion === 'items' || $seccion === 'obra' || " +
+                    "$seccion === 'personas' || $seccion === 'fotos' || $seccion === 'fotosData'";
     if (CFG.proyectoPropio) {
       return '{\n' +
              '  "rules": {\n' +
@@ -1801,6 +1912,251 @@
       return;
     }
     toast(ok ? "Copiado" : "No pude copiar — tocá el bloque y copialo a mano");
+  }
+
+
+  /* =========================================================
+     7bis) RESPONSABLES Y FOTOS
+  ========================================================= */
+  function personasOrdenadas(){
+    return vivos(datos.personas).sort(function(a, b){
+      return String(datos.personas[a].nombre || "").localeCompare(String(datos.personas[b].nombre || ""), "es");
+    });
+  }
+
+  function modalResponsable(iid){
+    var it = datos.items[iid];
+    if (!it) return;
+    var lista = personasOrdenadas();
+    abrirModal('<h2>Responsable</h2>' +
+      '<div class="ayuda">' + esc(it.texto) + '</div>' +
+      (lista.length
+        ? '<div class="rejilla" id="rPersonas">' + lista.map(function(pid){
+            return '<button data-p="' + esc(pid) + '"' + (it.resp === pid ? ' class="act"' : "") + '>' +
+                   esc(datos.personas[pid].nombre || datos.personas[pid].email) + '</button>';
+          }).join("") + '</div>' +
+          (it.resp ? '<button class="bfull sec" id="rQuitar">Sacar el responsable</button>' : "")
+        : '<div class="ayuda">Todavía no hay nadie cargado.</div>') +
+      '<h3>Agregar a alguien</h3>' +
+      '<input class="campo" id="rNom" placeholder="Nombre (ej: Juan, pintor)">' +
+      '<input class="campo" id="rMail" type="email" inputmode="email" placeholder="Mail (para poder avisarle)">' +
+      '<button class="bfull sec" id="rCrear">Agregar y asignar</button>');
+
+    if ($("rPersonas")) $("rPersonas").addEventListener("click", function(e){
+      var b = e.target.closest("button[data-p]"); if (!b) return;
+      tocarItem(iid, { resp: b.getAttribute("data-p") });
+      cerrarModal(); render(); toast("Asignado a " + personaNom(b.getAttribute("data-p")));
+    });
+    if ($("rQuitar")) $("rQuitar").addEventListener("click", function(){
+      tocarItem(iid, { resp: "" }); cerrarModal(); render(); toast("Sin responsable");
+    });
+    $("rCrear").addEventListener("click", function(){
+      var nom = $("rNom").value.trim();
+      if (!nom) { $("rNom").focus(); return; }
+      var pid = "p_" + uid();
+      datos.personas[pid] = { nombre: nom, email: $("rMail").value.trim(), m: 0 };
+      subir("personas", pid, datos.personas[pid]);
+      tocarItem(iid, { resp: pid });
+      cerrarModal(); render(); toast("Asignado a " + nom);
+    });
+  }
+
+  /* ---- Fotos ---------------------------------------------------------
+     Se guardan en dos pedazos: la ficha (liviana, viaja con todo) y los
+     bytes en base64, que van aparte y se bajan sólo cuando alguien abre la
+     foto. Si viajaran juntos, abrir el tablero en la obra se bajaría todas
+     las fotos del edificio con datos del celular.                       */
+  var MAX_LADO = 1280, CALIDAD = 0.72;
+
+  function comprimirImagen(file, cb){
+    var lector = new FileReader();
+    lector.onerror = function(){ cb(null); };
+    lector.onload = function(){
+      var img = new Image();
+      img.onerror = function(){ cb(null); };
+      img.onload = function(){
+        var w = img.width, h = img.height;
+        var r = Math.min(1, MAX_LADO / Math.max(w, h));
+        var c = document.createElement("canvas");
+        c.width = Math.round(w * r); c.height = Math.round(h * r);
+        try {
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          cb(c.toDataURL("image/jpeg", CALIDAD));
+        } catch(e){ cb(null); }
+      };
+      img.src = lector.result;
+    };
+    lector.readAsDataURL(file);
+  }
+
+  function claveFoto(fid){ return CLAVE + "_foto_" + fid; }
+
+  function guardarFoto(ficha, dataUrl, cuando){
+    var fid = "f_" + uid();
+    datos.fotos[fid] = { item: ficha.item || "", ent: ficha.ent || "", rubro: ficha.rubro || "",
+                         nota: ficha.nota || "", mime: "image/jpeg", por: (nube.usuario || ""), m: 0 };
+    fotosCache[fid] = dataUrl;
+    escribir(claveFoto(fid), dataUrl);            // queda en el equipo, aunque no haya señal
+    subir("fotos", fid, datos.fotos[fid]);        // la ficha viaja con el resto
+    if (nube.ref) nube.ref.child("fotosData/" + fid).set({ d: dataUrl }).catch(marcarError);
+    if (cuando) cuando(fid);
+  }
+
+  function traerFoto(fid, cb){
+    if (fotosCache[fid]) return cb(fotosCache[fid]);
+    leer(claveFoto(fid)).then(function(local){
+      if (local) { fotosCache[fid] = local; return cb(local); }
+      if (!nube.ref) return cb(null);
+      nube.ref.child("fotosData/" + fid).once("value").then(function(sn){
+        var v = sn.val(), d = v && v.d ? String(v.d) : "";
+        if (d) { fotosCache[fid] = d; escribir(claveFoto(fid), d); }
+        cb(d || null);
+      }).catch(function(){ cb(null); });
+    });
+  }
+
+  function borrarFoto(fid){
+    var f = datos.fotos[fid];
+    if (!f) return;
+    f.del = 1;
+    subir("fotos", fid, f);
+    if (nube.ref) nube.ref.child("fotosData/" + fid).remove().catch(function(){});
+    delete fotosCache[fid];
+    escribir(claveFoto(fid), "");
+  }
+
+  // Pinta las miniaturas de a una, a medida que llega cada foto.
+  function pintarMiniaturas(cont, ids){
+    cont.innerHTML = ids.length ? "" : '<div class="ayuda">Todavía no hay fotos.</div>';
+    ids.forEach(function(fid){
+      var img = document.createElement("img");
+      img.className = "mini"; img.alt = "Foto";
+      img.addEventListener("click", function(){ verFoto(fid); });
+      cont.appendChild(img);
+      traerFoto(fid, function(d){
+        if (d) img.src = d;
+        else { img.replaceWith(document.createTextNode("")); }
+      });
+    });
+  }
+
+  function modalFotos(iid){
+    var it = datos.items[iid];
+    if (!it) return;
+    var ids = (idx.porItem[iid] || []);
+    abrirModal('<h2>Fotos</h2>' +
+      '<div class="ayuda">' + esc(it.texto) + '</div>' +
+      '<div class="miniaturas" id="fLista"></div>' +
+      '<input type="file" id="fArchivo" accept="image/*" capture="environment" style="display:none">' +
+      '<button class="bfull" id="fSacar">📷 Sacar o elegir una foto</button>');
+    pintarMiniaturas($("fLista"), ids);
+    $("fSacar").addEventListener("click", function(){ $("fArchivo").click(); });
+    $("fArchivo").addEventListener("change", function(){
+      var file = this.files && this.files[0];
+      if (!file) return;
+      $("fSacar").disabled = true; $("fSacar").textContent = "Guardando…";
+      comprimirImagen(file, function(d){
+        $("fSacar").disabled = false; $("fSacar").textContent = "📷 Sacar o elegir una foto";
+        if (!d) { toast("No pude leer esa imagen"); return; }
+        guardarFoto({ item: iid, ent: it.ent, rubro: it.rubro }, d);
+        render(); modalFotos(iid); toast("Foto guardada");
+      });
+    });
+  }
+
+  function verFoto(fid){
+    var f = datos.fotos[fid];
+    if (!f) return;
+    var e = datos.entidades[f.ent];
+    abrirModal('<h2>Foto</h2>' +
+      '<div class="ayuda">' + esc((e ? e.nombre : "") + (f.rubro ? " · " + rubroNom(f.rubro) : "")) +
+        (f.por ? ' · subida por ' + esc(nombreDe(f.por)) : "") + '</div>' +
+      '<img class="foto-grande" id="fGrande" alt="Foto">' +
+      '<button class="bfull sec malo" id="fBorrar">Borrar la foto</button>');
+    traerFoto(fid, function(d){
+      var img = $("fGrande");
+      if (!img) return;
+      if (d) img.src = d;
+      else img.replaceWith(document.createTextNode("No pude traer esta foto. ¿Hay señal?"));
+    });
+    $("fBorrar").addEventListener("click", function(){
+      if (!confirm("¿Borrar esta foto?")) return;
+      var item = f.item;
+      borrarFoto(fid); cerrarModal(); render();
+      if (item && datos.items[item]) modalFotos(item);
+      toast("Foto borrada");
+    });
+  }
+
+  /* ---- Subir una foto desde afuera: preguntar dónde va ---- */
+  function modalFotoLibre(){
+    var inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*"; inp.setAttribute("capture", "environment");
+    inp.style.display = "none";
+    document.body.appendChild(inp);
+    inp.addEventListener("change", function(){
+      var file = this.files && this.files[0];
+      inp.remove();
+      if (!file) return;
+      toast("Preparando la foto…");
+      comprimirImagen(file, function(d){
+        if (!d) { toast("No pude leer esa imagen"); return; }
+        preguntarDonde(d);
+      });
+    });
+    inp.click();
+  }
+
+  function preguntarDonde(dataUrl){
+    var ents = entidadesDe("unidad").concat(entidadesDe("comun"));
+    abrirModal('<h2>¿A dónde va esta foto?</h2>' +
+      '<img class="foto-grande" src="' + dataUrl + '" alt="">' +
+      '<h3>Unidad o espacio</h3>' +
+      '<select class="campo" id="pEnt">' + ents.map(function(eid){
+        var e = datos.entidades[eid];
+        return '<option value="' + esc(eid) + '">' + esc(e.nombre) + (e.piso ? " · Piso " + esc(e.piso) : "") + '</option>';
+      }).join("") + '</select>' +
+      '<h3>Rubro</h3><select class="campo" id="pRubro"></select>' +
+      '<h3>Pendiente (opcional)</h3><select class="campo" id="pItem"></select>' +
+      '<button class="bfull" id="pGuardar">Guardar la foto</button>');
+
+    function pintarRubros(){
+      var eid = $("pEnt").value;
+      var bloques = rubrosDe(eid);
+      $("pRubro").innerHTML = bloques.length
+        ? bloques.map(function(b){ return '<option value="' + esc(b.rubro) + '">' + esc(rubroNom(b.rubro)) + '</option>'; }).join("")
+        : rubrosOrdenados().map(function(r){ return '<option value="' + esc(r) + '">' + esc(rubroNom(r)) + '</option>'; }).join("");
+      pintarItems();
+    }
+    function pintarItems(){
+      var eid = $("pEnt").value, rid = $("pRubro").value;
+      var its = itemsDe(eid).filter(function(i){ return datos.items[i].rubro === rid; });
+      $("pItem").innerHTML = '<option value="">— sin pendiente puntual —</option>' +
+        its.map(function(i){
+          return '<option value="' + esc(i) + '">' + (datos.items[i].ok ? "✓ " : "") + esc(datos.items[i].texto) + '</option>';
+        }).join("");
+    }
+    $("pEnt").addEventListener("change", pintarRubros);
+    $("pRubro").addEventListener("change", pintarItems);
+    pintarRubros();
+
+    $("pGuardar").addEventListener("click", function(){
+      var eid = $("pEnt").value, rid = $("pRubro").value, iid = $("pItem").value;
+      guardarFoto({ item: iid, ent: eid, rubro: rid }, dataUrl);
+      cerrarModal(); render();
+      toast(iid ? "Foto guardada en el pendiente" : "Foto guardada en " + datos.entidades[eid].nombre);
+    });
+  }
+
+  // Todas las fotos de una unidad o espacio, incluidas las de sus pendientes.
+  function fotosDeEntidad(eid){
+    return vivos(datos.fotos, function(f){ return f.ent === eid; });
+  }
+  function modalFotosEntidad(eid){
+    var e = datos.entidades[eid];
+    abrirModal('<h2>Fotos · ' + esc(e.nombre) + '</h2>' +
+      '<div class="miniaturas" id="fLista"></div>');
+    pintarMiniaturas($("fLista"), fotosDeEntidad(eid));
   }
 
   function entrar(mail, clave, cuando){
