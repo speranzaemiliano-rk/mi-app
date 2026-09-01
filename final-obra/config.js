@@ -67,11 +67,9 @@ window.FINAL_OBRA_CONFIG = {
     // Proyecto "Final de Obra" (el id quedó como dash-rk de un nombre
     // anterior: Firebase no deja cambiarlo, es sólo cosmético).
     //
-    // ⬇️ FALTA la apiKey. Sale de Firebase Console → ⚙️ Configuración del
-    //    proyecto → "Tus apps" → agregar app **Web** (</>) → SDK de
-    //    Firebase → "Configuración". Mientras esté vacía el tablero guarda
-    //    sólo en cada equipo y el botón ☁ lo dice; no se rompe nada.
-    apiKey:      "",
+    // La apiKey NO es un secreto: viaja al navegador de cualquiera que abra
+    // la página. Lo que protege los datos son las reglas y el login.
+    apiKey:      "AIzaSyDtv8_e6vWKPeCsAj5-SuuRzIwSJM5fZMI",
     // Verificado contra el servidor: la base existe y está en la región de
     // EE.UU. (por eso firebaseio.com y no firebasedatabase.app).
     databaseURL: "https://dash-rk-default-rtdb.firebaseio.com",
