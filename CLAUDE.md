@@ -81,6 +81,19 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 `manifest.json` (scope `/mi-app/`, instalable) + `sw.js` (constante `CACHE`, se bumpea en cada cambio; `obra/` y `final-obra/` tienen los suyos, con alcance sólo su carpeta — no asumir un valor fijo, revisar el archivo; network-first para `index.html`, no cachea Firebase/Railway/Google/EmailJS). Al deployar una versión nueva, `sw.js` NO llama `skipWaiting()` en el install: el SW nuevo queda en espera y la app muestra un banner "🔄 Hay una versión nueva — Actualizar" para no recargar en medio del uso.
 
+## Qué proyecto de Firebase usa cada cosa
+
+⚠️ **El `projectId` no dice para qué es el proyecto.** `control-caja-965ad` se llama **«Control Personal Obra»** y es el del **parte de personal**, no el de la caja: la caja diaria tiene el suyo. Guiarse por el id lleva a conclusiones falsas sobre qué datos conviven con qué.
+
+| App | Proyecto (nombre en la consola) | `projectId` | Config |
+|---|---|---|---|
+| Sistema de gestión (`index.html`) | Sistema RK | `modo-prueba-bb8c2` | `config.js` |
+| Parte de personal (`obra/`) | Control Personal Obra | `control-caja-965ad` | `obra/config.js` |
+| Final de obra (`final-obra/`) | *(uno propio, a crear)* | — | `final-obra/config.js` |
+| Caja diaria (**otro repo**) | Caja RK Final | `rk-cajadiaria-5-6` | fuera de acá |
+
+Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad.
+
 ## Parte de obra (`obra/`) — aparte de la app
 
 `obra/index.html` es una **planilla independiente** para el capataz: cuánta gente hay por gremio y qué hace cada uno, con envío del parte por WhatsApp. **No comparte nada con `index.html`**: sin Firebase, sin login, sin roles; el estado vive en `localStorage` (clave `parteObra_v2`, con migración desde `parteObra_v1`) del teléfono donde se carga. Tiene su propio `obra/manifest.json` y `obra/sw.js` (alcance sólo `/obra/`, network-first para el HTML) para que abra sin señal en la obra. Al editarla, cuidado con dos cosas: `_colPersist` y demás convenciones de la app **no aplican acá**, y el `<script>` inicial prueba `window.storage` (API de la vista previa de Claude) antes de caer a `localStorage` — en producción siempre usa `localStorage`.
@@ -111,7 +124,7 @@ Que sean planas **no es cosmético**. En `obra/` la sincronización sube el docu
 
 **Eco de la nube.** `firma()` compara los registros con las claves ordenadas; sin eso, el mismo dato con las claves en otro orden parece un cambio y el tablero se repinta en ciclo. `pedirRender()` agrupa los repintados y, si el usuario está tipeando (`escribiendo()`), **reintenta** en vez de saltear: saltear perdía el cambio hasta el siguiente repintado.
 
-**Configuración.** `final-obra/config.js` apunta a un proyecto de Firebase **propio del tablero** — ni el del sistema de gestión ni `control-caja` (que es **uno solo** para la caja diaria y el parte de personal; no son dos proyectos, confundirlos es fácil). El motivo es quién entra: al final de obra lo recorren la dirección de obra y los contratistas, y no tienen por qué estar a un error de reglas de los sueldos, los CUIL de la nómina o la contabilidad.
+**Configuración.** `final-obra/config.js` apunta a un proyecto de Firebase **propio del tablero**, como cada una de las otras apps (ver el mapa de proyectos más arriba). El motivo es quién entra: al final de obra lo recorren la dirección de obra y los contratistas, mientras que «Control Personal Obra» guarda la nómina con nombre y CUIL. Con base propia, un error de reglas acá no puede llegar a eso.
 
 Los cuatro valores de `firebase` vienen **vacíos**: cada instalación pone el suyo. Sin ellos el tablero funciona igual, guardando por equipo, y el botón ☁ lo dice. Las reglas **hay que publicarlas a mano**; el texto está en los comentarios de `config.js` y, mejor, lo muestra la propia app.
 
