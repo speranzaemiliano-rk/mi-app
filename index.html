@@ -119,11 +119,47 @@
                            escHtml(MODULOS[m].titulo) + '</button>';
                 }).join('');
         }
+        // Clave de entrada al Sistema. OJO: NO es un control de seguridad — el acceso real
+        // lo dan el rol en `roles/<uid>` y las reglas de Firebase, y cualquiera con la consola
+        // del navegador se la saltea. Es una pantalla para que en una computadora compartida
+        // o prestada no se entre de una a la contabilidad. Se pide una vez por sesión.
+        function _pedirPinSistema() {
+            var vacio = Promise.resolve(true);
+            if (typeof db === 'undefined' || !db) return vacio;
+            try { if (sessionStorage.getItem('rk_pin_sistema_ok') === '1') return vacio; } catch (e) {}
+            return db.ref('global/config/pinSistema').once('value').then(function(snap) {
+                var pin = String(snap.val() || '');
+                if (!pin) return true;
+                for (var i = 0; i < 3; i++) {
+                    var quedan = 3 - i;
+                    var v = window.prompt(i === 0
+                        ? '🔒 Clave para entrar al Sistema:'
+                        : '🔒 Clave incorrecta. Te queda(n) ' + quedan + ' intento(s):');
+                    if (v === null) return false;                       // canceló
+                    if (String(v).trim() === pin) {
+                        try { sessionStorage.setItem('rk_pin_sistema_ok', '1'); } catch (e) {}
+                        return true;
+                    }
+                }
+                alert('Clave incorrecta.');
+                return false;
+            }).catch(function() { return true; });   // si no se puede leer, no se traba la entrada
+        }
         function entrarAModulo(m) {
             // Los módulos que viven en otra página se resuelven por su url; el
             // sistema de gestión es esta misma, así que sigue de largo.
             var _d = MODULOS[m];
             if (_d && _d.url) { location.href = _d.url; return; }
+            _pedirPinSistema().then(function(ok) {
+                if (ok) { _entrarAlSistema(); return; }
+                // Sin clave no se entra, pero tampoco se queda en una pantalla muerta:
+                // vuelve a la elección de módulo (o al ingreso, si no había selector).
+                var _ov = document.getElementById('moduloSelector');
+                if (_ov) _ov.classList.remove('app-hidden');
+                else location.reload();
+            });
+        }
+        function _entrarAlSistema() {
             var ov = document.getElementById('moduloSelector');
             if (ov) ov.classList.add('app-hidden');
             document.getElementById('onboardingOverlay').classList.remove('app-hidden');
@@ -5305,6 +5341,30 @@
                     <div id="cfgPinBorradoStatus" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;"></div>
                   </div>
 
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;display:none;" id="cfgPinSistemaCard">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🔐 Clave para entrar al Sistema</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Se pide al entrar al módulo <strong>Sistema</strong>, una vez por sesión, igual que en Caja.
+                      Sirve para que en una computadora compartida o prestada no se entre de una a la contabilidad.
+                      <strong>No reemplaza a los permisos</strong>: quién puede ver qué lo siguen definiendo el rol
+                      del usuario y las reglas de Firebase. Se guarda en la nube (vale para todos los dispositivos).
+                      Dejala vacía para quitarla. Solo el superadmin la configura.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                      <div class="form-group" style="flex:1;min-width:180px;margin:0;">
+                        <label>Clave (4 a 8 dígitos)</label>
+                        <input type="password" id="cfgPinSistema" inputmode="numeric" autocomplete="new-password" placeholder="Vacío = sin clave" style="font-family:monospace;font-size:13px;letter-spacing:.2em;">
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarPinSistema()" style="margin-bottom:1px;">💾 Guardar</button>
+                    </div>
+                    <div id="cfgPinSistemaStatus" style="font-size:12px;margin-top:10px;color:var(--text-3);line-height:1.6;"></div>
+                    <p style="font-size:11.5px;color:var(--warn);margin-top:10px;line-height:1.6;">
+                      ⚠️ <strong>Si te la olvidás no vas a poder entrar al Sistema</strong> — y como se configura desde acá
+                      adentro, tampoco podrías quitarla. Se borra a mano desde
+                      <strong>Firebase Console → Realtime Database → global → config → pinSistema</strong>.
+                    </p>
+                  </div>
+
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:20px;" id="cfgAsistenteCard">
                     <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">🤖 Asistente</h4>
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
@@ -7622,6 +7682,7 @@
         // nunca la haya tenido (o el backend se haya mudado desde otra máquina).
         if (typeof _hidratarBackendUrl === 'function') _hidratarBackendUrl();
         if (typeof _hidratarPinBorrado === 'function') _hidratarPinBorrado();
+        if (typeof _hidratarPinSistema === 'function') _hidratarPinSistema();
         if (!REF_EMPRESAS) {
             console.error('REF_EMPRESAS no está definido. Firebase no se inició.');
             usarEmpresaLocal(true);
@@ -16759,6 +16820,7 @@
         cargarAppTokenUI();
         if (typeof cargarBackendUrlUI === 'function') cargarBackendUrlUI();
         if (typeof cargarPinBorradoUI === 'function') cargarPinBorradoUI();
+        if (typeof cargarPinSistemaUI === 'function') cargarPinSistemaUI();
         if (typeof cfgAsistenteEstadoUI === 'function') cfgAsistenteEstadoUI();
     }
 
@@ -17061,6 +17123,41 @@
             _cfgPinBorrado = val || null;
             if (el) el.value = '';
             if (st) st.innerHTML = val ? '✅ PIN guardado. Se pedirá al eliminar movimientos.' : '✅ PIN quitado.';
+        }).catch(function() { if (st) st.innerHTML = 'No se pudo guardar (sin acceso a la nube).'; });
+    }
+    // ── Clave de entrada al módulo Sistema ────────────────────────────────────
+    // La puerta en sí está arriba, junto a entrarAModulo. Acá sólo se configura.
+    var _cfgPinSistema = null;
+    function _hidratarPinSistema() {
+        try {
+            if (typeof db === 'undefined' || !db) return;
+            db.ref('global/config/pinSistema').once('value').then(function(snap) {
+                var v = snap.val(); _cfgPinSistema = v ? String(v) : null; cargarPinSistemaUI();
+            }).catch(function(){});
+        } catch (e) {}
+    }
+    function cargarPinSistemaUI() {
+        var card = document.getElementById('cfgPinSistemaCard');
+        if (card) card.style.display = (typeof esSuperAdmin !== 'undefined' && esSuperAdmin) ? '' : 'none';
+        var st = document.getElementById('cfgPinSistemaStatus');
+        if (st) st.innerHTML = _cfgPinSistema
+            ? '🔐 Hay una clave configurada — se pide al entrar al Sistema.'
+            : 'ℹ️ Sin clave: se entra al Sistema directamente después de ingresar.';
+    }
+    function guardarPinSistema() {
+        if (!(typeof esSuperAdmin !== 'undefined' && esSuperAdmin)) { alert('Sólo el superadmin puede configurar la clave.'); return; }
+        var el = document.getElementById('cfgPinSistema');
+        var val = String((el || {}).value || '').trim();
+        var st = document.getElementById('cfgPinSistemaStatus');
+        if (val && !/^\d{4,8}$/.test(val)) { alert('La clave tiene que ser de 4 a 8 dígitos (o vacía para quitarla).'); return; }
+        if (val && !confirm('La clave va a quedar en ' + val.replace(/./g, '•') + ' (' + val.length + ' dígitos).\n\n' +
+                            'Anotala: si te la olvidás no vas a poder entrar al Sistema, y sólo se quita desde la consola de Firebase.\n\n¿Guardarla?')) return;
+        db.ref('global/config/pinSistema').set(val || null).then(function() {
+            _cfgPinSistema = val || null;
+            if (el) el.value = '';
+            // Que quien la acaba de poner no se quede afuera al recargar.
+            try { sessionStorage.setItem('rk_pin_sistema_ok', '1'); } catch (e) {}
+            if (st) st.innerHTML = val ? '✅ Clave guardada. Se pedirá al entrar al Sistema.' : '✅ Clave quitada.';
         }).catch(function() { if (st) st.innerHTML = 'No se pudo guardar (sin acceso a la nube).'; });
     }
     // Pide el PIN (si hay) y, si es correcto, ejecuta el borrado.
