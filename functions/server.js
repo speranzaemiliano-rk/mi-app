@@ -112,7 +112,68 @@ const _RUTAS_SIN_TOKEN = ['/', '/whatsapp/webhook', '/diag/seguridad'];
 // Recomendado para un despliegue de cliente. Por defecto apagado para no cambiar el
 // comportamiento actual de RK.
 const _AUTH_ESTRICTA = /^(1|true|yes|si|sí)$/i.test(process.env.REQUIRE_AUTH || '');
+// ── Cuentas del tablero de final de obra ────────────────────────────────
+// El tablero (final-obra/) vive en OTRO proyecto de Firebase que el sistema,
+// a propósito: ahí entran la dirección de obra y los contratistas, y no tienen
+// por qué estar cerca de los sueldos ni de la contabilidad. Consecuencia: sus
+// idToken NO los puede verificar el Admin SDK de acá, que está atado al
+// proyecto del sistema.
+//
+// Se verifican contra su propio proyecto con Identity Toolkit, usando la apiKey
+// —que es pública, viaja igual al navegador de cualquiera que abra la página—.
+// Que el token sea válido PARA ESA apiKey es justamente la prueba de que la
+// cuenta es de ese proyecto.
+//
+// Y sólo habilita las rutas de esta lista: un usuario del tablero no toca ARCA,
+// ni los bancos, ni /usuarios.
+const _RUTAS_OBRA = ['/gemini', '/final-obra/avisar', '/final-obra/diag'];
+const _OBRA_API_KEY = process.env.FINAL_OBRA_API_KEY || 'AIzaSyDtv8_e6vWKPeCsAj5-SuuRzIwSJM5fZMI';
+const _OBRA_PERMITIDOS = String(process.env.FINAL_OBRA_ALLOWED || '')
+    .split(',').map(function(x){ return x.trim().toLowerCase(); }).filter(Boolean);
+// Verificar contra Google en cada request agregaría un salto de red por mensaje
+// del asistente. Se cachea un rato, con el token hasheado (nunca en claro).
+const _obraCache = new Map();   // sha256(idToken) -> { email, vence }
+const _OBRA_TTL = 5 * 60 * 1000;
+
+async function _verificarObra(idToken) {
+    const clave = crypto.createHash('sha256').update(idToken).digest('hex');
+    const hit = _obraCache.get(clave);
+    if (hit && hit.vence > Date.now()) return hit.email;
+    const r = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(_OBRA_API_KEY), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: idToken })
+    });
+    if (!r.ok) return null;
+    const d = await r.json().catch(function(){ return {}; });
+    const u = d && Array.isArray(d.users) ? d.users[0] : null;
+    const email = u && u.email ? String(u.email).toLowerCase() : null;
+    if (!email) return null;
+    if (_obraCache.size > 500) _obraCache.clear();
+    _obraCache.set(clave, { email: email, vence: Date.now() + _OBRA_TTL });
+    return email;
+}
+
 app.use(function(req, res, next) {
+    if (_RUTAS_OBRA.indexOf(req.path) === -1) return next();
+    const m = (req.get('Authorization') || '').match(/^Bearer\s+(.+)$/i);
+    if (!m) return next();                       // sin token: que siga el middleware de siempre
+    _verificarObra(m[1].trim()).then(function(email) {
+        if (!email) return next();               // no es del tablero: que lo resuelva el de siempre
+        if (_OBRA_PERMITIDOS.length && _OBRA_PERMITIDOS.indexOf(email) === -1) {
+            return res.status(403).json({ error: 'Tu cuenta no está habilitada para usar el asistente. Hay que agregar tu mail a FINAL_OBRA_ALLOWED.' });
+        }
+        if (!_OBRA_PERMITIDOS.length) {
+            console.warn('[seguridad] FINAL_OBRA_ALLOWED no configurado — ' + req.path + ' aceptado para cualquier cuenta del proyecto del tablero (' + email + ').');
+        }
+        req.obraEmail = email;
+        req._obraOk = true;
+        next();
+    }).catch(function(){ next(); });
+});
+
+app.use(function(req, res, next) {
+    if (req._obraOk) return next();                  // ya lo autenticó el bloque de arriba
     if (_RUTAS_SIN_TOKEN.indexOf(req.path) !== -1) return next();
     const esperado = process.env.APP_API_TOKEN;
     // 1) Token compartido (X-App-Token / ?token=): camino rápido y retrocompatible.
@@ -2035,6 +2096,68 @@ app.post('/usuarios/reset-password', async (req, res) => {
         res.json({ ok: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TABLERO DE FINAL DE OBRA
+   Sólo dos cosas: avisarle por mail al responsable de un pendiente, y un
+   diagnóstico para saber por qué no anda cuando no anda.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+app.get('/final-obra/diag', function(req, res) {
+    res.json({
+        ok: true,
+        cuentaReconocida: req.obraEmail || null,
+        apiKeyDelTablero: !!_OBRA_API_KEY,
+        listaDeHabilitados: _OBRA_PERMITIDOS.length ? _OBRA_PERMITIDOS.length + ' mail(s)' : 'sin configurar (entra cualquier cuenta del proyecto)',
+        gemini: !!process.env.GEMINI_API_KEY,
+        mail: mailBotConfigurado()
+    });
+});
+
+// Avisarle a alguien que le quedaron pendientes. Usa el mismo SMTP que las
+// alertas de vencimientos, así no hay una casilla más que configurar.
+app.post('/final-obra/avisar', async (req, res) => {
+    // Primero lo que mandó el cliente: si el pedido está mal, decirle QUÉ está
+    // mal, en vez de un "falta configurar el servidor" que no lo ayuda en nada.
+    var b = req.body || {};
+    var para = String(b.para || '').trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(para)) return res.status(400).json({ error: 'El destinatario no tiene un mail válido.' });
+    var pendientes = Array.isArray(b.pendientes) ? b.pendientes.slice(0, 200) : [];
+    if (!pendientes.length) return res.status(400).json({ error: 'No hay pendientes para avisar.' });
+    if (!mailBotConfigurado()) {
+        return res.status(500).json({ error: 'Falta configurar el mail en el servidor (MAIL_BOT_USER y MAIL_BOT_APP_PASSWORD).' });
+    }
+
+    var obra   = String(b.obra || 'Final de obra').slice(0, 120);
+    var nombre = String(b.nombre || '').slice(0, 120);
+    var dePart = req.obraEmail || 'el tablero';
+
+    var lineas = pendientes.map(function(x) {
+        var t = String((x && x.texto) || x || '').slice(0, 300);
+        var d = String((x && x.donde) || '').slice(0, 120);
+        return '• ' + t + (d ? '   [' + d + ']' : '');
+    });
+    var cuerpo = (nombre ? 'Hola ' + nombre + ',\n\n' : 'Hola,\n\n') +
+        'Te quedaron ' + pendientes.length + (pendientes.length === 1 ? ' pendiente' : ' pendientes') +
+        ' en ' + obra + ':\n\n' + lineas.join('\n') +
+        '\n\nEste aviso lo mandó ' + dePart + ' desde el tablero de final de obra.\n';
+
+    try {
+        var nodemailer = require('nodemailer');
+        var user = process.env.MAIL_BOT_USER, pass = process.env.MAIL_BOT_APP_PASSWORD;
+        var transporter = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user: user, pass: pass } });
+        await transporter.sendMail({
+            from: '"' + BRAND_ALERTAS + '" <' + user + '>',
+            to: para,
+            replyTo: req.obraEmail || undefined,
+            subject: obra + ' — ' + pendientes.length + (pendientes.length === 1 ? ' pendiente' : ' pendientes') + ' a tu nombre',
+            text: cuerpo
+        });
+        res.json({ ok: true, enviados: pendientes.length });
+    } catch (e) {
+        res.status(502).json({ error: 'No se pudo mandar el mail: ' + (e && e.message ? e.message : e) });
     }
 });
 

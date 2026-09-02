@@ -84,6 +84,11 @@ window.FINAL_OBRA_CONFIG = {
   // compartiera la base con otra app, poner false: ahí muestra sólo el
   // bloque a insertar, para no llevarse puestas las reglas de la otra.
   proyectoPropio: true,
+  // Backend en Railway. Lo usa el asistente (proxy de Gemini, así la key nunca
+  // viaja al navegador) y el aviso por mail al responsable. Sin esto los dos
+  // avisan que falta configurar; el resto del tablero anda igual.
+  backendUrl: "https://mi-app-production-e1cd.up.railway.app",
+
   // Nodo donde se guarda esta obra: los datos viven en finalObra/<obraId>.
   // Si algún día hay más de una obra, cada una lleva el suyo ("obra1",
   // "obra2"…) y no se mezclan.
