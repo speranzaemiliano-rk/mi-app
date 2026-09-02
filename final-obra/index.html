@@ -2446,9 +2446,13 @@
     "- Si no encontrás a qué ítem se refiere, no adivines: dejá acciones vacío y " +
     "preguntá en 'respuesta' qué unidad o qué pendiente es.\n" +
     "- Si menciona algo que no está en la lista, es un pendiente nuevo.\n" +
-    "- No repitas la lista entera en 'respuesta'; decí en criollo qué entendiste.";
+    "- No repitas la lista entera en 'respuesta'; decí en criollo qué entendiste.\n" +
+    "- Puede dictarte VARIAS cosas de una sola vez ('en la 101 falta el zócalo, en la 102 " +
+    "la grifería y en la 103 pintar el balcón'): devolvé una acción por cada una, no las juntes.\n" +
+    "- Si te dicta una lista de tareas nuevas para el mismo lugar, son varias acciones 'nuevo', " +
+    "una por tarea, cada una con su texto corto y concreto.";
 
-  function asisPedir(texto){
+  function asisPedir(texto, audio){
     if (!hayBackend()) {
       asisDecir("mal", "Falta la URL del backend en final-obra/config.js. Sin eso no puedo pensar.");
       return;
@@ -2471,7 +2475,12 @@
           model: "gemini-2.5-flash",
           body: {
             systemInstruction: { parts: [{ text: ASIS_INSTRUCCIONES }] },
-            contents: [{ role: "user", parts: [{ text: "DATOS DE LA OBRA:\n" + asisContexto() + "\n\nLO QUE DICE:\n" + texto }] }],
+            contents: [{ role: "user", parts: audio
+              ? [ { text: "DATOS DE LA OBRA:\n" + asisContexto() +
+                          "\n\nLO QUE DICE VIENE EN EL AUDIO. Transcribilo y respondé sobre eso. " +
+                          "Empezá 'respuesta' con lo que entendiste entre comillas, así se puede corregir si escuchaste mal." },
+                  { inline_data: { mime_type: audio.mime, data: audio.datos } } ]
+              : [ { text: "DATOS DE LA OBRA:\n" + asisContexto() + "\n\nLO QUE DICE:\n" + texto } ] }],
             generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
           }
         })
@@ -2567,10 +2576,10 @@
   var recon = null, grabando = false;
 
   function asisDictar(){
-    if (!Recon) {
-      toast("Este navegador no dicta. Escribilo y listo.");
-      return;
-    }
+    // Si ya se está grabando audio, este toque es para mandarlo.
+    if (grabadora && grabadora.state === "recording") { grabarParar(); return; }
+    // Sin reconocimiento en el navegador, se manda el audio directo.
+    if (!Recon) { grabarArrancar(); return; }
     if (grabando) { try { recon.stop(); } catch(e){} return; }
     recon = new Recon();
     recon.lang = "es-AR";
@@ -2585,11 +2594,144 @@
     };
     recon.onerror = function(ev){
       grabando = false; $("asisMic").classList.remove("grabando");
-      if (ev.error === "not-allowed") toast("Falta darle permiso al micrófono");
-      else if (ev.error !== "aborted" && ev.error !== "no-speech") toast("No pude escuchar: " + ev.error);
+      if (ev.error === "not-allowed") { toast("Falta darle permiso al micrófono"); return; }
+      if (ev.error === "aborted" || ev.error === "no-speech") return;
+      // El dictado del navegador falla bastante (Brave, sin red, servicio caído).
+      // En vez de dejarlo a pie, se pasa solo a grabar y mandar el audio.
+      toast("El dictado no anda acá — grabo y le mando el audio");
+      grabarArrancar();
     };
     recon.onend = function(){ grabando = false; $("asisMic").classList.remove("grabando"); $("asisTexto").focus(); };
     try { recon.start(); } catch(e){ toast("No pude arrancar el micrófono"); }
+  }
+
+
+  /* ---- Mandar audio de verdad ---------------------------------------
+     El dictado del navegador no existe en todos lados (Firefox no lo
+     tiene, y en iOS sólo anda en Safari; en Brave falla seguido). Así que
+     además se puede grabar y mandarle el audio al asistente.
+
+     Gemini acepta wav, mp3, aac, ogg y flac. MediaRecorder, en cambio,
+     casi siempre entrega webm/opus, que NO está en esa lista. Por eso lo
+     que no venga en un formato seguro se reconvierte acá a WAV mono de
+     16 kHz —que es lo que se usa para reconocer voz— antes de mandarlo.  */
+  // Tope de grabación. Como casi siempre hay que reconvertir a WAV (que no
+  // comprime), 30 s ya son cerca de 1 MB subiendo: de la obra, con señal
+  // mala, más que eso no llega.
+  var MAX_SEG = 30;
+  var grabadora = null, trozos = [], tempGrab = null, streamMic = null;
+
+  function mimeGrabacion(){
+    if (!window.MediaRecorder) return null;
+    var opciones = ["audio/ogg;codecs=opus", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"];
+    for (var i = 0; i < opciones.length; i++) {
+      try { if (MediaRecorder.isTypeSupported(opciones[i])) return opciones[i]; } catch(e){}
+    }
+    return "";
+  }
+
+  function b64De(buf){
+    var bytes = new Uint8Array(buf), s = "", paso = 0x8000;
+    for (var i = 0; i < bytes.length; i += paso) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + paso));
+    }
+    return btoa(s);
+  }
+
+  // AudioBuffer mono → WAV de 16 bits.
+  function wavDe(buf){
+    var datos = buf.getChannelData(0), n = datos.length;
+    var ab = new ArrayBuffer(44 + n * 2), v = new DataView(ab);
+    function txt(pos, t){ for (var i = 0; i < t.length; i++) v.setUint8(pos + i, t.charCodeAt(i)); }
+    txt(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); txt(8, "WAVEfmt ");
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, buf.sampleRate, true); v.setUint32(28, buf.sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    txt(36, "data"); v.setUint32(40, n * 2, true);
+    for (var i = 0; i < n; i++) {
+      var x = Math.max(-1, Math.min(1, datos[i]));
+      v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7FFF, true);
+    }
+    return ab;
+  }
+
+  // Los que Gemini documenta que acepta. Ojo: NO están ni audio/webm ni
+  // audio/mp4, que son justamente los que más entrega MediaRecorder — Chrome
+  // da webm y Safari mp4. Todo lo que no esté acá se reconvierte a WAV.
+  var MIMES_OK = ["audio/ogg", "audio/mpeg", "audio/mp3", "audio/aac", "audio/wav", "audio/flac"];
+  function formatoSeguro(mime){
+    var m = String(mime || "").split(";")[0].toLowerCase();
+    return MIMES_OK.indexOf(m) !== -1 ? m : null;
+  }
+
+  function prepararAudio(blob, cb){
+    var seguro = formatoSeguro(blob.type);
+    if (seguro) {
+      blob.arrayBuffer().then(function(ab){ cb(b64De(ab), seguro); })
+                        .catch(function(){ cb(null); });
+      return;
+    }
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AC || !OAC) return cb(null);
+    blob.arrayBuffer().then(function(ab){
+      return new AC().decodeAudioData(ab);
+    }).then(function(buf){
+      var sr = 16000, largo = Math.max(1, Math.ceil(buf.duration * sr));
+      var off = new OAC(1, largo, sr);           // 1 canal: mezcla el estéreo solo
+      var src = off.createBufferSource();
+      src.buffer = buf; src.connect(off.destination); src.start();
+      return off.startRendering();
+    }).then(function(rend){
+      cb(b64De(wavDe(rend)), "audio/wav");
+    }).catch(function(){ cb(null); });
+  }
+
+  function soltarMic(){
+    if (streamMic) { try { streamMic.getTracks().forEach(function(t){ t.stop(); }); } catch(e){} }
+    streamMic = null;
+  }
+
+  function grabarArrancar(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      toast("Este navegador no puede grabar. Escribilo y listo.");
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream){
+      streamMic = stream;
+      var mime = mimeGrabacion();
+      try { grabadora = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+      catch(e){ grabadora = new MediaRecorder(stream); }
+      trozos = [];
+      grabadora.ondataavailable = function(ev){ if (ev.data && ev.data.size) trozos.push(ev.data); };
+      grabadora.onstop = function(){
+        soltarMic();
+        $("asisMic").classList.remove("grabando");
+        $("asisMic").textContent = "🎙️";
+        if (tempGrab) { clearTimeout(tempGrab); tempGrab = null; }
+        var blob = new Blob(trozos, { type: (grabadora && grabadora.mimeType) || "audio/webm" });
+        grabadora = null; trozos = [];
+        if (!blob.size) { toast("No se grabó nada"); return; }
+        asisDecir("el", "Escuchando lo que grabaste…");
+        prepararAudio(blob, function(b64, mime2){
+          asisHist.pop();
+          if (!b64) { asisDecir("mal", "No pude preparar el audio. Probá escribiéndolo."); asisPintar(); return; }
+          asisPedir("🎙️ (audio)", { datos: b64, mime: mime2 });
+        });
+      };
+      grabadora.start();
+      $("asisMic").classList.add("grabando");
+      $("asisMic").textContent = "■";
+      toast("Grabando… tocá otra vez para mandar");
+      // Tope duro: si alguien deja el micrófono abierto, no se sube un archivo enorme.
+      tempGrab = setTimeout(function(){ if (grabadora && grabadora.state === "recording") grabadora.stop(); }, MAX_SEG * 1000);
+    }).catch(function(){
+      toast("Falta darle permiso al micrófono");
+    });
+  }
+
+  function grabarParar(){
+    if (grabadora && grabadora.state === "recording") { try { grabadora.stop(); } catch(e){} }
   }
 
   /* ---- Avisarle por mail al responsable ---- */
