@@ -62,6 +62,8 @@ Roles en `roles/<uid>`: `superadmin`, `admin`, `editor`, `lector`. Flags JS: `es
 - **Mail bot (Asistente RK por email):** `GET /mail/diag`, `GET /mail/revisar` (dispara la revisión manual). Recibe por IMAP (Gmail) y responde con Gemini por SMTP; revisa cada 2 min si está configurado. Backend listo; **falta crear la casilla de Gmail dedicada + contraseña de aplicación y cargar credenciales** — ver `PENDIENTES.md`. Deps: `imapflow`, `mailparser`, `nodemailer`.
 - **Gemini proxy:** `POST /gemini` (body `{model, body}`) — reenvía a la API de Gemini con `GEMINI_API_KEY` del servidor; así la key nunca viaja al navegador. Lo usa el Asistente RK y "Leer factura/presupuesto con IA". `IPC`: `GET /ipc/serie`, `GET /ipc/variacion?anioIni&mesIni&anioFin&mesFin` (proxea el CSV de INDEC, cacheado 12h).
 - **Auth del backend (middleware global, todas las rutas menos `/` y `/whatsapp/webhook`):** acepta **`X-App-Token`** (= `APP_API_TOKEN` de Railway) **o** `Authorization: Bearer <idToken>` de Firebase (cualquier usuario logueado en la app — verificado con Admin SDK). Si `APP_API_TOKEN` no está seteada, modo compatibilidad (acepta sin auth, con warning en el log). `/usuarios/*` exige además `requireSuperadmin` (rol `superadmin` en `roles/<uid>`) por encima de este middleware.
+- **Tablero de final de obra:** `GET /final-obra/diag`, `POST /final-obra/avisar` (body `{para, nombre, obra, pendientes:[{texto, donde}]}`) — le manda al responsable la lista de lo que tiene a su nombre, por el mismo SMTP del mail bot.
+- ⚠️ **Auth del tablero — el caso raro.** `final-obra/` vive en OTRO proyecto de Firebase, así que el Admin SDK de acá (atado a `modo-prueba-bb8c2`) **no puede verificar sus idToken**. Un middleware aparte, ANTES del de siempre, los verifica contra su propio proyecto con Identity Toolkit (`accounts:lookup?key=<FINAL_OBRA_API_KEY>`): que el token sea válido para esa apiKey es la prueba de que la cuenta es de ese proyecto. Si verifica, marca `req._obraOk` y el middleware de siempre lo deja pasar (su primera línea). Habilita **sólo** `_RUTAS_OBRA` (`/gemini`, `/final-obra/avisar`, `/final-obra/diag`): un usuario del tablero no toca ARCA, ni bancos, ni `/usuarios`. Si el token no verifica, **no rechaza**: sigue de largo al middleware normal, así nada de lo que andaba cambia. Resultado cacheado 5 min con el token hasheado.
 - Helper clave: `leerPem()` acepta PEM con `\n` reales/literales o base64.
 
 ## Integraciones
@@ -75,6 +77,7 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 **WhatsApp/Mail bot/Gemini:** `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`; `GEMINI_API_KEY` (**una sola key, compartida** por el asistente de WhatsApp/mail, el Asistente RK dentro de la app, y "Leer factura/presupuesto con IA" — todos pasan por `POST /gemini`); `MAIL_BOT_USER`, `MAIL_BOT_APP_PASSWORD`, `MAIL_BOT_ALLOWED` (reutilizadas también por la agenda de vencimientos); `ALERTAS_EMAIL_DEFAULT` (opcional, mail de respaldo para alertas de vencimientos si el vencimiento y la empresa no tienen email propio — si no se define usa `MAIL_BOT_USER`).
 **Seguridad del backend:** `APP_API_TOKEN` (token compartido esperado en `X-App-Token`; ver también auth por idToken de Firebase arriba); `ALLOWED_ORIGINS` (CORS, lista separada por comas; sin definir permite cualquier origen); `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` (opcionales, límite de requests por IP).
 **Firebase Admin** (para verificar idToken y para `/usuarios/*`): `FIREBASE_SERVICE_ACCOUNT` (el JSON completo del service account, crudo o en base64 — nombre preferido) **o** `FIREBASE_SERVICE_ACCOUNT_BASE64` (nombre viejo, mismo formato) **o**, si ninguno de los dos carga, fallback a variables individuales `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` / `FIREBASE_PROJECT_ID`. Diagnóstico: `GET /diag/firebase`.
+**Tablero de final de obra:** `FINAL_OBRA_API_KEY` (apiKey pública del proyecto del tablero; si falta usa la del repo), `FINAL_OBRA_ALLOWED` (mails habilitados a usar el asistente, separados por comas — **sin definir entra cualquier cuenta de ese proyecto**, y se avisa por log).
 `PORT`.
 
 ## PWA
@@ -143,6 +146,12 @@ El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`,
 **Semáforo**: por cantidad de pendientes — 0 terminada, 1-4 menores, 5-10 medios, 11+ críticos. Son los cortes del tablero original; si se tocan, hay que tocar `sevDe()` y los textos de `SEV`.
 
 **Permiso denegado con sesión abierta.** No abrir el formulario de ingreso: la cuenta ya entró bien, volver a entrar no cambia nada. `btnNube` tiene una rama propia para `estado === "mal" && nube.usuario` que muestra `bloqueReglas()` —las reglas con el mail de quien entró ya puesto— con botón de copiar y un «reintentar» que hace `soltarDatos()` + `conectarDatos()` sin recargar.
+
+**Asistente.** Habla con Gemini **a través del backend** (`CFG.backendUrl` + `/gemini`), nunca directo: la key vive en el servidor. Manda el idToken de la sesión del tablero, que el backend verifica como se explica arriba. El contexto que arma `asisContexto()` incluye lugares, rubros, personas y **sólo los pendientes** (tope 600): mandar lo ya hecho es pagar contexto que no se usa.
+
+⚠️ **El asistente NUNCA aplica nada solo.** Devuelve acciones, `asisTraducir()` descarta las que apunten a ids inexistentes, y se muestran con casilleros para confirmar. Dictando en la obra —con ruido y palabras técnicas— la transcripción falla seguido, y dar por hecha una unidad equivocada sería peor que no tener asistente.
+
+**Dictado**: usa `SpeechRecognition` del navegador (es-AR), no manda el audio a Gemini. Es instantáneo, no gasta datos, y lo transcripto queda en el casillero para revisarlo antes de mandarlo. Donde no exista, se escribe a mano y se avisa.
 
 **Informe**: `@media print` con `body.imprimiendo > *{display:none}` salvo `#reporte`. Se enumeraba qué esconder y cualquier bloque nuevo se colaba en la hoja.
 
