@@ -151,7 +151,9 @@ El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`,
 
 ⚠️ **El asistente NUNCA aplica nada solo.** Devuelve acciones, `asisTraducir()` descarta las que apunten a ids inexistentes, y se muestran con casilleros para confirmar. Dictando en la obra —con ruido y palabras técnicas— la transcripción falla seguido, y dar por hecha una unidad equivocada sería peor que no tener asistente.
 
-**Dictado**: usa `SpeechRecognition` del navegador (es-AR), no manda el audio a Gemini. Es instantáneo, no gasta datos, y lo transcripto queda en el casillero para revisarlo antes de mandarlo. Donde no exista, se escribe a mano y se avisa.
+**Micrófono — dos caminos, un solo botón.** Con `SpeechRecognition` (es-AR) transcribe en el navegador: instantáneo, gratis y sin gastar datos, y lo transcripto queda en el casillero para corregirlo antes de mandarlo. Donde no existe (Firefox, iOS fuera de Safari, y Brave donde suele fallar) **graba y le manda el audio a Gemini**; también cae ahí solo si el dictado tira error, en vez de dejar al usuario a pie.
+
+⚠️ **Gemini no acepta lo que graba MediaRecorder.** Los formatos documentados son wav, mp3, aiff, aac, ogg y flac — y MediaRecorder entrega **webm** (Chrome/Android) o **mp4** (Safari), ninguno de los dos en esa lista. Por eso `prepararAudio()` reconvierte a **WAV mono de 16 kHz** con `OfflineAudioContext` todo lo que no venga en un formato de `MIMES_OK`. En la práctica convierte casi siempre. Como el WAV no comprime, la grabación tiene tope de 30 s (`MAX_SEG`): más que eso no sube desde la obra.
 
 **Informe**: `@media print` con `body.imprimiendo > *{display:none}` salvo `#reporte`. Se enumeraba qué esconder y cualquier bloque nuevo se colaba en la hoja.
 
