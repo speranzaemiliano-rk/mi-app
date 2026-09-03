@@ -362,7 +362,46 @@
 
   /* ── Informe imprimible ─────────────────────────────────────── */
   #reporte{display:none}
-  @media print{
+    /* --- Vista Resumen: los dos cuadros de un vistazo --- */
+  .res-tit{display:flex;align-items:baseline;gap:10px;margin:18px 0 9px}
+  .res-tit h3{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2)}
+  .res-tit .cnt{margin-left:auto;font-size:12px;font-weight:700;color:var(--acento);font-variant-numeric:tabular-nums}
+  .res-tit .cnt.fin{color:var(--listo)}
+  .res-nota{font-size:12px;color:var(--text-2);margin:-4px 0 10px}
+
+  /* Departamentos: sólo el número. Se tacha solo cuando no le queda nada. */
+  .grilla{display:flex;flex-wrap:wrap;gap:6px}
+  .celda{
+    min-width:56px;border:1px solid var(--border);background:var(--card);border-radius:var(--radius-sm);
+    padding:8px 9px 7px;font-family:inherit;cursor:pointer;text-align:center;line-height:1.15;
+  }
+  .celda .n{display:block;font-size:15px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+  .celda .p{display:block;font-size:10px;font-weight:600;color:var(--danger);margin-top:2px;font-variant-numeric:tabular-nums}
+  .celda:active{background:var(--surface-2)}
+  .celda.listo{background:var(--listo-bg);border-color:var(--listo)}
+  .celda.listo .n{color:#125C28;text-decoration:line-through}
+  .celda.listo .p{color:#125C28}
+  .celda.vacia{border-style:dashed;background:var(--surface)}
+  .celda.vacia .n{color:var(--text-2)}
+  .celda.vacia .p{color:var(--text-2);font-weight:500}
+
+  /* Espacios comunes: el nombre y debajo sólo los rubros que faltan. */
+  .esp-fila{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);
+    padding:10px 12px;margin-bottom:7px;cursor:pointer}
+  .esp-fila:active{background:var(--surface-2)}
+  .esp-fila.listo{background:var(--listo-bg);border-color:var(--listo)}
+  .esp-cab{display:flex;align-items:baseline;gap:8px}
+  .esp-cab .nom{flex:1;min-width:0;font-size:14px;font-weight:700;color:var(--ink);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .esp-fila.listo .esp-cab .nom{color:#125C28;text-decoration:line-through}
+  .esp-cab .n{flex:0 0 auto;font-size:12px;font-weight:700;color:var(--danger);font-variant-numeric:tabular-nums}
+  .esp-fila.listo .esp-cab .n{color:#125C28}
+  .esp-rub{margin-top:6px;font-size:12.5px;color:var(--text-2);line-height:1.5}
+  .esp-rub b{color:var(--ink);font-weight:600}
+  .esp-rub .sep{color:var(--text-3);margin:0 2px}
+  .esp-sin{margin-top:5px;font-size:12.5px;color:var(--text-2)}
+
+@media print{
     body{background:#fff;padding:0}
     /* Al imprimir queda el informe y nada más. Enumerar qué esconder es
        frágil: cualquier bloque nuevo se colaría en la hoja. */
@@ -446,6 +485,7 @@
     <button class="tab act" data-vista="unidad">Departamentos</button>
     <button class="tab" data-vista="comun">Espacios comunes</button>
     <button class="tab" data-vista="rubro">Por rubro</button>
+    <button class="tab" data-vista="resumen">Resumen</button>
   </div>
 </nav>
 
@@ -849,8 +889,120 @@
     '</div>';
   }
 
+  /* Para la grilla alcanza el número: "Unidad 101" ocupa lugar de más
+     cuando hay 39 pegadas. Si al sacarle la palabra no queda nada
+     (un espacio que se llama sólo "Cochera"), se deja el nombre entero. */
+  function nomCorto(nombre){
+    var c = String(nombre || "").replace(/^\s*(unidad|departamento|depto\.?|dpto\.?|uf)\s+/i, "").trim();
+    return c || String(nombre || "");
+  }
+
+  // Una entidad sin ningún ítem cargado NO está terminada: está sin cargar.
+  // Distinguirlas importa: si no, 39 unidades vacías se ven todas listas.
+  function estadoDe(eid){
+    var n = cuentaDe(itemsDe(eid));
+    if (!n.total) return { clase:"vacia", pend:0, total:0, listo:false, vacio:true };
+    return { clase: n.pend === 0 ? "listo" : "", pend:n.pend, total:n.total,
+             listo: n.pend === 0, vacio:false };
+  }
+
+  // Nombres de los rubros que TODAVÍA tienen algo pendiente en esa entidad,
+  // con cuánto falta de cada uno. Es el cuadro que se pidió: sólo lo que falta.
+  function rubrosPendientesDe(eid){
+    var porR = {}, orden = [];
+    itemsDe(eid).forEach(function(iid){
+      var it = datos.items[iid];
+      if (it.ok) return;
+      if (!porR[it.rubro]) { porR[it.rubro] = 0; orden.push(it.rubro); }
+      porR[it.rubro]++;
+    });
+    return orden.map(function(r){ return { rubro:r, n:porR[r] }; });
+  }
+
+  function cuadroGrilla(titulo, tipo){
+    var lista = entidadesDe(tipo);
+    var listos = 0, sinCargar = 0;
+    lista.forEach(function(eid){
+      var e = estadoDe(eid);
+      if (e.vacio) sinCargar++; else if (e.listo) listos++;
+    });
+    var conDatos = lista.length - sinCargar;
+
+    var h = ['<div class="res-tit"><h3>' + esc(titulo) + '</h3>' +
+      (conDatos ? '<span class="cnt' + (listos === conDatos ? ' fin' : '') + '">' +
+        listos + ' de ' + conDatos + ' terminados</span>' : '') + '</div>'];
+    if (sinCargar) {
+      h.push('<div class="res-nota">' + sinCargar +
+        (sinCargar === 1 ? ' todavía no tiene pendientes cargados (borde punteado).'
+                         : ' todavía no tienen pendientes cargados (borde punteado).') + '</div>');
+    }
+    if (!lista.length) return h.join("") + '<div class="vacio">No hay nada cargado acá.</div>';
+
+    h.push('<div class="grilla">');
+    lista.forEach(function(eid){
+      var e = estadoDe(eid), ent = datos.entidades[eid];
+      h.push('<button class="celda ' + e.clase + '" data-ent="' + esc(eid) + '" title="' +
+        esc(ent.nombre) + (ent.piso ? " · piso " + esc(ent.piso) : "") + '">' +
+        '<span class="n">' + esc(nomCorto(ent.nombre)) + '</span>' +
+        '<span class="p">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ listo" : e.pend + " pend.")) + '</span>' +
+      '</button>');
+    });
+    h.push('</div>');
+    return h.join("");
+  }
+
+  function cuadroEspacios(){
+    var lista = entidadesDe("comun");
+    var listos = 0, sinCargar = 0;
+    lista.forEach(function(eid){
+      var e = estadoDe(eid);
+      if (e.vacio) sinCargar++; else if (e.listo) listos++;
+    });
+    var conDatos = lista.length - sinCargar;
+
+    var h = ['<div class="res-tit"><h3>Espacios comunes</h3>' +
+      (conDatos ? '<span class="cnt' + (listos === conDatos ? ' fin' : '') + '">' +
+        listos + ' de ' + conDatos + ' terminados</span>' : '') + '</div>'];
+    if (!lista.length) return h.join("") + '<div class="vacio">No hay espacios comunes cargados.</div>';
+
+    lista.forEach(function(eid){
+      var ent = datos.entidades[eid], e = estadoDe(eid), rs = rubrosPendientesDe(eid);
+      h.push('<div class="esp-fila ' + (e.listo ? "listo" : "") + '" data-ent="' + esc(eid) + '">' +
+        '<div class="esp-cab"><span class="nom">' +
+          (ent.icono ? esc(ent.icono) + " " : "") + esc(ent.nombre) + '</span>' +
+          '<span class="n">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ terminado" : e.pend + " pendientes")) + '</span>' +
+        '</div>' +
+        (rs.length
+          ? '<div class="esp-rub">' + rs.map(function(r){
+              return '<b>' + esc(rubroNom(r.rubro)) + '</b> ' + r.n;
+            }).join('<span class="sep"> · </span>') + '</div>'
+          : (e.vacio ? '<div class="esp-sin">todavía sin pendientes cargados</div>'
+                     : '<div class="esp-sin">no falta ningún rubro</div>')) +
+      '</div>');
+    });
+    return h.join("");
+  }
+
+  // El resumen es una foto de todo el tablero: dejar los filtros a la vista
+  // sin que hagan nada se lee como que están rotos.
+  function ajustarFiltros(){
+    var f = document.querySelector(".filtros");
+    if (f) f.style.display = (filtro.vista === "resumen") ? "none" : "";
+  }
+
+  function pintarResumen(cont){
+    cont.innerHTML =
+      cuadroEspacios() +
+      cuadroGrilla("Departamentos", "unidad") +
+      '<div class="res-nota" style="margin:14px 0 0">Se tachan solos cuando no les queda ' +
+      'ningún pendiente. Tocá cualquiera para abrirlo. Este resumen muestra todo: ' +
+      'no le afectan los filtros de arriba.</div>';
+  }
+
   function pintarLista(){
     var cont = $("lista"), html = [];
+
+    if (filtro.vista === "resumen") { pintarResumen(cont); return; }
 
     if (filtro.vista === "rubro") {
       var rs = rubrosOrdenados().filter(function(rid){
@@ -1565,6 +1717,7 @@
     filtro.vista = b.getAttribute("data-vista");
     Array.prototype.forEach.call(this.querySelectorAll(".tab"), function(x){ x.classList.remove("act"); });
     b.classList.add("act");
+    ajustarFiltros();
     pintarAcciones(); pintarLista();
   });
 
@@ -1599,7 +1752,7 @@
       });
       render(); return;
     }
-    var t = e.target.closest(".tarjeta"); if (!t) return;
+    var t = e.target.closest(".tarjeta, .celda, .esp-fila"); if (!t) return;
     if (t.getAttribute("data-ent")) abrirDetalle("ent", t.getAttribute("data-ent"));
     else abrirDetalle("rubro", t.getAttribute("data-rubro"));
   });
