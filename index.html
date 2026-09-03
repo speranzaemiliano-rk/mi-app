@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v480</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v481</div>
         </div>
     </nav>
 
@@ -7286,6 +7286,11 @@
                         <option value="ARS">ARS — Pesos argentinos</option>
                         <option value="USD">USD — Dólares</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label>🛡️ Fondo de reparo (garantía de obra)</label>
+                    <input type="number" id="factFondoReparoPct" step="0.01" min="0" max="100" placeholder="Ej: 10">
+                    <div class="form-hint">% que se le retiene a esta factura en cada pago, para devolvérselo al proveedor al terminar la obra. Dejalo vacío si no aplica. Se precarga solo al pagar; se puede ajustar en cada pago.</div>
                 </div>
                 <div class="form-group" id="factComputaGrupo">
                     <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(factura a nombre de la empresa — Factura A o B)</span></label>
@@ -11333,6 +11338,13 @@
                 : Math.round(pend/1.21);
         }
         pagoFDRecalcRet();
+        // Fondo de reparo: si la factura ya trae su propio % (cargado al recibirla), se
+        // precarga acá — recién ahora, para que la resta de retenciones ya esté calculada.
+        // Sólo si el campo sigue vacío: no pisa lo que el usuario haya tocado a mano.
+        if (_pagoFDTab === 'fact' && _itFD && _itFD.fondoReparoPct > 0) {
+            var frI = document.getElementById('pagoFDFrPct');
+            if (frI && !frI.value) { frI.value = _itFD.fondoReparoPct; pagoFDFrDesdePct(); }
+        }
     }
     function pagoFDSelMod(m) {
         document.getElementById('pagoFDMod').value=m;
@@ -15303,7 +15315,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v480';
+    var APP_VER = 'v481';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18625,6 +18637,9 @@
         if (datos.descripcion) document.getElementById('leerFactDesc').value    = datos.descripcion;
         if (datos.importe)     document.getElementById('leerFactImporte').value = datos.importe;
         if (datos.moneda)      document.getElementById('leerFactMoneda').value  = datos.moneda || 'ARS';
+        // Explícito (no "if"): en el lote se revisita un archivo distinto cada vez, y sin esto
+        // el % del fondo de reparo del archivo anterior quedaría pegado en el siguiente.
+        document.getElementById('leerFactFondoReparoPct').value = datos.fondoReparoPct || '';
         // Guardar neto gravado para base imponible de retenciones
         window._lfNetoGravado = datos.netoGravado || null;
         // Campos extra
@@ -18823,6 +18838,7 @@
             descripcion:      desc,
             importe:          importe,
             items:            _leerFactItems('lf'),   // detalle del comprobante: cada ítem suma o resta
+            fondoReparoPct:   parseFloat(document.getElementById('leerFactFondoReparoPct').value) || 0,
             moneda:           moneda,
             pagado:           0,
             estado:           'pendiente',
@@ -18970,6 +18986,7 @@
         document.getElementById('factDescripcion').value  = f.descripcion || '';
         _renderFactItems(f.items || []);
         document.getElementById('factImporte').value      = f.importe || 0;
+        document.getElementById('factFondoReparoPct').value = f.fondoReparoPct || '';
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
         var _fae = document.getElementById('factArchivoEstado');
@@ -19870,6 +19887,7 @@
             descripcion: document.getElementById('factDescripcion').value.trim(),
             importe:     parseFloat(document.getElementById('factImporte').value) || 0,
             items:       _leerFactItems(),   // detalle del comprobante: cada ítem suma o resta
+            fondoReparoPct: parseFloat(document.getElementById('factFondoReparoPct').value) || 0,
             moneda:      document.getElementById('factMoneda').value,
             pagado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].pagado || 0) : 0,
             estado:      editandoFactIndex >= 0 ? (facturas[editandoFactIndex].estado || 'pendiente') : 'pendiente',
@@ -33755,6 +33773,14 @@
         else if (tipo === 'documento')   { abrirModalDoc(ref);  _fichaSubirModal('modalDoc'); }
         else if (tipo === 'presupuesto') { editarFila(ref);     _fichaSubirModal('modal'); }
     };
+    // Eliminar un comprobante desde el extracto de la ficha del proveedor. eliminarFactura/
+    // eliminarDoc ya piden confirmación y no saben que se los llamó desde acá, así que
+    // refrescamos la ficha nosotros (si no, queda mostrando la fila del comprobante borrado).
+    window._fichaEliminarComprob = function(tipo, ref) {
+        if (tipo === 'factura')        eliminarFactura(ref);
+        else if (tipo === 'documento') eliminarDoc(ref);
+        _fichaRefrescarSiAbierta();
+    };
     // Sube un modal de edición por encima de la ficha de proveedor (que está en z-index 500).
     function _fichaSubirModal(id) { var m = document.getElementById(id); if (m) m.style.zIndex = '600'; }
     // Al cerrar un modal de edición abierto desde la ficha, refresca la ficha (abierta debajo)
@@ -34131,7 +34157,8 @@
                 if (m.ref) {
                     var r = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
                     if (puedeEd) {
-                        acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>';
+                        acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>'
+                            + ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEliminarComprob(\'' + m.ref.t + '\',' + r + ')" title="Eliminar">✕</button>';
                     }
                 } else if (m._op) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
@@ -41239,6 +41266,11 @@
           <div class="form-group">
             <label>Importe total *</label>
             <input type="number" id="leerFactImporte" step="0.01" min="0" placeholder="0.00" style="font-size:16px;font-weight:700;">
+          </div>
+          <div class="form-group">
+            <label>🛡️ Fondo de reparo (%)</label>
+            <input type="number" id="leerFactFondoReparoPct" step="0.01" min="0" max="100" placeholder="Ej: 10">
+            <div class="form-hint">Si esta factura tiene garantía de obra a retener en cada pago. Dejalo vacío si no aplica.</div>
           </div>
 
           <div class="form-group" style="grid-column:1/-1;">
