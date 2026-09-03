@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v481</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v482</div>
         </div>
     </nav>
 
@@ -7247,12 +7247,13 @@
 
                 <div class="form-group">
                     <label>Nro. Factura</label>
-                    <input type="text" id="factNumero" placeholder="Ej: 0001-00012345">
+                    <input type="text" id="factNumero" placeholder="Ej: 0001-00012345" oninput="_factRevisarDuplicado()">
                     <div class="form-hint" id="factNroProvHint" style="display:none;color:var(--success);"></div>
+                    <div class="form-hint" id="factDupAviso" style="display:none;color:var(--warn);font-weight:600;"></div>
                 </div>
                 <div class="form-group">
                     <label>Fecha de emisión</label>
-                    <input type="date" id="factFecha" required>
+                    <input type="date" id="factFecha" required onchange="_factRevisarDuplicado()">
                 </div>
                 <div class="form-group">
                     <label>Fecha de vencimiento</label>
@@ -15315,7 +15316,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v481';
+    var APP_VER = 'v482';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18148,6 +18149,7 @@
             _lfCola = []; _lfColaIdx = 0;
             _lfLote = []; _lfModoLote = false; _lfDesdeLote = false;
             var _p3 = document.getElementById('leerFactPaso3'); if (_p3) _p3.style.display = 'none';
+            var _lda = document.getElementById('leerFactDupAviso'); if (_lda) { _lda.style.display = 'none'; _lda.innerHTML = ''; }
         } catch (e) { console.error('abrirLeerFacturaPDF (preparación):', e); }
         document.body.classList.remove('printing-rv');
         document.getElementById('modalLeerFactPDF').classList.add('active');
@@ -18339,6 +18341,7 @@
         // Si está marcado como Nota de Crédito, refrescar las facturas de ese proveedor.
         var _ncChk = document.getElementById('leerFactEsNC');
         if (_ncChk && _ncChk.checked) _lfPoblarNCFacturas();
+        _lfRevisarDuplicado();
     }
 
     // Asistente IA: marcar el comprobante leído como Nota de Crédito. Oculta los controles de
@@ -18640,6 +18643,9 @@
         // Explícito (no "if"): en el lote se revisita un archivo distinto cada vez, y sin esto
         // el % del fondo de reparo del archivo anterior quedaría pegado en el siguiente.
         document.getElementById('leerFactFondoReparoPct').value = datos.fondoReparoPct || '';
+        // Apenas la IA reconoce proveedor + número, se avisa si ya está cargado — sin
+        // esperar a que se complete el pago y se confirme al final.
+        _lfRevisarDuplicado();
         // Guardar neto gravado para base imponible de retenciones
         window._lfNetoGravado = datos.netoGravado || null;
         // Campos extra
@@ -18754,6 +18760,47 @@
                 return { item: x, donde: c.donde, motivo: 'mismo importe y fecha' };
         }
         return null;
+    }
+
+    // ── Aviso EN VIVO de duplicado, mientras se completa el proveedor y el número ──
+    // Antes solo se avisaba al final, con todo el pago ya cargado y al tocar "Guardar" —
+    // demasiado tarde para evitar el trabajo repetido. Usa el mismo detector que la
+    // confirmación final (buscarComprobanteDuplicado), así los dos coinciden siempre;
+    // esto NO reemplaza esa confirmación, la anticipa.
+    function _dupAvisoVivo(cfg) {
+        var provEl  = document.getElementById(cfg.prov);
+        var numEl   = document.getElementById(cfg.numero);
+        var avisoEl = document.getElementById(cfg.aviso);
+        if (!provEl || !numEl || !avisoEl) return;
+        var impEl   = cfg.importe && document.getElementById(cfg.importe);
+        var fechaEl = cfg.fecha && document.getElementById(cfg.fecha);
+        var excluirId = (typeof cfg.excluirId === 'function') ? cfg.excluirId() : null;
+        var d = buscarComprobanteDuplicado({
+            proveedor: provEl.value,
+            numero: numEl.value,
+            importe: impEl ? impEl.value : null,
+            fecha: fechaEl ? fechaEl.value : null
+        }, excluirId);
+        if (!d) { avisoEl.style.display = 'none'; avisoEl.innerHTML = ''; return; }
+        var x = d.item;
+        var mon = (x.moneda === 'USD' ? 'USD ' : '$');
+        avisoEl.innerHTML = '⚠️ Ya hay un comprobante cargado que parece el mismo (' + d.motivo + '): '
+            + '<strong>' + escHtml(x.proveedor || '—') + '</strong> · N° ' + escHtml(x.numero || '(sin número)')
+            + ' · ' + (x.fecha ? formatearFecha(x.fecha) : '—') + ' · ' + mon + (x.importe || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
+            + ' (' + d.donde + '). Puede que otra persona ya lo haya cargado.';
+        avisoEl.style.display = '';
+    }
+    // Wrapper para el modal de carga manual (factura / ND / Comprobante X).
+    function _factRevisarDuplicado() {
+        _dupAvisoVivo({ prov: 'factProveedor', numero: 'factNumero', importe: 'factImporte', fecha: 'factFecha',
+            aviso: 'factDupAviso',
+            excluirId: function () { return (editandoFactIndex >= 0 && facturas[editandoFactIndex]) ? facturas[editandoFactIndex].id : null; } });
+    }
+    // Wrapper para la pantalla de revisión de "Leer con IA": se dispara solo apenas la IA
+    // completa proveedor + número (ver _mostrarPreviewFactura), sin que el usuario toque nada.
+    function _lfRevisarDuplicado() {
+        _dupAvisoVivo({ prov: 'leerFactProv', numero: 'leerFactNumero', importe: 'leerFactImporte', fecha: 'leerFactFecha',
+            aviso: 'leerFactDupAviso' });
     }
 
     // Devuelve true si hay que seguir adelante (no había duplicado, o el usuario aceptó).
@@ -18953,6 +19000,7 @@
             document.getElementById('factFechaPago').valueAsDate = new Date();
             document.getElementById('factArchivoEstado').textContent = 'Subí el PDF o imagen de la factura. Si es pesado se comprime automáticamente.';
             _renderFactItems([]);   // reset() no borra las filas de ítems, que son HTML generado
+            var _fda = document.getElementById('factDupAviso'); if (_fda) { _fda.style.display = 'none'; _fda.innerHTML = ''; }
             poblarSelectProveedoresFact();
             selFactTipo('presup');
             selFactPagoInmediato(true);
@@ -18989,6 +19037,7 @@
         document.getElementById('factFondoReparoPct').value = f.fondoReparoPct || '';
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
+        _factRevisarDuplicado();   // excluye este mismo registro; avisa si hay OTRO parecido
         var _fae = document.getElementById('factArchivoEstado');
         if (f.docId && f.docNombre) {
             _fae.innerHTML = '📎 Archivo actual: <a href="javascript:void(0)" onclick="descargarDoc(\'' + f.docId + '\',\'' + (f.docNombre||'factura').replace(/'/g,'') + '\')" style="color:var(--blue);font-weight:600;text-decoration:underline;cursor:pointer;">' + escHtml(f.docNombre) + '</a> '
@@ -19540,6 +19589,7 @@
         var _ncc = document.getElementById('factEsNC');
         if (_ncc && _ncc.checked) _factPoblarNCFacturas();
         _factMostrarNroProvHint();
+        _factRevisarDuplicado();
     }
     // Comprobante X: al elegir proveedor, muestra el próximo N° interno correlativo de ese
     // proveedor (numeración propia del sistema, ya que los comprobantes X no tienen N° de ARCA).
@@ -19773,6 +19823,7 @@
         const monto = document.getElementById('factMontoPago');
         if (monto && !monto._editado) monto.value = Math.round(imp) || '';
         recalcularRetencionesFactura();
+        _factRevisarDuplicado();
     }
 
     function poblarPresupuestosFactura() {
@@ -41235,7 +41286,8 @@
           </div>
           <div class="form-group">
             <label>N° Factura</label>
-            <input type="text" id="leerFactNumero" placeholder="0001-00012345">
+            <input type="text" id="leerFactNumero" placeholder="0001-00012345" oninput="_lfRevisarDuplicado()">
+            <div class="form-hint" id="leerFactDupAviso" style="display:none;color:var(--warn);font-weight:600;"></div>
           </div>
 
           <div class="form-group">
