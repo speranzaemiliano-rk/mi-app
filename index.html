@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v482</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v483</div>
         </div>
     </nav>
 
@@ -15316,7 +15316,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v482';
+    var APP_VER = 'v483';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -20246,26 +20246,38 @@
         sincronizarPagoPlan('factura', index);
     }
 
+    // Núcleo compartido: quita de `item.pagosHistorial` la entrada en el índice `pi` (o la
+    // ÚLTIMA si no se pasa `pi`, para no romper a quien ya llamaba sin ese argumento). Libera
+    // el número de OP y ajusta `pagado`. Devuelve el pago quitado (o null). NO persiste ni
+    // refresca pantallas: eso lo hace quien llama, una sola vez — importante cuando se
+    // desaplican varias entradas juntas (un pago que cubrió varias facturas).
+    function _desaplicarPagoEntryCore(item, pi) {
+        var hist = item.pagosHistorial || [];
+        var p = (pi != null && hist[pi] != null) ? hist[pi] : (hist.length ? hist[hist.length - 1] : null);
+        if (!p) {
+            if ((item.pagado || 0) > 0) { item.pagado = 0; }   // pago viejo sin historial
+            return null;
+        }
+        if (p.nroCorrelativo && typeof _liberarNroComprobante === 'function') _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
+        item.pagosHistorial = hist.filter(function (x) { return x !== p; });
+        item.pagado = Math.max(0, (item.pagado || 0) - (p.monto || 0));
+        return p;
+    }
+
     // Deshace el ÚLTIMO pago de una factura (repetible: se van deshaciendo de a uno).
     // Disponible incluso con la factura Saldada. Quita el pago del historial, baja el
     // monto pagado, libera el número de comprobante y saca su reflejo en Caja/Banco
     // (el movimiento se deriva del pagosHistorial, igual que en Documentos).
-    function desaplicarPagoFactura(index) {
+    function desaplicarPagoFactura(index, pi) {
         var f = facturas[index];
         if (!f) return;
         var hist = f.pagosHistorial || [];
         if (!hist.length && !(f.pagado > 0)) { alert('Esta factura no tiene pagos para desaplicar.'); return; }
-        var p = hist.length ? hist[hist.length - 1] : null;   // el último
+        var p = (pi != null) ? hist[pi] : (hist.length ? hist[hist.length - 1] : null);
         var monto = p ? (p.monto || 0) : (f.pagado || 0);
         var detalle = '$' + (monto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + (p && p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '');
-        if (!confirm('¿Desaplicar el último pago de esta factura (' + detalle + ')?\n\nLa factura vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
-        if (p) {
-            if (p.nroCorrelativo) _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
-            f.pagosHistorial = hist.filter(function(x){ return x !== p; });
-            f.pagado = Math.max(0, (f.pagado || 0) - monto);
-        } else {
-            f.pagado = 0;   // pago inicial cargado como "monto ya pagado", sin historial
-        }
+        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de esta factura (' + detalle + ')?\n\nLa factura vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
+        _desaplicarPagoEntryCore(f, pi);
         f.estado = _estadoFactDoc(f);
         REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial: f.pagosHistorial || [], pagado: f.pagado, estado: f.estado });
         if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', index);
@@ -20276,25 +20288,20 @@
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
         if (typeof renderBanco === 'function') renderBanco();
+        if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
     }
 
     // Igual que desaplicarPagoFactura, pero para un comprobante X / documento (REF_DOCS).
-    function desaplicarPagoDoc(docId) {
+    function desaplicarPagoDoc(docId, pi) {
         var d = (documentos || []).find(function(x){ return x.id === docId; });
         if (!d) return;
         var hist = d.pagosHistorial || [];
         if (!hist.length && !(d.pagado > 0)) { alert('Este comprobante no tiene pagos para desaplicar.'); return; }
-        var p = hist.length ? hist[hist.length - 1] : null;
+        var p = (pi != null) ? hist[pi] : (hist.length ? hist[hist.length - 1] : null);
         var monto = p ? (p.monto || 0) : (d.pagado || 0);
         var detalle = '$' + (monto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + (p && p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '');
-        if (!confirm('¿Desaplicar el último pago de este comprobante (' + detalle + ')?\n\nVuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
-        if (p) {
-            if (p.nroCorrelativo && typeof _liberarNroComprobante === 'function') _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
-            d.pagosHistorial = hist.filter(function(x){ return x !== p; });
-            d.pagado = Math.max(0, (d.pagado || 0) - monto);
-        } else {
-            d.pagado = 0;
-        }
+        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de este comprobante (' + detalle + ')?\n\nVuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
+        _desaplicarPagoEntryCore(d, pi);
         try { REF_DOCS.child(d.id).update({ pagosHistorial: d.pagosHistorial || [], pagado: d.pagado }); } catch(e){}
         if (d.presupuestoIdx != null && datos[d.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
             _reconciliarFacturaEnPresupuesto(d.presupuestoIdx, { id: d.id, pagado: d.pagado, fecha: d.fecha, numero: d.numero });
@@ -20306,6 +20313,59 @@
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
         if (typeof renderBanco === 'function') renderBanco();
+        if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
+    }
+
+    // Elimina la Orden de Pago vista en el extracto de la cuenta corriente (pestaña o ficha
+    // del proveedor): apunta a la entrada EXACTA que se clickeó (por índice), no siempre a la
+    // última — a diferencia de los botones ↩️ de la fila de la factura. Si el pago cubrió
+    // VARIAS facturas juntas (grupo), se desaplican todas a la vez: dejar solo una pata
+    // rota rompería la numeración y las retenciones, que son del PAGO, no de cada factura.
+    function ccDesaplicarPago(tipo, ref, pi, grupo) {
+        var entradas = [];
+        if (grupo) {
+            (facturas || []).forEach(function (f, i) {
+                (f.pagosHistorial || []).forEach(function (p, i2) { if (p.grupoPagoId === grupo) entradas.push({ item: f, pi: i2, tipoItem: 'fact', ref: i }); });
+            });
+            (documentos || []).forEach(function (d) {
+                (d.pagosHistorial || []).forEach(function (p, i2) { if (p.grupoPagoId === grupo) entradas.push({ item: d, pi: i2, tipoItem: 'doc', ref: d.id }); });
+            });
+        } else {
+            var item = (tipo === 'fact') ? facturas[ref] : (documentos || []).find(function (x) { return x.id === ref; });
+            if (item) entradas.push({ item: item, pi: pi, tipoItem: tipo, ref: ref });
+        }
+        if (!entradas.length) { alert('No se encontró el pago.'); return; }
+        var total = 0, nroComp = '';
+        entradas.forEach(function (e) {
+            var p = (e.item.pagosHistorial || [])[e.pi];
+            if (p) { total += (p.monto || 0); if (!nroComp) nroComp = p.nroCorrelativo || ''; }
+        });
+        var montoTxt = '$' + total.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+        var msg = (entradas.length > 1)
+            ? ('¿Eliminar esta Orden de Pago' + (nroComp ? ' (' + nroComp + ')' : '') + '?\n\nCubre ' + entradas.length + ' factura(s) por un total de ' + montoTxt + '. Cada una vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlas después.')
+            : ('¿Eliminar esta Orden de Pago' + (nroComp ? ' (' + nroComp + ')' : '') + ' de ' + montoTxt + '?\n\nEl comprobante vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.');
+        if (!confirm(msg)) return;
+        entradas.forEach(function (e) {
+            _desaplicarPagoEntryCore(e.item, e.pi);
+            e.item.estado = _estadoFactDoc(e.item);
+            if (e.tipoItem === 'fact') {
+                REF_FACTURAS.child(e.item.id || (e.item.id = _colUidItem())).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado, estado: e.item.estado });
+                if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', e.ref);
+            } else {
+                try { REF_DOCS.child(e.item.id).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado }); } catch (err) {}
+                if (e.item.presupuestoIdx != null && datos[e.item.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
+                    _reconciliarFacturaEnPresupuesto(e.item.presupuestoIdx, { id: e.item.id, pagado: e.item.pagado, fecha: e.item.fecha, numero: e.item.numero });
+                }
+            }
+        });
+        if (typeof renderFacturas === 'function') renderFacturas();
+        if (typeof renderDocumentos === 'function') renderDocumentos();
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
+        if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
+        if (typeof renderBanco === 'function') renderBanco();
+        if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
     }
 
     function renderFacturas() {
@@ -33991,6 +34051,11 @@
                 } else if (m._op) {
                     // Imprime la OP de ESTE pago (o la unica OP combinada, si el pago fue de varias facturas).
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
+                    if (puedeEd) {
+                        var _opRefArg = (m._op.t === 'fact') ? m._op.ref : ("'" + String(m._op.ref).replace(/'/g,"\\'") + "'");
+                        var _opGrupoArg = m._op.grupo ? ("'" + String(m._op.grupo).replace(/'/g,"\\'") + "'") : 'null';
+                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Eliminar esta Orden de Pago">✕</button>';
+                    }
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
                 } else if (m._fr) {
@@ -34213,6 +34278,11 @@
                     }
                 } else if (m._op) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="' + _vm.fn + '" title="Imprimir una copia de la Orden de Pago">🧾 OP</button>';
+                    if (puedeEd) {
+                        var _opRefArg = (m._op.t === 'fact') ? m._op.ref : ("'" + String(m._op.ref).replace(/'/g,"\\'") + "'");
+                        var _opGrupoArg = m._op.grupo ? ("'" + String(m._op.grupo).replace(/'/g,"\\'") + "'") : 'null';
+                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Eliminar esta Orden de Pago">✕</button>';
+                    }
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
                 } else if (m._fr) {
