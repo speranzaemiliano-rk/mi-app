@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v479</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v480</div>
         </div>
     </nav>
 
@@ -15303,7 +15303,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v479';
+    var APP_VER = 'v480';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17979,6 +17979,150 @@
     // para que el usuario la confirme antes de guardarla. NO se guardan solas: un dato mal
     // leído por la IA que entra sin mirar es un asiento contable equivocado.
     var _lfCola = [], _lfColaIdx = 0;
+    // ══════════ Carga en bloque: leer varios comprobantes y después elegir ══════════
+    // Antes había que decidir uno por uno mientras se leían. Ahora se leen todos de
+    // corrido, se muestran en una lista con lo que entendió la IA, y recién ahí se
+    // tilda qué entra al sistema. Un archivo ilegible no corta la tanda.
+    var _lfLote = [], _lfModoLote = false, _lfDesdeLote = false;
+
+    async function _lfLeerLote(archivos) {
+        var MAX_MB = 20;
+        var estadoEl = document.getElementById('leerFactEstado');
+        _lfLote = []; _lfModoLote = true; _lfDesdeLote = false;
+        _lfCola = []; _lfColaIdx = 0;
+        try {
+            for (var i = 0; i < archivos.length; i++) {
+                var f = archivos[i];
+                if (estadoEl) estadoEl.textContent = '⏳ Leyendo ' + (i + 1) + ' de ' + archivos.length + ': ' + f.name + '…';
+                if (f.size > MAX_MB * 1024 * 1024) {
+                    _lfLote.push({ nombre: f.name, b64: null, tipo: null, datos: null, elegido: false,
+                                   error: 'Supera los ' + MAX_MB + ' MB.' });
+                    continue;
+                }
+                await procesarFacturaPDF(f);   // en modo lote empuja a _lfLote y vuelve
+            }
+        } finally {
+            _lfModoLote = false;
+        }
+        if (estadoEl) estadoEl.textContent = '';
+        _lfPintarLote();
+    }
+
+    function _lfNum(n) { return '$' + Number(n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
+    function _lfPintarLote() {
+        var p1 = document.getElementById('leerFactPaso1');
+        var p2 = document.getElementById('leerFactPaso2');
+        var p3 = document.getElementById('leerFactPaso3');
+        if (p1) p1.style.display = 'none';
+        if (p2) p2.style.display = 'none';
+        if (p3) p3.style.display = '';
+        var tit = document.getElementById('leerFactTitle');
+        if (tit) tit.textContent = '📎 Comprobantes leídos — elegí cuáles cargar';
+
+        var ok = _lfLote.filter(function(x){ return !x.error; });
+        var mal = _lfLote.filter(function(x){ return x.error; });
+        var h = '';
+        if (ok.length) {
+            h += '<div class="table-wrap"><table><thead><tr>'
+               + '<th style="width:34px;"><input type="checkbox" id="lfLoteTodos" onchange="lfLoteMarcarTodos(this.checked)" title="Marcar o desmarcar todos" style="width:auto;margin:0;"></th>'
+               + '<th>Proveedor</th><th>Comprobante</th><th>Fecha</th><th style="text-align:right;">Importe</th><th>Archivo</th><th></th>'
+               + '</tr></thead><tbody>';
+            _lfLote.forEach(function(x, i) {
+                if (x.error) return;
+                var d = x.datos || {};
+                h += '<tr>'
+                   + '<td><input type="checkbox" class="lf-lote-chk" data-i="' + i + '" ' + (x.elegido ? 'checked' : '') + ' onchange="lfLoteMarcar(' + i + ', this.checked)" style="width:auto;margin:0;"></td>'
+                   + '<td>' + escHtml(d.proveedor || '—') + '</td>'
+                   + '<td>' + escHtml(d.numero || '—') + (d.tipoComprobante ? ' <span style="font-size:10px;color:var(--text-3);">(' + escHtml(d.tipoComprobante) + ')</span>' : '') + '</td>'
+                   + '<td style="white-space:nowrap;">' + escHtml(d.fecha || '—') + '</td>'
+                   + '<td style="text-align:right;white-space:nowrap;">' + _lfNum(d.importe) + (d.moneda === 'USD' ? ' USD' : '') + '</td>'
+                   + '<td style="font-size:11px;color:var(--text-3);">' + escHtml(x.nombre) + '</td>'
+                   + '<td><button type="button" class="btn btn-outline btn-sm" onclick="lfLoteRevisar(' + i + ')" title="Abrir este para revisarlo o corregirlo">✏️</button></td>'
+                   + '</tr>';
+            });
+            h += '</tbody></table></div>';
+        } else {
+            h += '<div style="padding:20px;text-align:center;color:var(--text-3);">No se pudo leer ninguno de los archivos.</div>';
+        }
+        if (mal.length) {
+            h += '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--warn);border-radius:8px;background:var(--warn-bg);font-size:12px;color:var(--warn);">'
+               + '<strong>' + mal.length + ' archivo(s) no se pudieron leer</strong> y quedan afuera:<ul style="margin:6px 0 0 18px;">'
+               + mal.map(function(x){ return '<li>' + escHtml(x.nombre) + ' — ' + escHtml(x.error) + '</li>'; }).join('')
+               + '</ul>Cargalos aparte, de a uno.</div>';
+        }
+        var cont = document.getElementById('lfLoteLista');
+        if (cont) cont.innerHTML = h;
+        _lfActualizarBotonLote();
+    }
+
+    window.lfLoteMarcar = function(i, val) {
+        if (_lfLote[i]) _lfLote[i].elegido = !!val;
+        _lfActualizarBotonLote();
+    };
+    window.lfLoteMarcarTodos = function(val) {
+        _lfLote.forEach(function(x){ if (!x.error) x.elegido = !!val; });
+        document.querySelectorAll('.lf-lote-chk').forEach(function(c){ c.checked = !!val; });
+        _lfActualizarBotonLote();
+    };
+    function _lfActualizarBotonLote() {
+        var n = _lfLote.filter(function(x){ return x.elegido && !x.error; }).length;
+        var b = document.getElementById('lfLoteBtn');
+        if (b) { b.disabled = !n; b.textContent = n ? ('Cargar ' + n + ' comprobante(s)') : 'Elegí al menos uno'; }
+    }
+    // Abre uno del lote en la pantalla de revisión de siempre, sin perder la lista.
+    window.lfLoteRevisar = function(i) {
+        var x = _lfLote[i];
+        if (!x || x.error) return;
+        _leerFactArchivoDB64 = x.b64;
+        _leerFactArchivoTipo = x.tipo;
+        _lfLoteRevisando = i;
+        document.getElementById('leerFactPaso3').style.display = 'none';
+        document.getElementById('leerFactPaso2').style.display = '';
+        _mostrarPreviewFactura(x.datos || {});
+        document.getElementById('leerFactTitle').textContent = '📎 Revisando ' + x.nombre;
+    };
+    var _lfLoteRevisando = -1;
+    // Carga los tildados: se encolan y pasan por la revisión de siempre, uno tras otro,
+    // pero sin volver a preguntar por cada uno (ya se eligieron en la lista) y sin
+    // gastar otra lectura de IA: los datos ya están extraídos.
+    window.lfLoteCargar = function() {
+        var elegidos = _lfLote.filter(function(x){ return x.elegido && !x.error; });
+        if (!elegidos.length) return;
+        _lfPendientes = elegidos.slice();
+        _lfDesdeLote = true; _lfCargadosLote = 0;
+        _lfSiguienteDelLote();
+    };
+    var _lfPendientes = [];
+    var _lfCargadosLote = 0;
+    function _lfFinLote() {
+        var n = _lfCargadosLote;
+        _lfDesdeLote = false; _lfLote = []; _lfPendientes = []; _lfCargadosLote = 0;
+        if (n > 0) alert('✅ Listo: se cargaron ' + n + ' comprobante(s).');
+    }
+    function _lfSiguienteDelLote() {
+        if (!_lfPendientes.length) { _lfFinLote(); return; }
+        var x = _lfPendientes.shift();
+        _leerFactArchivoDB64 = x.b64;
+        _leerFactArchivoTipo = x.tipo;
+        document.getElementById('modalLeerFactPDF').classList.add('active');
+        document.getElementById('leerFactPaso1').style.display = 'none';
+        document.getElementById('leerFactPaso3').style.display = 'none';
+        document.getElementById('leerFactPaso2').style.display = '';
+        var quedan = _lfPendientes.length;
+        _mostrarPreviewFactura(x.datos || {});
+        document.getElementById('leerFactTitle').textContent =
+            '📎 ' + x.nombre + (quedan ? ' — quedan ' + quedan + ' después de éste' : ' — el último');
+    }
+    window.lfLoteVolver = function() {
+        _lfLoteRevisando = -1;
+        _lfPintarLote();
+    };
+    window.lfLoteCancelar = function() {
+        _lfLote = []; _lfPendientes = []; _lfDesdeLote = false;
+        cerrarLeerFactPDF();
+    };
+
 
     function abrirLeerFacturaPDF() {
         try {
@@ -17990,6 +18134,8 @@
             _leerFactArchivoDB64 = null;
             _leerFactArchivoTipo = null;
             _lfCola = []; _lfColaIdx = 0;
+            _lfLote = []; _lfModoLote = false; _lfDesdeLote = false;
+            var _p3 = document.getElementById('leerFactPaso3'); if (_p3) _p3.style.display = 'none';
         } catch (e) { console.error('abrirLeerFacturaPDF (preparación):', e); }
         document.body.classList.remove('printing-rv');
         document.getElementById('modalLeerFactPDF').classList.add('active');
@@ -17998,6 +18144,21 @@
     // Pasa al siguiente archivo de la cola. Se llama DESPUÉS de guardar, nunca al cancelar:
     // si el usuario cierra el modal a mano, la cola queda ahí y se descarta al volver a abrirlo.
     function _lfAvanzarCola() {
+        // Se guardó uno que se estaba revisando desde la lista: se saca de la lista y se vuelve.
+        if (_lfLoteRevisando >= 0) {
+            _lfLote.splice(_lfLoteRevisando, 1);
+            _lfLoteRevisando = -1;
+            _lfCargadosLote++;
+            if (_lfLote.filter(function(x){ return !x.error; }).length) {
+                document.getElementById('modalLeerFactPDF').classList.add('active');
+                _lfPintarLote();
+            } else {
+                _lfFinLote();
+            }
+            return;
+        }
+        // Tanda elegida en la lista: sigue con el próximo sin preguntar.
+        if (_lfDesdeLote) { _lfCargadosLote++; _lfSiguienteDelLote(); return; }
         if (!_lfCola.length) return;
         _lfColaIdx++;
         if (_lfColaIdx >= _lfCola.length) {
@@ -18008,7 +18169,8 @@
         }
         var falta = _lfCola.length - _lfColaIdx;
         var sig = _lfCola[_lfColaIdx];
-        if (!confirm('Quedan ' + falta + ' archivo(s) por cargar.\n\nSigue: ' + sig.name + '\n\n¿Continuar?')) {
+        // Si la tanda salió de la lista, ya eligió ahí: no se le vuelve a preguntar por cada uno.
+        if (!_lfDesdeLote && !confirm('Quedan ' + falta + ' archivo(s) por cargar.\n\nSigue: ' + sig.name + '\n\n¿Continuar?')) {
             _lfCola = []; _lfColaIdx = 0;
             return;
         }
@@ -18296,6 +18458,8 @@
         if (!file) {
             var _sel = (fileInput && fileInput.files) ? Array.prototype.slice.call(fileInput.files) : [];
             if (!_sel.length) { alert('Seleccioná uno o más archivos PDF o imagen.'); return; }
+            // Varios archivos: se leen TODOS primero y después se elige cuáles cargar.
+            if (_sel.length > 1) { return _lfLeerLote(_sel); }
             _lfCola = _sel; _lfColaIdx = 0;
             file = _lfCola[0];
         }
@@ -18404,11 +18568,24 @@
                 throw new Error(motivo);
             }
 
+            // En modo lote no se abre la revisión: el resultado se guarda y se sigue con
+            // el siguiente. La elección de qué cargar se hace después, sobre la lista.
+            if (_lfModoLote) {
+                _lfLote.push({ nombre: file.name, b64: b64, tipo: _leerFactArchivoTipo,
+                               datos: extracted, elegido: true, error: '' });
+                return;
+            }
             estadoEl.textContent = '✅ Datos extraídos. Revisá y confirmá antes de guardar.';
             _mostrarPreviewFactura(extracted);
 
         } catch(err) {
             var msgErr = err.message || 'Error al procesar el archivo.';
+            // En lote, un archivo ilegible no puede cortar la tanda: se anota y se sigue.
+            if (_lfModoLote) {
+                _lfLote.push({ nombre: file.name, b64: null, tipo: null, datos: null,
+                               elegido: false, error: msgErr });
+                return;
+            }
             var hint = geminiHintError(msgErr);
             estadoEl.innerHTML = '❌ ' + msgErr +
                 (hint ? '<br><small>' + hint + '</small>' : '') +
@@ -41169,6 +41346,18 @@
         <div class="modal-footer" style="margin-top:20px;">
           <button class="btn btn-outline" onclick="leerFactVolver()">← Volver</button>
           <button class="btn btn-success" id="lfGuardarBtn" onclick="confirmarFacturaPDF()">💾 Guardar Factura</button>
+        </div>
+      </div>
+
+      <div id="leerFactPaso3" style="display:none;">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px;">
+          Se leyeron todos los archivos. <strong>Tildá los que querés cargar</strong> y tocá el botón de abajo:
+          cada uno se abre para que lo revises antes de guardarlo, uno tras otro. Con ✏️ podés revisar uno ahora.
+        </p>
+        <div id="lfLoteLista"></div>
+        <div class="modal-footer" style="margin-top:20px;">
+          <button class="btn btn-outline" onclick="lfLoteCancelar()">Cancelar</button>
+          <button class="btn btn-success" id="lfLoteBtn" onclick="lfLoteCargar()">Cargar</button>
         </div>
       </div>
 
