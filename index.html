@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v483</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v484</div>
         </div>
     </nav>
 
@@ -7160,9 +7160,15 @@
             <form id="formFact">
                 <div class="form-group">
                     <label>Proveedor *</label>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <select id="factProveedor" required onchange="onFactProveedorChange()" style="flex:1;"></select>
-                        <button type="button" class="btn btn-gold btn-sm" onclick="factDarDeAltaProv()" title="Dar de alta un proveedor que todavía no está en el maestro" style="white-space:nowrap;">➕ Nuevo</button>
+                    <div style="display:flex;gap:8px;align-items:flex-start;">
+                        <div style="flex:1;">
+                            <input type="text" id="factProveedor" list="factProveedorList" required placeholder="Buscá o escribí la razón social…" style="width:100%;" oninput="onFactProveedorChange()">
+                            <datalist id="factProveedorList"></datalist>
+                        </div>
+                        <button type="button" id="factBtnAltaProv" class="btn btn-gold btn-sm" onclick="factDarDeAltaProv()" title="Dar de alta un proveedor que todavía no está en el maestro" style="white-space:nowrap;margin-top:2px;">➕ Nuevo</button>
+                    </div>
+                    <div id="factProvNuevoAviso" style="display:none;margin-top:6px;font-size:12px;color:var(--warn);padding:6px 10px;background:var(--warn-bg);border-left:3px solid var(--warn);border-radius:3px;">
+                        ⚠️ Este proveedor no está en el maestro. Dalo de alta con ➕ Nuevo (así queda con CUIT y regímenes de retención) o seguí, si es solo para esta vez.
                     </div>
                 </div>
 
@@ -14734,12 +14740,23 @@
         }) || null;
     }
 
-    // Igual, pero también intenta una coincidencia parcial (para prellenar con el nombre
-    // que extrajo la IA de un PDF/foto, que puede venir con nombre de fantasía y no calzar
-    // exacto con la razón social cargada, o viceversa).
-    function buscarProveedorAprox(nombre) {
+    // Busca por CUIT, ignorando guiones/espacios ("20-12345678-9" == "20123456789").
+    function buscarProveedorPorCuit(cuit) {
+        var c = String(cuit || '').replace(/\D/g, '');
+        if (c.length < 11) return null;   // un CUIT tiene 11 dígitos; menos que eso no alcanza
+        return proveedores.find(function(p){ return String(p.cuit || '').replace(/\D/g, '') === c; }) || null;
+    }
+    // Igual que buscarProveedorPorNombre, pero además intenta CUIT y una coincidencia parcial
+    // de nombre — en ese orden. El CUIT es un identificador exacto: cuando la IA leyó el nombre
+    // mal (típico con "S.A." vs "SA", nombres de fantasía, o directamente confundiendo emisor y
+    // receptor) pero el CUIT salió bien, encuentra el proveedor igual. Sin CUIT, cae a la
+    // coincidencia parcial de nombre de siempre (para prellenar con lo que extrajo la IA de un
+    // PDF/foto, que puede venir con nombre de fantasía y no calzar exacto con la razón social).
+    function buscarProveedorAprox(nombre, cuit) {
         var exacto = buscarProveedorPorNombre(nombre);
         if (exacto) return exacto;
+        var porCuit = buscarProveedorPorCuit(cuit);
+        if (porCuit) return porCuit;
         if (!nombre) return null;
         var n = String(nombre).toLowerCase().trim();
         return proveedores.find(function(p){
@@ -15316,7 +15333,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v483';
+    var APP_VER = 'v484';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18502,9 +18519,21 @@
 
             var mimeType = file.type || 'application/pdf';
 
+            // Se le pasa a Gemini el nombre (y CUIT, si está cargado) de la empresa activa, para
+            // que pueda EXCLUIRLO explícitamente del campo "proveedor": es la confusión más común
+            // al leer facturas de ARCA/AFIP, porque el receptor también tiene su CUIT impreso.
+            var _miEmpresa = (typeof getEmpresaParaRecibo === 'function') ? getEmpresaParaRecibo() : null;
+            var _avisoEmisor = 'Importante para identificar bien al EMISOR (el que cobra, no el que paga): ' +
+                'en las facturas de ARCA/AFIP la razón social y el CUIT del EMISOR aparecen arriba, junto al logo/membrete y el tipo de comprobante (A/B/C); ' +
+                'la razón social del RECEPTOR/cliente aparece más abajo, en un renglón rotulado "Apellido y Nombre / Razón Social", "Cliente" o "Sr(es)". No las confundas. ' +
+                'Los campos "proveedor", "cuit", "condicionIva" y "direccion" tienen que ser TODOS de la MISMA parte (el emisor) — si mezclás datos de las dos partes el comprobante queda mal cargado. ' +
+                ((_miEmpresa && _miEmpresa.nombre) ? ('La empresa que RECIBE y PAGA esta factura (nuestra empresa) se llama "' + _miEmpresa.nombre + '"' +
+                    (_miEmpresa.cuit ? (', CUIT ' + _miEmpresa.cuit) : '') +
+                    '. El campo "proveedor" NUNCA puede ser ese nombre (ni una variante): tiene que ser la OTRA parte, quien emitió la factura. ') : '');
+
             var prompt = 'Analizá esta factura y extraé los siguientes datos en formato JSON puro (sin markdown, sin explicación extra, solo el objeto JSON):\n' +
                 '{\n' +
-                '  "proveedor": "nombre o razón social del emisor de la factura",\n' +
+                '  "proveedor": "nombre o razón social del EMISOR de la factura (quien la emite y cobra)",\n' +
                 '  "cuit": "CUIT del emisor con guiones (ej: 20-12345678-9), o null",\n' +
                 '  "condicionIva": "condición frente al IVA del emisor (ej: Responsable Inscripto, Monotributista, Exento), o null",\n' +
                 '  "direccion": "dirección del emisor, o null",\n' +
@@ -18523,6 +18552,7 @@
                 '  "descripcion": "descripción breve del concepto o servicio facturado",\n' +
                 '  "items": [ { "detalle": "descripción de la línea", "cantidad": número, "precioUnitario": número, "importe": número } ]\n' +
                 '}\n' +
+                _avisoEmisor +
                 'Si el documento es un VEP (Volante Electrónico de Pago) de ARCA/AFIP para pagar impuestos, ' +
                 'tratalo igual como una factura pero completá así: "proveedor":"ARCA", "numero": el número de VEP con el prefijo "VEP " (ej: "VEP 1654174369"), ' +
                 '"fecha": la fecha de generación del VEP, "vencimiento": el día de expiración del VEP, "tipoComprobante":"X", ' +
@@ -18623,10 +18653,13 @@
             dl.appendChild(o);
         });
 
-        // Pre-llenar el input con el nombre extraído (exacto, por nombre de fantasía, o match parcial)
-        if (datos.proveedor) {
-            var provMatch = buscarProveedorAprox(datos.proveedor);
-            inp.value = provMatch ? provMatch.razonSocial : datos.proveedor;
+        // Pre-llenar el input con el nombre extraído (exacto, por CUIT, por nombre de fantasía,
+        // o match parcial). El CUIT importa especialmente acá: si la IA confundió emisor con
+        // receptor y trajo mal el nombre, el CUIT del emisor suele venir bien igual, y encuentra
+        // al proveedor correcto del maestro aunque el nombre no calce.
+        if (datos.proveedor || datos.cuit) {
+            var provMatch = buscarProveedorAprox(datos.proveedor, datos.cuit);
+            inp.value = provMatch ? provMatch.razonSocial : (datos.proveedor || '');
         } else {
             inp.value = '';
         }
@@ -19001,6 +19034,7 @@
             document.getElementById('factArchivoEstado').textContent = 'Subí el PDF o imagen de la factura. Si es pesado se comprime automáticamente.';
             _renderFactItems([]);   // reset() no borra las filas de ítems, que son HTML generado
             var _fda = document.getElementById('factDupAviso'); if (_fda) { _fda.style.display = 'none'; _fda.innerHTML = ''; }
+            var _fpn = document.getElementById('factProvNuevoAviso'); if (_fpn) _fpn.style.display = 'none';
             poblarSelectProveedoresFact();
             selFactTipo('presup');
             selFactPagoInmediato(true);
@@ -19038,6 +19072,7 @@
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
         _factRevisarDuplicado();   // excluye este mismo registro; avisa si hay OTRO parecido
+        _factChequearProvNuevo();
         var _fae = document.getElementById('factArchivoEstado');
         if (f.docId && f.docNombre) {
             _fae.innerHTML = '📎 Archivo actual: <a href="javascript:void(0)" onclick="descargarDoc(\'' + f.docId + '\',\'' + (f.docNombre||'factura').replace(/'/g,'') + '\')" style="color:var(--blue);font-weight:600;text-decoration:underline;cursor:pointer;">' + escHtml(f.docNombre) + '</a> '
@@ -19106,17 +19141,22 @@
 
     function cerrarFactura() { var m=document.getElementById('modalFact'); m.classList.remove('active'); m.style.zIndex=''; _fichaRefrescarSiAbierta(); }
 
+    // Input de texto libre + datalist (antes era un <select>): se puede escribir cualquier
+    // parte del nombre para filtrar, en vez de tener que ir letra por letra desde el principio
+    // como obliga un <select> nativo. Ordenado alfabéticamente, y el CUIT al lado de cada uno
+    // para distinguir proveedores con nombres parecidos.
     function poblarSelectProveedoresFact(seleccionado) {
-        const sel = document.getElementById('factProveedor');
-        sel.innerHTML = '<option value="">— Seleccionar —</option>';
-        const nombres = proveedores.map(p => p.razonSocial).filter(Boolean);
-        if (seleccionado && !nombres.includes(seleccionado)) nombres.unshift(seleccionado);
-        nombres.forEach(n => {
-            const o = document.createElement('option');
-            o.value = o.textContent = n;
-            if (n === seleccionado) o.selected = true;
-            sel.appendChild(o);
-        });
+        const inp = document.getElementById('factProveedor');
+        const dl  = document.getElementById('factProveedorList');
+        if (!inp || !dl) return;
+        const lista = (proveedores || []).filter(p => p.razonSocial)
+            .slice()
+            .sort((a, b) => (a.razonSocial || '').localeCompare(b.razonSocial || '', 'es', { sensitivity: 'base' }));
+        dl.innerHTML = lista.map(p => {
+            const etiqueta = p.cuit ? (p.razonSocial + ' — CUIT ' + p.cuit) : p.razonSocial;
+            return '<option value="' + escHtml(p.razonSocial) + '" label="' + escHtml(etiqueta) + '">' + escHtml(etiqueta) + '</option>';
+        }).join('');
+        inp.value = seleccionado || '';
     }
 
     // Dar de alta un proveedor sin salir de la carga del comprobante. Abre el
@@ -19125,7 +19165,13 @@
     // mecanismo que usa la carga por IA (lfDarDeAltaProv).
     function factDarDeAltaProv() {
         if (typeof agregarProveedor !== 'function') return;
+        // Si ya se tipeó un nombre en el campo, se lleva al formulario de alta para no
+        // reescribirlo (el campo ahora es texto libre, así que puede traer ya el nombre
+        // que la IA leyó mal o el que se está por escribir a mano).
+        var _yaTipeado = (document.getElementById('factProveedor') || {}).value || '';
         agregarProveedor();
+        var _pr = document.getElementById('provRazon');
+        if (_pr && _yaTipeado.trim()) _pr.value = _yaTipeado.trim();
         var mp = document.getElementById('modalProv'); if (mp) mp.style.zIndex = 700;
         window._provAltaCallback = function(nuevo) {
             if (mp) mp.style.zIndex = '';
@@ -19590,6 +19636,19 @@
         if (_ncc && _ncc.checked) _factPoblarNCFacturas();
         _factMostrarNroProvHint();
         _factRevisarDuplicado();
+        _factChequearProvNuevo();
+    }
+    // Ahora que el campo es texto libre (antes era un <select> cerrado a la lista), hay que
+    // avisar si lo tipeado no es ninguno de los proveedores cargados — no bloquea, para no
+    // trabar un comprobante puntual de alguien que no vale la pena dar de alta. El botón
+    // ➕ Nuevo sigue disponible siempre (para dar de alta cualquiera, no solo el tipeado).
+    function _factChequearProvNuevo() {
+        var inp = document.getElementById('factProveedor');
+        var aviso = document.getElementById('factProvNuevoAviso');
+        if (!inp || !aviso) return;
+        var val = inp.value.trim();
+        var existe = !val || !!buscarProveedorPorNombre(val);
+        aviso.style.display = existe ? 'none' : '';
     }
     // Comprobante X: al elegir proveedor, muestra el próximo N° interno correlativo de ese
     // proveedor (numeración propia del sistema, ya que los comprobantes X no tienen N° de ARCA).
@@ -20719,9 +20778,17 @@
         var estadoEl = document.getElementById('leerFactEstado');
         if (!b64)    { if (estadoEl) estadoEl.textContent = '❌ No hay PDF cargado.'; return; }
         if (estadoEl) estadoEl.textContent = '🤖 Enviando a Gemini para análisis…';
+        var _miEmpresaGmail = (typeof getEmpresaParaRecibo === 'function') ? getEmpresaParaRecibo() : null;
+        var _avisoEmisorGmail = 'Importante para identificar bien al EMISOR (el que cobra, no el que paga): ' +
+            'en las facturas de ARCA/AFIP la razón social y el CUIT del EMISOR aparecen arriba, junto al logo/membrete y el tipo de comprobante (A/B/C); ' +
+            'la razón social del RECEPTOR/cliente aparece más abajo, en un renglón rotulado "Apellido y Nombre / Razón Social", "Cliente" o "Sr(es)". No las confundas. ' +
+            'Los campos "proveedor", "cuit", "condicionIva" y "direccion" tienen que ser TODOS de la MISMA parte (el emisor) — si mezclás datos de las dos partes el comprobante queda mal cargado. ' +
+            ((_miEmpresaGmail && _miEmpresaGmail.nombre) ? ('La empresa que RECIBE y PAGA esta factura (nuestra empresa) se llama "' + _miEmpresaGmail.nombre + '"' +
+                (_miEmpresaGmail.cuit ? (', CUIT ' + _miEmpresaGmail.cuit) : '') +
+                '. El campo "proveedor" NUNCA puede ser ese nombre (ni una variante): tiene que ser la OTRA parte, quien emitió la factura. ') : '');
         var prompt = 'Analizá esta factura y extraé los siguientes datos en formato JSON puro (sin markdown, sin explicación extra, solo el objeto JSON):\n' +
             '{\n' +
-            '  "proveedor": "nombre o razón social del emisor de la factura",\n' +
+            '  "proveedor": "nombre o razón social del EMISOR de la factura (quien la emite y cobra)",\n' +
             '  "cuit": "CUIT del emisor con guiones (ej: 20-12345678-9), o null",\n' +
             '  "condicionIva": "condición frente al IVA del emisor, o null",\n' +
             '  "direccion": "dirección del emisor, o null",\n' +
@@ -20738,6 +20805,7 @@
             '  "descripcion": "descripción breve del concepto facturado",\n' +
             '  "items": [ { "detalle": "descripción de la línea", "cantidad": número, "precioUnitario": número, "importe": número } ]\n' +
             '}\n' +
+            _avisoEmisorGmail +
             'Si el documento es un VEP (Volante Electrónico de Pago) de ARCA/AFIP para pagar impuestos, ' +
             'tratalo igual como una factura pero completá así: "proveedor":"ARCA", "numero": el número de VEP con el prefijo "VEP " (ej: "VEP 1654174369"), ' +
             '"fecha": la fecha de generación del VEP, "vencimiento": el día de expiración del VEP, "tipoComprobante":"X", ' +
