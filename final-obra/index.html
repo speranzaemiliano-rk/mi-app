@@ -442,6 +442,35 @@
   .rep-caja.ok .cab{background:#E9F6EC}
   .rep-caja.ok .cab .t{text-decoration:line-through}
   @media print { .rep-cajas{column-count:3} }
+
+  /* Cuadro de doble entrada: lugares en las filas, rubros en las columnas.
+     table-layout:fixed reparte el ancho entre los rubros que haya, así entra
+     en la hoja tenga la obra 8 rubros o 25. Los títulos van rotados porque
+     "Ayuda de gremio" no entra en 7mm de ancho. */
+  .rep-mx{width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:8px;font-size:8px}
+  .rep-mx col.lug{width:36mm}
+  .rep-mx col.tot{width:10mm}
+  .rep-mx thead th{border-bottom:1px solid #111;padding:1mm .3mm;vertical-align:bottom;font-weight:700}
+  .rep-mx thead th.r{height:26mm;padding:0}
+  .rep-mx thead th.r span{writing-mode:vertical-rl;transform:rotate(180deg);
+    display:inline-block;font-size:8px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+  .rep-mx thead th.lug, .rep-mx thead th.tot{font-size:7.5px;text-transform:uppercase;letter-spacing:.06em}
+  .rep-mx thead th.tot{text-align:right}
+  .rep-mx tbody td{border-bottom:.5px solid #ddd;padding:.9mm .3mm;text-align:center;
+    font-variant-numeric:tabular-nums;font-size:8.5px}
+  /* El nombre baja de línea en vez de cortarse: con ellipsis, "Sala Máquinas
+     Ascensor Frente" y "…Contrafrente" quedaban idénticas. */
+  .rep-mx tbody td.lug{text-align:left;font-weight:700;font-size:9px;line-height:1.25;
+    word-break:break-word}
+  .rep-mx tbody td.lug small{font-weight:500;color:#666}
+  .rep-mx tbody td.tot{text-align:right;font-weight:700;padding-right:1mm}
+  .rep-mx td.cero{color:#999}
+  .rep-mx tr.gr td{background:#EFEFF2;font-weight:800;font-size:8px;text-transform:uppercase;
+    letter-spacing:.1em;text-align:left;padding:1.2mm 1mm;border-bottom:1px solid #111}
+  .rep-mx tr.fin td{border-top:1px solid #111;border-bottom:0;font-weight:800;padding-top:1.2mm}
+  .rep-mx tr.ok td.lug{text-decoration:line-through;color:#555}
+  .rep-mx tr{page-break-inside:avoid}
+  .rep-mx thead{display:table-header-group}
   .rep-ent{margin-bottom:13px;page-break-inside:avoid}
   .rep-ent h2{font-size:12.5px;font-weight:800;border-bottom:1px solid #111;padding-bottom:3px;margin-bottom:5px;
               display:flex;justify-content:space-between}
@@ -1591,7 +1620,7 @@
     abrirModal('<h2>Informe de final de obra</h2>' +
       '<h3>Cómo se ve</h3>' +
       '<div class="rejilla" id="iFormato">' +
-        ['cuadro|Cuadro resumen','detalle|Con el detalle'].map(function(o){
+        ['cuadro|Cuadro resumen','matriz|Doble entrada','detalle|Con el detalle'].map(function(o){
           var q = o.split("|");
           return '<button data-f="' + q[0] + '"' + (infCfg.formato === q[0] ? ' class="act"' : "") + '>' + q[1] + '</button>';
         }).join("") + '</div>' +
@@ -1614,12 +1643,14 @@
       '<button class="bfull" id="iHacer">Imprimir / Guardar PDF</button>');
 
     function repintarCuenta(){
-      if (infCfg.formato === "cuadro") {
+      if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
         var n = lugaresEnAlcance();
-        $("iCuenta").textContent = n
-          ? "Un recuadro por lugar: " + n + (n === 1 ? " lugar." : " lugares.") +
-            " Adentro, los rubros que le faltan."
-          : "Con ese filtro no queda ningún lugar.";
+        if (!n) { $("iCuenta").textContent = "Con ese filtro no queda ningún lugar."; return; }
+        $("iCuenta").textContent = infCfg.formato === "matriz"
+          ? "Una tabla de " + n + (n === 1 ? " lugar" : " lugares") + " por " +
+            rubrosMatriz().length + " rubros, con lo que falta en cada cruce."
+          : "Un recuadro por lugar: " + n + (n === 1 ? " lugar." : " lugares.") +
+            " Adentro, los rubros que le faltan.";
         return;
       }
       var d = datosInforme();
@@ -1723,6 +1754,82 @@
     return tipos.reduce(function(n, t){ return n + filasCuadro(t).length; }, 0);
   }
 
+  /* Cuadro de doble entrada: los lugares en las filas y los rubros en las
+     columnas. En cada cruce, cuánto falta de ese rubro en ese lugar; vacío
+     si no falta nada. Sirve para leerlo en las dos direcciones: qué le
+     falta a la 101, y en cuántos lugares está metida la pintura. */
+  function rubrosMatriz(){
+    var conPend = {};
+    Object.keys(datos.items).forEach(function(iid){
+      var it = datos.items[iid];
+      if (it.del || it.ok) return;
+      var e = datos.entidades[it.ent];
+      if (!e || e.del) return;
+      if (infCfg.alcance !== "ambos" && e.tipo !== infCfg.alcance) return;
+      if (infCfg.rubros.length && infCfg.rubros.indexOf(it.rubro) === -1) return;
+      conPend[it.rubro] = 1;
+    });
+    return rubrosOrdenados().filter(function(r){ return conPend[r]; });
+  }
+
+  function filasMatriz(tipo, cols){
+    return entidadesDe(tipo).map(function(eid){
+      var ent = datos.entidades[eid], porR = {}, pend = 0;
+      itemsDe(eid).forEach(function(iid){
+        var it = datos.items[iid];
+        if (it.ok) return;
+        if (cols.indexOf(it.rubro) === -1) return;
+        porR[it.rubro] = (porR[it.rubro] || 0) + 1;
+        pend++;
+      });
+      // Con filtro de rubros puesto, el lugar que no toca ninguno no va.
+      if (infCfg.rubros.length && !pend) return null;
+      return { id: eid, nombre: ent.nombre, icono: ent.icono || "",
+               piso: ent.piso || "", porR: porR, pend: pend };
+    }).filter(Boolean);
+  }
+
+  function armarMatriz(){
+    var cols = rubrosMatriz();
+    if (!cols.length) return '<div class="rep-gr">No queda ningún pendiente con ese filtro.</div>';
+
+    var tipos = infCfg.alcance === "ambos" ? ["comun","unidad"] : [infCfg.alcance];
+    var nombres = { comun:"Espacios comunes", unidad:"Departamentos" };
+    var grupos = tipos.map(function(t){ return { t:t, filas: filasMatriz(t, cols) }; })
+                      .filter(function(g){ return g.filas.length; });
+    if (!grupos.length) return '<div class="rep-gr">No hay lugares con ese filtro.</div>';
+
+    var h = ['<table class="rep-mx"><colgroup><col class="lug">' +
+      cols.map(function(){ return '<col>'; }).join("") + '<col class="tot"></colgroup>'];
+
+    h.push('<thead><tr><th class="lug">Lugar</th>' +
+      cols.map(function(r){ return '<th class="r"><span>' + esc(rubroNom(r)) + '</span></th>'; }).join("") +
+      '<th class="tot">Total</th></tr></thead><tbody>');
+
+    var totCol = {}, totGeneral = 0;
+    grupos.forEach(function(g){
+      h.push('<tr class="gr"><td colspan="' + (cols.length + 2) + '">' + esc(nombres[g.t]) + '</td></tr>');
+      g.filas.forEach(function(f){
+        h.push('<tr' + (f.pend === 0 ? ' class="ok"' : '') + '>' +
+          '<td class="lug">' + (f.icono ? esc(f.icono) + " " : "") + esc(f.nombre) +
+            (f.piso ? ' <small>· P' + esc(f.piso) + '</small>' : '') + '</td>' +
+          cols.map(function(r){
+            var n = f.porR[r] || 0;
+            totCol[r] = (totCol[r] || 0) + n;
+            return n ? '<td>' + n + '</td>' : '<td class="cero">·</td>';
+          }).join("") +
+          '<td class="tot">' + (f.pend || "—") + '</td></tr>');
+        totGeneral += f.pend;
+      });
+    });
+
+    h.push('<tr class="fin"><td class="lug">Total por rubro</td>' +
+      cols.map(function(r){ return '<td>' + (totCol[r] || 0) + '</td>'; }).join("") +
+      '<td class="tot">' + totGeneral + '</td></tr>');
+    h.push('</tbody></table>');
+    return h.join("");
+  }
+
   function armarCuadro(){
     var tipos = infCfg.alcance === "ambos" ? ["comun","unidad"] : [infCfg.alcance];
     var nombres = { comun:"Espacios comunes", unidad:"Departamentos" };
@@ -1741,7 +1848,7 @@
 
     // Resumen por rubro. En el cuadro no va: se comía la primera hoja y el
     // total ya está arriba, en la línea de "N lugares · N ítems".
-    if (infCfg.formato !== "cuadro") {
+    if (infCfg.formato !== "cuadro" && infCfg.formato !== "matriz") {
       var porR = {}, ordenR = [];
       d.ents.forEach(function(x){
         x.bloques.forEach(function(b){
@@ -1760,8 +1867,8 @@
       }
     }
 
-    if (infCfg.formato === "cuadro") {
-      L.push(armarCuadro());
+    if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
+      L.push(infCfg.formato === "matriz" ? armarMatriz() : armarCuadro());
       if (infCfg.firmas) {
         L.push('<div class="rep-firmas">' +
           '<div><div class="linea"></div>Dirección de obra</div>' +
@@ -1805,7 +1912,7 @@
     var d = datosInforme();
     // El cuadro también vale cuando no queda nada pendiente: ese informe es
     // justamente el que dice que está todo cerrado.
-    if (!d.total && !(infCfg.formato === "cuadro" && lugaresEnAlcance())) {
+    if (!d.total && !((infCfg.formato === "cuadro" || infCfg.formato === "matriz") && lugaresEnAlcance())) {
       toast("Con ese filtro no hay nada para imprimir"); return;
     }
     $("reporte").innerHTML = armarInforme();
