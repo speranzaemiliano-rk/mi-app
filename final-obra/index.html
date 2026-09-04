@@ -471,6 +471,25 @@
   .rep-mx tr.ok td.lug{text-decoration:line-through;color:#555}
   .rep-mx tr{page-break-inside:avoid}
   .rep-mx thead{display:table-header-group}
+
+  /* Con las tareas escritas la tabla cambia de forma: las columnas ya no son
+     casilleros de un número sino bloques de texto, así que se reparten por
+     contenido y los títulos van derechos. Sólo es legible con pocos rubros
+     — con los 18 de la obra entera cada columna queda en 4 caracteres. */
+  .rep-mx.tx{table-layout:auto;font-size:7.5px}
+  .rep-mx.tx col.lug{width:auto}
+  .rep-mx.tx thead th.r{height:auto;padding:1mm .8mm;text-align:left;vertical-align:bottom}
+  .rep-mx.tx thead th.r span{writing-mode:horizontal-tb;transform:none;
+    white-space:normal;font-size:7.5px;font-weight:700}
+  .rep-mx.tx tbody td{text-align:left;padding:1mm .8mm;font-size:7.5px;line-height:1.3}
+  .rep-mx.tx tbody td.lug{white-space:normal;min-width:22mm}
+  .rep-mx.tx td.tar b{display:block;font-weight:400;padding-left:2.2mm;position:relative;
+    margin-bottom:.4mm;color:#111}
+  .rep-mx.tx td.tar b:before{content:"·";position:absolute;left:.4mm;color:#666}
+  .rep-mx.tx td.cero{text-align:center}
+  .mx-cap{caption-side:top;text-align:left;font-size:8px;font-weight:800;letter-spacing:.1em;
+    text-transform:uppercase;color:#333;padding:0 0 1.5mm;page-break-after:avoid}
+  .rep-mx.tx{page-break-before:auto}
   .rep-ent{margin-bottom:13px;page-break-inside:avoid}
   .rep-ent h2{font-size:12.5px;font-weight:800;border-bottom:1px solid #111;padding-bottom:3px;margin-bottom:5px;
               display:flex;justify-content:space-between}
@@ -1613,7 +1632,7 @@
      No usa librerías: arma el HTML y llama a window.print().
      Desde ahí el celular ofrece "Guardar como PDF".
   ========================================================= */
-  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro" };
+  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false };
 
   function modalInforme(){
     var rs = rubrosOrdenados().filter(function(r){ return (idx.porRubro[r] || []).length; });
@@ -1635,6 +1654,8 @@
           return '<button data-r="' + esc(r) + '"' + (infCfg.rubros.indexOf(r) !== -1 ? ' class="act"' : "") +
                  ' style="border-color:' + esc(rubroCol(r)) + '55">' + esc(rubroNom(r)) + '</button>';
         }).join("") + '</div>' +
+      '<label class="chk" id="iTareasLbl"><input type="checkbox" id="iTareas"' + (infCfg.tareas ? " checked" : "") +
+        '> Escribir las tareas en vez del número</label>' +
       '<label class="chk"><input type="checkbox" id="iPend"' + (infCfg.soloPendientes ? " checked" : "") +
         '> Sólo lo que falta</label>' +
       '<label class="chk"><input type="checkbox" id="iFirmas"' + (infCfg.firmas ? " checked" : "") +
@@ -1646,11 +1667,24 @@
       if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
         var n = lugaresEnAlcance();
         if (!n) { $("iCuenta").textContent = "Con ese filtro no queda ningún lugar."; return; }
-        $("iCuenta").textContent = infCfg.formato === "matriz"
-          ? "Una tabla de " + n + (n === 1 ? " lugar" : " lugares") + " por " +
-            rubrosMatriz().length + " rubros, con lo que falta en cada cruce."
-          : "Un recuadro por lugar: " + n + (n === 1 ? " lugar." : " lugares.") +
-            " Adentro, los rubros que le faltan.";
+        if (infCfg.formato !== "matriz") {
+          $("iCuenta").textContent = "Un recuadro por lugar: " + n +
+            (n === 1 ? " lugar." : " lugares.") + " Adentro, los rubros que le faltan.";
+          return;
+        }
+        var nr = rubrosMatriz().length;
+        var txt = "Una tabla de " + n + (n === 1 ? " lugar" : " lugares") + " por " + nr +
+                  (nr === 1 ? " rubro" : " rubros") + ", con " +
+                  (infCfg.tareas ? "las tareas escritas" : "lo que falta") + " en cada cruce.";
+        // Con las tareas escritas cada columna se lleva un bloque de texto y
+        // no entran todos los rubros de ancho, así que sale en tandas. Conviene
+        // decirlo antes de mandar a imprimir: son varias hojas más.
+        if (infCfg.tareas && nr > MAX_TX) {
+          txt += " Como no entran " + nr + " columnas de texto a lo ancho, sale en " +
+                 Math.ceil(nr / MAX_TX) + " tandas de a " + MAX_TX +
+                 " rubros. Filtrá rubros arriba si querés una sola.";
+        }
+        $("iCuenta").textContent = txt;
         return;
       }
       var d = datosInforme();
@@ -1659,11 +1693,19 @@
           (d.total === 1 ? " ítem." : " ítems.")
         : "Con ese filtro no queda nada para imprimir.";
     }
+    // La casilla sólo tiene sentido en la doble entrada: en los otros dos
+    // formatos las tareas ya salen (o ya se decidió que no).
+    function ajustarTareas(){
+      var l = $("iTareasLbl");
+      if (l) l.style.display = (infCfg.formato === "matriz") ? "" : "none";
+    }
+    ajustarTareas();
+    $("iTareas").addEventListener("change", function(){ infCfg.tareas = this.checked; repintarCuenta(); });
     $("iFormato").addEventListener("click", function(e){
       var b = e.target.closest("button[data-f]"); if (!b) return;
       infCfg.formato = b.getAttribute("data-f");
       Array.prototype.forEach.call(this.children, function(x){ x.classList.remove("act"); });
-      b.classList.add("act"); repintarCuenta();
+      b.classList.add("act"); ajustarTareas(); repintarCuenta();
     });
     $("iAlcance").addEventListener("click", function(e){
       var b = e.target.closest("button[data-v]"); if (!b) return;
@@ -1774,32 +1816,32 @@
 
   function filasMatriz(tipo, cols){
     return entidadesDe(tipo).map(function(eid){
-      var ent = datos.entidades[eid], porR = {}, pend = 0;
+      var ent = datos.entidades[eid], porR = {}, txtR = {}, pend = 0;
       itemsDe(eid).forEach(function(iid){
         var it = datos.items[iid];
         if (it.ok) return;
         if (cols.indexOf(it.rubro) === -1) return;
         porR[it.rubro] = (porR[it.rubro] || 0) + 1;
+        (txtR[it.rubro] = txtR[it.rubro] || []).push(it.texto || "(sin texto)");
         pend++;
       });
       // Con filtro de rubros puesto, el lugar que no toca ninguno no va.
       if (infCfg.rubros.length && !pend) return null;
       return { id: eid, nombre: ent.nombre, icono: ent.icono || "",
-               piso: ent.piso || "", porR: porR, pend: pend };
+               piso: ent.piso || "", porR: porR, txtR: txtR, pend: pend };
     }).filter(Boolean);
   }
 
-  function armarMatriz(){
-    var cols = rubrosMatriz();
-    if (!cols.length) return '<div class="rep-gr">No queda ningún pendiente con ese filtro.</div>';
+  // Con las tareas escritas, cada columna se lleva un bloque de texto y los
+  // 18 rubros de la obra no entran a lo ancho: la tabla se salía de la hoja y
+  // al imprimir se cortaba, perdiendo columnas sin avisar. Por eso en ese modo
+  // se parte en tandas de MAX_TX rubros, cada una repitiendo la columna Lugar.
+  var MAX_TX = 4;
 
-    var tipos = infCfg.alcance === "ambos" ? ["comun","unidad"] : [infCfg.alcance];
-    var nombres = { comun:"Espacios comunes", unidad:"Departamentos" };
-    var grupos = tipos.map(function(t){ return { t:t, filas: filasMatriz(t, cols) }; })
-                      .filter(function(g){ return g.filas.length; });
-    if (!grupos.length) return '<div class="rep-gr">No hay lugares con ese filtro.</div>';
-
-    var h = ['<table class="rep-mx"><colgroup><col class="lug">' +
+  function tablaMatriz(cols, grupos, conTareas, caption){
+    var h = ['<table class="rep-mx' + (conTareas ? " tx" : "") + '">' +
+      (caption ? '<caption class="mx-cap">' + esc(caption) + '</caption>' : '') +
+      '<colgroup><col class="lug">' +
       cols.map(function(){ return '<col>'; }).join("") + '<col class="tot"></colgroup>'];
 
     h.push('<thead><tr><th class="lug">Lugar</th>' +
@@ -1808,18 +1850,29 @@
 
     var totCol = {}, totGeneral = 0;
     grupos.forEach(function(g){
-      h.push('<tr class="gr"><td colspan="' + (cols.length + 2) + '">' + esc(nombres[g.t]) + '</td></tr>');
-      g.filas.forEach(function(f){
-        h.push('<tr' + (f.pend === 0 ? ' class="ok"' : '') + '>' +
+      // Un lugar que no debe nada de ESTA tanda no se repite en ella.
+      var filas = g.filas.filter(function(f){
+        return cols.some(function(r){ return (f.porR[r] || 0) > 0; });
+      });
+      if (!filas.length) return;
+      h.push('<tr class="gr"><td colspan="' + (cols.length + 2) + '">' + esc(nombres_[g.t]) + '</td></tr>');
+      filas.forEach(function(f){
+        var pendTanda = 0;
+        var celdas = cols.map(function(r){
+          var n = f.porR[r] || 0;
+          totCol[r] = (totCol[r] || 0) + n;
+          pendTanda += n;
+          if (!n) return '<td class="cero">·</td>';
+          if (!conTareas) return '<td>' + n + '</td>';
+          return '<td class="tar">' + (f.txtR[r] || []).map(function(t){
+            return '<b>' + esc(t) + '</b>';
+          }).join("") + '</td>';
+        }).join("");
+        h.push('<tr' + (pendTanda === 0 ? ' class="ok"' : '') + '>' +
           '<td class="lug">' + (f.icono ? esc(f.icono) + " " : "") + esc(f.nombre) +
             (f.piso ? ' <small>· P' + esc(f.piso) + '</small>' : '') + '</td>' +
-          cols.map(function(r){
-            var n = f.porR[r] || 0;
-            totCol[r] = (totCol[r] || 0) + n;
-            return n ? '<td>' + n + '</td>' : '<td class="cero">·</td>';
-          }).join("") +
-          '<td class="tot">' + (f.pend || "—") + '</td></tr>');
-        totGeneral += f.pend;
+          celdas + '<td class="tot">' + (pendTanda || "—") + '</td></tr>');
+        totGeneral += pendTanda;
       });
     });
 
@@ -1828,6 +1881,31 @@
       '<td class="tot">' + totGeneral + '</td></tr>');
     h.push('</tbody></table>');
     return h.join("");
+  }
+
+  var nombres_ = { comun:"Espacios comunes", unidad:"Departamentos" };
+
+  function armarMatriz(){
+    var cols = rubrosMatriz();
+    if (!cols.length) return '<div class="rep-gr">No queda ningún pendiente con ese filtro.</div>';
+
+    var tipos = infCfg.alcance === "ambos" ? ["comun","unidad"] : [infCfg.alcance];
+    var grupos = tipos.map(function(t){ return { t:t, filas: filasMatriz(t, cols) }; })
+                      .filter(function(g){ return g.filas.length; });
+    if (!grupos.length) return '<div class="rep-gr">No hay lugares con ese filtro.</div>';
+
+    var conTareas = !!infCfg.tareas;
+    if (!conTareas || cols.length <= MAX_TX) {
+      return tablaMatriz(cols, grupos, conTareas, "");
+    }
+
+    var partes = [], i;
+    for (i = 0; i < cols.length; i += MAX_TX) {
+      var tanda = cols.slice(i, i + MAX_TX);
+      partes.push(tablaMatriz(tanda, grupos, true,
+        "Rubros " + (i + 1) + " a " + Math.min(i + MAX_TX, cols.length) + " de " + cols.length));
+    }
+    return partes.join("");
   }
 
   function armarCuadro(){
