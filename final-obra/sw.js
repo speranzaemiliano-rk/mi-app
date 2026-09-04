@@ -2,7 +2,7 @@
 // Vive dentro de /final-obra/, así que su alcance (scope) es sólo esta carpeta:
 // no se pisa con el sw.js de la app principal ni con el de /obra/.
 // Objetivo: que el tablero abra en la obra aunque no haya señal.
-const CACHE = 'final-obra-v7';
+const CACHE = 'final-obra-v8';
 // La ruta base se deriva de dónde está servido este archivo (ej. /mi-app/final-obra/sw.js → /mi-app/final-obra/).
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
 const SHELL = [BASE, BASE + 'index.html', BASE + 'config.js', BASE + 'manifest.json', BASE + 'datos-iniciales.js',
