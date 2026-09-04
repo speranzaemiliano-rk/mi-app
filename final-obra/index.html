@@ -408,6 +408,11 @@
     body.imprimiendo > *{display:none!important}
     body.imprimiendo > #reporte{display:block!important}
     @page{margin:14mm}
+    /* Con las tareas escritas cada rubro necesita ancho de verdad. Apaisada
+       la hoja pasa de 182mm útiles a 267mm: casi un 50% más para repartir.
+       Se usa una página con nombre porque @page no entiende de clases. */
+    @page apaisada{size:A4 landscape;margin:10mm}
+    body.apaisado > #reporte{page:apaisada}
   }
   #reporte{font-size:11px;color:#111}
   .rep-head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #111;padding-bottom:9px;margin-bottom:14px}
@@ -476,11 +481,18 @@
      casilleros de un número sino bloques de texto, así que se reparten por
      contenido y los títulos van derechos. Sólo es legible con pocos rubros
      — con los 18 de la obra entera cada columna queda en 4 caracteres. */
-  .rep-mx.tx{table-layout:auto;font-size:7.5px}
-  .rep-mx.tx col.lug{width:auto}
-  .rep-mx.tx thead th.r{height:auto;padding:1mm .8mm;text-align:left;vertical-align:bottom}
-  .rep-mx.tx thead th.r span{writing-mode:horizontal-tb;transform:none;
-    white-space:normal;font-size:7.5px;font-weight:700}
+  /* table-layout:fixed es lo que garantiza que la tabla NUNCA se salga de la
+     hoja: con 'auto' el navegador la ensancha según el contenido y las últimas
+     columnas se perdían al imprimir, sin avisar. Con 'fixed' el ancho se
+     reparte entre todos los rubros y el texto baja de renglón. */
+  .rep-mx.tx{table-layout:fixed;font-size:7.5px}
+  .rep-mx.tx col.lug{width:26mm}
+  .rep-mx.tx td{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
+  /* Con los 18 rubros en una fila cada columna queda en ~13mm: un título
+     horizontal se parte a mitad de palabra ("Carpinteria/s"). Girados como en
+     el cuadro de números entran enteros y no comen alto. */
+  .rep-mx.tx thead th.r{height:22mm;padding:0;vertical-align:bottom}
+  .rep-mx.tx thead th.r span{font-size:7.5px;font-weight:700}
   .rep-mx.tx tbody td{text-align:left;padding:1mm .8mm;font-size:7.5px;line-height:1.3}
   .rep-mx.tx tbody td.lug{white-space:normal;min-width:22mm}
   .rep-mx.tx td.tar b{display:block;font-weight:400;padding-left:2.2mm;position:relative;
@@ -1672,19 +1684,16 @@
             (n === 1 ? " lugar." : " lugares.") + " Adentro, los rubros que le faltan.";
           return;
         }
+        // Con las tareas escritas cada rubro se lleva un bloque de texto, así
+        // que conviene decir cuántas columnas van a salir antes de imprimir.
         var nr = rubrosMatriz().length;
-        var txt = "Una tabla de " + n + (n === 1 ? " lugar" : " lugares") + " por " + nr +
-                  (nr === 1 ? " rubro" : " rubros") + ", con " +
-                  (infCfg.tareas ? "las tareas escritas" : "lo que falta") + " en cada cruce.";
-        // Con las tareas escritas cada columna se lleva un bloque de texto y
-        // no entran todos los rubros de ancho, así que sale en tandas. Conviene
-        // decirlo antes de mandar a imprimir: son varias hojas más.
-        if (infCfg.tareas && nr > MAX_TX) {
-          txt += " Como no entran " + nr + " columnas de texto a lo ancho, sale en " +
-                 Math.ceil(nr / MAX_TX) + " tandas de a " + MAX_TX +
-                 " rubros. Filtrá rubros arriba si querés una sola.";
-        }
-        $("iCuenta").textContent = txt;
+        $("iCuenta").textContent = infCfg.tareas
+          ? "Un cuadro de " + n + (n === 1 ? " lugar" : " lugares") + " por " + nr +
+            (nr === 1 ? " rubro, con las tareas escritas. Sale apaisado." :
+             " rubros, con las tareas escritas. Sale apaisado" +
+             (nr > 8 ? "; con tantos rubros las columnas quedan angostas." : "."))
+          : "Un cuadro de " + n + (n === 1 ? " lugar" : " lugares") + " por " + nr +
+            (nr === 1 ? " rubro." : " rubros.");
         return;
       }
       var d = datosInforme();
@@ -1832,14 +1841,6 @@
     }).filter(Boolean);
   }
 
-  // Con las tareas escritas, cada columna se lleva un bloque de texto y los
-  // 18 rubros de la obra no entran a lo ancho: la tabla se salía de la hoja y
-  // al imprimir se cortaba, perdiendo columnas sin avisar. Por eso en ese modo
-  // se parte en tandas de MAX_TX rubros, cada una repitiendo la columna Lugar.
-  // Con 4 las columnas quedaban de unos 40mm y las tareas se partían en tres
-  // renglones; con 3 pasan a ~53mm y entran casi siempre en dos.
-  var MAX_TX = 3;
-
   function tablaMatriz(cols, grupos, conTareas, caption){
     var h = ['<table class="rep-mx' + (conTareas ? " tx" : "") + '">' +
       (caption ? '<caption class="mx-cap">' + esc(caption) + '</caption>' : '') +
@@ -1896,18 +1897,12 @@
                       .filter(function(g){ return g.filas.length; });
     if (!grupos.length) return '<div class="rep-gr">No hay lugares con ese filtro.</div>';
 
-    var conTareas = !!infCfg.tareas;
-    if (!conTareas || cols.length <= MAX_TX) {
-      return tablaMatriz(cols, grupos, conTareas, "");
-    }
-
-    var partes = [], i;
-    for (i = 0; i < cols.length; i += MAX_TX) {
-      var tanda = cols.slice(i, i + MAX_TX);
-      partes.push(tablaMatriz(tanda, grupos, true,
-        "Rubros " + (i + 1) + " a " + Math.min(i + MAX_TX, cols.length) + " de " + cols.length));
-    }
-    return partes.join("");
+    // TODOS los rubros en la misma fila de encabezado, siempre. Antes esto se
+    // partía en tandas y cada rubro aparecía en una tabla distinta: se leía
+    // peor, porque para saber qué le falta a una unidad había que juntar tres
+    // o cuatro tablas. El ancho se resuelve en el CSS y en la orientación de
+    // la hoja (ver abajo), no cortando la tabla.
+    return tablaMatriz(cols, grupos, !!infCfg.tareas, "");
   }
 
   function armarCuadro(){
@@ -1998,10 +1993,16 @@
     $("reporte").innerHTML = armarInforme();
     cerrarModal();
     document.body.classList.add("imprimiendo");
+    // La doble entrada CON las tareas escritas es la única que necesita la
+    // hoja apaisada; el resto se lee mejor en vertical.
+    document.body.classList.toggle("apaisado", infCfg.formato === "matriz" && !!infCfg.tareas);
     // El navegador necesita un respiro para pintar el informe antes de imprimir.
     setTimeout(function(){
       try { window.print(); } catch(e){}
-      setTimeout(function(){ document.body.classList.remove("imprimiendo"); }, 600);
+      setTimeout(function(){
+        document.body.classList.remove("imprimiendo");
+        document.body.classList.remove("apaisado");
+      }, 600);
     }, 220);
   }
 
