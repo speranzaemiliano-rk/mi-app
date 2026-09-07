@@ -479,7 +479,6 @@
   .rep-mx td.cero{color:#999}
   .rep-mx tr.gr td{background:#EFEFF2;font-weight:800;font-size:8px;text-transform:uppercase;
     letter-spacing:.1em;text-align:left;padding:1.2mm 1mm;border-bottom:1px solid #111}
-  .rep-mx tr.fin td{border-top:1px solid #111;font-weight:800;padding-top:1.2mm}
   .rep-mx tr.ok td.lug{text-decoration:line-through;color:#555}
   .rep-mx tr{page-break-inside:avoid}
   .rep-mx thead{display:table-header-group}
@@ -1490,7 +1489,8 @@
         return '<button data-color="' + c + '" style="background:' + c + '22;border-color:' + c +
                ';color:' + c + (c.toLowerCase() === (r.color || "").toLowerCase() ? ';font-weight:800' : "") + '">■</button>';
       }).join("") + '</div>' +
-      '<button class="bfull" id="mGuardar">Guardar</button>');
+      '<button class="bfull" id="mGuardar">Guardar</button>' +
+      _bloqueFusion(rid));
     var elegido = r.color;
     $("mColores").addEventListener("click", function(e){
       var b = e.target.closest("button[data-color]");
@@ -1504,6 +1504,47 @@
       if (!nom) { $("mNom").focus(); return; }
       tocarRubro(rid, { nombre: nom, color: elegido });
       cerrarModal(); render(); toast("Guardado");
+    });
+    _engancharFusion(rid);
+  }
+
+  /* ---- Fusionar dos rubros ----
+     Cuando resulta que dos rubros eran el mismo gremio (sanitarios y
+     plomería, por ejemplo), no alcanza con juntarlos en el informe: los
+     pendientes quedan cargados en dos lados y en la app se siguen viendo
+     separados. Esto los mueve de verdad y deja el rubro vacío en la
+     papelera, así queda unificado en todas las pantallas y para todos. */
+  function _bloqueFusion(rid){
+    var otros = rubrosOrdenados().filter(function(r){ return r !== rid; });
+    if (!otros.length) return "";
+    var n = (idx.porRubro[rid] || []).length;
+    return '<h3 style="margin-top:18px">Fusionar con otro rubro</h3>' +
+      '<div class="ayuda">Los ' + n + (n === 1 ? " pendiente pasa" : " pendientes pasan") +
+      ' al rubro que elijas y \u00ab' + esc(rubroNom(rid)) + '\u00bb va a la papelera. ' +
+      'Se aplica en toda la app, no s\u00f3lo en el informe.</div>' +
+      '<select class="campo" id="mFusion"><option value="">\u2014 eleg\u00ed un rubro \u2014</option>' +
+      otros.map(function(r){
+        return '<option value="' + esc(r) + '">' + esc(rubroNom(r)) + '</option>';
+      }).join("") + '</select>' +
+      '<button class="bfull sec malo" id="mFusionar">Fusionar</button>';
+  }
+
+  function _engancharFusion(rid){
+    var b = $("mFusionar");
+    if (!b) return;
+    b.addEventListener("click", function(){
+      var destino = $("mFusion").value;
+      if (!destino) { $("mFusion").focus(); return; }
+      var ids = (idx.porRubro[rid] || []).slice();
+      var msg = "\u00bfPasar " + ids.length + (ids.length === 1 ? " pendiente" : " pendientes") +
+                " de \u00ab" + rubroNom(rid) + "\u00bb a \u00ab" + rubroNom(destino) + "\u00bb?\n\n" +
+                "\u00ab" + rubroNom(rid) + "\u00bb queda vac\u00edo y va a la papelera.\n" +
+                "Esto no se deshace con un bot\u00f3n: habr\u00eda que volver a moverlos de a uno.";
+      if (!confirm(msg)) return;
+      ids.forEach(function(iid){ tocarItem(iid, { rubro: destino }); });
+      tocarRubro(rid, { del: 1 });
+      cerrarModal(); cerrarDetalle(); render();
+      toast(ids.length + (ids.length === 1 ? " pendiente movido" : " pendientes movidos"));
     });
   }
 
@@ -1855,7 +1896,7 @@
       cols.map(function(r){ return '<th class="r"><span lang="es">' + esc(rubroNom(r)) + '</span></th>'; }).join("") +
       '</tr></thead><tbody>');
 
-    var totCol = {};
+
     grupos.forEach(function(g){
       // Un lugar que no debe nada de ESTA tanda no se repite en ella.
       var filas = g.filas.filter(function(f){
@@ -1867,7 +1908,6 @@
         var pendTanda = 0;
         var celdas = cols.map(function(r){
           var n = f.porR[r] || 0;
-          totCol[r] = (totCol[r] || 0) + n;
           pendTanda += n;
           if (!n) return '<td class="cero">·</td>';
           if (!conTareas) return '<td>' + n + '</td>';
@@ -1882,10 +1922,6 @@
       });
     });
 
-    // La fila de totales no ocupa ancho, así que se queda; la columna Total
-    // sí lo ocupaba y era lo que hacía falta para las tareas.
-    h.push('<tr class="fin"><td class="lug">Total por rubro</td>' +
-      cols.map(function(r){ return '<td>' + (totCol[r] || 0) + '</td>'; }).join("") + '</tr>');
     h.push('</tbody></table>');
     return h.join("");
   }
