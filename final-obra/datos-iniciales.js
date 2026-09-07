@@ -94,11 +94,6 @@ window.FINAL_OBRA_SEED = {
    "color": "#6c63a8",
    "orden": 14
   },
-  "plomeria": {
-   "nombre": "Plomería",
-   "color": "#0891b2",
-   "orden": 15
-  },
   "marmoleria": {
    "nombre": "Marmolería",
    "color": "#7c3aed",
@@ -2474,7 +2469,7 @@ window.FINAL_OBRA_SEED = {
   },
   "i_u505_plomeria_9": {
    "ent": "u505",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Controlar pérdida tapón conexión lavarropas",
    "ok": false,
    "orden": 9
@@ -2684,7 +2679,7 @@ window.FINAL_OBRA_SEED = {
   },
   "i_u603_plomeria_6": {
    "ent": "u603",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Pierde conexión lavarropas",
    "ok": false,
    "orden": 6
@@ -3146,7 +3141,7 @@ window.FINAL_OBRA_SEED = {
   },
   "i_u704_plomeria_1": {
    "ent": "u704",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Verificar si pierde conexión a lavarropas",
    "ok": false,
    "orden": 1
@@ -3244,7 +3239,7 @@ window.FINAL_OBRA_SEED = {
   },
   "i_u705_plomeria_0": {
    "ent": "u705",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Pérdida en cocina proveniente del 805, verificar qué es",
    "ok": false,
    "orden": 0
@@ -4763,35 +4758,35 @@ window.FINAL_OBRA_SEED = {
   },
   "i_c_terraza_plomeria_25": {
    "ent": "c_terraza",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar inodoro",
    "ok": false,
    "orden": 25
   },
   "i_c_terraza_plomeria_26": {
    "ent": "c_terraza",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar bacha toilette",
    "ok": false,
    "orden": 26
   },
   "i_c_terraza_plomeria_27": {
    "ent": "c_terraza",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Colocar embellecedores",
    "ok": false,
    "orden": 27
   },
   "i_c_terraza_plomeria_28": {
    "ent": "c_terraza",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Verificar que estén conectadas bombas presurizadoras",
    "ok": false,
    "orden": 28
   },
   "i_c_terraza_plomeria_29": {
    "ent": "c_terraza",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar ducha exterior terraza",
    "ok": false,
    "orden": 29
@@ -4945,14 +4940,14 @@ window.FINAL_OBRA_SEED = {
   },
   "i_c_pb_plomeria_18": {
    "ent": "c_pb",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Terminar retorno agua caliente pleno contrafrente",
    "ok": false,
    "orden": 18
   },
   "i_c_pb_plomeria_19": {
    "ent": "c_pb",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Terminar conexión pluvial que viene del 105",
    "ok": false,
    "orden": 19
@@ -5932,28 +5927,28 @@ window.FINAL_OBRA_SEED = {
   },
   "i_c_subsuelo_plomeria_16": {
    "ent": "c_subsuelo",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar bombas a tanque de bombeo",
    "ok": false,
    "orden": 16
   },
   "i_c_subsuelo_plomeria_17": {
    "ent": "c_subsuelo",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Armar colector tanque de bombeo",
    "ok": false,
    "orden": 17
   },
   "i_c_subsuelo_plomeria_18": {
    "ent": "c_subsuelo",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar bomba para pozo de bombeo pluvial",
    "ok": false,
    "orden": 18
   },
   "i_c_subsuelo_plomeria_19": {
    "ent": "c_subsuelo",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Conectar bomba para pozo de bombeo cloacal",
    "ok": false,
    "orden": 19
@@ -6149,14 +6144,14 @@ window.FINAL_OBRA_SEED = {
   },
   "i_c_piso13_plomeria_8": {
    "ent": "c_piso13",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Modificar conexión tanque, que quede desde el lateral no desde la tapa superior",
    "ok": false,
    "orden": 8
   },
   "i_c_piso13_plomeria_9": {
    "ent": "c_piso13",
-   "rubro": "plomeria",
+   "rubro": "sanitarios",
    "texto": "Instalar tanque reserva agua de lluvia",
    "ok": false,
    "orden": 9
