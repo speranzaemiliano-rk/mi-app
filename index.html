@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v486</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v487</div>
         </div>
     </nav>
 
@@ -15346,7 +15346,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v486';
+    var APP_VER = 'v487';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -24450,13 +24450,15 @@
             var fechaVal = (fechasDOM[i] && fechasDOM[i] !== '') ? fechasDOM[i]
                          : (fechasGuardadas[i] && fechasGuardadas[i] !== '') ? fechasGuardadas[i]
                          : defaultISO;
-            var pagada = cobros.some(function(c){ return c.nroCuota === i+1; });
             var nroCuota = i + 1;
+            var cobroPag = cobros.find(function(c){ return c.nroCuota === nroCuota; });
+            var pagada = !!cobroPag;
             var dV = new Date(fechaVal + 'T00:00:00');
             var vencida = !pagada && dV < hoy;
-            // Monto: aplicar factor solo a cuotas >= desdeNro y no pagadas
+            // Monto: si ya se cobró, el monto REAL cobrado (nunca el recalculado por CAC);
+            // si está pendiente, aplicar factor solo desde "desdeNro".
             var aplica = factorCAC !== null && !pagada && nroCuota >= desdeNro;
-            var montoCuota = aplica ? base * factorCAC : base;
+            var montoCuota = pagada ? cobroPag.monto : (aplica ? base * factorCAC : base);
             var montoCell = aplica
                 ? fmtNum(montoCuota) + ' <span style="font-size:10px;color:#1A73E8;margin-left:4px;">×'+factorCAC.toFixed(3)+'</span>'
                 : fmtNum(montoCuota);
@@ -25513,29 +25515,6 @@
         var factorChip= document.getElementById('cvFactorChip');
         if (!tbody) return;
 
-        // ── Poblar selector "Desde cuota N" con solo las pendientes ──
-        var selDesde = document.getElementById('cvDesdeNro');
-        var desdeAnterior = selDesde ? parseInt(selDesde.value) || 1 : 1;
-        if (selDesde) {
-            selDesde.innerHTML = '';
-            var primPend = null;
-            for (var k = 0; k < nc; k++) {
-                var esPag = cobros.some(function(c){ return c.nroCuota === k+1; });
-                if (!esPag) {
-                    if (primPend === null) primPend = k+1;
-                    var opt = document.createElement('option');
-                    opt.value = k+1;
-                    opt.textContent = 'Cuota '+(k+1);
-                    if (k+1 === desdeAnterior) opt.selected = true;
-                    selDesde.appendChild(opt);
-                }
-            }
-            if (!selDesde.options.length) {
-                var opt0 = document.createElement('option'); opt0.value='99'; opt0.textContent='Sin pendientes'; selDesde.appendChild(opt0);
-            }
-        }
-        var desdeNro = selDesde ? parseInt(selDesde.value) || 1 : 1;
-
         // ── Factor CAC ──
         var factor = (cacBase > 0 && cacActual > 0) ? cacActual / cacBase : null;
         var esUSD  = (v.cuotasMoneda === 'usd');
@@ -25554,11 +25533,16 @@
         }
         if (factorLbl) {
             if (factor !== null) {
-                factorLbl.innerHTML = 'Factor: <strong>'+factor.toFixed(4)+'</strong> · Se aplicará a las cuotas <strong>'+(desdeNro)+' a '+nc+'</strong> pendientes. Las pagadas quedan congeladas.';
+                factorLbl.innerHTML = 'Factor: <strong>'+factor.toFixed(4)+'</strong> · Se aplica solo a las cuotas pendientes que tildes en «Actualizar». Las pagadas quedan congeladas siempre, al monto con el que realmente se cobraron.';
             } else {
                 factorLbl.textContent = 'Completá los índices CAC para ver la actualización.';
             }
         }
+
+        // Conserva qué filas pendientes ya estaban tildadas antes de reconstruir la tabla
+        // (al tocar los campos de CAC), para no perder la selección del usuario.
+        var marcadasPrevias = {};
+        tbody.querySelectorAll('.cv-cuota-check').forEach(function(chk){ marcadasPrevias[chk.dataset.cuota] = chk.checked; });
 
         // ── Montos históricos por cuota (cuotaMontos guardados, o base para las nunca actualizadas) ──
         var cuotaMontos = v.cuotaMontos || [];  // array indexado 0..nc-1
@@ -25572,22 +25556,19 @@
             var nroCuota = i + 1;
             var fechaISO = fechas[i] || (d0 ? (function(i2){ var d=new Date(d0); d.setMonth(d.getMonth()+i2); return d.toISOString().slice(0,10); })(i) : '');
             var pagada   = cobros.some(function(c){ return c.nroCuota === nroCuota; });
+            var cobroPag = pagada ? cobros.find(function(c){ return c.nroCuota === nroCuota; }) : null;
             var dV       = fechaISO ? new Date(fechaISO+'T00:00:00') : null;
             var vencida  = !pagada && dV && dV < hoy;
 
-            // Monto vigente de esta cuota (lo que está guardado, o el base si nunca se actualizó)
-            var montoVigente = (cuotaMontos[i] && cuotaMontos[i] > 0) ? cuotaMontos[i] : montoBase;
+            // Monto vigente de esta cuota: si ya se cobró, lo que REALMENTE se cobró (nunca se
+            // recalcula); si está pendiente, lo guardado en cuotaMontos o el monto base.
+            var montoVigente = (pagada && cobroPag && cobroPag.monto > 0) ? cobroPag.monto
+                : (cuotaMontos[i] && cuotaMontos[i] > 0) ? cuotaMontos[i] : montoBase;
 
-            // Monto nuevo: solo si es pendiente Y >= desdeNro Y hay factor
-            var montoNuevo;
-            var aplica = !pagada && nroCuota >= desdeNro && factor !== null;
-            if (pagada) {
-                montoNuevo = null;  // congelada
-            } else if (aplica) {
-                montoNuevo = montoBase * factor;
-            } else {
-                montoNuevo = montoVigente; // pendiente pero antes de "desde"
-            }
+            // ¿Estaba tildada antes de reconstruir? Por defecto, todas las pendientes arrancan tildadas.
+            var marcada = marcadasPrevias.hasOwnProperty(String(nroCuota)) ? marcadasPrevias[nroCuota] : true;
+            var aplica = !pagada && marcada && factor !== null;
+            var montoNuevo = aplica ? montoBase * factor : montoVigente;
 
             // Columna "Monto anterior"
             var celdaAnterior;
@@ -25601,18 +25582,21 @@
             // forma de cobro) sin tener que borrar todo. Se ofrece desde la columna Estado.
             var _cobroReal = pagada ? (v.cobrosHistorial||[]).findIndex(function(c){ return c.comp==='cuota' && c.nroCuota === nroCuota; }) : -1;
 
+            // Columna "Actualizar" (checkbox, solo pendientes)
+            var celdaCheck = pagada
+                ? '<span style="color:#9AA0A6;font-size:13px;" title="Las cuotas pagadas nunca se recalculan">🔒</span>'
+                : '<input type="checkbox" class="cv-cuota-check" data-cuota="'+nroCuota+'"'+(marcada?' checked':'')+' onchange="cvOnCheckCuota(this)">';
+
             // Columna "Monto nuevo"
             var celdaNuevo;
             if (pagada) {
-                celdaNuevo = '<span style="color:#9AA0A6;font-size:11px;">🔒 Congelado</span>';
+                celdaNuevo = '<span style="color:#9AA0A6;font-size:11px;">🔒 Cobrada</span>';
             } else if (aplica && montoNuevo !== montoVigente) {
                 var sube = montoNuevo > montoVigente;
                 celdaNuevo = '<strong style="color:'+(sube?'var(--blue)':'var(--success)')+';">'+fmtN(montoNuevo)+'</strong>'
                     +'<span style="font-size:10px;color:'+(sube?'var(--blue)':'var(--success)')+';margin-left:4px;">'+(sube?'▲':'▼')+'</span>';
-            } else if (!aplica && !pagada) {
-                celdaNuevo = '<span style="color:#9AA0A6;font-size:11px;">Sin cambio</span>';
             } else {
-                celdaNuevo = fmtN(montoNuevo);
+                celdaNuevo = '<span style="color:#9AA0A6;font-size:11px;">Sin cambio</span>';
             }
 
             var estadoHtml = pagada
@@ -25623,15 +25607,55 @@
                     : '<span style="color:#9AA0A6;font-size:11px;">Pendiente</span>';
             var trBg = pagada ? '#F8FFF8' : vencida ? '#FFF5F5' : aplica ? '#F0F4FF' : '';
             var tr = document.createElement('tr');
+            tr.dataset.cuotaRow = nroCuota;
+            tr.dataset.vigente = montoVigente;
             tr.style.background = trBg;
             tr.innerHTML =
                 '<td style="padding:6px 10px;text-align:center;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--text-2);">'+(pagada?'<span style="opacity:.5;">':'')+(i+1)+(pagada?'</span>':'')+'</td>'+
                 '<td style="padding:6px 10px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;'+(pagada?'opacity:.5;':'')+'">'+fmtF(fechaISO)+'</td>'+
                 '<td style="padding:6px 10px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;">'+celdaAnterior+'</td>'+
+                '<td style="padding:6px 10px;text-align:center;">'+celdaCheck+'</td>'+
                 '<td style="padding:6px 10px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;">'+celdaNuevo+'</td>'+
                 '<td style="padding:6px 10px;text-align:center;">'+estadoHtml+'</td>';
             tbody.appendChild(tr);
         }
+    }
+
+    // Al tildar/destildar una cuota puntual: recalcula solo esa fila (sin reconstruir toda la
+    // tabla, para no perder la selección de las demás).
+    function cvOnCheckCuota(chk) {
+        var idx = parseInt(document.getElementById('cobroVentaIdx').value);
+        var v = ventas[idx]; if (!v) return;
+        var cacBase   = parseFloat(document.getElementById('cvCACBase').value)   || v.cacBase   || 0;
+        var cacActual = parseFloat(document.getElementById('cvCACActual').value) || v.cacActual || 0;
+        var factor = (cacBase > 0 && cacActual > 0) ? cacActual / cacBase : null;
+        var montoBase = v.construccionBase || 0;
+        var esUSD = (v.cuotasMoneda === 'usd');
+        var prefix = esUSD ? 'USD ' : '$ ';
+        var fmtN = function(n){ return prefix + (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var tr = chk.closest('tr');
+        var celdaNuevo = tr.children[4];
+        var montoVigente = parseFloat(tr.dataset.vigente) || montoBase;
+        var aplica = chk.checked && factor !== null;
+        var montoNuevo = aplica ? montoBase * factor : montoVigente;
+        tr.style.background = aplica ? '#F0F4FF' : '';
+        if (aplica && montoNuevo !== montoVigente) {
+            var sube = montoNuevo > montoVigente;
+            celdaNuevo.innerHTML = '<strong style="color:'+(sube?'var(--blue)':'var(--success)')+';">'+fmtN(montoNuevo)+'</strong>'
+                +'<span style="font-size:10px;color:'+(sube?'var(--blue)':'var(--success)')+';margin-left:4px;">'+(sube?'▲':'▼')+'</span>';
+        } else {
+            celdaNuevo.innerHTML = '<span style="color:#9AA0A6;font-size:11px;">Sin cambio</span>';
+        }
+    }
+
+    // "Marcar todas / Desmarcar todas las pendientes" (link arriba de la tabla).
+    function cvMarcarTodasCuotas(marcar) {
+        var tbody = document.getElementById('cvPlanBody');
+        if (!tbody) return;
+        tbody.querySelectorAll('.cv-cuota-check').forEach(function(chk){
+            chk.checked = marcar;
+            cvOnCheckCuota(chk);
+        });
     }
 
     // ── Confirmar plan: persiste cuotaMontos actualizados y pasa al paso 2 ──
@@ -25640,7 +25664,6 @@
         var v        = ventas[idx];
         var cacBase   = parseFloat(document.getElementById('cvCACBase').value)   || 0;
         var cacActual = parseFloat(document.getElementById('cvCACActual').value) || 0;
-        var desdeNro  = parseInt(document.getElementById('cvDesdeNro').value)    || 1;
         var nc        = v.nroCuotas || 0;
         var montoBase = v.construccionBase || 0;
         var cobros    = (v.cobrosHistorial||[]).filter(function(c){ return c.comp==='cuota'; });
@@ -25650,17 +25673,24 @@
         if (cacBase > 0)   v.cacBase   = cacBase;
         if (cacActual > 0) v.cacActual = cacActual;
 
-        // Actualizar cuotaMontos: congelar pagadas, aplicar factor desde desdeNro en pendientes
+        // Qué cuotas pendientes quedaron tildadas en «Actualizar» (una por una, no un corte único).
+        var marcadas = {};
+        document.querySelectorAll('#cvPlanBody .cv-cuota-check').forEach(function(chk){
+            marcadas[chk.dataset.cuota] = chk.checked;
+        });
+
+        // Actualizar cuotaMontos: nunca tocar pagadas (quedan al monto real cobrado, no acá);
+        // en las pendientes, aplicar el factor solo a las tildadas y dejar fijo el resto.
         var cuotaMontos = v.cuotaMontos ? v.cuotaMontos.slice() : [];
         while (cuotaMontos.length < nc) cuotaMontos.push(montoBase);
         for (var i = 0; i < nc; i++) {
             var nroCuota = i + 1;
             var pagada   = cobros.some(function(c){ return c.nroCuota === nroCuota; });
             if (pagada) continue; // nunca tocar pagadas
-            if (factor !== null && nroCuota >= desdeNro) {
+            if (factor !== null && marcadas[nroCuota]) {
                 cuotaMontos[i] = Math.round(montoBase * factor);
             }
-            // Si no aplica (antes de desdeNro), dejamos el valor que ya tenía
+            // Si no está tildada, dejamos el valor que ya tenía (queda fijo)
         }
         v.cuotaMontos = cuotaMontos;
 
@@ -26303,10 +26333,16 @@
     }
 
     // Monto vigente de la cuota i de una venta cuotas_cac:
-    //  - si tiene un monto congelado/guardado (cuotaMontos[i]), lo usa;
+    //  - si ya se cobró, el monto que REALMENTE se cobró (cobrosHistorial) — congelado para
+    //    siempre, no se recalcula aunque después se actualice el CAC de las cuotas siguientes;
+    //  - si no, y tiene un monto congelado/guardado (cuotaMontos[i]) por una actualización de
+    //    CAC previa, lo usa;
     //  - si no, aplica el factor CAC vigente (cacActual/cacBase) al monto base, para que el
     //    valor actualizado se refleje aunque todavía no se haya registrado un cobro.
     function _cuotaMontoVigente(v, i) {
+        var nroCuota = i + 1;
+        var cobroPag = (v.cobrosHistorial || []).find(function(c){ return c.comp === 'cuota' && c.nroCuota === nroCuota; });
+        if (cobroPag && cobroPag.monto > 0) return cobroPag.monto;
         var cm = (v.cuotaMontos || [])[i];
         if (cm && cm > 0) return cm;
         var base = v.construccionBase || 0;
@@ -39096,13 +39132,12 @@
                 <input type="month" title="Elegí el mes y se completa el índice CAC" onchange="cacAutofill(this.value,'cvCACActual')" style="width:34px;padding:2px;" aria-label="Mes CAC actual">
               </div>
             </div>
-            <div>
-              <label style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);display:block;margin-bottom:3px;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">Actualizar desde cuota</label>
-              <select id="cvDesdeNro" style="width:110px;padding:6px 9px;border:1px solid var(--border);font-size:12px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;" onchange="cvRecalcPlan()">
-                <option value="1">N° 1 (todas)</option>
-              </select>
-            </div>
             <div id="cvFactorChip" style="padding:6px 10px;background:#EBF0F8;border-radius:6px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--blue);display:none;white-space:nowrap;align-self:flex-end;margin-bottom:1px;"></div>
+          </div>
+          <div style="margin-top:8px;">
+            <a href="#" onclick="cvMarcarTodasCuotas(true);return false;" style="font-size:11px;">☑ Marcar todas las pendientes</a>
+            <span style="color:var(--text-3);"> · </span>
+            <a href="#" onclick="cvMarcarTodasCuotas(false);return false;" style="font-size:11px;">☐ Desmarcar todas</a>
           </div>
         </div>
 
@@ -39114,6 +39149,7 @@
                 <th style="padding:7px 10px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">N°</th>
                 <th style="padding:7px 10px;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Vencimiento</th>
                 <th style="padding:7px 10px;text-align:right;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto anterior</th>
+                <th style="padding:7px 10px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;" title="Solo las cuotas tildadas se actualizan con el nuevo CAC">Actualizar</th>
                 <th style="padding:7px 10px;text-align:right;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Monto nuevo</th>
                 <th style="padding:7px 10px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:400;">Estado</th>
               </tr>
