@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v484</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v486</div>
         </div>
     </nav>
 
@@ -5983,7 +5983,12 @@
                   <div class="table-card">
                     <div class="table-card-head">
                       <h3>🏛️ Retenciones AFIP/ARCA</h3>
-                      <div style="display:flex;gap:6px;">
+                      <div style="display:flex;gap:6px;align-items:center;">
+                        <select id="rptTipoRet" onchange="rptRenderRetenciones(rptFiltro())" style="font-size:12px;padding:4px 6px;border-radius:6px;border:1px solid var(--border);">
+                          <option value="">Todas</option>
+                          <option value="ganancias">Solo Ganancias</option>
+                          <option value="suss">Solo SUSS</option>
+                        </select>
                         <button class="btn btn-outline btn-sm" onclick="rptExportar('retenciones')">⬇️ Excel</button>
                         <button class="btn btn-gold btn-sm" onclick="exportarSICORE()" title="Retenciones de Ganancias sobre pagos de Facturas, listas para importar en el aplicativo SICORE">📄 SICORE (Ganancias)</button>
                         <button class="btn btn-outline btn-sm" onclick="rptImprimir('retenciones')">🖨️ Imprimir</button>
@@ -13551,32 +13556,44 @@
         return { neto: neto, iva: iva, total: total, alicPct: alicPct, estimado: estimado };
     }
 
+    // Tipo elegido en el selector "Todas/Solo Ganancias/Solo SUSS" de la tarjeta de Retenciones.
+    // '' = todas, 'ganancias' | 'suss' = solo ese tipo (usa _esRetSUSS por código de régimen).
+    function _rptTipoRetSel() {
+        var el = document.getElementById('rptTipoRet');
+        return el ? el.value : '';
+    }
+
+    // Filas de retenciones (presupuestos + facturas) en el período, filtradas opcionalmente por tipo.
+    // Compartida entre la vista en pantalla, la impresión y la exportación a Excel para no duplicar la lógica.
+    function _rptFilasRetenciones(f, tipoFiltro, vacio) {
+        if (vacio === undefined) vacio = '—';
+        var rows = [];
+        var agregar = function(fecha, proveedor, cbte, r, montoPago) {
+            if (!r.monto) return;
+            if (tipoFiltro && _esRetSUSS(r.codigo) !== (tipoFiltro === 'suss')) return;
+            rows.push({ fecha: fecha, proveedor: proveedor||vacio, cbte: cbte||vacio, codigo: r.codigo, desc: r.desc||r.codigo, montoPago: montoPago, retencion: r.monto });
+        };
+        (datos||[]).forEach(function(d) {
+            (d.pagosHistorial||[]).forEach(function(p) {
+                if (!rptEnPeriodo(p.fecha, f)) return;
+                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, d.proveedor, d.recibo, r, (p.capital||p.montoPagado||0)+(p.mayores||0)); });
+            });
+        });
+        (facturas||[]).forEach(function(fa) {
+            (fa.pagosHistorial||[]).forEach(function(p) {
+                if (!rptEnPeriodo(p.fecha, f)) return;
+                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, fa.proveedor, fa.numero, r, p.monto||0); });
+            });
+        });
+        rows.sort(function(a,b){ return a.fecha < b.fecha ? -1 : 1; });
+        return rows;
+    }
+
     function rptRenderRetenciones(f) {
         var body = document.getElementById('rptRetencionesBody');
         var foot = document.getElementById('rptRetencionesFoot');
         if (!body) return;
-        var rows = [];
-        // Retenciones de presupuestos
-        (datos||[]).forEach(function(d) {
-            (d.pagosHistorial||[]).forEach(function(p) {
-                if (!rptEnPeriodo(p.fecha, f)) return;
-                (p.retenciones||[]).forEach(function(r) {
-                    if (!r.monto) return;
-                    rows.push({ fecha: p.fecha, proveedor: d.proveedor||'—', cbte: d.recibo||'—', codigo: r.codigo, desc: r.desc||r.codigo, montoPago: (p.capital||p.montoPagado||0)+(p.mayores||0), retencion: r.monto });
-                });
-            });
-        });
-        // Retenciones de facturas
-        (facturas||[]).forEach(function(fa) {
-            (fa.pagosHistorial||[]).forEach(function(p) {
-                if (!rptEnPeriodo(p.fecha, f)) return;
-                (p.retenciones||[]).forEach(function(r) {
-                    if (!r.monto) return;
-                    rows.push({ fecha: p.fecha, proveedor: fa.proveedor||'—', cbte: fa.numero||'—', codigo: r.codigo, desc: r.desc||r.codigo, montoPago: p.monto||0, retencion: r.monto });
-                });
-            });
-        });
-        rows.sort(function(a,b){ return a.fecha < b.fecha ? -1 : 1; });
+        var rows = _rptFilasRetenciones(f, _rptTipoRetSel());
         if (!rows.length) { body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:16px;">Sin retenciones en el período</td></tr>'; foot.innerHTML=''; return; }
         var totRet = 0;
         body.innerHTML = rows.map(function(r) {
@@ -13678,12 +13695,11 @@
                 }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+items.length+' facturas)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
                 (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'');
         } else {
-            var rows = [];
-            (datos||[]).forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:d.proveedor||'—',cbte:d.recibo||'—',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:(p.capital||p.montoPagado||0)+(p.mayores||0),retencion:r.monto}); }); }); });
-            (facturas||[]).forEach(function(fa){ (fa.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:fa.proveedor||'—',cbte:fa.numero||'—',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:p.monto||0,retencion:r.monto}); }); }); });
-            rows.sort(function(a,b){return a.fecha<b.fecha?-1:1;});
+            var tipoRetSel = _rptTipoRetSel();
+            var rows = _rptFilasRetenciones(f, tipoRetSel);
+            var tipoRetTitulo = tipoRetSel === 'ganancias' ? ' — Solo Ganancias' : tipoRetSel === 'suss' ? ' — Solo SUSS' : '';
             var totRet=0;
-            content = '<h1>🏛️ Retenciones AFIP/ARCA</h1><h2>'+empresa+' — '+periodo+'</h2>' +
+            content = '<h1>🏛️ Retenciones AFIP/ARCA'+tipoRetTitulo+'</h1><h2>'+empresa+' — '+periodo+'</h2>' +
                 '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Régimen</th><th>Descripción</th><th class="r">Monto Pago</th><th class="r">Retención</th></tr></thead><tbody>' +
                 rows.map(function(r){ totRet+=r.retencion; return '<tr><td>'+r.fecha+'</td><td>'+r.proveedor+'</td><td>'+r.cbte+'</td><td>'+r.codigo+'</td><td>'+r.desc+'</td><td class="r">'+_fmtM(r.montoPago)+'</td><td class="r ret">'+_fmtM(r.retencion)+'</td></tr>'; }).join('') +
                 '</tbody><tfoot><tr><td colspan="6">TOTAL RETENCIONES ('+rows.length+' registros)</td><td class="r ret">'+_fmtM(totRet)+'</td></tr></tfoot></table>';
@@ -13727,10 +13743,7 @@
         }
 
         function _sheetRetenciones() {
-            var rows = [];
-            (datos||[]).forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:d.proveedor||'',cbte:d.recibo||'',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:(p.capital||p.montoPagado||0)+(p.mayores||0),retencion:r.monto}); }); }); });
-            (facturas||[]).forEach(function(fa){ (fa.pagosHistorial||[]).forEach(function(p){ if(!rptEnPeriodo(p.fecha,f))return;(p.retenciones||[]).forEach(function(r){ if(!r.monto)return;rows.push({fecha:p.fecha,proveedor:fa.proveedor||'',cbte:fa.numero||'',codigo:r.codigo,desc:r.desc||r.codigo,montoPago:p.monto||0,retencion:r.monto}); }); }); });
-            rows.sort(function(a,b){ return a.fecha<b.fecha?-1:1; });
+            var rows = _rptFilasRetenciones(f, _rptTipoRetSel(), '');
             return rows.map(function(r) {
                 return { 'Fecha': r.fecha, 'Proveedor': r.proveedor, 'Comprobante': r.cbte,
                          'Régimen': r.codigo, 'Descripción': r.desc,
@@ -15333,7 +15346,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v484';
+    var APP_VER = 'v486';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -26012,6 +26025,17 @@
             grupoVenc.style.display = 'none';
             document.getElementById('ecvVenc').value = '';
         }
+        // TC del cobro (solo cuotas en pesos, para que el plan las muestre en USD al dólar del pago
+        // y no al dólar de hoy). Las cuotas ya en USD (cuota_usd_simple, o cuota con cuotasMoneda='usd') no lo necesitan.
+        var esUSDCuota = (c.comp === 'cuota_usd_simple') || (c.comp === 'cuota' && v.cuotasMoneda === 'usd');
+        var grupoTC = document.getElementById('ecvGrupoTC');
+        if (_esCobroCuota(c) && !esUSDCuota) {
+            grupoTC.style.display = '';
+            document.getElementById('ecvTC').value = c.tc || '';
+        } else {
+            grupoTC.style.display = 'none';
+            document.getElementById('ecvTC').value = '';
+        }
         // Factura emitida: número + link a la actual (si tiene) + input para adjuntar/reemplazar.
         document.getElementById('ecvFacturaNro').value = c.facturaNro || '';
         document.getElementById('ecvFacturaArchivo').value = '';
@@ -26027,6 +26051,19 @@
         document.getElementById('ecvGrupoCuenta').style.display = (document.getElementById('ecvModalidad').value === 'A') ? '' : 'none';
     };
     window.cerrarEditarCobroVenta = function() { document.getElementById('modalEditarCobroVenta').classList.remove('active'); };
+    // Busca el dólar histórico de la fecha cargada en el editor y lo vuelca en ecvTC.
+    function _ecvBuscarTCFecha() {
+        var fecha = (document.getElementById('ecvFecha')||{}).value;
+        var tcEl = document.getElementById('ecvTC');
+        if (!fecha || !tcEl) { alert('Ingresá primero la fecha del cobro.'); return; }
+        var ph = tcEl.placeholder;
+        tcEl.placeholder = 'Buscando…';
+        _buscarDolarHistorico(fecha, 5, function(valor){
+            tcEl.placeholder = ph;
+            if (valor > 0) tcEl.value = Math.round(valor);
+            else alert('No se encontró el dólar de esa fecha. Podés cargarlo a mano.');
+        });
+    }
     // Desde el paso 1 del cobro (plan de cuotas), abrir el editor de un cobro pagado.
     window.cvEditarCobroCuota = function(idx, cIdx) {
         if (typeof cerrarModalCobroVenta === 'function') cerrarModalCobroVenta();
@@ -26056,6 +26093,11 @@
         if (_esCobroCuota(c) && document.getElementById('ecvGrupoVenc').style.display !== 'none') {
             var venc = document.getElementById('ecvVenc').value;
             if (venc) _setCuotaVencimiento(v, c.comp, c.nroCuota, venc);
+        }
+        // TC del cobro (para que el plan de cuotas la muestre en USD al dólar del pago, no al de hoy).
+        if (document.getElementById('ecvGrupoTC').style.display !== 'none') {
+            var tcNuevo = parseFloat(document.getElementById('ecvTC').value) || 0;
+            if (tcNuevo > 0) c.tc = tcNuevo; else delete c.tc;
         }
         // Factura emitida: número + adjuntar/reemplazar el archivo.
         var _facNroE = (document.getElementById('ecvFacturaNro').value||'').trim();
@@ -39230,6 +39272,14 @@
         <label>Fecha de vencimiento de la cuota <span id="ecvVencNro" style="color:var(--text-3);font-weight:400;"></span></label>
         <input type="date" id="ecvVenc">
         <div class="form-hint" style="color:var(--text-3);">Cambia cuándo vence esta cuota en el plan (distinta de la fecha en que se cobró).</div>
+      </div>
+      <div class="form-group" id="ecvGrupoTC" style="display:none;">
+        <label>Dólar del día (TC) de este cobro</label>
+        <div style="display:flex;gap:6px;">
+          <input type="number" id="ecvTC" step="0.01" min="0" placeholder="Ej: 1200" style="flex:1;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="_ecvBuscarTCFecha()">🔍 Buscar</button>
+        </div>
+        <div class="form-hint" style="color:var(--text-3);">Se usa para mostrar esta cuota en USD en el plan. Si quedó vacío (cobro cargado antes de tener este campo), completalo con el dólar de la fecha del cobro — «🔍 Buscar» trae el dólar histórico de esa fecha. Dejalo vacío para que siga mostrando el dólar de hoy.</div>
       </div>
       <div class="form-group" id="ecvGrupoCac">
         <label>Índice CAC aplicado</label>
