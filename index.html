@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v487</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v488</div>
         </div>
     </nav>
 
@@ -5928,7 +5928,7 @@
                         <button class="btn btn-outline btn-sm" onclick="rptImprimir('ventas')">🖨️ Imprimir</button>
                       </div>
                     </div>
-                    <div style="overflow-x:auto;">
+                    <div class="table-wrap" style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
                         <thead>
                           <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text-3);font-size:11px;">
@@ -5958,7 +5958,7 @@
                         <button class="btn btn-outline btn-sm" onclick="rptImprimir('compras')">🖨️ Imprimir</button>
                       </div>
                     </div>
-                    <div style="overflow-x:auto;">
+                    <div class="table-wrap" style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
                         <thead>
                           <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text-3);font-size:11px;">
@@ -5994,10 +5994,20 @@
                         <button class="btn btn-outline btn-sm" onclick="rptImprimir('retenciones')">🖨️ Imprimir</button>
                       </div>
                     </div>
-                    <div style="overflow-x:auto;">
+                    <!-- Tildar retenciones para armar el pago a cuenta (día 15) o el saldo de la DDJJ (fin de mes) -->
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);font-size:11px;">
+                      <span style="color:var(--text-3);">Tildar:</span>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(1)" title="Retenciones del 1 al 15 — las del pago a cuenta">1ª quincena (pago a cuenta)</button>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(2)" title="Retenciones del 16 en adelante — las del saldo de la DDJJ">2ª quincena (saldo DDJJ)</button>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelTodas(true)">Todas</button>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelTodas(false)">Ninguna</button>
+                      <span id="rptRetSelResumen" style="margin-left:auto;color:var(--text-3);"></span>
+                    </div>
+                    <div class="table-wrap" style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
                         <thead>
                           <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text-3);font-size:11px;">
+                            <th style="padding:6px 8px;text-align:center;"><input type="checkbox" id="rptRetSelTodo" onchange="rptRetSelTodas(this.checked)" title="Tildar / destildar todas"></th>
                             <th style="padding:6px 8px;">Fecha Pago</th>
                             <th style="padding:6px 8px;">Proveedor</th>
                             <th style="padding:6px 8px;">Comprobante</th>
@@ -6010,6 +6020,15 @@
                         <tbody id="rptRetencionesBody"></tbody>
                         <tfoot id="rptRetencionesFoot"></tfoot>
                       </table>
+                    </div>
+                    <div id="rptRetSelBarra" style="display:none;padding:10px 14px;border-top:1px solid var(--border);background:var(--surface);">
+                      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:12px;">
+                        <span><strong id="rptRetSelCant">0</strong> tildadas</span>
+                        <span>Ganancias: <strong id="rptRetSelGan" style="color:var(--danger);">$ 0,00</strong></span>
+                        <span>SUSS: <strong id="rptRetSelSuss" style="color:var(--danger);">$ 0,00</strong></span>
+                        <span>Total: <strong id="rptRetSelTotal" style="color:var(--danger);">$ 0,00</strong></span>
+                        <button class="btn btn-outline btn-sm" style="margin-left:auto;" onclick="rptImprimirRetSeleccion()">🖨️ Imprimir lo tildado</button>
+                      </div>
                     </div>
                   </div>
 
@@ -13453,6 +13472,17 @@
         return s;
     }
 
+    // Fecha para los reportes, siempre en DD/MM/YYYY: acepta el formato de ARCA (YYYYMMDD)
+    // y el interno (YYYY-MM-DD). Vacía → '—'.
+    function _rptFechaDMY(s) {
+        s = String(s||'').trim();
+        if (!s) return '—';
+        if (s.length === 8 && s.indexOf('-') === -1) return rptFechaAfip(s);
+        var p = s.split('-');
+        if (p.length === 3) return p[2]+'/'+p[1]+'/'+p[0];
+        return s;
+    }
+
     function _fmtM(n) { return '$ ' + (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
     function rptActualizar() {
@@ -13475,9 +13505,9 @@
             var signo = _rptSignoVenta(v.tipoComp);
             var neto = signo*(v.impNeto||0), iva = signo*(v.impIVA||0), total = signo*(v.impTotal||0);
             totNeto += neto; totIVA += iva; totTotal += total;
-            var fecha = v.fecha.length===8 ? rptFechaAfip(v.fecha) : v.fecha;
+            var fecha = _rptFechaDMY(v.fecha);
             return '<tr style="border-bottom:1px solid var(--border);">' +
-                '<td style="padding:5px 8px;">'+fecha+'</td>' +
+                '<td style="padding:5px 8px;white-space:nowrap;">'+fecha+'</td>' +
                 '<td style="padding:5px 8px;">'+(_afipTiposNombreRpt[v.tipoComp]||v.tipoComp)+'</td>' +
                 '<td style="padding:5px 8px;">'+String(v.ptoVta||'').padStart(4,'0')+'-'+String(v.nro||'').padStart(8,'0')+'</td>' +
                 '<td style="padding:5px 8px;">'+( v.razon||'—')+'</td>' +
@@ -13521,7 +13551,7 @@
             totNeto += d.neto; totIVA += d.iva; totTotal += d.total;
             var estado = v.estado==='pagada' ? '<span style="color:var(--success);">✔ Pagada</span>' : v.estado==='parcial' ? '<span style="color:var(--gold);">◑ Parcial</span>' : '<span style="color:var(--danger);">○ Pendiente</span>';
             return '<tr style="border-bottom:1px solid var(--border);">' +
-                '<td style="padding:5px 8px;">'+(v.fecha||'—')+'</td>' +
+                '<td style="padding:5px 8px;white-space:nowrap;">'+_rptFechaDMY(v.fecha)+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.proveedor||'—')+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.numero||'—')+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.descripcion||'—')+'</td>' +
@@ -13594,12 +13624,14 @@
         var foot = document.getElementById('rptRetencionesFoot');
         if (!body) return;
         var rows = _rptFilasRetenciones(f, _rptTipoRetSel());
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-3);padding:16px;">Sin retenciones en el período</td></tr>'; foot.innerHTML=''; return; }
+        _rptRetFilas = rows;   // las mismas filas que se ven, para lo que se tilde
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:16px;">Sin retenciones en el período</td></tr>'; foot.innerHTML=''; _rptRetActualizarSel(); return; }
         var totRet = 0;
-        body.innerHTML = rows.map(function(r) {
+        body.innerHTML = rows.map(function(r, i) {
             totRet += r.retencion;
             return '<tr style="border-bottom:1px solid var(--border);">' +
-                '<td style="padding:5px 8px;">'+(r.fecha||'—')+'</td>' +
+                '<td style="padding:5px 8px;text-align:center;"><input type="checkbox" class="rpt-ret-chk" data-i="'+i+'" onchange="_rptRetActualizarSel()"></td>' +
+                '<td style="padding:5px 8px;white-space:nowrap;">'+_rptFechaDMY(r.fecha)+'</td>' +
                 '<td style="padding:5px 8px;">'+(r.proveedor)+'</td>' +
                 '<td style="padding:5px 8px;">'+(r.cbte)+'</td>' +
                 '<td style="padding:5px 8px;font-size:11px;font-weight:600;">'+(r.codigo)+'</td>' +
@@ -13609,8 +13641,80 @@
                 '</tr>';
         }).join('');
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--bg);">' +
-            '<td colspan="6" style="padding:6px 8px;">TOTAL RETENCIONES ('+rows.length+' registros)</td>' +
+            '<td colspan="7" style="padding:6px 8px;">TOTAL RETENCIONES ('+rows.length+' registros)</td>' +
             '<td style="padding:6px 8px;text-align:right;color:var(--danger);">'+_fmtM(totRet)+'</td></tr>';
+        _rptRetActualizarSel();
+    }
+
+    // ── Tildar retenciones para armar el pago a cuenta (día 15) y el saldo de la DDJJ ──
+    // Las filas tildadas se suman aparte, separando Ganancias de SUSS, sin tocar el total general.
+    var _rptRetFilas = [];
+
+    function _rptRetSeleccionadas() {
+        var sel = [];
+        document.querySelectorAll('#rptRetencionesBody .rpt-ret-chk').forEach(function(chk){
+            if (chk.checked) { var r = _rptRetFilas[parseInt(chk.dataset.i)]; if (r) sel.push(r); }
+        });
+        return sel;
+    }
+
+    function _rptRetActualizarSel() {
+        var sel = _rptRetSeleccionadas();
+        var barra = document.getElementById('rptRetSelBarra');
+        var resumen = document.getElementById('rptRetSelResumen');
+        var gan = 0, suss = 0;
+        sel.forEach(function(r){ if (_esRetSUSS(r.codigo)) suss += r.retencion; else gan += r.retencion; });
+        if (barra) barra.style.display = sel.length ? '' : 'none';
+        var s = function(id, txt){ var e = document.getElementById(id); if (e) e.textContent = txt; };
+        s('rptRetSelCant',  sel.length);
+        s('rptRetSelGan',   _fmtM(gan));
+        s('rptRetSelSuss',  _fmtM(suss));
+        s('rptRetSelTotal', _fmtM(gan + suss));
+        if (resumen) resumen.textContent = sel.length ? (sel.length + ' tildadas · ' + _fmtM(gan + suss)) : '';
+        var todo = document.getElementById('rptRetSelTodo');
+        if (todo) todo.checked = sel.length > 0 && sel.length === _rptRetFilas.length;
+    }
+
+    function rptRetSelTodas(val) {
+        document.querySelectorAll('#rptRetencionesBody .rpt-ret-chk').forEach(function(chk){ chk.checked = !!val; });
+        _rptRetActualizarSel();
+    }
+
+    // Tilda las de una quincena: la 1ª (días 1 a 15) es la del pago a cuenta del día 15,
+    // la 2ª (16 en adelante) la que queda para el saldo de la declaración jurada.
+    function rptRetSelQuincena(q) {
+        document.querySelectorAll('#rptRetencionesBody .rpt-ret-chk').forEach(function(chk){
+            var r = _rptRetFilas[parseInt(chk.dataset.i)];
+            var dia = r && r.fecha ? parseInt(String(r.fecha).slice(8,10)) : 0;
+            chk.checked = dia > 0 && (q === 1 ? dia <= 15 : dia > 15);
+        });
+        _rptRetActualizarSel();
+    }
+
+    function rptImprimirRetSeleccion() {
+        var sel = _rptRetSeleccionadas();
+        if (!sel.length) { alert('No hay retenciones tildadas.'); return; }
+        var f = rptFiltro();
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        var quins = ['','— 1ª Quincena','— 2ª Quincena'];
+        var periodo = meses[f.mes] + ' ' + f.anio + ' ' + (quins[f.quin]||'');
+        var empresa = empresaActual ? empresaActual.nombre : '';
+        var css = '<style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Arial,sans-serif;font-size:12px;color:#111;padding:24px;}h1{font-size:16px;margin-bottom:4px;}h2{font-size:13px;color:#555;margin-bottom:16px;font-weight:400;}table{width:100%;border-collapse:collapse;margin-bottom:16px;}th{background:#f0f0f0;padding:6px 8px;text-align:left;font-size:11px;border-bottom:2px solid #ccc;}td{padding:5px 8px;border-bottom:1px solid #e0e0e0;}tfoot td{font-weight:700;background:#f8f8f8;border-top:2px solid #999;}.r{text-align:right;}.ret{color:#c00;}@media print{button{display:none;}}</style>';
+        var gan = 0, suss = 0;
+        var filas = sel.map(function(r){
+            if (_esRetSUSS(r.codigo)) suss += r.retencion; else gan += r.retencion;
+            return '<tr><td>'+_rptFechaDMY(r.fecha)+'</td><td>'+r.proveedor+'</td><td>'+r.cbte+'</td><td>'+r.codigo+'</td><td>'+r.desc+'</td><td class="r">'+_fmtM(r.montoPago)+'</td><td class="r ret">'+_fmtM(r.retencion)+'</td></tr>';
+        }).join('');
+        var content = '<h1>🏛️ Retenciones seleccionadas</h1><h2>'+empresa+' — '+periodo+'</h2>' +
+            '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Régimen</th><th>Descripción</th><th class="r">Monto Pago</th><th class="r">Retención</th></tr></thead><tbody>' +
+            filas + '</tbody><tfoot>' +
+            '<tr><td colspan="6">Ganancias</td><td class="r ret">'+_fmtM(gan)+'</td></tr>' +
+            '<tr><td colspan="6">SUSS</td><td class="r ret">'+_fmtM(suss)+'</td></tr>' +
+            '<tr><td colspan="6">TOTAL ('+sel.length+' registros)</td><td class="r ret">'+_fmtM(gan+suss)+'</td></tr>' +
+            '</tfoot></table>';
+        var w = window.open('','_blank');
+        w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Retenciones seleccionadas</title>'+css+'</head><body>'+content+'<button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🖨️ Imprimir / Guardar PDF</button></body></html>');
+        w.document.close();
     }
 
     function rptRenderStats(f) {
@@ -13691,7 +13795,7 @@
                     var d = _rptIvaCompra(v); if (d.estimado) hayEst=true;
                     totN+=d.neto;totIV+=d.iva;totT+=d.total;
                     var est = v.estado==='pagada'?'<span class="ok">Pagada</span>':v.estado==='parcial'?'<span class="pend">Parcial</span>':'<span class="ret">Pendiente</span>';
-                    return '<tr><td>'+(v.fecha||'—')+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+_fmtM(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+_fmtM(d.iva)+'</td><td class="r">'+_fmtM(d.total)+'</td><td class="c">'+est+'</td></tr>';
+                    return '<tr><td>'+_rptFechaDMY(v.fecha)+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+_fmtM(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+_fmtM(d.iva)+'</td><td class="r">'+_fmtM(d.total)+'</td><td class="c">'+est+'</td></tr>';
                 }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+items.length+' facturas)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
                 (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'');
         } else {
@@ -13701,7 +13805,7 @@
             var totRet=0;
             content = '<h1>🏛️ Retenciones AFIP/ARCA'+tipoRetTitulo+'</h1><h2>'+empresa+' — '+periodo+'</h2>' +
                 '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Régimen</th><th>Descripción</th><th class="r">Monto Pago</th><th class="r">Retención</th></tr></thead><tbody>' +
-                rows.map(function(r){ totRet+=r.retencion; return '<tr><td>'+r.fecha+'</td><td>'+r.proveedor+'</td><td>'+r.cbte+'</td><td>'+r.codigo+'</td><td>'+r.desc+'</td><td class="r">'+_fmtM(r.montoPago)+'</td><td class="r ret">'+_fmtM(r.retencion)+'</td></tr>'; }).join('') +
+                rows.map(function(r){ totRet+=r.retencion; return '<tr><td>'+_rptFechaDMY(r.fecha)+'</td><td>'+r.proveedor+'</td><td>'+r.cbte+'</td><td>'+r.codigo+'</td><td>'+r.desc+'</td><td class="r">'+_fmtM(r.montoPago)+'</td><td class="r ret">'+_fmtM(r.retencion)+'</td></tr>'; }).join('') +
                 '</tbody><tfoot><tr><td colspan="6">TOTAL RETENCIONES ('+rows.length+' registros)</td><td class="r ret">'+_fmtM(totRet)+'</td></tr></tfoot></table>';
         }
 
@@ -13722,7 +13826,7 @@
             var items = (facturasARCA||[]).filter(function(v){ return rptEnPeriodo(v.fecha.length===8 ? v.fecha.slice(0,4)+'-'+v.fecha.slice(4,6)+'-'+v.fecha.slice(6,8) : v.fecha, f); });
             return items.map(function(v) {
                 var alicPct = v.impNeto > 0 ? Math.round((v.impIVA / v.impNeto)*100) : 0;
-                var fecha = v.fecha.length===8 ? rptFechaAfip(v.fecha) : v.fecha;
+                var fecha = _rptFechaDMY(v.fecha);
                 var signo = _rptSignoVenta(v.tipoComp);
                 return { 'Fecha': fecha, 'Tipo': (_afipTiposNombreRpt[v.tipoComp]||v.tipoComp),
                          'Número': String(v.ptoVta||'').padStart(4,'0')+'-'+String(v.nro||'').padStart(8,'0'),
@@ -13735,7 +13839,7 @@
             var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
             return items.map(function(v) {
                 var d = _rptIvaCompra(v);
-                return { 'Fecha': v.fecha||'', 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
+                return { 'Fecha': _rptFechaDMY(v.fecha), 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
                          'Concepto': v.descripcion||'', 'Neto Gravado': Math.round(d.neto),
                          'IVA %': d.alicPct, 'IVA $': Math.round(d.iva), 'Total': Math.round(d.total),
                          'IVA estimado': d.estimado ? 'Sí (21%)' : '', 'Pagado': v.pagado||0, 'Estado': v.estado||'' };
@@ -13745,7 +13849,7 @@
         function _sheetRetenciones() {
             var rows = _rptFilasRetenciones(f, _rptTipoRetSel(), '');
             return rows.map(function(r) {
-                return { 'Fecha': r.fecha, 'Proveedor': r.proveedor, 'Comprobante': r.cbte,
+                return { 'Fecha': _rptFechaDMY(r.fecha), 'Proveedor': r.proveedor, 'Comprobante': r.cbte,
                          'Régimen': r.codigo, 'Descripción': r.desc,
                          'Monto Pago': r.montoPago, 'Retención': r.retencion };
             });
@@ -15346,7 +15450,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v487';
+    var APP_VER = 'v488';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
