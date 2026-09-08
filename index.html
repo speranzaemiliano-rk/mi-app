@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v485</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v486</div>
         </div>
     </nav>
 
@@ -15346,7 +15346,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v485';
+    var APP_VER = 'v486';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -26025,6 +26025,17 @@
             grupoVenc.style.display = 'none';
             document.getElementById('ecvVenc').value = '';
         }
+        // TC del cobro (solo cuotas en pesos, para que el plan las muestre en USD al dólar del pago
+        // y no al dólar de hoy). Las cuotas ya en USD (cuota_usd_simple, o cuota con cuotasMoneda='usd') no lo necesitan.
+        var esUSDCuota = (c.comp === 'cuota_usd_simple') || (c.comp === 'cuota' && v.cuotasMoneda === 'usd');
+        var grupoTC = document.getElementById('ecvGrupoTC');
+        if (_esCobroCuota(c) && !esUSDCuota) {
+            grupoTC.style.display = '';
+            document.getElementById('ecvTC').value = c.tc || '';
+        } else {
+            grupoTC.style.display = 'none';
+            document.getElementById('ecvTC').value = '';
+        }
         // Factura emitida: número + link a la actual (si tiene) + input para adjuntar/reemplazar.
         document.getElementById('ecvFacturaNro').value = c.facturaNro || '';
         document.getElementById('ecvFacturaArchivo').value = '';
@@ -26040,6 +26051,19 @@
         document.getElementById('ecvGrupoCuenta').style.display = (document.getElementById('ecvModalidad').value === 'A') ? '' : 'none';
     };
     window.cerrarEditarCobroVenta = function() { document.getElementById('modalEditarCobroVenta').classList.remove('active'); };
+    // Busca el dólar histórico de la fecha cargada en el editor y lo vuelca en ecvTC.
+    function _ecvBuscarTCFecha() {
+        var fecha = (document.getElementById('ecvFecha')||{}).value;
+        var tcEl = document.getElementById('ecvTC');
+        if (!fecha || !tcEl) { alert('Ingresá primero la fecha del cobro.'); return; }
+        var ph = tcEl.placeholder;
+        tcEl.placeholder = 'Buscando…';
+        _buscarDolarHistorico(fecha, 5, function(valor){
+            tcEl.placeholder = ph;
+            if (valor > 0) tcEl.value = Math.round(valor);
+            else alert('No se encontró el dólar de esa fecha. Podés cargarlo a mano.');
+        });
+    }
     // Desde el paso 1 del cobro (plan de cuotas), abrir el editor de un cobro pagado.
     window.cvEditarCobroCuota = function(idx, cIdx) {
         if (typeof cerrarModalCobroVenta === 'function') cerrarModalCobroVenta();
@@ -26069,6 +26093,11 @@
         if (_esCobroCuota(c) && document.getElementById('ecvGrupoVenc').style.display !== 'none') {
             var venc = document.getElementById('ecvVenc').value;
             if (venc) _setCuotaVencimiento(v, c.comp, c.nroCuota, venc);
+        }
+        // TC del cobro (para que el plan de cuotas la muestre en USD al dólar del pago, no al de hoy).
+        if (document.getElementById('ecvGrupoTC').style.display !== 'none') {
+            var tcNuevo = parseFloat(document.getElementById('ecvTC').value) || 0;
+            if (tcNuevo > 0) c.tc = tcNuevo; else delete c.tc;
         }
         // Factura emitida: número + adjuntar/reemplazar el archivo.
         var _facNroE = (document.getElementById('ecvFacturaNro').value||'').trim();
@@ -39243,6 +39272,14 @@
         <label>Fecha de vencimiento de la cuota <span id="ecvVencNro" style="color:var(--text-3);font-weight:400;"></span></label>
         <input type="date" id="ecvVenc">
         <div class="form-hint" style="color:var(--text-3);">Cambia cuándo vence esta cuota en el plan (distinta de la fecha en que se cobró).</div>
+      </div>
+      <div class="form-group" id="ecvGrupoTC" style="display:none;">
+        <label>Dólar del día (TC) de este cobro</label>
+        <div style="display:flex;gap:6px;">
+          <input type="number" id="ecvTC" step="0.01" min="0" placeholder="Ej: 1200" style="flex:1;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="_ecvBuscarTCFecha()">🔍 Buscar</button>
+        </div>
+        <div class="form-hint" style="color:var(--text-3);">Se usa para mostrar esta cuota en USD en el plan. Si quedó vacío (cobro cargado antes de tener este campo), completalo con el dólar de la fecha del cobro — «🔍 Buscar» trae el dólar histórico de esa fecha. Dejalo vacío para que siga mostrando el dólar de hoy.</div>
       </div>
       <div class="form-group" id="ecvGrupoCac">
         <label>Índice CAC aplicado</label>
