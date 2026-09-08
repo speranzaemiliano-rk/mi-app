@@ -571,6 +571,7 @@
     <button class="tab" data-vista="comun">Espacios comunes</button>
     <button class="tab" data-vista="rubro">Por rubro</button>
     <button class="tab" data-vista="resumen">Resumen</button>
+    <button class="tab" data-vista="entrega">Entrega de posesiones</button>
   </div>
 </nav>
 
@@ -723,7 +724,11 @@
   }
   function normEnt(v){
     v = v || {};
-    var e = { tipo: v.tipo === "comun" ? "comun" : "unidad",
+    // 'entrega' son los temas del cierre de obra (habilitaciones, manuales,
+    // administración). Van como entidades para heredar items, responsables,
+    // tilde, foto y sincronización sin tocar las reglas de Firebase, que sólo
+    // dejan escribir rubros/entidades/items/obra.
+    var e = { tipo: (v.tipo === "comun" || v.tipo === "entrega") ? v.tipo : "unidad",
               nombre: String(v.nombre || "Sin nombre"),
               piso: v.piso == null ? "" : String(v.piso),
               icono: v.icono == null ? "" : String(v.icono),
@@ -821,8 +826,12 @@
     Object.keys(datos.items).forEach(function(iid){
       var it = datos.items[iid];
       if (it.del) return;
-      if (!datos.entidades[it.ent] || datos.entidades[it.ent].del) return;
-      (idx.porEnt[it.ent]   = idx.porEnt[it.ent]   || []).push(iid);
+      var ent = datos.entidades[it.ent];
+      if (!ent || ent.del) return;
+      (idx.porEnt[it.ent] = idx.porEnt[it.ent] || []).push(iid);
+      // Fuera del eje de rubros: si no, "Entrega" sería un rubro más en la
+      // pestaña Por rubro y una columna más en el cuadro de doble entrada.
+      if (ent.tipo === "entrega") return;
       (idx.porRubro[it.rubro] = idx.porRubro[it.rubro] || []).push(iid);
     });
     var cmp = function(a, b){
@@ -862,8 +871,11 @@
 
   function pintarCabecera(){
     $("obraNombre").textContent = nombreObra();
+    // Los temas de entrega tienen su propia solapa y su propio contador: si
+    // entraran acá, los 820 pendientes de obra dejarían de ser 820.
     var todos = vivos(datos.items, function(it){
-      return datos.entidades[it.ent] && !datos.entidades[it.ent].del;
+      var e = datos.entidades[it.ent];
+      return e && !e.del && e.tipo !== "entrega";
     });
     var n = cuentaDe(todos);
     var pct = n.total ? Math.round(n.ok * 100 / n.total) : 0;
@@ -1107,10 +1119,24 @@
       return;
     }
 
+    // La solapa de entrega arranca sin nada: en vez del "limpiá los filtros"
+    // ofrece cargar el listado de una, que es lo que se va a querer hacer.
+    if (filtro.vista === "entrega" && !entidadesDe("entrega").length) {
+      cont.innerHTML = '<div class="vacio">Todavía no cargaste los temas de la entrega.<br><br>' +
+        '<button class="bt pri" data-acc="cargarEntrega">Cargar el listado de la obra</button>' +
+        '<div style="margin-top:14px;font-size:13px;line-height:1.5">Son ' +
+        SEMILLA_ENTREGA.reduce(function(n, g){ return n + g[2].length; }, 0) +
+        ' tareas en ' + SEMILLA_ENTREGA.length + ' temas: ' +
+        SEMILLA_ENTREGA.map(function(g){ return esc(g[0]); }).join(" · ") +
+        '.<br>Después les ponés responsable a cada una.</div></div>';
+      return;
+    }
+
     var lista = entidadesDe(filtro.vista).filter(pasaFiltro);
     if (!lista.length) {
       cont.innerHTML = '<div class="vacio">No hay ' +
-        (filtro.vista === "unidad" ? "unidades" : "espacios") + ' que cumplan el filtro.<br>' +
+        (filtro.vista === "unidad" ? "unidades" : (filtro.vista === "entrega" ? "temas" : "espacios")) +
+        ' que cumplan el filtro.<br>' +
         '<button class="bt" style="margin-top:12px" data-acc="limpiar">Limpiar filtros</button></div>';
       return;
     }
@@ -1440,10 +1466,88 @@
   }
 
   /* ---- Alta y edición de unidades / espacios ---- */
+  /* =========================================================
+     ENTREGA DE POSESIONES
+     Los temas del cierre de obra: habilitaciones, manuales,
+     administración, escrituras. Van como entidades de tipo
+     "entrega" con sus items, así heredan responsable, tilde,
+     foto, aviso por mail y sincronización, sin colección nueva
+     (las reglas de Firebase sólo dejan rubros/entidades/items).
+  ========================================================= */
+  var RUBRO_ENTREGA = "entrega";
+  var SEMILLA_ENTREGA = [
+    ["Servicios", "\uD83D\uDD0C", [
+      "Habilitación de AYSA, METROGAS y EDENOR",
+      "Instalar el servicio de WIFI de Personal / Cablevisión en el edificio",
+      "Contratar el servicio de WIFI para las cámaras y los sectores comunes"
+    ]],
+    ["Ascensores y cocheras", "\uD83D\uDE97", [
+      "Habilitar los dos ascensores",
+      "Habilitar las plataformas dobles de cocheras KASA",
+      "Resolver el acceso a las cocheras fijas que tapa el árbol",
+      "Mover el poste de electricidad de Arribeños que bloquea las cocheras"
+    ]],
+    ["Seguridad", "\uD83D\uDCF9", [
+      "Comprar las cámaras y los repetidores de WIFI para todos los sectores",
+      "Definir quién hace la instalación y la puesta a punto de las cámaras",
+      "HIPCAM en la puerta de acceso al edificio: imanes y funcionamiento"
+    ]],
+    ["Manuales", "\uD83D\uDCD8", [
+      "Manual de uso e instructivo del edificio completo",
+      "Manual de HIPCAM (cerraduras) y de la app del portero eléctrico, para enviar a todos los propietarios",
+      "Manual de las plataformas dobles de cocheras: controles remotos, seguridad y uso"
+    ]],
+    ["Administración", "\uD83C\uDFE2", [
+      "Definir la administración del edificio: coordinar reuniones con los candidatos para la semana del 21 de septiembre",
+      "La administración tiene que contratar limpieza, retiro de basura, mantenimiento de partes comunes, banco y fondos"
+    ]],
+    ["Escrituras y cierre", "\uD83D\uDCDD", [
+      "Definir los escritos de cada posesión con Fransoni y los valores contables",
+      "Comprar el regalo de cada posesión (maceta con el logo de RK)",
+      "Definir la fecha y coordinar el pago que nos corresponde de la mudanza de Marisa Barros"
+    ]]
+  ];
+
+  function _asegurarRubroEntrega(){
+    if (datos.rubros[RUBRO_ENTREGA]) return;
+    var maxO = 0;
+    Object.keys(datos.rubros).forEach(function(r){ maxO = Math.max(maxO, datos.rubros[r].orden || 0); });
+    datos.rubros[RUBRO_ENTREGA] = { nombre: "Entrega", color: "#6D4BE0", orden: maxO + 1 };
+    subir("rubros", RUBRO_ENTREGA, datos.rubros[RUBRO_ENTREGA]);
+  }
+
+  function cargarListadoEntrega(){
+    var yaHay = entidadesDe("entrega").length;
+    if (yaHay && !confirm("Ya hay " + yaHay + " temas cargados.\n\n" +
+        "Esto agrega el listado completo igual, así que van a quedar repetidos.\n¿Seguir?")) return;
+    _asegurarRubroEntrega();
+    var orden = 0, temas = 0, tareas = 0;
+    SEMILLA_ENTREGA.forEach(function(g){
+      orden++;
+      var eid = "e_" + uid();
+      datos.entidades[eid] = { tipo: "entrega", nombre: g[0], piso: "", icono: g[1], orden: orden };
+      subir("entidades", eid, datos.entidades[eid]);
+      temas++;
+      // El orden va explícito: nuevoItem lo saca del índice, que no se
+      // reconstruye dentro del bucle, así que las 18 salían con orden 1 y
+      // quedaban mezcladas al desempatar por id.
+      g[2].forEach(function(t, i){
+        var iid = "i_" + eid + "_" + RUBRO_ENTREGA + "_" + uid();
+        datos.items[iid] = { ent: eid, rubro: RUBRO_ENTREGA, texto: t, ok: false, orden: i + 1 };
+        subir("items", iid, datos.items[iid]);
+        tareas++;
+      });
+    });
+    render();
+    toast(temas + " temas y " + tareas + " tareas cargadas");
+  }
+
   function modalNuevaEntidad(tipo){
-    var esU = tipo === "unidad";
-    abrirModal('<h2>' + (esU ? "Nueva unidad" : "Nuevo espacio común") + '</h2>' +
-      '<input class="campo" id="mNom" placeholder="' + (esU ? "Ej: Unidad 106" : "Ej: Sala de máquinas") + '">' +
+    var esU = tipo === "unidad", esE = tipo === "entrega";
+    var titulo  = esU ? "Nueva unidad"  : (esE ? "Nuevo tema de entrega" : "Nuevo espacio común");
+    var ejemplo = esU ? "Ej: Unidad 106" : (esE ? "Ej: Seguridad"          : "Ej: Sala de máquinas");
+    abrirModal('<h2>' + titulo + '</h2>' +
+      '<input class="campo" id="mNom" placeholder="' + ejemplo + '">' +
       (esU ? '<input class="campo" id="mPiso" placeholder="Piso (ej: 1)">'
            : '<input class="campo" id="mIco" placeholder="Ícono opcional (ej: 🎉)">') +
       '<button class="bfull" id="mGuardar">Crear</button>');
@@ -1455,7 +1559,7 @@
       Object.keys(datos.entidades).forEach(function(e){
         if (datos.entidades[e].tipo === tipo) maxO = Math.max(maxO, datos.entidades[e].orden || 0);
       });
-      var eid = (esU ? "u_" : "c_") + uid();
+      var eid = (esU ? "u_" : (esE ? "e_" : "c_")) + uid();
       datos.entidades[eid] = { tipo: tipo, nombre: nom,
         piso: esU ? $("mPiso").value.trim() : "",
         icono: esU ? "" : $("mIco").value.trim(), orden: maxO + 1 };
@@ -1861,6 +1965,9 @@
       if (it.del || it.ok) return;
       var e = datos.entidades[it.ent];
       if (!e || e.del) return;
+      // "ambos" es unidades + comunes. Sin esta segunda condición, los temas
+      // de entrega metían su rubro como una columna más en el cuadro.
+      if (e.tipo === "entrega") return;
       if (infCfg.alcance !== "ambos" && e.tipo !== infCfg.alcance) return;
       if (infCfg.rubros.length && infCfg.rubros.indexOf(it.rubro) === -1) return;
       conPend[it.rubro] = 1;
@@ -2085,6 +2192,9 @@
   });
 
   $("lista").addEventListener("click", function(e){
+    // El botón de cargar el listado vive en el estado vacío de la lista, no en
+    // la barra de acciones, así que su click entra por acá.
+    if (e.target.closest('[data-acc="cargarEntrega"]')) { cargarListadoEntrega(); return; }
     if (e.target.closest('[data-acc="limpiar"]')) {
       filtro.sev = "todas"; filtro.rubros = []; filtro.texto = ""; $("buscar").value = "";
       Array.prototype.forEach.call($("filaEstado").querySelectorAll(".fbtn"), function(x, i){
@@ -2153,6 +2263,7 @@
     var h = [];
     if (filtro.vista === "unidad")      h.push('<button class="bt pri" data-acc="nuevaUnidad">+ Unidad</button>');
     else if (filtro.vista === "comun")  h.push('<button class="bt pri" data-acc="nuevoEspacio">+ Espacio</button>');
+    else if (filtro.vista === "entrega") h.push('<button class="bt pri" data-acc="nuevoTema">+ Tema</button>');
     h.push('<button class="bt" data-acc="foto">📷 Foto</button>');
     h.push('<button class="bt" data-acc="avisar">✉️ Avisar</button>');
     h.push('<button class="bt" data-acc="informe">Informe</button>');
@@ -2164,6 +2275,8 @@
     var acc = b.getAttribute("data-acc");
     if (acc === "nuevaUnidad")  modalNuevaEntidad("unidad");
     if (acc === "nuevoEspacio") modalNuevaEntidad("comun");
+    if (acc === "nuevoTema")     modalNuevaEntidad("entrega");
+    if (acc === "cargarEntrega") cargarListadoEntrega();
     if (acc === "foto")         modalFotoLibre();
     if (acc === "avisar")       modalAvisar();
     if (acc === "informe")      modalInforme();
