@@ -3510,7 +3510,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v489</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v490</div>
         </div>
     </nav>
 
@@ -15450,7 +15450,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v489';
+    var APP_VER = 'v490';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -34905,7 +34905,177 @@
         document.getElementById('modalFichaProv').classList.add('active');
     }
 
+    // Ficha del proveedor como documento imprimible / PDF, con TODOS los datos cargados
+    // (incluidos los que la pantalla no muestra: nombre de fantasía, localidad/provincia/CP y
+    // los datos bancarios), el estado de cuenta y el detalle de comprobantes y presupuestos.
+    function imprimirFichaProvPDF(nombre) {
+        nombre = nombre || window._fichaProvNombre;
+        if (!nombre) return;
+        var prov = buscarProveedorPorNombre(nombre) || {};
+        var fmtA = function(n){ return '$' + (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var esc  = function(v){ return escHtml(String(v == null ? '' : v)); };
+        var val  = function(v){ v = String(v == null ? '' : v).trim(); return v ? esc(v) : '<span class="vacio">—</span>'; };
+
+        // ── Estilos propios de esta ficha (encima de los del resto de los documentos) ──
+        var css = _rCSS() + '<style>'
+            + '.sec{font-size:10px;font-weight:800;color:var(--gold);text-transform:uppercase;letter-spacing:.14em;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);}'
+            + '.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px 26px;margin-bottom:6px;}'
+            + '.fd{display:flex;gap:8px;font-size:12px;line-height:1.6;padding:4px 0;border-bottom:1px solid #f4f4f4;}'
+            + '.fd .k{color:var(--muted);flex:0 0 42%;}'
+            + '.fd .v{font-weight:700;color:var(--ink);flex:1;word-break:break-word;}'
+            + '.vacio{color:#bbb;font-weight:400;}'
+            + '.pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}'
+            + '.pill{font-size:10px;font-weight:700;background:#F1EDFC;border:1px solid #ddd3f7;color:#5a3fc0;border-radius:20px;padding:3px 10px;}'
+            + '.pill.ex{background:#FDECEA;border-color:#f5c6c0;color:#c0392b;}'
+            + '.kpis{display:flex;gap:10px;margin-bottom:4px;}'
+            + '.kpi{flex:1;border:1px solid var(--line);border-radius:6px;padding:9px 11px;}'
+            + '.kpi .kl{font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:3px;}'
+            + '.kpi .kv{font-size:14px;font-weight:800;}'
+            + 'table.tbl tbody td{padding:8px 10px;font-size:11.5px;}'
+            + 'table.tbl thead th{padding:8px 10px;}'
+            + 'table.tbl{margin-bottom:10px;}'
+            + '.nada{font-size:11px;color:var(--muted);padding:8px 2px;}'
+            + '</style>';
+
+        var dato = function(k, v){ return '<div class="fd"><span class="k">' + k + '</span><span class="v">' + val(v) + '</span></div>'; };
+
+        // ── Regímenes de retención ──
+        var regs = [];
+        if (prov.ret78)        regs.push('Ganancias Reg. 78 — Bienes muebles/cambio (2%)');
+        if (prov.ret94)        regs.push('Ganancias Reg. 94 — Locaciones de obra/servicios (2%)');
+        if (prov.ret119)       regs.push('Ganancias Reg. 119 — Honorarios (escala 5%–31%)');
+        if (prov.ret30)        regs.push('Ganancias Reg. 30/31/32 — Alquileres (6%)');
+        if (prov.retSUSSIng)   regs.push('SUSS — Obras de ingeniería (1,2%)');
+        if (prov.retSUSSConst) regs.push('SUSS — Obras de construcción (2,5%)');
+        if (prov.retSUSSLimp)  regs.push('SUSS — Empresa de limpieza (6%)');
+        var nCerts = (prov.certificadosExento || []).length;
+
+        // ── Estado de cuenta ──
+        var cc = _ctaCteProvMovs(nombre);
+        var presus = (typeof datos !== 'undefined' ? datos : []).filter(function(d){ return d.proveedor === nombre; });
+        var facts  = (facturas || []).filter(function(f){ return f.proveedor === nombre && !f.esNotaCredito; });
+        var notas  = (facturas || []).filter(function(f){ return f.proveedor === nombre && f.esNotaCredito; });
+        var docs   = (typeof documentos !== 'undefined' ? documentos : []).filter(function(d){ return d.proveedor === nombre; });
+
+        var detalleProv = [prov.cuit ? ('CUIT ' + esc(prov.cuit)) : '', esc(prov.condicionIVA || ''), esc(prov.direccion || '')].filter(Boolean).join(' · ');
+        var h = '<div class="pg">' + buildReciboHeader('Ficha de Proveedor', '', null,
+            { label: 'Proveedor', nombre: nombre, detalle: detalleProv });
+
+        h += '<div class="sec">Identificación</div><div class="grid">'
+            + dato('Razón social', prov.razonSocial || nombre)
+            + dato('Nombre de fantasía', prov.nombreFantasia)
+            + dato('CUIT', prov.cuit)
+            + dato('Condición IVA', prov.condicionIVA)
+            + dato('Rubro', prov.rubro)
+            + dato('Grupo', prov.grupo)
+            + '</div>';
+
+        h += '<div class="sec">Contacto</div><div class="grid">'
+            + dato('Teléfono', prov.telefono)
+            + dato('Email', prov.email)
+            + dato('Dirección', prov.direccion)
+            + dato('Localidad', prov.localidad)
+            + dato('Provincia', prov.provincia)
+            + dato('Código postal', prov.codigoPostal)
+            + '</div>';
+
+        h += '<div class="sec">Datos bancarios</div><div class="grid">'
+            + dato('Banco', prov.banco)
+            + dato('Titular', prov.titular)
+            + dato('Sucursal', prov.sucursal)
+            + dato('N° de cuenta', prov.nroCuenta)
+            + dato('CBU', prov.cbu)
+            + dato('Alias', prov.alias)
+            + '</div>';
+
+        h += '<div class="sec">Regímenes de retención</div>';
+        if (prov.exentoRetenciones) {
+            h += '<div class="pills"><span class="pill ex">EXENTO DE RETENCIONES</span>'
+               + (nCerts ? '<span class="pill">' + nCerts + ' certificado' + (nCerts > 1 ? 's' : '') + ' de exención adjunto' + (nCerts > 1 ? 's' : '') + '</span>' : '')
+               + '</div>';
+            if (regs.length) h += '<div class="nada">Regímenes cargados (no se aplican mientras esté exento): ' + esc(regs.join(' · ')) + '</div>';
+        } else if (regs.length) {
+            h += '<div class="pills">' + regs.map(function(r){ return '<span class="pill">' + esc(r) + '</span>'; }).join('') + '</div>';
+        } else {
+            h += '<div class="nada">Sin regímenes de retención cargados.</div>';
+        }
+
+        h += '<div class="sec">Estado de cuenta</div>'
+            + '<div class="kpis">'
+            + '<div class="kpi"><div class="kl">Total facturado</div><div class="kv">' + fmtA(cc.totalDebe) + '</div></div>'
+            + '<div class="kpi"><div class="kl">Total pagado</div><div class="kv" style="color:#0f7e5e;">' + fmtA(cc.totalPagado) + '</div></div>'
+            + '<div class="kpi"><div class="kl">Retenciones</div><div class="kv" style="color:#c0392b;">' + fmtA(cc.totalRet) + '</div></div>'
+            + (cc.totalFR > 0.5 ? '<div class="kpi"><div class="kl">Fondo de reparo</div><div class="kv">' + fmtA(cc.totalFR) + '</div></div>' : '')
+            + '<div class="kpi"><div class="kl">Saldo</div><div class="kv" style="color:' + (cc.saldoNeto > 0.5 ? '#c0392b' : '#0f7e5e') + ';">' + fmtA(cc.saldoNeto) + '</div></div>'
+            + '</div>';
+
+        // ── Tabla genérica de comprobantes ──
+        var tablaComp = function(titulo, arr, getNum) {
+            var s = '<div class="sec">' + titulo + ' (' + arr.length + ')</div>';
+            if (!arr.length) return s + '<div class="nada">Sin registros.</div>';
+            var tImp = 0, tPag = 0, tSal = 0;
+            var filas = arr.map(function(o){
+                var saldo = _saldoFactDoc(o);
+                tImp += (o.importe || 0); tPag += (o.pagado || 0); tSal += saldo;
+                var est = o.estado === 'pagada' ? 'Pagada' : o.estado === 'parcial' ? 'Parcial' : 'Pendiente';
+                return '<tr><td>' + (o.fecha ? esc(formatearFecha(o.fecha)) : '—') + '</td>'
+                    + '<td>' + val(getNum(o)) + '</td>'
+                    + '<td>' + val(o.descripcion || o.concepto) + '</td>'
+                    + '<td class="r">' + fmtA(o.importe) + '</td>'
+                    + '<td class="r">' + fmtA(o.pagado) + '</td>'
+                    + '<td class="r">' + fmtA(saldo) + '</td>'
+                    + '<td>' + est + '</td></tr>';
+            }).join('');
+            return s + '<table class="tbl"><thead><tr><th>Fecha</th><th>Número</th><th>Detalle</th>'
+                + '<th class="r">Importe</th><th class="r">Pagado</th><th class="r">Saldo</th><th>Estado</th></tr></thead>'
+                + '<tbody>' + filas + '</tbody>'
+                + '<tfoot><tr><td colspan="3">Totales</td><td class="r">' + fmtA(tImp) + '</td>'
+                + '<td class="r">' + fmtA(tPag) + '</td><td class="r">' + fmtA(tSal) + '</td><td></td></tr></tfoot></table>';
+        };
+
+        h += tablaComp('Facturas', facts, function(o){ return o.numero; });
+        if (notas.length) h += tablaComp('Notas de crédito', notas, function(o){ return o.numero; });
+        if (docs.length)  h += tablaComp('Comprobantes X recibidos', docs, function(o){ return o.numero; });
+
+        // ── Presupuestos ──
+        h += '<div class="sec">Presupuestos (' + presus.length + ')</div>';
+        if (!presus.length) {
+            h += '<div class="nada">Sin presupuestos cargados.</div>';
+        } else {
+            // Ojo: calcPresupuesto().totalAjustado NO es el total del presupuesto, es el SALDO
+            // pendiente ya actualizado por CAC (capitalPend + mayores). Por eso va como "Saldo
+            // actualizado" y no se le vuelve a restar lo pagado.
+            var pB = 0, pP = 0, pM = 0, pS = 0;
+            var filasP = presus.map(function(d){
+                var c = (typeof calcPresupuesto === 'function') ? calcPresupuesto(d)
+                    : { base: (d.presupuesto||0), mayores: 0, totalAjustado: Math.max((d.presupuesto||0)-(d.pagado||0),0), pagadoTotal: (d.pagado||0) };
+                var pag = (c.pagadoTotal != null) ? c.pagadoTotal : (d.pagado || 0);
+                pB += (c.base || 0); pP += pag; pM += (c.mayores || 0); pS += (c.totalAjustado || 0);
+                return '<tr><td>' + (d.fecha ? esc(formatearFecha(d.fecha)) : '—') + '</td>'
+                    + '<td>' + val([d.concepto, d.rubro].filter(Boolean).join(' · ')) + '</td>'
+                    + '<td class="r">' + fmtA(c.base) + '</td>'
+                    + '<td class="r">' + fmtA(pag) + '</td>'
+                    + '<td class="r">' + fmtA(c.mayores) + '</td>'
+                    + '<td class="r">' + fmtA(c.totalAjustado) + '</td></tr>';
+            }).join('');
+            h += '<table class="tbl"><thead><tr><th>Fecha</th><th>Ítem</th><th class="r">Presupuesto</th>'
+                + '<th class="r">Pagado</th><th class="r">Mayores costos</th><th class="r">Saldo actualizado</th></tr></thead>'
+                + '<tbody>' + filasP + '</tbody>'
+                + '<tfoot><tr><td colspan="2">Totales</td><td class="r">' + fmtA(pB) + '</td><td class="r">' + fmtA(pP) + '</td>'
+                + '<td class="r">' + fmtA(pM) + '</td><td class="r">' + fmtA(pS) + '</td></tr></tfoot></table>';
+        }
+
+        var emp = getEmpresaParaRecibo();
+        h += '<div class="pie">Ficha emitida el ' + new Date().toLocaleDateString('es-AR') + ' · ' + esc(emp.nombre) + '</div>';
+        h += '</div>';
+
+        _imprimirDocHTML('<html><head><meta charset="UTF-8"><title>Ficha de Proveedor — ' + esc(nombre) + '</title>' + css + '</head><body>' + h + '</body></html>');
+    }
+
     function imprimirFichaProv() {
+        // Con la ficha de datos abierta se imprime el documento completo del proveedor; con la
+        // cuenta corriente abierta, se sigue imprimiendo el extracto que se está viendo.
+        if (window._fichaVista !== 'ctacte') { imprimirFichaProvPDF(window._fichaProvNombre); return; }
         var cont = document.getElementById('fichaProv_contenido');
         if (!cont) return;
         var titulo = document.getElementById('fichaProv_titulo').textContent || 'Ficha Proveedor';
