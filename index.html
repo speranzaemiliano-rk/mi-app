@@ -3117,11 +3117,19 @@
             <div id="authFormBloque">
             <div class="form-group">
                 <label>Correo electrónico</label>
-                <input type="email" id="authEmail" placeholder="tu@correo.com" autocomplete="username">
+                <!-- autocapitalize/autocorrect/spellcheck en "no": el teclado del celular mete
+                     mayúscula inicial o "corrige" el correo y después el ingreso falla. -->
+                <input type="email" id="authEmail" placeholder="tu@correo.com" autocomplete="username"
+                       inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label>Contraseña</label>
-                <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password">
+                <div style="position:relative;">
+                    <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password"
+                           autocapitalize="none" autocorrect="off" spellcheck="false" style="width:100%;padding-right:44px;">
+                    <button type="button" id="authVerPass" onclick="_authToggleVerPass()" title="Ver la contraseña"
+                            style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;cursor:pointer;font-size:15px;line-height:1;padding:4px;color:var(--text-3);">👁</button>
+                </div>
             </div>
             <button class="btn btn-primary" id="authSubmitBtn" onclick="enviarAuth()">Ingresar</button>
             <div style="display:flex;align-items:center;gap:12px;margin:18px 0 14px;">
@@ -3510,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v490</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v491</div>
         </div>
     </nav>
 
@@ -15450,7 +15458,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v490';
+    var APP_VER = 'v491';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -16424,6 +16432,43 @@
     function mostrarAuthError(msg) { const e = document.getElementById('authError'); e.textContent = msg; e.style.display = 'block'; }
     function ocultarAuthError() { document.getElementById('authError').style.display = 'none'; }
 
+    // Mostrar/ocultar la contraseña. En el celular es la única forma de ver qué escribió
+    // realmente el teclado (corrector, mayúscula automática, un espacio de más).
+    function _authToggleVerPass() {
+        var inp = document.getElementById('authPassword');
+        var btn = document.getElementById('authVerPass');
+        if (!inp) return;
+        var mostrar = (inp.type === 'password');
+        inp.type = mostrar ? 'text' : 'password';
+        if (btn) {
+            btn.textContent = mostrar ? '🙈' : '👁';
+            btn.title = mostrar ? 'Ocultar la contraseña' : 'Ver la contraseña';
+        }
+        try { inp.focus(); } catch (e) {}
+    }
+
+    function _esErrorCredencial(code) {
+        return code === 'auth/wrong-password' || code === 'auth/user-not-found' || code === 'auth/invalid-credential';
+    }
+
+    // Con qué método está dada de alta esa cuenta. Sirve para el caso típico de "en la compu
+    // entro y en el celular no": la sesión de la compu quedó abierta desde que se creó la cuenta
+    // con Google, y en el celular se pide una contraseña que esa cuenta nunca tuvo.
+    // Si Firebase tiene activada la protección de enumeración de correos, esto devuelve vacío
+    // (y entonces no se dice nada, en vez de inventar una explicación).
+    async function _sugerenciaMetodoIngreso(email) {
+        try {
+            var metodos = await auth.fetchSignInMethodsForEmail(email);
+            if (!metodos || !metodos.length) return '';
+            if (metodos.indexOf('password') === -1) {
+                var nombres = { 'google.com': 'Google', 'microsoft.com': 'Microsoft' };
+                var lista = metodos.map(function(m){ return nombres[m] || m; }).join(' o ');
+                return ' Esta cuenta entra con ' + lista + ': tocá ese botón en vez de escribir la contraseña.';
+            }
+        } catch (e) {}
+        return '';
+    }
+
     async function enviarAuth() {
         const email = document.getElementById('authEmail').value.trim();
         const pass  = document.getElementById('authPassword').value;
@@ -16431,7 +16476,17 @@
         if (!email || !pass) { mostrarAuthError('Completá correo y contraseña.'); return; }
         try {
             await auth.signInWithEmailAndPassword(email, pass);
-        } catch (err) { mostrarAuthError(traducirError(err.code)); }
+        } catch (err) {
+            var msg = traducirError(err.code);
+            if (_esErrorCredencial(err.code)) {
+                if (pass !== pass.trim()) {
+                    msg += ' Ojo: la contraseña empieza o termina con un espacio — suele agregarlo el teclado del celular. Tocá el 👁 para verla.';
+                } else {
+                    msg += await _sugerenciaMetodoIngreso(email);
+                }
+            }
+            mostrarAuthError(msg);
+        }
     }
 
     // Cuenta válida pero todavía sin rol asignado: se queda en la pantalla de
