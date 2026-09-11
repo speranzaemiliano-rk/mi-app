@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v494</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v495</div>
         </div>
     </nav>
 
@@ -15470,7 +15470,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v494';
+    var APP_VER = 'v495';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -30139,6 +30139,81 @@
         });
     };
 
+    // «Guardar y marcar pagado»: graba el recibo del mes y registra el pago del saldo pendiente
+    // sin salir de la liquidación (antes había que ir sí o sí a «Pagos de sueldo»). Si el mes ya
+    // tenía adelantos o pagos parciales, registra sólo lo que falta, no el total de vuelta.
+    // El reparto sigue la convención de siempre: el neto del recibo por banco y la Parte B en
+    // efectivo; si se pagó de otra forma, se corrige después desde «Pagos de sueldo».
+    window.guardarReciboYMarcarPagado = async function() {
+        if (!_esDuenoRemun()) return;
+        var emp = _empDesdeModal();
+        if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
+        if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con «💾 Guardar empleado», y después marcá el pago.'); return; }
+        var mes = (document.getElementById('empLiqMes') || {}).value || '';
+        if (!mes) { alert('Elegí el mes que estás liquidando.'); return; }
+
+        var _res = _guardarReciboSnap(emp, mes, {});
+        if (_res === false) return;   // canceló el reemplazo del recibo existente
+
+        var btn = document.getElementById('btnReciboPagado');
+        if (btn) btn.disabled = true;
+        var m = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        try {
+            await Promise.resolve(_res);
+            var t = remTotalesConceptos(emp);
+            var netoOfi = remNetoOficial(emp), fuera = t.fuera;
+            var total = netoOfi + fuera;
+            var yaPagado = _remPagadoDe(emp.nombre, mes);
+            var pend = Math.round((total - yaPagado) * 100) / 100;
+            if (pend <= 0.5) {
+                alert('✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\nEste mes ya figura pagado: liquidado ' + m(total) + ' · pagado ' + m(yaPagado) + '.');
+                return;
+            }
+            // Lo que falta del recibo va por banco; el resto (Parte B) en efectivo.
+            var banco = Math.max(Math.min(pend, netoOfi - yaPagado), 0);
+            var efe = Math.round((pend - banco) * 100) / 100;
+            if (banco <= 0.5) { banco = 0; efe = pend; }
+            else if (efe <= 0.5) { efe = 0; banco = pend; }
+
+            var txt = '✅ Recibo de ' + _mesLabel(mes) + ' guardado.\n\n¿Marcarlo como PAGADO?\n\n'
+                + 'Se registra un pago de ' + m(pend)
+                + (yaPagado > 0.5 ? ('\n(liquidado ' + m(total) + ' − ya pagado ' + m(yaPagado) + ')') : '')
+                + '\n · Banco: ' + m(banco)
+                + '\n · Efectivo: ' + m(efe)
+                + '\n\nSi se pagó de otra forma, lo corregís después en «Pagos de sueldo».';
+            if (!confirm(txt)) return;
+
+            var idPago = 'RP-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            remunPagos.push({
+                id: idPago,
+                nombre: emp.nombre, mes: mes,
+                fecha: ((document.getElementById('empLiqFecha') || {}).value) || _remHoyISO(),
+                montoBanco: banco, montoEfectivo: efe, tipo: 'pago',
+                detalle: 'Marcado como pagado desde la liquidación', adjunto: null,
+                empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+                proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+                consolidado: false, creadoEn: Date.now()
+            });
+            await persistirRemunPagos();
+            // persistirRemunPagos() atrapa su propio error, así que el await sale bien igual si la
+            // escritura falló: se comprueba contra la base antes de decir que quedó pagado.
+            if (REF_REMUN_PAGOS) {
+                var _sn = await REF_REMUN_PAGOS.child(idPago).once('value');
+                if (!_sn.exists()) throw new Error('El pago no quedó en la base (la escritura no dejó rastro).');
+            }
+            _remRecordarMedio(banco, efe);
+            if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
+            renderRemuneraciones();
+            alert('✅ Pago de ' + m(pend) + ' registrado para ' + _mesLabel(mes) + '.\n\nQueda en «Pagos de sueldo» para consolidarlo en Caja/Banco.');
+        } catch (e) {
+            var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
+            console.error('Marcar pagado — falló:', e);
+            alert('❌ No se pudo marcar como pagado.\n\nMotivo: ' + msg + '\n\nRevisá «Pagos de sueldo» antes de volver a intentarlo, para no cargarlo dos veces.');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
     // Lista los recibos guardados de un empleado, con reimprimir / eliminar.
     function _renderRecibosEmpleado(empId) {
         var cont = document.getElementById('empRecibosHist'); if (!cont) return;
@@ -41071,11 +41146,20 @@
         <select id="liqEmpSelect" onchange="if(this.value!==''){ liquidarSueldoEmpleado(parseInt(this.value,10)); }" style="width:100%; padding:8px 10px; font-size:14px;"></select>
       </div>
       <div id="liqEmpInfo" style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px; color:var(--text-2);"></div>
-      <div class="form-hint" style="margin-bottom:10px;"><strong>Las dos partes se imprimen en el recibo.</strong> La diferencia es impositiva: la <strong>🅰️ Parte A</strong> es <strong>remunerativa</strong> y entra en la base de los aportes de ley (17%); la <strong>🅱️ Parte B</strong> es <strong>no remunerativa</strong> — figura en el recibo y suma al neto, pero <strong>no se tiene en cuenta para los impuestos</strong>. Podés agregar todos los conceptos que quieras en cada parte, y pasar uno de una parte a la otra con ⇊ / ⇈. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» cuando corresponda y se calculan automáticamente como un haber remunerativo.</div>
+      <div class="form-hint" style="margin-bottom:10px;">
+        <strong>¿En cuál va cada concepto?</strong>
+        Si <strong>paga aportes</strong> (antigüedad, presentismo, horas extra, aguinaldo, vacaciones) → <strong>🅰️ Parte A</strong>.
+        Si es un <strong>bono o suma no remunerativa</strong>, que no paga aportes → <strong>🅱️ Parte B</strong>.
+        Las dos salen en el recibo y suman al <strong>mismo neto a cobrar</strong>; si te equivocaste, pasás el concepto de una parte a la otra con ⇊ / ⇈.
+        <details style="margin-top:6px;">
+          <summary style="cursor:pointer;">Ver el detalle impositivo</summary>
+          <div style="margin-top:6px;">La 🅰️ Parte A entra, junto con el sueldo básico, en la base sobre la que se calculan los aportes de ley (17%) en relación de dependencia. La 🅱️ Parte B figura en el recibo y suma al neto, pero queda afuera de esa base. El SAC (aguinaldo) y las vacaciones <strong>no se incluyen solos</strong>: agregalos con los botones «+ Aguinaldo (SAC)» / «+ Vacaciones» y se calculan automáticamente como haber remunerativo.</div>
+        </details>
+      </div>
       <!-- ───── PARTE A: todo lo que va POR RECIBO (se liquida, tributa aportes salvo los no remunerativos) ───── -->
       <div class="rem-parte rem-parte-a">
         <div class="rem-parte-head">
-          <strong>🅰️ Parte A — Remunerativo (tributa)</strong>
+          <strong>🅰️ Parte A — Remunerativo (paga aportes)</strong>
           <span class="rem-parte-sub" id="empParteASub">$0</span>
         </div>
         <div class="form-hint" style="margin:0 0 8px;">El sueldo básico más estos conceptos forman la <strong>base imponible</strong>: sobre ese total se calculan los aportes de ley (17%) en relación de dependencia.</div>
@@ -41098,7 +41182,7 @@
       <!-- ───── PARTE B: fuera del recibo, solo efectivo (no se liquida ni tributa nada) ───── -->
       <div class="rem-parte rem-parte-b">
         <div class="rem-parte-head">
-          <strong>🅱️ Parte B — No remunerativo (no tributa)</strong>
+          <strong>🅱️ Parte B — No remunerativo (no paga aportes)</strong>
           <span class="rem-parte-sub" id="empParteBSub">$0</span>
         </div>
         <div class="form-hint" style="margin:0 0 8px;">Bonos, gratificaciones y demás conceptos que <strong>sí figuran en el recibo</strong> y suman al neto a cobrar, pero <strong>no se tienen en cuenta para los impuestos</strong>: quedan afuera de la base de aportes. Cómo se paga (banco, efectivo o mitad y mitad) se decide después, al cargar el pago.</div>
@@ -41120,6 +41204,7 @@
         <label style="font-size:12px;" title="Fecha con la que sale «emitido» el recibo. Podés ponerla distinta de hoy (ej. la fecha de pago).">Fecha de emisión<br><input type="date" id="empLiqFecha" style="padding:6px 8px; font-size:13px;"></label>
         <button type="button" class="btn btn-gold btn-sm" onclick="guardarReciboMes()">💾 Guardar recibo del mes</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="imprimirReciboActual()" title="Imprime el recibo y lo deja guardado en «Recibos anteriores»">🖨️ Imprimir y guardar</button>
+        <button type="button" class="btn btn-success btn-sm" id="btnReciboPagado" onclick="guardarReciboYMarcarPagado()" title="Guarda el recibo del mes y registra el pago acá mismo, sin ir a «Pagos de sueldo»">✅ Guardar y marcar pagado</button>
         <span style="font-size:11px; color:var(--text-3); flex:1; min-width:180px;">Elegí el mes y guardá: el recibo queda grabado con la liquidación de ese mes y lo podés reimprimir cuando quieras.</span>
       </div>
       <div id="empRecibosHist" style="margin-top:6px;"></div>
