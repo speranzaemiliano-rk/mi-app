@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v493</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v494</div>
         </div>
     </nav>
 
@@ -15470,7 +15470,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v493';
+    var APP_VER = 'v494';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -27941,6 +27941,20 @@
     // recibo, bono fuera del recibo, y descuentos dentro o fuera del recibo.
     // Formato viejo (retrocompatible): tipo 'haber' = remunerativo en recibo, 'descuento' = en
     // recibo, 'fuera' = haber no remunerativo fuera del recibo.
+    // Firebase devuelve los arrays como OBJETO con claves numéricas cuando quedan huecos (por
+    // ejemplo al borrar un concepto del medio). Si eso pasa, `conceptos.forEach` explota y el
+    // recibo no se imprime. Todo lo que recorre conceptos pasa por acá y recibe siempre un array.
+    function _remConceptos(x) {
+        if (Array.isArray(x)) return x;
+        if (x && typeof x === 'object') {
+            return Object.keys(x)
+                .sort(function(a, b){ return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); })
+                .map(function(k){ return x[k]; })
+                .filter(Boolean);
+        }
+        return [];
+    }
+
     function _remNormConcepto(c) {
         c = c || {};
         var tipo = (c.tipo === 'descuento') ? 'descuento' : 'haber';
@@ -27967,7 +27981,7 @@
     //   fuera     → neto de lo de afuera (compatibilidad con el formato anterior)
     function remTotalesConceptos(emp) {
         var haberes = 0, noRemun = 0, descuentos = 0, fueraHab = 0, fueraDesc = 0;
-        (emp.conceptos || []).forEach(function(c0) {
+        _remConceptos(emp.conceptos).forEach(function(c0) {
             var c = _remNormConcepto(c0);
             var m = c.monto || 0;
             if (c.tipo === 'descuento') { if (c.enRecibo) descuentos += m; else fueraDesc += m; }
@@ -28241,7 +28255,7 @@
             // aparece saldado cuando en realidad falta pagarlo. Se avisa acá, que es donde se mira.
             if (recibo && pagado > 0.5) {
                 var _montosPag = pagos.map(function(rp){ return (rp.montoBanco||0)+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); });
-                var _dups = (recibo.conceptos || []).map(_remNormConcepto).filter(function(c){
+                var _dups = _remConceptos(recibo.conceptos).map(_remNormConcepto).filter(function(c){
                     if (c.tipo !== 'descuento' || !(c.monto > 0)) return false;
                     return _montosPag.some(function(mp){ return Math.abs(mp - c.monto) < 0.5; }) || /adelant|a cuenta|entregad/i.test(c.nombre || '');
                 });
@@ -29682,7 +29696,7 @@
         // resto (incluye los guardados con el formato viejo "fuera de recibo", que no tributaban).
         var contA = document.getElementById('empConceptosLista');
         var contB = document.getElementById('empConceptosListaB');
-        var norm = (emp.conceptos || []).map(_remNormConcepto);
+        var norm = _remConceptos(emp.conceptos).map(_remNormConcepto);
         if (contA) contA.innerHTML = norm.filter(function(c){ return c.parte === 'A'; }).map(_empConceptoHTML).join('');
         if (contB) contB.innerHTML = norm.filter(function(c){ return c.parte !== 'A'; }).map(_empConceptoBHTML).join('');
         document.getElementById('modalLiquidarTitle').textContent = '💰 Liquidar sueldo — ' + (emp.nombre || '');
@@ -29854,7 +29868,7 @@
         var neto = totalHab - totalDesc;
         var esMono = emp.tipoContrato === 'monotributo';
         var filas = '<tr><td>Sueldo básico</td><td class="r">' + fmt(emp.sueldoBasico) + '</td><td class="r"></td></tr>';
-        (emp.conceptos || []).forEach(function(c0) {
+        _remConceptos(emp.conceptos).forEach(function(c0) {
             var c = _remNormConcepto(c0);
             if (!c.enRecibo) return;   // lo de "fuera del recibo" no se imprime en el recibo oficial
             var esDesc = c.tipo === 'descuento';
@@ -29874,7 +29888,7 @@
         // el TOTAL A COBRAR del período. Cómo se paga (banco/efectivo) se define en el pago.
         var bloqueExtra = '';
         if (t.fuera) {
-            var _filasB = (emp.conceptos || []).map(_remNormConcepto).filter(function(c){ return !c.enRecibo && c.monto; })
+            var _filasB = _remConceptos(emp.conceptos).map(_remNormConcepto).filter(function(c){ return !c.enRecibo && c.monto; })
                 .map(function(c){
                     var esDesc = c.tipo === 'descuento';
                     return '<tr><td>' + escHtml(c.nombre || (esDesc ? 'Descuento' : 'Concepto')) + '</td><td class="r">' +
@@ -30148,7 +30162,7 @@
     window.imprimirReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
         if (!r) return;
-        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, dni: r.dni, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: r.conceptos || [], obraSocial: r.obraSocial, convenio: r.convenio, legajoNro: r.legajoNro, nroRecibo: r.nroRecibo }, r.mes, r.fechaEmision);
+        _imprimirReciboDe({ nombre: r.empleadoNombre, cuil: r.cuil, dni: r.dni, fechaIngreso: r.fechaIngreso, puesto: r.puesto, tipoContrato: r.tipoContrato, sueldoBasico: r.basico, conceptos: _remConceptos(r.conceptos), obraSocial: r.obraSocial, convenio: r.convenio, legajoNro: r.legajoNro, nroRecibo: r.nroRecibo }, r.mes, r.fechaEmision);
     };
     window.eliminarReciboGuardado = function(id) {
         var r = (remunRecibos || []).find(function(x){ return x.id === id; });
