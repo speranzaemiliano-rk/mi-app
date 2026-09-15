@@ -341,6 +341,21 @@
     font-size:23px;line-height:1;cursor:pointer;box-shadow:0 4px 14px rgba(109,75,224,.35);
   }
   #btnAsis:active{transform:scale(.94)}
+  /* Con cara puesta se va el degradado y el ✨ (font-size:0), y queda el borde
+     blanco para que el circulo se recorte contra cualquier fondo. */
+  #btnAsis.concara{
+    background-color:transparent;background-size:cover;background-position:center;
+    background-repeat:no-repeat;font-size:0;border:2px solid #fff;
+  }
+  .cara-fila{display:flex;align-items:center;gap:12px;margin-top:4px}
+  .cara-prev{
+    flex:0 0 auto;width:54px;height:54px;border-radius:50%;font-size:23px;
+    display:flex;align-items:center;justify-content:center;color:#fff;
+    background:linear-gradient(135deg,#22D3EE,#7C5CFF 60%,#C084FC);
+    background-size:cover;background-position:center;
+  }
+  .cara-bts{display:flex;gap:6px;flex-wrap:wrap}
+  .cara-bts .bt{display:inline-block}
   #asis{
     position:fixed;inset:0;z-index:80;background:var(--surface);display:none;flex-direction:column;
   }
@@ -1274,6 +1289,7 @@
     pintarCabecera();
     pintarFiltroRubros();
     pintarLista();
+    pintarCara();
     if (detalleAbierto) pintarDetalle();
   }
   function pedirRender(){
@@ -1853,6 +1869,18 @@
       '<h3>Nombre de la obra</h3>' +
       '<input class="campo" id="aObra" placeholder="Ej: Edificio San Martín 1240" value="' + esc(datos.obra) + '">' +
       '<div class="ayuda">Sale en el encabezado, en el informe impreso y en lo que se manda por WhatsApp.</div>' +
+      '<h3>Cara del asistente</h3>' +
+      '<div class="cara-fila">' +
+        '<div class="cara-prev" id="aCaraPrev">' + (hayCara() ? "" : "✨") + '</div>' +
+        '<div class="cara-bts">' +
+          '<label class="bt pri" for="aCaraFile">' + (hayCara() ? "Cambiar" : "Elegir imagen") + '</label>' +
+          '<input type="file" id="aCaraFile" accept="image/*" style="display:none">' +
+          (hayCara() ? '<button class="bt" id="aCaraSacar">Sacar</button>' : "") +
+        '</div>' +
+      '</div>' +
+      '<div class="ayuda">Reemplaza el ✨ del botón de abajo a la derecha. Se achica a ' + CARA_LADO +
+        'px y se guarda con el tablero, así que la ven todos los equipos. Queda en tu base, ' +
+        'no en el repositorio: no se publica en internet.</div>' +
       '<div class="aviso">' + entidadesDe("unidad").length + ' unidades · ' + entidadesDe("comun").length +
         ' espacios comunes · ' + n.total + ' ítems (' + n.ok + ' resueltos).</div>' +
       '<h3>Informe</h3>' +
@@ -1876,6 +1904,24 @@
       datos.obra = this.value.trim();
       guardarLocal(); subirNombre();
       pintarCabecera(); toast("Nombre guardado");
+    });
+    if (hayCara()) traerFoto(CARA, function(d){
+      var pv = $("aCaraPrev");
+      if (d && pv) pv.style.backgroundImage = 'url("' + d + '")';
+    });
+    $("aCaraFile").addEventListener("change", function(){
+      var f = this.files && this.files[0]; if (!f) return;
+      if (!/^image\//.test(f.type)) { toast("Eso no es una imagen"); return; }
+      toast("Achicando la imagen…");
+      comprimirImagen(f, function(d){
+        if (!d) { toast("No se pudo leer la imagen"); return; }
+        guardarCara(d);
+        cerrarModal(); toast("Cara del asistente cambiada");
+      }, CARA_LADO, CARA_CALIDAD);
+    });
+    if ($("aCaraSacar")) $("aCaraSacar").addEventListener("click", function(){
+      borrarFoto(CARA); pintarCara();
+      cerrarModal(); toast("Volvió el ✨");
     });
     $("aInforme").addEventListener("click", function(){ cerrarModal(); modalInforme(); });
     if ($("aPapelera")) $("aPapelera").addEventListener("click", function(e){
@@ -2761,7 +2807,10 @@
      las fotos del edificio con datos del celular.                       */
   var MAX_LADO = 1280, CALIDAD = 0.72;
 
-  function comprimirImagen(file, cb){
+  // lado/calidad son opcionales: sin ellos hace lo de siempre (1280 / .72).
+  // La cara del asistente pide mucho menos, porque termina en un circulo de 54px.
+  function comprimirImagen(file, cb, lado, calidad){
+    lado = lado || MAX_LADO; calidad = calidad || CALIDAD;
     var lector = new FileReader();
     lector.onerror = function(){ cb(null); };
     lector.onload = function(){
@@ -2769,12 +2818,12 @@
       img.onerror = function(){ cb(null); };
       img.onload = function(){
         var w = img.width, h = img.height;
-        var r = Math.min(1, MAX_LADO / Math.max(w, h));
+        var r = Math.min(1, lado / Math.max(w, h));
         var c = document.createElement("canvas");
         c.width = Math.round(w * r); c.height = Math.round(h * r);
         try {
           c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-          cb(c.toDataURL("image/jpeg", CALIDAD));
+          cb(c.toDataURL("image/jpeg", calidad));
         } catch(e){ cb(null); }
       };
       img.src = lector.result;
@@ -2805,6 +2854,38 @@
         if (d) { fotosCache[fid] = d; escribir(claveFoto(fid), d); }
         cb(d || null);
       }).catch(function(){ cb(null); });
+    });
+  }
+
+  /* ---- Cara del asistente --------------------------------------------
+     Va con id fijo adentro de `fotos`/`fotosData`, el mismo camino que una
+     foto cualquiera: asi anda con las reglas de Firebase que ya estan
+     publicadas, sin tener que tocarlas (agregar una rama nueva y olvidarse
+     de publicar las reglas ya rompio cosas en silencio en este proyecto).
+     Con item y ent vacios queda invisible: `indexar` la saltea por no tener
+     item, `fotosDe` filtra por ent, y la papelera solo mira lugares e items.
+     No se commitea ninguna imagen: la cara vive en la base de Emiliano. */
+  var CARA = "_cara", CARA_LADO = 192, CARA_CALIDAD = 0.82;
+
+  function hayCara(){ var f = datos.fotos[CARA]; return !!(f && !f.del); }
+
+  function guardarCara(dataUrl){
+    datos.fotos[CARA] = { item:"", ent:"", rubro:"", nota:"cara del asistente",
+                          mime:"image/jpeg", por:(nube.usuario || ""), m:0 };
+    fotosCache[CARA] = dataUrl;
+    escribir(claveFoto(CARA), dataUrl);
+    subir("fotos", CARA, datos.fotos[CARA]);
+    if (nube.ref) nube.ref.child("fotosData/" + CARA).set({ d: dataUrl }).catch(marcarError);
+    pintarCara();
+  }
+
+  function pintarCara(){
+    var b = $("btnAsis"); if (!b) return;
+    if (!hayCara()) { b.classList.remove("concara"); b.style.backgroundImage = ""; return; }
+    traerFoto(CARA, function(d){
+      if (!d) return;
+      b.style.backgroundImage = 'url("' + d + '")';
+      b.classList.add("concara");
     });
   }
 
