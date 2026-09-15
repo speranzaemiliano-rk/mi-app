@@ -3522,7 +3522,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v505</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v506</div>
         </div>
     </nav>
 
@@ -5383,10 +5383,14 @@
                     <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
                       El botón flotante del asistente se puede ocultar con la ✕ que aparece encima —
                       se toca sin querer con facilidad. Para traerlo de vuelta hay un 🤖 dorado abajo a
-                      la derecha, pero si no lo encontrás, desde acá lo mostrás igual.
+                      la derecha, pero si no lo encontrás, desde acá lo mostrás igual.<br>
+                      También se puede <strong>arrastrar</strong> para moverlo. Si quedó en un rincón raro
+                      —o lo movieron en la computadora y ahora no aparece en el celular— usá
+                      «Devolverlo a su lugar».
                     </p>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                       <button class="btn btn-gold btn-sm" onclick="cfgAsistenteMostrar()">👁️ Mostrar asistente</button>
+                      <button class="btn btn-outline btn-sm" onclick="cfgAsistenteReubicar()">📍 Devolverlo a su lugar</button>
                       <button class="btn btn-outline btn-sm" onclick="cfgAsistenteOcultar()">🙈 Ocultarlo</button>
                     </div>
                     <div id="cfgAsistenteEstado" style="font-size:12px;margin-top:10px;color:var(--text-3);"></div>
@@ -7678,9 +7682,20 @@
         var el = document.getElementById('cfgAsistenteEstado');
         if (!el) return;
         var oculto = localStorage.getItem('rk_agente_oculto') === '1';
+        var pos = null;
+        try { pos = JSON.parse(localStorage.getItem('rk_agente_pos') || 'null'); } catch (e) {}
+        var movido = !!(pos && pos.left != null);
         el.innerHTML = oculto
             ? '<span style="color:var(--warn);font-weight:600;">Ahora está oculto.</span> Tocá «Mostrar asistente».'
-            : '<span style="color:var(--success);font-weight:600;">Ahora está visible</span>, abajo a la derecha.';
+            : '<span style="color:var(--success);font-weight:600;">Ahora está visible</span>, '
+              + (movido ? 'en la posición a la que lo arrastraste. Si no lo ves, tocá «Devolverlo a su lugar».'
+                        : 'abajo a la derecha.');
+    }
+    // Lo trae de vuelta al rincón por defecto y lo muestra: es la salida de emergencia
+    // para cuando quedó arrastrado fuera de la pantalla y no hay dónde tocarlo.
+    function cfgAsistenteReubicar() {
+        if (typeof rkAgenteResetPos === 'function') rkAgenteResetPos();
+        cfgAsistenteMostrar();
     }
     function cfgAsistenteMostrar() {
         try { localStorage.removeItem('rk_agente_oculto'); } catch (e) {}
@@ -15692,7 +15707,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v505';
+    var APP_VER = 'v506';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -44195,10 +44210,35 @@
     var btn = document.getElementById('rk-agente-btn');
     if (!btn) return;
     var LS_POS = 'rk_agente_pos', LS_HIDE = 'rk_agente_oculto';
-    try {
-      var pos = JSON.parse(localStorage.getItem(LS_POS) || 'null');
-      if (pos && pos.left != null) { btn.style.left = pos.left + 'px'; btn.style.top = pos.top + 'px'; btn.style.right = 'auto'; btn.style.bottom = 'auto'; }
-    } catch(e){}
+    // La posición se guarda en píxeles absolutos. Si se arrastró el muñeco en una ventana
+    // ancha y después se abre la app en el celular (o se achica la ventana), esas
+    // coordenadas caen FUERA de la pantalla: el asistente existe pero no se ve, y el chip
+    // 🤖 para recuperarlo sólo aparece cuando está oculto a propósito, no cuando se fue de
+    // cuadro. Por eso la posición se reencuadra siempre contra el viewport de ahora.
+    window.rkAgenteAcomodar = function() {
+      var b = document.getElementById('rk-agente-btn'); if (!b) return;
+      var pos = null;
+      try { pos = JSON.parse(localStorage.getItem(LS_POS) || 'null'); } catch(e){}
+      if (!pos || pos.left == null) return;               // sin posición propia: manda el CSS
+      var an = b.offsetWidth || 76, al = b.offsetHeight || 100;
+      var maxX = Math.max(0, window.innerWidth  - an);
+      var maxY = Math.max(0, window.innerHeight - al);
+      var nx = Math.max(0, Math.min(maxX, pos.left));
+      var ny = Math.max(0, Math.min(maxY, pos.top));
+      b.style.left = nx + 'px'; b.style.top = ny + 'px'; b.style.right = 'auto'; b.style.bottom = 'auto';
+      if (nx !== pos.left || ny !== pos.top) {
+        try { localStorage.setItem(LS_POS, JSON.stringify({ left: nx, top: ny })); } catch(e2){}
+      }
+    };
+    // Vuelve al rincón de siempre, borrando la posición arrastrada.
+    window.rkAgenteResetPos = function() {
+      try { localStorage.removeItem(LS_POS); } catch(e){}
+      var b = document.getElementById('rk-agente-btn'); if (!b) return;
+      b.style.left = ''; b.style.top = ''; b.style.right = ''; b.style.bottom = '';
+    };
+    rkAgenteAcomodar();
+    window.addEventListener('resize', rkAgenteAcomodar);
+    window.addEventListener('orientationchange', function(){ setTimeout(rkAgenteAcomodar, 250); });
     if (localStorage.getItem(LS_HIDE) === '1') { btn.style.display = 'none'; var r0 = document.getElementById('rk-agente-restore'); if (r0) r0.style.display = 'flex'; }
     var startX, startY, origX, origY, moved = false, dragging = false;
     function onDown(e){
@@ -44265,6 +44305,8 @@
     var btn = document.getElementById('rk-agente-btn'); if (btn) btn.style.display = '';
     var r = document.getElementById('rk-agente-restore'); if (r) r.style.display = 'none';
     try { localStorage.removeItem('rk_agente_oculto'); } catch(e2){}
+    // Si además había quedado arrastrado fuera de la pantalla, mostrarlo no alcanzaría.
+    if (typeof rkAgenteAcomodar === 'function') rkAgenteAcomodar();
   };
 </script>
 
