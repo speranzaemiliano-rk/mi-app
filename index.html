@@ -1289,6 +1289,10 @@
         tbody tr:last-child td { border-bottom: none; }
         tbody tr:hover { background: var(--surface); }
 
+        /* Resaltado de lo que coincidió al buscar un proveedor */
+        mark.prov-hit { background: var(--gold-pale, #FBF1D3); color: inherit; padding: 0 1px; border-radius: 3px; font-weight: 700; }
+        @media (prefers-color-scheme: dark) { mark.prov-hit { background: rgba(230,190,90,.28); } }
+
         /* Cuenta Corriente: filas y tarjetas más compactas (los conceptos quedaban muy separados) */
         #ccContenido table { font-size: 13px; }
         #ccContenido th { padding: 8px 14px; }
@@ -3518,7 +3522,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v503</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v504</div>
         </div>
     </nav>
 
@@ -4281,7 +4285,8 @@
                         <button class="btn btn-outline btn-sm" id="btnUnificarProv" onclick="abrirUnificarProveedores()" title="Juntar dos proveedores duplicados en uno solo, moviendo sus facturas, pagos y presupuestos">🔗 Unificar duplicados</button>
                     </div>
                     <div class="search-row">
-                        <input type="text" class="search-input" id="buscadorProv" oninput="renderProveedores()" placeholder="Buscar por nombre, CUIT, rubro o grupo…">
+                        <input type="text" class="search-input" id="buscadorProv" oninput="renderProveedores()" onkeydown="if(event.key==='Escape'){limpiarBuscadorProv();}" placeholder="Buscar: nombre, CUIT, rubro, mail, alias… (sin tildes y en cualquier orden)">
+                        <span id="provBusqContador" style="font-size:12px;color:var(--text-3);white-space:nowrap;align-self:center;"></span>
                         <select id="filtroGrupo" onchange="renderProveedores()" style="width:auto; min-width:140px;">
                             <option value="">Todos los grupos</option>
                         </select>
@@ -15290,14 +15295,90 @@
         }
     });
 
-    function textoBuscador() { const b = document.getElementById('buscadorProv'); return b ? b.value.trim().toLowerCase() : ''; }
+    function textoBuscador() { const b = document.getElementById('buscadorProv'); return b ? b.value.trim() : ''; }
     function grupoFiltro()    { const f = document.getElementById('filtroGrupo'); return f ? f.value : ''; }
-    function coincideProv(p) {
-        const q = textoBuscador(); const g = grupoFiltro();
-        if (g && (p.grupo||'') !== g) return false;
-        if (!q) return true;
-        return [p.razonSocial,p.nombreFantasia,p.cuit,p.rubro,p.grupo,p.telefono,p.direccion].map(x=>(x||'').toLowerCase()).join(' ').includes(q);
+
+    // ── Búsqueda de proveedores ────────────────────────────────────────────────
+    // La vieja era un `includes()` sobre todos los campos pegados: no encontraba
+    // «marmola» si estaba cargado «MÁRMOLA», ni el CUIT sin guiones, ni servía
+    // escribir dos pedazos sueltos («marmola aires»). Ahora: sin tildes, por
+    // palabras sueltas (todas tienen que aparecer, en cualquier orden), el CUIT
+    // también se compara sólo por sus dígitos, y el resultado sale ordenado por
+    // qué tan buena es la coincidencia.
+    function _provNorm(x) {
+        return (x == null ? '' : String(x)).toLowerCase().normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
     }
+    function _provTerminos(q) {
+        return _provNorm(q).split(' ').filter(Boolean);
+    }
+    // Todo lo buscable de un proveedor, cacheado por render para no recalcularlo por término.
+    function _provBlob(p) {
+        return _provNorm([p.razonSocial, p.nombreFantasia, p.cuit, p.rubro, p.grupo, p.telefono,
+                          p.direccion, p.localidad, p.provincia, p.email, p.condicionIVA,
+                          p.alias, p.banco, p.titular].filter(Boolean).join(' '));
+    }
+    function _soloDigitos(x) { return (x == null ? '' : String(x)).replace(/\D/g, ''); }
+
+    // Puntaje: cuanto más alto, más arriba en la lista. -1 = no coincide.
+    function _provPuntaje(p, terminos) {
+        if (!terminos.length) return 0;
+        var blob    = _provBlob(p);
+        var nombre  = _provNorm(p.razonSocial);
+        var fant    = _provNorm(p.nombreFantasia);
+        var cuitNum = _soloDigitos(p.cuit);
+        var puntos  = 0;
+        for (var i = 0; i < terminos.length; i++) {
+            var t = terminos[i];
+            var tNum = _soloDigitos(t);
+            var enTexto = blob.indexOf(t) >= 0;
+            var enCuit  = tNum.length >= 2 && cuitNum.indexOf(tNum) >= 0;
+            if (!enTexto && !enCuit) return -1;          // todos los términos tienen que estar
+            if (nombre === t)                 puntos += 100;
+            else if (nombre.indexOf(t) === 0) puntos += 50;
+            else if (fant.indexOf(t) === 0)   puntos += 35;
+            else if (nombre.indexOf(t) > 0)   puntos += 20;
+            else if (enCuit)                  puntos += 15;
+            else                              puntos += 5;   // coincidió por rubro, mail, dirección…
+        }
+        // La frase entera y seguida vale más que los pedazos sueltos.
+        if (terminos.length > 1 && nombre.indexOf(terminos.join(' ')) >= 0) puntos += 40;
+        return puntos;
+    }
+    function coincideProv(p) {
+        const g = grupoFiltro();
+        if (g && (p.grupo||'') !== g) return false;
+        return _provPuntaje(p, _provTerminos(textoBuscador())) >= 0;
+    }
+    // Resalta en el nombre los pedazos que coincidieron (sin romper el escapado ni las tildes:
+    // se marca por POSICIÓN sobre el texto original, comparando contra su versión normalizada).
+    function _provResaltar(texto, terminos) {
+        var orig = (texto == null ? '' : String(texto));
+        if (!terminos.length) return escHtml(orig);
+        var plano = _provNorm(orig);
+        // _provNorm puede colapsar espacios y cambiar el largo: si no coincide, no resaltamos.
+        if (plano.length !== orig.length) return escHtml(orig);
+        var marcas = new Array(orig.length).fill(false), i, j, desde, idx;
+        for (i = 0; i < terminos.length; i++) {
+            desde = 0;
+            while ((idx = plano.indexOf(terminos[i], desde)) >= 0) {
+                for (j = idx; j < idx + terminos[i].length; j++) marcas[j] = true;
+                desde = idx + terminos[i].length;
+            }
+        }
+        var out = '', abierto = false;
+        for (i = 0; i < orig.length; i++) {
+            if (marcas[i] && !abierto) { out += '<mark class="prov-hit">'; abierto = true; }
+            else if (!marcas[i] && abierto) { out += '</mark>'; abierto = false; }
+            out += escHtml(orig[i]);
+        }
+        return out + (abierto ? '</mark>' : '');
+    }
+    window.limpiarBuscadorProv = function() {
+        var b = document.getElementById('buscadorProv');
+        if (b) { b.value = ''; b.focus(); }
+        renderProveedores();
+    };
 
     function renderProveedores() {
         const tbody = document.getElementById('proveedoresBody');
@@ -15312,11 +15393,27 @@
                     .sort(function(a, b){ return (a.razonSocial || '').localeCompare(b.razonSocial || ''); })
                     .map(function(p){ return '<option value="' + escHtml(p.razonSocial) + '">' + escHtml(p.razonSocial) + (p.nombreFantasia ? ' (' + escHtml(p.nombreFantasia) + ')' : '') + (p.rubro ? ' — ' + escHtml(p.rubro) : '') + '</option>'; }).join('');
         }
-        const visibles = proveedores.map((p,i) => ({p,i})).filter(o => coincideProv(o.p));
+        const _terminos = _provTerminos(textoBuscador());
+        const _g = grupoFiltro();
+        const visibles = proveedores.map((p,i) => ({ p, i, _pt: _provPuntaje(p, _terminos) }))
+            .filter(o => o._pt >= 0 && !(_g && (o.p.grupo||'') !== _g))
+            .sort(function(a, b){
+                if (b._pt !== a._pt) return b._pt - a._pt;                 // mejor coincidencia primero
+                return (a.p.razonSocial||'').localeCompare(b.p.razonSocial||'', 'es', {sensitivity:'base'});
+            });
+        // Contador de resultados al lado del buscador.
+        var _cnt = document.getElementById('provBusqContador');
+        if (_cnt) {
+            _cnt.textContent = (_terminos.length || _g)
+                ? (visibles.length + ' de ' + proveedores.length)
+                : '';
+        }
         if (proveedores.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="empty-msg">Todavía no cargaste ningún proveedor. Tocá "+ Agregar Proveedor".</td></tr>';
         } else if (visibles.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="2" class="empty-msg">Ningún proveedor coincide con la búsqueda.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="2" class="empty-msg">Ningún proveedor coincide con «' + escHtml(textoBuscador()) + '»'
+                + (grupoFiltro() ? ' dentro del grupo «' + escHtml(grupoFiltro()) + '»' : '') + '.'
+                + '<br><button class="btn btn-outline btn-sm" style="margin-top:10px;" onclick="limpiarBuscadorProv()">Limpiar la búsqueda</button></td></tr>';
         } else {
             visibles.forEach(({p, i: index}) => {
                 const certificados = (p.certificadosExento && p.certificadosExento.length)
@@ -15364,12 +15461,13 @@
                 tr.style.cursor = 'pointer';
                 tr.title = 'Clic para ver ficha completa';
                 (function(n){ tr.addEventListener('click', function(ev){ if(ev.target&&ev.target.closest&&ev.target.closest('button,a,input,select,textarea'))return; verFichaProveedor(n); }); })(nombre);
-                const _meta = [p.cuit, p.condicionIVA, p.rubro].filter(Boolean).map(escHtml).join(' · ');
+                const _meta = [p.cuit, p.condicionIVA, p.rubro].filter(Boolean)
+                    .map(function(x){ return _provResaltar(x, _terminos); }).join(' · ');
                 tr.innerHTML = `
                     <td>
                         ${p.grupo ? '<div style="margin-bottom:3px;"><span class="pill pill-gold" style="font-size:9px;">'+escHtml(p.grupo)+'</span></div>' : ''}
-                        <a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;font-size:15px;cursor:pointer;" title="Ver toda la info del proveedor">${escHtml(nombre)}</a>
-                        ${p.nombreFantasia ? '<span style="color:var(--text-3);font-size:11px;"> · '+escHtml(p.nombreFantasia)+'</span>' : ''}${_crBadge}
+                        <a href="javascript:void(0)" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" style="color:var(--blue);text-decoration:none;font-weight:600;font-size:15px;cursor:pointer;" title="Ver toda la info del proveedor">${_provResaltar(nombre, _terminos)}</a>
+                        ${p.nombreFantasia ? '<span style="color:var(--text-3);font-size:11px;"> · '+_provResaltar(p.nombreFantasia, _terminos)+'</span>' : ''}${_crBadge}
                         ${_meta ? '<div style="font-size:11px;color:var(--text-3);margin-top:3px;">'+_meta+'</div>' : ''}
                     </td>
                     <td><div class="action-btns" style="justify-content:flex-end;"><button class="btn btn-gold btn-sm" onclick="verFichaProveedor('${nombre.replace(/'/g,"\\'")}')" title="Ver toda la info del proveedor: datos, retenciones, contacto, presupuestos, facturas, documentos y pagos">👁 Ver ficha</button> ${acciones}</div></td>
@@ -15583,7 +15681,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v503';
+    var APP_VER = 'v504';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
