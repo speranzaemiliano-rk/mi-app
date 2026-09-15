@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v495</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v496</div>
         </div>
     </nav>
 
@@ -6048,10 +6048,14 @@
             <div class="modal" id="modalPrestamo">
               <div class="modal-box" style="max-width:560px;">
                 <div class="modal-head">
-                  <h2>🔄 Préstamo entre Proyectos</h2>
+                  <h2 id="prestModalTitulo">🔄 Préstamo entre Proyectos</h2>
                   <button class="modal-close" onclick="cerrarModalPrestamo()">✕</button>
                 </div>
                 <div class="modal-body">
+                  <div id="prestAvisoEdicion" style="display:none;margin-bottom:12px;padding:9px 12px;border-radius:8px;font-size:12px;border:1px solid var(--warn);background:rgba(230,160,60,.08);color:var(--text-2);">
+                    Estás <strong>editando</strong> un préstamo ya registrado: al guardar se corrigen también los movimientos de caja que generó en las dos empresas.
+                    Las empresas y los proyectos <strong>no se pueden cambiar</strong> acá — para eso hay que eliminar el préstamo y cargarlo de nuevo.
+                  </div>
                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                     <div class="form-group">
                       <label>De (empresa origen) *</label>
@@ -6095,7 +6099,7 @@
                   </div>
                   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
                     <button class="btn btn-outline" onclick="cerrarModalPrestamo()">Cancelar</button>
-                    <button class="btn btn-gold" onclick="guardarPrestamo()">💾 Registrar Préstamo</button>
+                    <button class="btn btn-gold" id="prestBtnGuardar" onclick="guardarPrestamo()">💾 Registrar Préstamo</button>
                   </div>
                 </div>
               </div>
@@ -15470,7 +15474,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v495';
+    var APP_VER = 'v496';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -36833,6 +36837,7 @@
                 :'<span class="badge-rol badge-warn">⏳ Pendiente</span>';
             var acciones=puedeEditar
                 ?'<button class="btn btn-outline btn-sm" onclick="imprimirPrestamo('+i+')" title="Imprimir comprobante">🖨️</button> '+
+                 '<button class="btn btn-outline btn-sm" onclick="abrirModalPrestamo('+i+')" title="Corregir monto, moneda, fecha o concepto">✏️</button> '+
                  '<button class="btn btn-outline btn-sm" onclick="marcarPrestamoDevuelto('+i+')"'+(pr.estado==='devuelto'?' disabled style="opacity:.5"':'')+'>✓ Devuelto</button> '+
                  btnElim('prestamo', i)
                 :'<button class="btn btn-outline btn-sm" onclick="imprimirPrestamo('+i+')" title="Imprimir comprobante">🖨️</button>';
@@ -36862,7 +36867,13 @@
         }
     }
 
-    function abrirModalPrestamo(){
+    // Índice del préstamo que se está editando (-1 = alta nueva).
+    var editandoPrestamoIdx = -1;
+
+    function abrirModalPrestamo(idx){
+        editandoPrestamoIdx = (typeof idx === 'number' && idx >= 0) ? idx : -1;
+        var pr = (editandoPrestamoIdx >= 0) ? prestamos[editandoPrestamoIdx] : null;
+        if (editandoPrestamoIdx >= 0 && !pr) { alert('No se encontró el préstamo.'); editandoPrestamoIdx = -1; return; }
         var selDe=document.getElementById('prestDe');
         var selA=document.getElementById('prestA');
         selDe.innerHTML=''; selA.innerHTML='';
@@ -36871,20 +36882,44 @@
             selA.innerHTML+='<option value="'+e.nombre+'">'+e.nombre+'</option>';
         });
         if(empresas.length>1) selA.selectedIndex=1;
+        if (pr) { selDe.value = pr.de || selDe.value; selA.value = pr.a || selA.value; }
         onPrestEmpChange('De');
         onPrestEmpChange('A');
         /* Si hay una sola empresa, pre-seleccionar el 2do proyecto en destino */
-        if(empresas.length===1){
+        if(!pr && empresas.length===1){
             var selPrA=document.getElementById('prestProyA');
             if(selPrA.options.length>1) selPrA.selectedIndex=1;
         }
-        document.getElementById('prestMonto').value='';
-        document.getElementById('prestMoneda').value='ARS';
-        document.getElementById('prestFecha').valueAsDate=new Date();
-        document.getElementById('prestConcepto').value='';
+        if (pr) {
+            var sD = document.getElementById('prestProyDe'), sA = document.getElementById('prestProyA');
+            if (pr.proyDeId) sD.value = pr.proyDeId;
+            if (pr.proyAId)  sA.value = pr.proyAId;
+        }
+        document.getElementById('prestMonto').value = pr ? (pr.monto || '') : '';
+        document.getElementById('prestMoneda').value = pr ? (pr.moneda || 'ARS') : 'ARS';
+        if (pr && pr.fecha) document.getElementById('prestFecha').value = pr.fecha;
+        else document.getElementById('prestFecha').valueAsDate = new Date();
+        document.getElementById('prestConcepto').value = pr ? (pr.concepto || '') : '';
+        // En edición no se cambian las puntas: mover los movimientos de caja de un proyecto a
+        // otro es otra operación (para eso está eliminar y volver a cargarlo).
+        ['prestDe','prestProyDe','prestA','prestProyA'].forEach(function(id){
+            var el = document.getElementById(id); if (el) el.disabled = !!pr;
+        });
+        var _t = document.getElementById('prestModalTitulo');
+        if (_t) _t.textContent = pr ? '✏️ Editar Préstamo' : '🔄 Préstamo entre Proyectos';
+        var _av = document.getElementById('prestAvisoEdicion');
+        if (_av) _av.style.display = pr ? '' : 'none';
+        var _b = document.getElementById('prestBtnGuardar');
+        if (_b) _b.textContent = pr ? '💾 Guardar cambios' : '💾 Registrar Préstamo';
         document.getElementById('modalPrestamo').classList.add('active');
     }
-    function cerrarModalPrestamo(){ document.getElementById('modalPrestamo').classList.remove('active'); }
+    function cerrarModalPrestamo(){
+        editandoPrestamoIdx = -1;
+        ['prestDe','prestProyDe','prestA','prestProyA'].forEach(function(id){
+            var el = document.getElementById(id); if (el) el.disabled = false;
+        });
+        document.getElementById('modalPrestamo').classList.remove('active');
+    }
 
     function imprimirPrestamo(idx){
         var pr = prestamos[idx];
@@ -36945,6 +36980,75 @@
         return db.ref().update(upd).then(function(){ return { e:empId, p:proyId, id:movimiento.id }; });
     }
 
+    // Rutas de los movimientos de caja que generó un préstamo (el par original y, si se marcó
+    // devuelto, el par de la devolución). Los préstamos nuevos guardan los ids exactos en
+    // pr.movs; los viejos se buscan por referencia exigiendo además esPrestamo===true, porque
+    // la referencia es texto libre y podría coincidir con un movimiento cargado a mano.
+    function _prestamoRutasMovs(pr){
+        if (pr.movs && pr.movs.length) {
+            return Promise.resolve(pr.movs.filter(Boolean).map(function(m){
+                return _rutaMovCaja(m.e, m.p) + '/' + m.id;
+            }));
+        }
+        var refs = [pr.refMov, 'DEV-' + pr.refMov].filter(Boolean);
+        var puntas = [];
+        if(pr.empDeId && pr.proyDeId) puntas.push({ e: pr.empDeId, p: pr.proyDeId });
+        if(pr.empAId  && pr.proyAId)  puntas.push({ e: pr.empAId,  p: pr.proyAId });
+        return Promise.all(puntas.map(function(pt){
+            var base = _rutaMovCaja(pt.e, pt.p);
+            return db.ref(base).once('value').then(function(s){
+                var v = s.val(); if(!v || typeof v !== 'object') return [];
+                var rutas = [];
+                Object.keys(v).forEach(function(k){
+                    var m = v[k];
+                    if(m && m.esPrestamo === true && refs.indexOf(m.referencia) !== -1) rutas.push(base + '/' + k);
+                });
+                return rutas;
+            });
+        })).then(function(listas){ return listas.reduce(function(a,l){ return a.concat(l); }, []); });
+    }
+
+    // Corrige un préstamo ya registrado: el monto (y moneda/fecha/concepto) vive replicado en
+    // los dos movimientos de caja, así que se actualizan juntos en UN update atómico. Los
+    // movimientos de la devolución, si los hay, sólo cambian de monto y moneda: su fecha y su
+    // texto son los del día en que se devolvió, no los del préstamo.
+    function _guardarPrestamoEditado(pr, monto, moneda, fecha, concepto){
+        var etiqueta = concepto || 'Préstamo interempresa';
+        return _prestamoRutasMovs(pr).then(function(rutas){
+            if (!rutas.length) throw new Error('No se encontraron los movimientos de caja de este préstamo.');
+            return Promise.all(rutas.map(function(ruta){
+                return db.ref(ruta).once('value').then(function(s){ return { ruta: ruta, mov: s.val() }; });
+            }));
+        }).then(function(items){
+            var upd = {};
+            items.forEach(function(it){
+                if (!it.mov) return;
+                var esDevolucion = String(it.mov.referencia || '').indexOf('DEV-') === 0;
+                upd[it.ruta + '/monto']  = monto;
+                upd[it.ruta + '/moneda'] = moneda;
+                if (!esDevolucion) {
+                    upd[it.ruta + '/fecha'] = fecha;
+                    upd[it.ruta + '/obs']   = etiqueta;
+                }
+            });
+            if (pr.id) {
+                upd['global/prestamos/' + pr.id + '/monto']    = monto;
+                upd['global/prestamos/' + pr.id + '/moneda']   = moneda;
+                upd['global/prestamos/' + pr.id + '/fecha']    = fecha;
+                upd['global/prestamos/' + pr.id + '/concepto'] = concepto;
+            }
+            return db.ref().update(upd);
+        }).then(function(){
+            // El registro se actualizó directo en la base; se refleja en memoria para que la
+            // tabla muestre el valor nuevo sin esperar el listener.
+            pr.monto = monto; pr.moneda = moneda; pr.fecha = fecha; pr.concepto = concepto;
+            cerrarModalPrestamo();
+            _renderPrestamosTabla();
+            renderTesoreria();
+            alert('✓ Préstamo corregido. También se ajustaron los movimientos de caja de las dos empresas.');
+        });
+    }
+
     function guardarPrestamo(){
         var deNombre=document.getElementById('prestDe').value;
         var aNombre=document.getElementById('prestA').value;
@@ -36952,7 +37056,24 @@
         var moneda=document.getElementById('prestMoneda').value;
         var fecha=document.getElementById('prestFecha').value||new Date().toISOString().slice(0,10);
         var concepto=document.getElementById('prestConcepto').value.trim();
-        if(!deNombre||!aNombre||!monto||monto<=0){ alert('Completar empresa origen, destino y monto.'); return; }
+        if(!monto||monto<=0){ alert('Completar el monto.'); return; }
+
+        // ── Edición de un préstamo ya registrado ──
+        if (editandoPrestamoIdx >= 0) {
+            var _pr = prestamos[editandoPrestamoIdx];
+            if (!_pr) { alert('No se encontró el préstamo.'); return; }
+            var _btn = document.getElementById('prestBtnGuardar');
+            if (_btn) _btn.disabled = true;
+            _guardarPrestamoEditado(_pr, monto, moneda, fecha, concepto)
+                .catch(function(err){
+                    console.error(err);
+                    alert('No se pudo corregir el préstamo: ' + (err.message || err) + '\n\nNo se cambió nada.');
+                })
+                .then(function(){ if (_btn) _btn.disabled = false; });
+            return;
+        }
+
+        if(!deNombre||!aNombre){ alert('Completar empresa origen y destino.'); return; }
 
         var empDe=empresas.find(function(e){return e.nombre===deNombre;});
         var empA=empresas.find(function(e){return e.nombre===aNombre;});
@@ -37084,37 +37205,10 @@
         if(!pr) return;
         if(!confirm('¿Eliminar este préstamo?\n\nSe eliminan también los movimientos de caja que generó: el EGRESO de quien prestó y el INGRESO de quien recibió, en las dos empresas. Si el préstamo estaba marcado como devuelto, también se quitan los movimientos de la devolución.\n\nEsta acción no se puede deshacer.')) return;
 
-        // ── Qué rutas de caja borrar ─────────────────────────────────────────
-        // Préstamos nuevos: guardan en pr.movs el {empresa,proyecto,id} EXACTO de
-        //   cada movimiento → se borran por id, sin ambigüedad.
-        // Préstamos viejos (sin pr.movs): se buscan por referencia PERO exigiendo
-        //   además esPrestamo===true — la referencia sola es texto libre y podría
-        //   coincidir con un movimiento manual que el usuario haya cargado.
-        var rutasPromise;
-        if (pr.movs && pr.movs.length) {
-            rutasPromise = Promise.resolve(pr.movs.filter(Boolean).map(function(m){
-                return _rutaMovCaja(m.e, m.p) + '/' + m.id;
-            }));
-        } else {
-            var refs = [pr.refMov, 'DEV-' + pr.refMov].filter(Boolean);
-            var puntas = [];
-            if(pr.empDeId && pr.proyDeId) puntas.push({ e: pr.empDeId, p: pr.proyDeId });
-            if(pr.empAId  && pr.proyAId)  puntas.push({ e: pr.empAId,  p: pr.proyAId });
-            // SIN .catch que trague el error: si una lectura falla, todo el borrado se
-            // aborta y no se toca nada (mejor no borrar que dejar un movimiento huérfano).
-            rutasPromise = Promise.all(puntas.map(function(pt){
-                var base = _rutaMovCaja(pt.e, pt.p);
-                return db.ref(base).once('value').then(function(s){
-                    var v = s.val(); if(!v || typeof v !== 'object') return [];
-                    var rutas = [];
-                    Object.keys(v).forEach(function(k){
-                        var m = v[k];
-                        if(m && m.esPrestamo === true && refs.indexOf(m.referencia) !== -1) rutas.push(base + '/' + k);
-                    });
-                    return rutas;
-                });
-            })).then(function(listas){ return listas.reduce(function(a,l){ return a.concat(l); }, []); });
-        }
+        // Rutas de los movimientos a borrar (mismo criterio que usa la edición).
+        // SIN .catch que trague el error: si una lectura falla, todo el borrado se
+        // aborta y no se toca nada (mejor no borrar que dejar un movimiento huérfano).
+        var rutasPromise = _prestamoRutasMovs(pr);
 
         rutasPromise.then(function(rutas){
             // UN SOLO update atómico con los movimientos de caja Y el registro del
