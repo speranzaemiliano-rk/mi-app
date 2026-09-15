@@ -3522,7 +3522,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v504</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v505</div>
         </div>
     </nav>
 
@@ -7239,6 +7239,9 @@
                             <option value="factx|X">Comprobante X</option>
                             <option value="ncx|X">Nota de Crédito X</option>
                         </optgroup>
+                        <optgroup label="Pagos de impuestos y aportes">
+                            <option value="vep|X">Volante Electrónico de Pago (VEP)</option>
+                        </optgroup>
                     </select>
                     <!-- drivers internos: factEsNC dispara el circuito de nota de crédito en el submit -->
                     <input type="checkbox" id="factEsNC" style="display:none;">
@@ -10907,7 +10910,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:'Fact.'+(f.numero||f.descripcion||'—'),tipo:'Factura',mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||''});
+                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:(f.esVEP?'VEP ':'Fact.')+(f.numero||f.descripcion||'—'),tipo:(f.esVEP?'VEP':'Factura'),esVEP:!!f.esVEP,mod:p.modalidad,capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||''});
             });
         });
         documentos.forEach(function(d){
@@ -11027,7 +11030,7 @@
         }
         var f = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var kv = function(k, v, col){ return '<div class="c-kv"><span>' + k + '</span><span' + (col ? ' style="color:' + col + ';"' : '') + '>' + v + '</span></div>'; };
-        var tipo = r.esEmit ? 'Comprobante emitido' : r.esDoc ? 'Comprobante X' : r.esFact ? 'Factura' : 'Presupuesto';
+        var tipo = r.esEmit ? 'Comprobante emitido' : r.esDoc ? 'Comprobante X' : r.esFact ? (r.esVEP ? 'VEP' : 'Factura') : 'Presupuesto';
         box.innerHTML =
             '<div class="c-titulo">PAGO SELECCIONADO</div>'
             + '<div style="font-size:16px;font-weight:700;margin-top:5px;line-height:1.25;">' + escHtml(r.prov || '—') + '</div>'
@@ -13669,6 +13672,14 @@
     // Pago de impuestos: IIBB/AGIP, SICORE, etc.) se carga como factura con tipoComprobante 'X'
     // y NO es un comprobante fiscal con crédito de IVA → NO debe sumar al Libro IVA Compras ni a
     // los totales de ARCA. También queda afuera si se marcó manualmente computaARCA:false.
+    // Nombre corto del comprobante recibido, para listados y cuenta corriente.
+    function _facTipoLabel(f) {
+        if (!f) return 'Comprobante';
+        if (f.esVEP) return 'VEP';
+        if (f.esNotaCredito) return 'Nota de Crédito';
+        if (f.esNotaDebito)  return 'Nota de Débito';
+        return (f.computaARCA === false) ? 'Comprobante X' : 'Factura';
+    }
     function _facComputaArca(f) {
         if (!f) return false;
         if (f.computaARCA === false) return false;
@@ -15681,7 +15692,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v504';
+    var APP_VER = 'v505';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -18781,6 +18792,9 @@
     // Deduce clase (fact/nc/nd) + letra (A/B/C) desde el texto de tipo que extrae la IA.
     function _claseDeTipoTexto(txt) {
         var s = (txt || '').toString().toLowerCase();
+        // Un VEP se reconoce por el nombre, no por la letra: no tiene A/B/C.
+        var sSinTildes = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (/\bvep\b/.test(sSinTildes) || sSinTildes.indexOf('volante electronico') !== -1) return 'vep|X';
         var letra = 'A';
         var mL = s.match(/\b([abc])\b/);
         if (mL) letra = mL[1].toUpperCase();
@@ -18800,13 +18814,15 @@
         var hint = document.getElementById('leerFactClaseHint');
         if (hint) hint.textContent = esNC
             ? 'La nota de crédito RESTA de la cuenta corriente del proveedor (como un pago).' + (clase === 'ncx' ? ' Comprobante X (no oficial, no ARCA).' : '')
+            : (clase === 'vep')
+                ? 'VEP (Volante Electrónico de Pago): el comprobante del pago de un impuesto o aporte. Suma a la cuenta corriente y sale en la caja, pero NO da crédito fiscal de IVA, así que no entra en el Libro de Compras.'
             : (clase === 'nd')
                 ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
                 : (clase === 'factx')
                     ? 'Comprobante X: como una factura pero NO se registra en ARCA (no oficial).'
                     : '';
-        // Comprobante X → forzar "no computa ARCA".
-        if (clase === 'factx') { var cs = document.getElementById('leerFactComputaARCA'); if (cs) cs.value = 'false'; }
+        // Comprobante X y VEP → forzar "no computa ARCA" (ninguno da crédito fiscal de IVA).
+        if (clase === 'factx' || clase === 'vep') { var cs = document.getElementById('leerFactComputaARCA'); if (cs) cs.value = 'false'; }
         lfToggleNC();
     }
     function lfToggleNC() {
@@ -19345,6 +19361,7 @@
                                   ? ((document.getElementById('leerFactLetraVal')||{}).value || 'A')
                                   : (tipoComp || ''),
             esNotaDebito:     (document.getElementById('leerFactClaseVal')||{}).value === 'nd',
+            esVEP:            (document.getElementById('leerFactClaseVal')||{}).value === 'vep',
             cae:              cae || '',
             vencimientoCae:   vencCae || '',
             netoGravado:      window._lfNetoGravado || 0,
@@ -19515,9 +19532,10 @@
         const f = facturas[index];
         window._factNetoGravado = f.netoGravado || 0;
         var _esX = (f.computaARCA === false);
-        document.getElementById('modalFactTitle').textContent = f.esNotaDebito ? '🧾 Editar Nota de Débito' : (_esX ? '🧾 Editar Comprobante X' : '🧾 Editar Factura');
+        var _esVEP = !!f.esVEP;
+        document.getElementById('modalFactTitle').textContent = _esVEP ? '🧾 Editar VEP' : (f.esNotaDebito ? '🧾 Editar Nota de Débito' : (_esX ? '🧾 Editar Comprobante X' : '🧾 Editar Factura'));
         var _fcE = document.getElementById('factClase');
-        if (_fcE) _fcE.value = f.esNotaDebito ? ('nd|' + (f.tipoComprobante || 'A')) : (_esX ? 'factx|X' : ('fact|' + (f.tipoComprobante || 'A')));
+        if (_fcE) _fcE.value = _esVEP ? 'vep|X' : (f.esNotaDebito ? ('nd|' + (f.tipoComprobante || 'A')) : (_esX ? 'factx|X' : ('fact|' + (f.tipoComprobante || 'A'))));
         factClaseChange();
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
@@ -19971,11 +19989,14 @@
                 ? 'La nota de débito SUMA a la cuenta corriente del proveedor (deuda, igual que una factura).'
                 : (clase === 'factx')
                     ? 'Comprobante X: como una factura pero NO se registra en ARCA (no oficial).'
-                    : '';
+                    : (clase === 'vep')
+                        ? 'VEP (Volante Electrónico de Pago): el comprobante del pago de un impuesto o aporte. Suma a la cuenta corriente y sale en la caja, pero NO da crédito fiscal de IVA, así que no entra en el Libro de Compras.'
+                        : '';
         factToggleNC();
-        // Comprobante X: es una factura no oficial → forzar "no computa ARCA" y ocultar ese toggle.
+        // Comprobante X y VEP: no son facturas con crédito fiscal de IVA → se fuerza
+        // "no computa ARCA" y se esconde ese toggle, porque no hay nada que elegir.
         if (!esNC) {
-            var esX = (clase === 'factx');
+            var esX = (clase === 'factx' || clase === 'vep');
             if (typeof selFactComputaARCA === 'function') selFactComputaARCA(!esX);
             var cg = document.getElementById('factComputaGrupo'); if (cg) cg.style.display = esX ? 'none' : '';
         }
@@ -20465,6 +20486,9 @@
             computaARCA: (document.getElementById('factComputaARCA')||{}).value !== 'false',
             tipoComprobante: (document.getElementById('factLetraVal')||{}).value || 'A',
             esNotaDebito: (document.getElementById('factClaseVal')||{}).value === 'nd',
+            // VEP: se guarda como comprobante sin crédito fiscal (igual que un X) más esta marca,
+            // que es la que le cambia el nombre en los listados y en el comprobante impreso.
+            esVEP: (document.getElementById('factClaseVal')||{}).value === 'vep',
             nroProv:     editandoFactIndex >= 0 ? (facturas[editandoFactIndex].nroProv || null) : null
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
@@ -20665,10 +20689,13 @@
     // recibo de pago. Usa el encabezado compartido (empresa + proyecto).
     function _imprimirComprobanteItem(d, tituloForzado, retHtml) {
         if (!d) return;
-        var tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Documento no válido como factura', factura:'Factura', otro:'Comprobante' };
+        var tipoLabels = { recibo:'Recibo', orden_pago:'Orden de Pago', ticket:'Ticket', comprobante_x:'Documento no válido como factura', factura:'Factura', vep:'Volante Electrónico de Pago (VEP)', otro:'Comprobante' };
         var titulo = tituloForzado || tipoLabels[d.tipo] || 'Comprobante';
-        // Comprobantes NO oficiales (no computan ARCA) no pueden salir como "Factura".
-        if (d.computaARCA === false && (titulo === 'Factura' || titulo === 'Comprobante X')) titulo = 'Documento no válido como factura';
+        // Un VEP tiene nombre propio y no es "documento no válido como factura": es el
+        // comprobante oficial del pago de un impuesto, sólo que sin crédito fiscal de IVA.
+        if (d.esVEP || d.tipo === 'vep') titulo = 'Volante Electrónico de Pago (VEP)';
+        // El resto de los comprobantes NO oficiales (no computan ARCA) no pueden salir como "Factura".
+        else if (d.computaARCA === false && (titulo === 'Factura' || titulo === 'Comprobante X')) titulo = 'Documento no válido como factura';
         var mon = d.moneda === 'USD' ? 'USD ' : '$ ';
         var fmt = function(n){ return mon + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var emision = new Date().toLocaleDateString('es-AR');
@@ -20959,7 +20986,7 @@
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>'}</td>
+                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${f.esVEP ? ' <span class="pill" style="background:#e8f0fe;color:#1a56c4;" title="Volante Electrónico de Pago: comprobante del pago de un impuesto o aporte. No da crédito fiscal de IVA.">🏛️ VEP</span>' : (_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>')}</td>
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></td>
@@ -23618,7 +23645,7 @@
                     <td><strong>${f.proveedor||'—'}</strong>${pillFac}</td>
                     <td>${f.nroProv ? `<span class="pill" style="background:#E8F5E9;color:#2E7D32;font-size:10px;padding:1px 6px;border-radius:8px;" title="Numeración correlativa del proveedor">${_fmtNroProv(f.nroProv)}</span><br>` : ''}${f.numero ? `<strong>${escHtml(f.numero)}</strong>` : (f.nroProv ? '' : '—')}</td>
                     <td>${f.descripcion||'—'}</td>
-                    <td>${f.esNotaDebito ? `<span class="pill" style="background:#fdecea;color:#b3261e;">Nota de Déb. ${escHtml(f.tipoComprobante||'')}</span>` : (f.computaARCA===false ? '<span class="pill" style="background:#FFF3E0;color:#E65100;" title="Comprobante no oficial — no válido como factura">Doc. no válido s/factura</span>' : '<span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span>')}</td>
+                    <td>${f.esVEP ? '<span class="pill" style="background:#E8F0FE;color:#1a56c4;" title="Volante Electrónico de Pago: comprobante del pago de un impuesto o aporte. No da crédito fiscal de IVA.">🏛️ VEP</span>' : (f.esNotaDebito ? `<span class="pill" style="background:#fdecea;color:#b3261e;">Nota de Déb. ${escHtml(f.tipoComprobante||'')}</span>` : (f.computaARCA===false ? '<span class="pill" style="background:#FFF3E0;color:#E65100;" title="Comprobante no oficial — no válido como factura">Doc. no válido s/factura</span>' : '<span class="pill" style="background:#E8F0FE;color:#1565C0;">Factura</span>'))}</td>
                     <td style="text-align:right;">${mon}${imp.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                     <td style="text-align:right;">${mon}${pag.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                     <td><span class="pill ${estadoClass}">${estadoLabel}</span></td>
@@ -34721,7 +34748,7 @@
         var comps = [];
         (facturas || []).forEach(function(f){ if (f.proveedor !== nombre) return;
             if (f.esNotaCredito) { comps.push({ o:'nc', id: f.id, tipo: 'Nota de Créd. ' + (f.tipoComprobante||''), num: (f.numero || '—'), fecha: f.fecha, imp: -(f.importe || 0), pag: 0, est: 'nc', saldo: 0, esNC: true }); return; }
-            comps.push({ o:'fact', ref: facturas.indexOf(f), tipo: (f.computaARCA === false ? 'Comprobante X' : 'Factura'), num: (f.numero || _fmtNroProv(f.nroProv) || '—'), fecha: f.fecha, imp: f.importe || 0, pag: f.pagado || 0, est: _ccEstadoItem(f), saldo: _saldoFactDoc(f) }); });
+            comps.push({ o:'fact', ref: facturas.indexOf(f), tipo: _facTipoLabel(f), num: (f.numero || _fmtNroProv(f.nroProv) || '—'), fecha: f.fecha, imp: f.importe || 0, pag: f.pagado || 0, est: _ccEstadoItem(f), saldo: _saldoFactDoc(f) }); });
         (documentos || []).forEach(function(d){ if (d.proveedor !== nombre) return;
             comps.push({ o:'doc', ref: d.id, tipo: 'Comprobante X', num: (d.numero || _fmtNroProv(d.nroProv) || d.nro || '—'), fecha: d.fecha, imp: d.importe || 0, pag: d.pagado || 0, est: _ccEstadoItem(d), saldo: _saldoFactDoc(d) }); });
         comps.sort(function(a,b){ return String(b.fecha || '').localeCompare(String(a.fecha || '')); });
@@ -39240,6 +39267,7 @@
                         <option value="orden_pago">Orden de Pago</option>
                         <option value="ticket">Ticket</option>
                         <option value="comprobante_x">Comprobante X</option>
+                        <option value="vep">Volante Electrónico de Pago (VEP)</option>
                         <option value="otro">Otro</option>
                     </select>
                 </div>
@@ -42405,6 +42433,9 @@
             <optgroup label="Comprobantes X (no oficiales · no ARCA)">
               <option value="factx|X">Comprobante X</option>
               <option value="ncx|X">Nota de Crédito X</option>
+            </optgroup>
+            <optgroup label="Pagos de impuestos y aportes">
+              <option value="vep|X">Volante Electrónico de Pago (VEP)</option>
             </optgroup>
           </select>
           <input type="checkbox" id="leerFactEsNC" style="display:none;">
