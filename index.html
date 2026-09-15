@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v501</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v502</div>
         </div>
     </nav>
 
@@ -15532,7 +15532,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v501';
+    var APP_VER = 'v502';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -33915,6 +33915,47 @@
     // ── Modal editar pago ──────────────────────────────────
     var _editPagoData = null;
 
+    // El proveedor no vive en el pago: vive en el comprobante (factura, comprobante X o
+    // presupuesto) al que el pago está imputado. Por eso cambiarlo acá mueve el comprobante
+    // ENTERO —con todos sus pagos— a ese proveedor, y así se avisa antes de guardar.
+    var _editPagoProvOriginal = '';
+    function _editPagoItem(src, di) {
+        if (src === 'presup') return datos[di];
+        if (src === 'doc')    return (documentos || []).find(function(x){ return x.id === di; });
+        return facturas[di];
+    }
+    function _editPagoPoblarProv(seleccionado) {
+        var inp = document.getElementById('editPagoProveedor');
+        var dl  = document.getElementById('editPagoProveedorList');
+        if (!inp || !dl) return;
+        var lista = (proveedores || []).filter(function(p){ return p.razonSocial; }).slice()
+            .sort(function(a,b){ return (a.razonSocial||'').localeCompare(b.razonSocial||'', 'es', {sensitivity:'base'}); });
+        dl.innerHTML = lista.map(function(p){
+            var et = p.cuit ? (p.razonSocial + ' — CUIT ' + p.cuit) : p.razonSocial;
+            return '<option value="' + escHtml(p.razonSocial) + '" label="' + escHtml(et) + '">' + escHtml(et) + '</option>';
+        }).join('');
+        inp.value = seleccionado || '';
+    }
+    window._editPagoAvisoProv = function() {
+        var inp  = document.getElementById('editPagoProveedor');
+        var hint = document.getElementById('editPagoProvHint');
+        if (!inp || !hint) return;
+        var nuevo = (inp.value || '').trim();
+        if (!nuevo || nuevo === _editPagoProvOriginal) {
+            hint.style.color = '';
+            hint.textContent = 'El proveedor es del comprobante, no del pago: si lo cambiás, el comprobante y todos sus pagos pasan a ese proveedor.';
+            return;
+        }
+        var d = _editPagoData ? _editPagoItem(_editPagoData.src, _editPagoData.datoIdx) : null;
+        var nPagos = d ? (d.pagosHistorial || []).length : 0;
+        var existe = (typeof buscarProveedorPorNombre === 'function') && !!buscarProveedorPorNombre(nuevo);
+        hint.style.color = existe ? 'var(--warn)' : 'var(--danger)';
+        hint.innerHTML = existe
+            ? '⚠️ Se mueve el comprobante de <strong>' + escHtml(_editPagoProvOriginal || '—') + '</strong> a <strong>' + escHtml(nuevo) + '</strong>'
+              + (nPagos > 1 ? ', con sus ' + nPagos + ' pagos.' : '.')
+            : '⚠️ «' + escHtml(nuevo) + '» no está en el maestro de proveedores. Dalo de alta primero desde Proveedores, o elegí uno de la lista.';
+    };
+
     function abrirEditarPago(src, datoIdx, pagoIdx) {
         var p, label;
         if (src === 'presup') {
@@ -33931,6 +33972,9 @@
             label = (f.proveedor||'') + ' — ' + (f.numero||f.descripcion||'');
         }
         _editPagoData = { src, datoIdx, pagoIdx };
+        _editPagoProvOriginal = _editPagoItem(src, datoIdx) ? (_editPagoItem(src, datoIdx).proveedor || '') : '';
+        _editPagoPoblarProv(_editPagoProvOriginal);
+        _editPagoAvisoProv();
         document.getElementById('editPagoLabel').textContent = label;
         document.getElementById('editPagoSrc').value     = src;
         document.getElementById('editPagoDatoIdx').value = datoIdx;
@@ -34016,6 +34060,21 @@
         var mod    = document.getElementById('editPagoModalidad').value;
         if (!fecha) { alert('La fecha es obligatoria.'); return; }
         if (cap <= 0) { alert('El capital debe ser mayor a cero.'); return; }
+        // Cambio de proveedor: como el proveedor es del comprobante, se mueve el comprobante
+        // entero (y con él todos sus pagos). Se pide confirmación explícita.
+        var _provNuevo = ((document.getElementById('editPagoProveedor') || {}).value || '').trim();
+        var _provCambia = !!_provNuevo && _provNuevo !== _editPagoProvOriginal;
+        if (_provCambia) {
+            if (typeof buscarProveedorPorNombre === 'function' && !buscarProveedorPorNombre(_provNuevo)) {
+                alert('No encontramos «' + _provNuevo + '» entre los proveedores cargados.\n\nDalo de alta desde Proveedores, o elegí uno de la lista.');
+                return;
+            }
+            var _itmP = _editPagoItem(src, di);
+            var _nP = _itmP ? (_itmP.pagosHistorial || []).length : 0;
+            if (!confirm('¿Pasar este comprobante de «' + (_editPagoProvOriginal || '—') + '» a «' + _provNuevo + '»?\n\n'
+                + 'El proveedor es del comprobante, así que se mueve el comprobante entero'
+                + (_nP > 1 ? ' con sus ' + _nP + ' pagos' : '') + ': cambia en la cuenta corriente, en la caja y en la Orden de Pago.')) return;
+        }
         // Comprobante de transferencia (si se eligió uno nuevo)
         var _comp = null;
         try { _comp = await _subirComprobantePago('editPagoComprobante'); } catch(e) { return; }
@@ -34036,8 +34095,9 @@
             d.pagado = d.pagosHistorial.reduce(function(s,x){ return s + ((x.capital||0)+(x.mayores||0)+(x.canjeCapital||0) || (x.montoPagado||0)); }, 0);
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0)+(x.canjeCapital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
+            if (_provCambia) d.proveedor = _provNuevo;
             // Solo el nodo de este presupuesto (evita pisar a otro usuario en paralelo)
-            REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores });
+            REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores, proveedor:d.proveedor });
         } else if (src === 'doc') {
             var doc = documentos.find(function(x){ return x.id === di; });
             if (!doc) { cerrarModalEditarPago(); return; }
@@ -34047,7 +34107,8 @@
             pd.modalidad = mod;
             _aplicarComp(pd);
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
-            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
+            if (_provCambia) doc.proveedor = _provNuevo;
+            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial, proveedor: doc.proveedor });
         } else {
             var f = facturas[di];
             var pf = f.pagosHistorial[pi];
@@ -34058,8 +34119,9 @@
             // Recalcular pagado total de la factura
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             f.estado = _estadoFactDoc(f);
+            if (_provCambia) f.proveedor = _provNuevo;
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
-            REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
+            REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado, proveedor:f.proveedor });
         }
 
         cerrarModalEditarPago();
@@ -34069,7 +34131,13 @@
         renderFacturas();
         renderDocumentos();
         renderPagos();
-        alert('✓ Pago actualizado correctamente.');
+        if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
+        if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
+        if (typeof renderExtractoBancario === 'function') renderExtractoBancario();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
+        if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
+        alert('✓ Pago actualizado correctamente.' + (_provCambia ? '\nEl comprobante ahora figura a nombre de ' + _provNuevo + '.' : ''));
     }
 
     function eliminarPagoEditado() {
@@ -41585,6 +41653,13 @@
       <input type="hidden" id="editPagoSrc">
       <input type="hidden" id="editPagoDatoIdx">
       <input type="hidden" id="editPagoPagoIdx">
+
+      <div class="form-group">
+        <label>Proveedor</label>
+        <input type="text" id="editPagoProveedor" list="editPagoProveedorList" placeholder="Buscá o escribí la razón social…" style="width:100%;" oninput="_editPagoAvisoProv()">
+        <datalist id="editPagoProveedorList"></datalist>
+        <div class="form-hint" id="editPagoProvHint"></div>
+      </div>
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
