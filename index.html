@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v500</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v501</div>
         </div>
     </nav>
 
@@ -15532,7 +15532,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v500';
+    var APP_VER = 'v501';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17623,6 +17623,18 @@
     // El borrado se rutea según el tipo de movimiento y sólo aparece donde es seguro
     // (movimientos manuales de caja/banco y pagos de documentos). Reusa _verOrigenMovimiento /
     // _editarOrigenMovimiento (ruteados por srcTipo) para no duplicar lógica.
+    // Deshace el pago que originó un movimiento de Caja General. Si el pago cubrió varias
+    // facturas juntas (grupo), ccDesaplicarPago las desaplica todas — dejar una pata suelta
+    // rompería la numeración y las retenciones, que son del PAGO y no de cada factura.
+    window.cgDesaplicarMov = function(t, ref, pi, grupo) {
+        if (grupo) { ccDesaplicarPago(t, ref, pi, grupo); return; }
+        if (pi == null) {
+            if (t === 'fact') desaplicarPagoFactura(ref); else desaplicarPagoDoc(ref);
+            return;
+        }
+        ccDesaplicarPago(t, ref, pi, null);
+    };
+
     function _accionesMovHTML(m) {
         if (!m || m.srcTipo == null || m.srcRef == null) return '';
         var refArg = (typeof m.srcRef === 'number') ? m.srcRef : ("'" + String(m.srcRef).replace(/'/g,"\\'") + "'");
@@ -17631,6 +17643,14 @@
         var h = '';
         if (puedeVer) h += '<button class="btn btn-outline btn-sm" onclick="_verOrigenMovimiento(\'' + m.srcTipo + '\',' + refArg + ')" title="Imprimir el comprobante (PDF)">🖨️</button>';
         if (ed) h += '<button class="btn btn-outline btn-sm" onclick="_editarOrigenMovimiento(\'' + m.srcTipo + '\',' + refArg + ')" title="Editar">✏</button>';
+        // Movimiento que salió de un pago a proveedor: se puede deshacer desde acá mismo.
+        if (ed && m.desapT) {
+            var _dRef = (m.desapT === 'fact') ? m.desapRef : ("'" + String(m.desapRef).replace(/'/g,"\\'") + "'");
+            var _dGr  = m.desapGrupo ? ("'" + String(m.desapGrupo).replace(/'/g,"\\'") + "'") : 'null';
+            h += '<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);"'
+               + ' onclick="cgDesaplicarMov(\'' + m.desapT + '\',' + _dRef + ',' + (m.desapPi == null ? 'null' : m.desapPi) + ',' + _dGr + ')"'
+               + ' title="Desaplicar este pago: el comprobante vuelve a Pendiente/Parcial y este movimiento se va de la caja">↩️</button>';
+        }
         if (ed) {
             if (m.srcTipo === 'movbanco' && m.igIdx != null && m.igIdx >= 0)      h += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movbanco\',' + m.igIdx + ')" title="Eliminar (pide PIN)">🗑️</button>';
             else if (m.srcTipo === 'movcaja' && m.igIdx != null && m.igIdx >= 0)  h += '<button class="btn btn-danger-sm" onclick="_borrarMovConPin(\'movcaja\',' + m.igIdx + ')" title="Eliminar (pide PIN)">🗑️</button>';
@@ -20640,7 +20660,7 @@
         if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
-        if (typeof renderBanco === 'function') renderBanco();
+        if (typeof renderExtractoBancario === 'function') renderExtractoBancario();
         if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
     }
 
@@ -20665,7 +20685,7 @@
         if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
-        if (typeof renderBanco === 'function') renderBanco();
+        if (typeof renderExtractoBancario === 'function') renderExtractoBancario();
         if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
     }
 
@@ -20717,7 +20737,7 @@
         if (typeof renderCajaGeneral === 'function') renderCajaGeneral();
         if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
         if (typeof renderEfectivoUSD === 'function') renderEfectivoUSD();
-        if (typeof renderBanco === 'function') renderBanco();
+        if (typeof renderExtractoBancario === 'function') renderExtractoBancario();
         if (typeof _fichaRefrescarSiAbierta === 'function') _fichaRefrescarSiAbierta();
     }
 
@@ -21530,22 +21550,22 @@
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
             movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||'—', entrada: 0, salida: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
         }); });
-        facturas.forEach(function(f, fIdx){ (f.pagosHistorial||[]).forEach(function(p){
+        facturas.forEach(function(f, fIdx){ (f.pagosHistorial||[]).forEach(function(p, pIdx){
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'' });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'', desapT:'fact', desapRef:fIdx, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
         }); });
         (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
             if (hist.length) {
-                hist.forEach(function(p){
+                hist.forEach(function(p, pIdx){
                     if (p.modalidad !== 'A') return;
                     var cId = p.cuentaId||'';
                     var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'documento', srcRef:d.id });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
                 });
             } else if ((d.pagado||0) > 0 && d.modalidad === 'A') {
-                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id });
+                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:null, desapGrupo:'' });
             }
         });
         ingGeneral.forEach(function(ig, igIdx){
@@ -21710,20 +21730,20 @@
         });
         facturas.filter(f => (f.moneda||'ARS') === 'ARS').forEach(f => {
             var fIdx = facturas.indexOf(f);
-            (f.pagosHistorial||[]).forEach(p => {
+            (f.pagosHistorial||[]).forEach((p, pIdx) => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx, desapT:'fact', desapRef:fIdx, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
             });
         });
         (documentos||[]).filter(d => (d.moneda||'ARS') === 'ARS').forEach(d => {
             var hist = d.pagosHistorial || [];
             if (hist.length > 0) {
-                hist.forEach(p => {
+                hist.forEach((p, pIdx) => {
                     if (p.modalidad !== 'B') return;
-                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'documento', srcRef:d.id });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
                 });
             } else if ((d.pagado||0) > 0 && (d.modalidad||'B') === 'B') {
-                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: d.pagado, srcTipo:'documento', srcRef:d.id });
+                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'), origen: d.proveedor, ingreso: 0, egreso: d.pagado, srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:null, desapGrupo:'' });
             }
         });
 
@@ -21832,9 +21852,9 @@
         });
         facturas.filter(f => f.moneda === 'USD').forEach(f => {
             var fIdx = facturas.indexOf(f);
-            (f.pagosHistorial||[]).forEach(p => {
+            (f.pagosHistorial||[]).forEach((p, pIdx) => {
                 if (p.modalidad !== 'B') return;
-                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx });
+                movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: f.numero||f.descripcion||'—', origen: f.proveedor, ingreso: 0, egreso: p.monto||0, srcTipo:'factura', srcRef:fIdx, desapT:'fact', desapRef:fIdx, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
             });
         });
 
@@ -33434,14 +33454,16 @@
 
         // 6. Pagos de Facturas (A=Banco, B=Efectivo)
         facturas.forEach(function(f, fIdx) {
-            (f.pagosHistorial||[]).forEach(function(p) {
+            (f.pagosHistorial||[]).forEach(function(p, pIdx) {
                 movs.push({
                     fecha: p.fecha, moneda: f.moneda||'ARS',
                     tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero+' — ':'') + (f.descripcion||'—') + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''),
                     origen: f.proveedor||'—',
                     medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
                     monto: _netoPagado(p), esIngreso: false,
-                    srcTipo: 'factura', srcRef: fIdx, grupoPagoId: p.grupoPagoId||''
+                    srcTipo: 'factura', srcRef: fIdx, grupoPagoId: p.grupoPagoId||'',
+                    // Datos para el ↩️ de la fila: apunta a ESTE pago, no siempre al último.
+                    desapT: 'fact', desapRef: fIdx, desapPi: pIdx, desapGrupo: p.grupoPagoId||''
                 });
             });
         });
@@ -33450,7 +33472,7 @@
         (documentos||[]).forEach(function(d) {
             var hist = d.pagosHistorial || [];
             if (hist.length > 0) {
-                hist.forEach(function(p) {
+                hist.forEach(function(p, pIdx) {
                     movs.push({
                         fecha: p.fecha, moneda: d.moneda||'ARS',
                         tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero+' — ':'') + (d.descripcion||'—') + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''),
@@ -33458,7 +33480,8 @@
                         medio: p.modalidad==='A' ? 'Banco' : 'Efectivo',
                         srcTipo: 'documento', srcRef: d.id,
                         monto: _netoPagado(p), esIngreso: false,
-                        docId: d.id, pagoId: p.pagoId||''
+                        docId: d.id, pagoId: p.pagoId||'',
+                        desapT: 'doc', desapRef: d.id, desapPi: pIdx, desapGrupo: p.grupoPagoId||''
                     });
                 });
             } else if ((d.pagado||0) > 0) {
@@ -33469,7 +33492,9 @@
                     medio: d.modalidad==='A' ? 'Banco' : 'Efectivo',
                     srcTipo: 'documento', srcRef: d.id,
                     monto: d.pagado, esIngreso: false,
-                    docId: d.id, pagoId: ''
+                    docId: d.id, pagoId: '',
+                    // Pago viejo sin historial: no hay entrada puntual, se desaplica lo pagado.
+                    desapT: 'doc', desapRef: d.id, desapPi: null, desapGrupo: ''
                 });
             }
         });
@@ -34583,7 +34608,7 @@
                     if (puedeEd) {
                         var _opRefArg = (m._op.t === 'fact') ? m._op.ref : ("'" + String(m._op.ref).replace(/'/g,"\\'") + "'");
                         var _opGrupoArg = m._op.grupo ? ("'" + String(m._op.grupo).replace(/'/g,"\\'") + "'") : 'null';
-                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Eliminar esta Orden de Pago">✕</button>';
+                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Desaplicar este pago: el comprobante vuelve a Pendiente/Parcial y se va el movimiento de Caja/Banco">↩️ Desaplicar</button>';
                     }
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
@@ -34822,7 +34847,7 @@
                     if (puedeEd) {
                         var _opRefArg = (m._op.t === 'fact') ? m._op.ref : ("'" + String(m._op.ref).replace(/'/g,"\\'") + "'");
                         var _opGrupoArg = m._op.grupo ? ("'" + String(m._op.grupo).replace(/'/g,"\\'") + "'") : 'null';
-                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Eliminar esta Orden de Pago">✕</button>';
+                        acc += ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="ccDesaplicarPago(\'' + m._op.t + '\',' + _opRefArg + ',' + m._op.pi + ',' + _opGrupoArg + ')" title="Desaplicar este pago: el comprobante vuelve a Pendiente/Parcial y se va el movimiento de Caja/Banco">↩️ Desaplicar</button>';
                     }
                 } else if (m._ret) {
                     acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:var(--danger);" onclick="' + _vm.fn + '" title="Imprimir el certificado de retención">🏛️ Ret.</button>';
