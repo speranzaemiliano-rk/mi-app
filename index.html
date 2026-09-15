@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v502</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v503</div>
         </div>
     </nav>
 
@@ -6963,6 +6963,9 @@
         Junta dos fichas del mismo proveedor en una sola. Todo lo que esté a nombre del duplicado
         —facturas, comprobantes, pagos, presupuestos, créditos y vencimientos— pasa al correcto,
         y la ficha duplicada se elimina. <strong>No se borra ningún movimiento.</strong>
+        El duplicado puede ser una ficha del maestro o, al final de la lista, un <strong>nombre suelto</strong>
+        que quedó tipeado a mano en comprobantes viejos y nunca llegó a tener ficha. Las tildes no
+        importan para encontrar los movimientos: «MÁRMOLA» y «MARMOLA» se toman como el mismo nombre.
       </div>
       <div class="form-group">
         <label>Proveedor duplicado (se elimina) *</label>
@@ -9446,20 +9449,54 @@
     // reapuntar ese nombre en todas las colecciones y borrar la ficha sobrante. El nombre del
     // proveedor vive en `razonSocial` (y opcionalmente `nombreFantasia`), NO en `nombre`.
     function _unifNorm(x) { return (x || '').toString().trim().toLowerCase().replace(/\s+/g, ' '); }
+    // Para BUSCAR movimientos, además se ignoran las tildes: el mismo proveedor aparece cargado
+    // como «MÁRMOLA» y como «MARMOLA» según quién lo tipeó. OJO: esta versión floja NO se usa
+    // para decidir si dos fichas son la misma ni para borrar la ficha sobrante — ahí hace falta
+    // el nombre exacto, si no unificar dos fichas que sólo difieren en la tilde borraría las dos.
+    function _unifNormLoose(x) {
+        return _unifNorm(x).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
     function _unifProvPorNombre(nombre) {
-        var n = _unifNorm(nombre);
-        return (proveedores || []).find(function(x){ return _unifNorm(x.razonSocial) === n; }) || null;
+        var n = _unifNorm(nombre), nl = _unifNormLoose(nombre);
+        return (proveedores || []).find(function(x){ return _unifNorm(x.razonSocial) === n; })
+            || (proveedores || []).find(function(x){ return _unifNormLoose(x.razonSocial) === nl; })
+            || null;
+    }
+    // Nombres de proveedor que aparecen en los movimientos pero NO tienen ficha en el maestro
+    // (se tipearon a mano en un comprobante viejo). Sin esto no se los puede elegir como origen
+    // y quedan para siempre colgados en la cuenta corriente con su propio renglón.
+    function _unifNombresSinFicha() {
+        var conFicha = {};
+        (proveedores || []).forEach(function(pv){
+            if (pv && pv.razonSocial)    conFicha[_unifNormLoose(pv.razonSocial)] = 1;
+            if (pv && pv.nombreFantasia) conFicha[_unifNormLoose(pv.nombreFantasia)] = 1;
+        });
+        var vistos = {}, out = [];
+        var sumar = function(nom) {
+            var t = (nom || '').toString().trim();
+            if (!t) return;
+            var k = _unifNormLoose(t);
+            if (conFicha[k] || vistos[k]) return;
+            vistos[k] = 1; out.push(t);
+        };
+        (typeof datos !== 'undefined' ? datos : []).forEach(function(d){ if (d) sumar(d.proveedor); });
+        (typeof facturas !== 'undefined' ? facturas : []).forEach(function(f){ if (f) sumar(f.proveedor); });
+        (typeof documentos !== 'undefined' ? (documentos||[]) : []).forEach(function(d){ if (d) sumar(d.proveedor); });
+        (typeof creditosProveedor !== 'undefined' ? (creditosProveedor||[]) : []).forEach(function(c){ if (c) sumar(c.proveedor); });
+        (typeof comprobantesEmitidos !== 'undefined' ? (comprobantesEmitidos||[]) : []).forEach(function(e){ if (e) sumar(e.proveedorNombre); });
+        (typeof vencimientos !== 'undefined' ? (vencimientos||[]) : []).forEach(function(v){ if (v) sumar(v.proveedor); });
+        return out.sort(function(a,b){ return a.localeCompare(b, 'es', {sensitivity:'base'}); });
     }
     // Nombres con los que puede estar cargado un movimiento de ese proveedor: la razón social y,
     // si no la comparte con otro proveedor, también el nombre de fantasía (las facturas a veces
     // se cargan con ese). Se excluye una fantasía repetida para no arrastrar movimientos ajenos.
     function _unifClavesDe(nombre) {
         var pv = _unifProvPorNombre(nombre), claves = {};
-        claves[_unifNorm(nombre)] = 1;
+        claves[_unifNormLoose(nombre)] = 1;
         if (pv && pv.nombreFantasia) {
-            var nf = _unifNorm(pv.nombreFantasia);
+            var nf = _unifNormLoose(pv.nombreFantasia);
             var repetida = (proveedores || []).filter(function(x){
-                return _unifNorm(x.nombreFantasia) === nf || _unifNorm(x.razonSocial) === nf;
+                return _unifNormLoose(x.nombreFantasia) === nf || _unifNormLoose(x.razonSocial) === nf;
             }).length > 1;
             if (nf && !repetida) claves[nf] = 1;
         }
@@ -9469,7 +9506,7 @@
     // Cuenta (o reapunta, si aplicar=true) todo lo que está a nombre de `de` para pasarlo a `a`.
     function _unifRecorrer(de, a, aplicar) {
         var claves = _unifClavesDe(de);
-        var coincide = function(x) { return !!claves[_unifNorm(x)]; };
+        var coincide = function(x) { return !!claves[_unifNormLoose(x)]; };
         var r = { presupuestos: 0, facturas: 0, documentos: 0, creditos: 0, emitidos: 0, vencimientos: 0, pagos: 0 };
         var docsTocados = {}, vencsTocados = [];
         var cuentaPagos = function(obj) { return ((obj && obj.pagosHistorial) || []).length; };
@@ -9518,7 +9555,15 @@
             var etiqueta = pv.razonSocial + (pv.nombreFantasia ? ' (' + pv.nombreFantasia + ')' : '') + (pv.cuit ? ' · ' + pv.cuit : '');
             return '<option value="' + escHtml(pv.razonSocial) + '">' + escHtml(etiqueta) + '</option>';
         }).join('');
-        document.getElementById('unifProvOrigen').innerHTML = opts;
+        // El DESTINO tiene que ser una ficha real; el ORIGEN puede ser un nombre suelto que
+        // quedó escrito a mano en comprobantes viejos y nunca llegó al maestro.
+        var sueltos = _unifNombresSinFicha();
+        var optsOrigen = opts + (sueltos.length
+            ? '<optgroup label="Nombres sueltos (sin ficha de proveedor)">'
+              + sueltos.map(function(n){ return '<option value="' + escHtml(n) + '">' + escHtml(n) + ' · sin ficha</option>'; }).join('')
+              + '</optgroup>'
+            : '');
+        document.getElementById('unifProvOrigen').innerHTML = optsOrigen;
         document.getElementById('unifProvDestino').innerHTML = opts;
         document.getElementById('unifProvPreview').innerHTML = '<span style="color:var(--text-3);">Elegí los dos proveedores para ver qué se va a mover.</span>';
         if (nombreOrigen) {
@@ -9541,11 +9586,13 @@
             ['Comprobantes emitidos', c.emitidos], ['Créditos a favor', c.creditos], ['Vencimientos', c.vencimientos]
         ].filter(function(f){ return f[1] > 0; });
         // Dos fichas con el mismo CUIT es la señal más fuerte de que están duplicadas.
-        var pDe = _unifProvPorNombre(de) || {}, pA = _unifProvPorNombre(a) || {};
+        var pDe = _unifProvPorNombre(de), pA = _unifProvPorNombre(a) || {};
+        var sinFicha = !pDe; pDe = pDe || {};
         var cuitDe = (pDe.cuit || '').replace(/\D/g, ''), cuitA = (pA.cuit || '').replace(/\D/g, '');
         var mismoCuit = cuitDe && cuitA && cuitDe === cuitA;
         box.innerHTML =
-            (mismoCuit ? '<div style="color:var(--success);margin-bottom:8px;">✅ Los dos tienen el mismo CUIT (' + escHtml(pDe.cuit) + '): son el mismo proveedor.</div>'
+            (sinFicha ? '<div style="color:var(--blue);margin-bottom:8px;">ℹ️ «' + escHtml(de) + '» no tiene ficha propia: es un nombre escrito a mano en los comprobantes. Se reescribe en todos y listo, no hay ficha que borrar.</div>'
+             : mismoCuit ? '<div style="color:var(--success);margin-bottom:8px;">✅ Los dos tienen el mismo CUIT (' + escHtml(pDe.cuit) + '): son el mismo proveedor.</div>'
                        : (cuitDe && cuitA ? '<div style="color:var(--warn);margin-bottom:8px;">⚠️ Tienen CUIT distinto (' + escHtml(pDe.cuit) + ' vs ' + escHtml(pA.cuit) + '). Revisá que sean realmente el mismo.</div>' : '')) +
             '<div><strong>' + escHtml(de) + '</strong> → <strong>' + escHtml(a) + '</strong></div>' +
             (filas.length
@@ -9561,8 +9608,10 @@
         if (!de || !a) { alert('Elegí los dos proveedores.'); return; }
         if (_unifNorm(de) === _unifNorm(a)) { alert('Son el mismo proveedor.'); return; }
         var prev = _unifRecorrer(de, a, false);
+        var teniaFicha = !!_unifProvPorNombre(de);
         var totalMov = prev.presupuestos + prev.facturas + prev.documentos + prev.emitidos + prev.creditos + prev.vencimientos;
-        if (!confirm('Se van a pasar ' + totalMov + ' registro(s) de «' + de + '» a «' + a + '», y se va a eliminar la ficha de «' + de + '».\n\n' +
+        if (!confirm('Se van a pasar ' + totalMov + ' registro(s) de «' + de + '» a «' + a + '»'
+                     + (teniaFicha ? ', y se va a eliminar la ficha de «' + de + '».' : ' («' + de + '» no tiene ficha propia, así que no hay nada que borrar).') + '\n\n' +
                      'Los movimientos NO se borran: cambian de titular.\n\nEsta acción no se puede deshacer sola. ¿Confirmás?')) return;
 
         var btn = document.getElementById('btnConfirmarUnifProv');
@@ -9580,9 +9629,11 @@
             });
             // Por último se saca la ficha duplicada del maestro (por razón social, que es su nombre).
             var antes = (proveedores || []).length;
+            // Comparación EXACTA: si se borrara por nombre sin tildes, unificar «MÁRMOLA» dentro
+            // de «MARMOLA» se llevaría puesta también la ficha destino.
             proveedores = (proveedores || []).filter(function(pv){ return _unifNorm(pv.razonSocial) !== _unifNorm(de); });
-            if (antes === proveedores.length) { alert('⚠️ No se encontró la ficha de «' + de + '» para eliminar. Los movimientos sí se movieron.'); }
-            persistirProveedores();
+            if (antes === proveedores.length && teniaFicha) { alert('⚠️ No se encontró la ficha de «' + de + '» para eliminar. Los movimientos sí se movieron.'); }
+            if (antes !== proveedores.length) persistirProveedores();
             cerrarUnificarProveedores();
             if (typeof renderProveedores === 'function') renderProveedores();
             if (typeof renderizar === 'function') renderizar();
@@ -15532,7 +15583,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v502';
+    var APP_VER = 'v503';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
