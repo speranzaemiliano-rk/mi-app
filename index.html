@@ -3518,7 +3518,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v498</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v499</div>
         </div>
     </nav>
 
@@ -11295,7 +11295,9 @@
         var modal = document.getElementById('modalPagoFD'); if (!modal) return;
         document.getElementById('pagoFDMonto').value='';
         document.getElementById('pagoFDFecha').value=new Date().toISOString().substring(0,10);
-        document.getElementById('pagoFDBase').value='';
+        var _biNuevo=document.getElementById('pagoFDBase');
+        _biNuevo.value=''; delete _biNuevo.dataset.manual;
+        _pagoFDBaseAviso();
         _pagoFDRetsManuales=[];
         var _mlEl=document.getElementById('pagoFDRetManualLista'); if(_mlEl) _mlEl.innerHTML='';
         document.getElementById('pagoFDRetDesglose').innerHTML='';
@@ -11367,7 +11369,10 @@
         info.style.display='';
         var mi=document.getElementById('pagoFDMonto');if(mi&&(!mi.value||parseFloat(mi.value)===0))mi.value=Math.round(pend);
         var bi=document.getElementById('pagoFDBase');
-        if(bi&&(!bi.value||parseFloat(bi.value)===0)){
+        // Se recalcula al cambiar de comprobante, salvo que el usuario la haya escrito a mano
+        // (antes sólo se completaba si estaba vacía, así que al cambiar de factura quedaba la
+        // base de la anterior).
+        if(bi&&bi.dataset.manual!=='1'){
             // Si la factura tiene neto gravado cargado (ya sin IVA ni percepciones de IIBB), se
             // escala proporcionalmente al monto pendiente en vez de estimar con importe/1.21.
             var fRef = (_pagoFDTab==='fact' && typeof f !== 'undefined') ? f : null;
@@ -11391,6 +11396,35 @@
         if(gc)gc.style.display=m==='A'?'':'none';if(pr)pr.style.display=m==='A'?'':'none';
         pagoFDRecalcRet();
     }
+    // La base imponible se calcula sola (neto s/IVA del comprobante), pero se puede escribir a
+    // mano cuando el IVA no es 21%, hay percepciones, o la retención va sobre otra cosa. Una vez
+    // escrita queda marcada como manual y NADA la vuelve a pisar: ni cambiar de comprobante ni
+    // tildar otra factura en el modo "varias del mismo proveedor". Con ↺ se vuelve al automático.
+    function pagoFDBaseEditada() {
+        var bi = document.getElementById('pagoFDBase');
+        if (bi) bi.dataset.manual = '1';
+        _pagoFDBaseAviso();
+        pagoFDRecalcRet();
+    }
+    function _pagoFDBaseAviso() {
+        var bi = document.getElementById('pagoFDBase');
+        var hint = document.getElementById('pagoFDBaseHint');
+        if (!bi || !hint) return;
+        hint.innerHTML = (bi.dataset.manual === '1')
+            ? '✏️ Base escrita a mano: no se recalcula sola. <a href="#" onclick="pagoFDBaseAuto();return false;">↺ Volver al cálculo automático</a>'
+            : 'Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.';
+    }
+    window.pagoFDBaseAuto = function() {
+        var bi = document.getElementById('pagoFDBase');
+        if (!bi) return;
+        delete bi.dataset.manual;
+        bi.value = '';
+        _pagoFDBaseAviso();
+        // Recalcula la base del comprobante (o del conjunto, en el modo varias facturas).
+        if (_pagoFDModo === 'varias') _pagoFDMultiRecalc();
+        else pagoFDActualizarItem();
+    };
+
     var _pagoFDRetsCalculadas = [];
     function pagoFDRecalcRet(soloTotales) {
         var mod=document.getElementById('pagoFDMod').value;
@@ -11683,7 +11717,8 @@
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
         var baseTotal  = sel.reduce(function(s,x){ return s + x.neto; }, 0);
         var mi = document.getElementById('pagoFDMonto'); if (mi) mi.value = montoTotal ? Math.round(montoTotal) : '';
-        var bi = document.getElementById('pagoFDBase'); if (bi) bi.value = baseTotal ? Math.round(baseTotal) : '';
+        var bi = document.getElementById('pagoFDBase');
+        if (bi && bi.dataset.manual !== '1') bi.value = baseTotal ? Math.round(baseTotal) : '';
         var res = document.getElementById('pagoFDMultiResumen');
         if (res) {
             if (sel.length) { res.style.display = ''; res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>$' + (montoTotal).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong>'; }
@@ -15488,7 +15523,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v498';
+    var APP_VER = 'v499';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -41711,8 +41746,8 @@
           <div class="ret-panel-title">🏛️ Retenciones AFIP / ARCA</div>
           <div class="form-group" style="margin-bottom:12px;">
             <label style="font-size:11px;">Base imponible neta (s/IVA)</label>
-            <input type="number" id="pagoFDBase" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="pagoFDRecalcRet()" style="width:100%;">
-            <div class="form-hint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
+            <input type="number" id="pagoFDBase" step="0.01" min="0" placeholder="Monto neto s/IVA" oninput="pagoFDBaseEditada()" style="width:100%;">
+            <div class="form-hint" id="pagoFDBaseHint">Se calcula automáticamente asumiendo IVA 21%. Editá si el porcentaje es distinto.</div>
           </div>
           <div id="pagoFDRetDesglose"></div>
           <div id="pagoFDRetManualLista"></div>
