@@ -1289,6 +1289,21 @@
         tbody tr:last-child td { border-bottom: none; }
         tbody tr:hover { background: var(--surface); }
 
+        /* Autocompletado de proveedores (reemplaza al <datalist> nativo) */
+        #provAutoPanel {
+            position: fixed; display: none; z-index: 100000; overflow-y: auto;
+            background: var(--surface, #fff); border: 1px solid var(--border, #d8d8d8);
+            border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 4px;
+            -webkit-overflow-scrolling: touch;
+        }
+        #provAutoPanel .pac-item { padding: 7px 10px; border-radius: 7px; cursor: pointer; line-height: 1.3; }
+        #provAutoPanel .pac-item.sel,
+        #provAutoPanel .pac-item:hover { background: var(--surface-2, #eef2f8); }
+        #provAutoPanel .pac-nom  { font-size: 13.5px; font-weight: 600; color: var(--text-1, #1b1b1b); }
+        #provAutoPanel .pac-fant { font-weight: 400; color: var(--text-3, #8a8a8a); font-size: 12px; }
+        #provAutoPanel .pac-meta { font-size: 11px; color: var(--text-3, #8a8a8a); margin-top: 1px; }
+        #provAutoPanel .pac-nota { padding: 8px 10px; font-size: 12px; color: var(--text-3, #8a8a8a); }
+
         /* Resaltado de lo que coincidió al buscar un proveedor */
         mark.prov-hit { background: var(--gold-pale, #FBF1D3); color: inherit; padding: 0 1px; border-radius: 3px; font-weight: 700; }
         @media (prefers-color-scheme: dark) { mark.prov-hit { background: rgba(230,190,90,.28); } }
@@ -3522,7 +3537,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v506</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v507</div>
         </div>
     </nav>
 
@@ -15400,6 +15415,136 @@
         }
         return out + (abierto ? '</mark>' : '');
     }
+    // ── Autocompletado de proveedores en los campos de carga ──────────────────
+    // El <datalist> nativo del navegador no alcanzaba: no ignora las tildes (escribir
+    // «marmola» no encontraba «MÁRMOLA»), no encuentra por CUIT si no se tipea igual que
+    // como está guardado, no acepta pedazos sueltos, no muestra el CUIT ni el rubro para
+    // distinguir homónimos y en el celular muchas veces ni se despliega. Esto lo reemplaza
+    // usando el MISMO motor que el buscador de la pantalla de Proveedores.
+    var _PAC_MAX = 12;
+    var _pacInput = null, _pacIdx = -1, _pacItems = [], _pacEligiendo = false;
+
+    function _pacPanel() {
+        var el = document.getElementById('provAutoPanel');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'provAutoPanel';
+            // mousedown con preventDefault: al tocar una opción el input NO pierde el foco,
+            // así el blur no cierra el panel antes de que llegue el click.
+            el.addEventListener('mousedown', function(ev){ ev.preventDefault(); });
+            document.body.appendChild(el);
+        }
+        return el;
+    }
+    function _pacCerrar() {
+        var el = document.getElementById('provAutoPanel');
+        if (el) el.style.display = 'none';
+        _pacInput = null; _pacIdx = -1; _pacItems = [];
+    }
+    // Panel en position:fixed y ubicado por getBoundingClientRect: así no hay que envolver
+    // el input en un contenedor relativo (varios están dentro de flex y se romperían).
+    function _pacUbicar() {
+        if (!_pacInput) return;
+        var el = _pacPanel(), r = _pacInput.getBoundingClientRect();
+        var abajo = window.innerHeight - r.bottom - 10, arriba = r.top - 10;
+        var haciaArriba = (abajo < 150 && arriba > abajo);
+        el.style.left  = Math.round(r.left) + 'px';
+        el.style.width = Math.round(r.width) + 'px';
+        el.style.maxHeight = Math.round(Math.min(300, Math.max(120, haciaArriba ? arriba : abajo))) + 'px';
+        if (haciaArriba) { el.style.top = 'auto'; el.style.bottom = Math.round(window.innerHeight - r.top + 2) + 'px'; }
+        else             { el.style.bottom = 'auto'; el.style.top = Math.round(r.bottom + 2) + 'px'; }
+    }
+    function _pacBuscar(q) {
+        var terminos = _provTerminos(q);
+        var todos = (proveedores || []).filter(function(p){ return p && p.razonSocial; })
+            .map(function(p){ return { p: p, pt: _provPuntaje(p, terminos) }; })
+            .filter(function(o){ return o.pt >= 0; })
+            .sort(function(a, b){
+                if (b.pt !== a.pt) return b.pt - a.pt;
+                return (a.p.razonSocial||'').localeCompare(b.p.razonSocial||'', 'es', {sensitivity:'base'});
+            });
+        return { lista: todos.slice(0, _PAC_MAX), total: todos.length, terminos: terminos };
+    }
+    function _pacRender() {
+        if (!_pacInput) return;
+        var el = _pacPanel();
+        var r = _pacBuscar(_pacInput.value || '');
+        _pacItems = r.lista.map(function(o){ return o.p.razonSocial; });
+        _pacIdx = _pacItems.length ? 0 : -1;
+        if (!r.lista.length) {
+            el.innerHTML = '<div class="pac-nota">Ningún proveedor coincide. Podés escribirlo igual, o darlo de alta con ➕.</div>';
+        } else {
+            el.innerHTML = r.lista.map(function(o, i){
+                var pv = o.p;
+                var meta = [pv.cuit, pv.rubro, pv.localidad].filter(Boolean)
+                    .map(function(x){ return _provResaltar(x, r.terminos); }).join(' · ');
+                return '<div class="pac-item' + (i === 0 ? ' sel' : '') + '" data-i="' + i + '" onclick="_pacElegirIdx(' + i + ')">'
+                     + '<div class="pac-nom">' + _provResaltar(pv.razonSocial, r.terminos)
+                     + (pv.nombreFantasia ? ' <span class="pac-fant">· ' + _provResaltar(pv.nombreFantasia, r.terminos) + '</span>' : '')
+                     + '</div>'
+                     + (meta ? '<div class="pac-meta">' + meta + '</div>' : '')
+                     + '</div>';
+            }).join('')
+            + (r.total > r.lista.length
+                ? '<div class="pac-nota">…y ' + (r.total - r.lista.length) + ' más. Seguí escribiendo para achicar la lista.</div>'
+                : '');
+        }
+        el.style.display = 'block';
+        _pacUbicar();
+    }
+    window._pacElegirIdx = function(i) {
+        if (!_pacInput || !_pacItems[i]) return;
+        var inp = _pacInput;                 // _pacCerrar lo pone en null
+        inp.value = _pacItems[i];
+        _pacCerrar();
+        // Los campos ya tenían su oninput/onchange (retenciones, presupuestos, avisos…):
+        // se disparan como si el usuario hubiera tipeado, para no duplicar esa lógica.
+        // La bandera evita que ese mismo 'input' —y el focus de abajo— vuelvan a abrir el
+        // panel apenas se eligió una opción.
+        _pacEligiendo = true;
+        try { inp.dispatchEvent(new Event('input',  { bubbles: true })); } catch (e) {}
+        try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+        try { inp.focus(); } catch (e) {}
+        setTimeout(function(){ _pacEligiendo = false; }, 0);
+    };
+    function _pacTecla(e) {
+        var el = document.getElementById('provAutoPanel');
+        if (!_pacInput || !el || el.style.display === 'none') return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (!_pacItems.length) return;
+            e.preventDefault();
+            _pacIdx = (e.key === 'ArrowDown')
+                ? (_pacIdx + 1) % _pacItems.length
+                : (_pacIdx - 1 + _pacItems.length) % _pacItems.length;
+            var nodos = el.querySelectorAll('.pac-item');
+            for (var k = 0; k < nodos.length; k++) nodos[k].classList.toggle('sel', k === _pacIdx);
+            if (nodos[_pacIdx] && nodos[_pacIdx].scrollIntoView) nodos[_pacIdx].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter') {
+            // Sin esto, Enter dentro del formulario de factura lo enviaría a medio completar.
+            if (_pacIdx >= 0 && _pacItems[_pacIdx]) { e.preventDefault(); _pacElegirIdx(_pacIdx); }
+        } else if (e.key === 'Escape') {
+            _pacCerrar();
+        }
+    }
+    // Se engancha una sola vez por campo (dataset.pac). Los que la llaman son las funciones
+    // que pueblan cada modal, así que no hace falta tocar el arranque de la app.
+    window.provAutocompletar = function(id) {
+        var inp = document.getElementById(id);
+        if (!inp || inp.dataset.pac === '1') return;
+        inp.dataset.pac = '1';
+        inp.setAttribute('autocomplete', 'off');
+        inp.removeAttribute('list');                   // fuera el datalist nativo
+        inp.addEventListener('focus', function(){ if (_pacEligiendo) return; _pacInput = inp; _pacRender(); });
+        inp.addEventListener('click', function(){ if (_pacEligiendo) return; _pacInput = inp; _pacRender(); });
+        inp.addEventListener('input', function(){ if (_pacEligiendo) return; _pacInput = inp; _pacRender(); });
+        inp.addEventListener('keydown', _pacTecla);
+        inp.addEventListener('blur', function(){
+            setTimeout(function(){ if (_pacInput === inp) _pacCerrar(); }, 180);
+        });
+    };
+    window.addEventListener('scroll', function(){ if (_pacInput) _pacUbicar(); }, true);
+    window.addEventListener('resize', function(){ if (_pacInput) _pacUbicar(); });
+
     window.limpiarBuscadorProv = function() {
         var b = document.getElementById('buscadorProv');
         if (b) { b.value = ''; b.focus(); }
@@ -15707,7 +15852,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v506';
+    var APP_VER = 'v507';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19089,6 +19234,7 @@
         // Detalle línea por línea que leyó la IA (queda editable antes de guardar).
         _renderFactItems(_normItemsIA(datos.items), 'lf');
         // Poblar datalist de proveedores (input libre + sugerencias)
+        provAutocompletar('leerFactProv');   // reemplaza al datalist nativo
         var inp  = document.getElementById('leerFactProv');
         var dl   = document.getElementById('leerFactProvList');
         dl.innerHTML = '';
@@ -19641,6 +19787,7 @@
         const inp = document.getElementById('factProveedor');
         const dl  = document.getElementById('factProveedorList');
         if (!inp || !dl) return;
+        provAutocompletar('factProveedor');   // reemplaza al datalist nativo
         const lista = (proveedores || []).filter(p => p.razonSocial)
             .slice()
             .sort((a, b) => (a.razonSocial || '').localeCompare(b.razonSocial || '', 'es', { sensitivity: 'base' }));
@@ -21370,6 +21517,7 @@
             if (datos_.moneda) { var ms = document.getElementById('leerFactMoneda'); if (ms) ms.value = datos_.moneda; }
             setVal('leerFactDesc',    datos_.descripcion);
             window._lfNetoGravado = datos_.netoGravado || null;
+            provAutocompletar('leerFactProv');
             // Poblar el datalist con los proveedores YA cargados, para poder ELEGIR uno existente
             // (antes solo se poblaba en el flujo "Leer PDF"; en el de Gmail quedaba vacío y por eso
             // solo aparecía la opción de dar de alta uno nuevo).
@@ -23159,6 +23307,7 @@
         const inp = document.getElementById('docProveedor');
         const list = document.getElementById('docProveedorList');
         if (!inp || !list) return;
+        provAutocompletar('docProveedor');
         const cur = seleccionado !== undefined ? seleccionado : inp.value;
         list.innerHTML = '';
         proveedores.slice().sort((a,b) => (a.razonSocial||'').localeCompare(b.razonSocial||'')).forEach(p => {
@@ -34119,6 +34268,7 @@
         var inp = document.getElementById('editPagoProveedor');
         var dl  = document.getElementById('editPagoProveedorList');
         if (!inp || !dl) return;
+        provAutocompletar('editPagoProveedor');
         var lista = (proveedores || []).filter(function(p){ return p.razonSocial; }).slice()
             .sort(function(a,b){ return (a.razonSocial||'').localeCompare(b.razonSocial||'', 'es', {sensitivity:'base'}); });
         dl.innerHTML = lista.map(function(p){
