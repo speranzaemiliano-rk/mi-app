@@ -3537,7 +3537,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v507</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v508</div>
         </div>
     </nav>
 
@@ -6029,11 +6029,14 @@
                     <!-- Tildar retenciones para armar el pago a cuenta (día 15) o el saldo de la DDJJ (fin de mes) -->
                     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);font-size:11px;">
                       <span style="color:var(--text-3);">Tildar:</span>
-                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(1)" title="Retenciones del 1 al 15 — las del pago a cuenta">1ª quincena (pago a cuenta)</button>
-                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(2)" title="Retenciones del 16 en adelante — las del saldo de la DDJJ">2ª quincena (saldo DDJJ)</button>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(1)" title="Retenciones del 1 al 14 — las del pago a cuenta que se hace el 15">1ª quincena (pago a cuenta)</button>
+                      <button class="btn btn-outline btn-sm" onclick="rptRetSelQuincena(2)" title="Retenciones del 15 en adelante — las del saldo de la DDJJ">2ª quincena (saldo DDJJ)</button>
                       <button class="btn btn-outline btn-sm" onclick="rptRetSelTodas(true)">Todas</button>
                       <button class="btn btn-outline btn-sm" onclick="rptRetSelTodas(false)">Ninguna</button>
                       <span id="rptRetSelResumen" style="margin-left:auto;color:var(--text-3);"></span>
+                    </div>
+                    <div style="padding:6px 14px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-3);">
+                      📌 En <strong>retenciones</strong> el día <strong>15 entra en la 2ª quincena</strong>: el pago a cuenta del 15 se arma con lo del 1 al 14 y lo de ese mismo día queda para el saldo de la DDJJ. En los libros de Compras y Ventas la 1ª quincena sigue siendo del 1 al 15.
                     </div>
                     <div class="table-wrap" style="overflow-x:auto;">
                       <table style="width:100%;font-size:12px;border-collapse:collapse;">
@@ -13627,12 +13630,20 @@
         return { anio, mes, quin };
     }
 
-    function rptEnPeriodo(fechaStr, f) {
+    // Último día de la 1ª quincena para las RETENCIONES. El pago a cuenta se hace el 15,
+    // así que lo que se retiene ESE MISMO día ya no entra: va al saldo de la DDJJ de fin
+    // de mes. Los libros de Compras y Ventas no usan esto: ahí la 1ª quincena sigue siendo
+    // del 1 al 15.
+    var RPT_CORTE_RET = 14;
+
+    // `corte` = último día de la 1ª quincena (15 por defecto).
+    function rptEnPeriodo(fechaStr, f, corte) {
         if (!fechaStr) return false;
+        if (typeof corte !== 'number') corte = 15;
         var d = new Date(fechaStr + 'T00:00:00');
         if (d.getFullYear() !== f.anio || d.getMonth() !== f.mes) return false;
-        if (f.quin === 1 && d.getDate() > 15) return false;
-        if (f.quin === 2 && d.getDate() <= 15) return false;
+        if (f.quin === 1 && d.getDate() > corte) return false;
+        if (f.quin === 2 && d.getDate() <= corte) return false;
         return true;
     }
 
@@ -13784,13 +13795,13 @@
         };
         (datos||[]).forEach(function(d) {
             (d.pagosHistorial||[]).forEach(function(p) {
-                if (!rptEnPeriodo(p.fecha, f)) return;
+                if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
                 (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, d.proveedor, d.recibo, r, (p.capital||p.montoPagado||0)+(p.mayores||0)); });
             });
         });
         (facturas||[]).forEach(function(fa) {
             (fa.pagosHistorial||[]).forEach(function(p) {
-                if (!rptEnPeriodo(p.fecha, f)) return;
+                if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
                 (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, fa.proveedor, fa.numero, r, p.monto||0); });
             });
         });
@@ -13859,13 +13870,13 @@
         _rptRetActualizarSel();
     }
 
-    // Tilda las de una quincena: la 1ª (días 1 a 15) es la del pago a cuenta del día 15,
-    // la 2ª (16 en adelante) la que queda para el saldo de la declaración jurada.
+    // Tilda las de una quincena: la 1ª (días 1 a RPT_CORTE_RET) es la del pago a cuenta que
+    // se hace el 15, la 2ª (el propio 15 en adelante) la que queda para el saldo de la DDJJ.
     function rptRetSelQuincena(q) {
         document.querySelectorAll('#rptRetencionesBody .rpt-ret-chk').forEach(function(chk){
             var r = _rptRetFilas[parseInt(chk.dataset.i)];
             var dia = r && r.fecha ? parseInt(String(r.fecha).slice(8,10)) : 0;
-            chk.checked = dia > 0 && (q === 1 ? dia <= 15 : dia > 15);
+            chk.checked = dia > 0 && (q === 1 ? dia <= RPT_CORTE_RET : dia > RPT_CORTE_RET);
         });
         _rptRetActualizarSel();
     }
@@ -13911,7 +13922,7 @@
         var collectRet = function(arr, keyFecha, getHist) {
             (arr||[]).forEach(function(item) {
                 (getHist(item)||[]).forEach(function(p) {
-                    if (!rptEnPeriodo(p.fecha, f)) return;
+                    if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
                     (p.retenciones||[]).forEach(function(r){ totRet += r.monto||0; });
                 });
             });
@@ -14112,7 +14123,7 @@
         var filas = [];
         (facturas || []).forEach(function(fa) {
             (fa.pagosHistorial || []).forEach(function(p) {
-                if (!rptEnPeriodo(p.fecha, f)) return;
+                if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
                 (p.retenciones || []).forEach(function(r) {
                     if (!r.monto) return;
                     var codReg = SICORE_REGIMEN_MAP[r.codigo];
@@ -15852,7 +15863,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v507';
+    var APP_VER = 'v508';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
