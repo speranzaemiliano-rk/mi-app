@@ -3537,7 +3537,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v508</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v509</div>
         </div>
     </nav>
 
@@ -13788,22 +13788,52 @@
     function _rptFilasRetenciones(f, tipoFiltro, vacio) {
         if (vacio === undefined) vacio = '—';
         var rows = [];
-        var agregar = function(fecha, proveedor, cbte, r, montoPago) {
+        // Un pago que cubre VARIAS facturas del mismo proveedor lleva UNA sola retención por
+        // régimen: así se calcula, así se emite el certificado y así se declara. En
+        // pagosHistorial igual se guarda prorrateada por factura —hace falta para que el saldo
+        // de cada comprobante cierre—, pero mostrarla partida en el reporte no se corresponde
+        // con el papel. Acá se vuelve a juntar por grupo de pago + régimen.
+        var porGrupo = {};
+        var agregar = function(fecha, proveedor, cbte, r, montoPago, grupoId) {
             if (!r.monto) return;
             if (tipoFiltro && _esRetSUSS(r.codigo) !== (tipoFiltro === 'suss')) return;
+            if (grupoId) {
+                var k = grupoId + '|' + r.codigo;
+                var g = porGrupo[k];
+                if (g) {
+                    g.retencion += r.monto;
+                    g.montoPago += montoPago;
+                    g._cbtes.push(cbte || vacio);
+                    g.cbte = g._cbtes.length + ' facturas: ' + g._cbtes.join(', ');
+                    return;
+                }
+                g = { fecha: fecha, proveedor: proveedor||vacio, cbte: cbte||vacio, codigo: r.codigo,
+                      desc: r.desc||r.codigo, montoPago: montoPago, retencion: r.monto,
+                      grupoPagoId: grupoId, _cbtes: [cbte || vacio] };
+                porGrupo[k] = g;
+                rows.push(g);
+                return;
+            }
             rows.push({ fecha: fecha, proveedor: proveedor||vacio, cbte: cbte||vacio, codigo: r.codigo, desc: r.desc||r.codigo, montoPago: montoPago, retencion: r.monto });
         };
         (datos||[]).forEach(function(d) {
             (d.pagosHistorial||[]).forEach(function(p) {
                 if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
-                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, d.proveedor, d.recibo, r, (p.capital||p.montoPagado||0)+(p.mayores||0)); });
+                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, d.proveedor, d.recibo, r, (p.capital||p.montoPagado||0)+(p.mayores||0), p.grupoPagoId); });
             });
         });
         (facturas||[]).forEach(function(fa) {
             (fa.pagosHistorial||[]).forEach(function(p) {
                 if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
-                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, fa.proveedor, fa.numero, r, p.monto||0); });
+                (p.retenciones||[]).forEach(function(r) { agregar(p.fecha, fa.proveedor, fa.numero, r, p.monto||0, p.grupoPagoId); });
             });
+        });
+        // El prorrateo se guarda redondeado por factura: al volver a sumarlo pueden quedar
+        // centavos de diferencia contra el total que se retuvo. Se redondea a dos decimales.
+        rows.forEach(function(x){
+            if (!x.grupoPagoId) return;
+            x.retencion = Math.round(x.retencion * 100) / 100;
+            x.montoPago = Math.round(x.montoPago * 100) / 100;
         });
         rows.sort(function(a,b){ return a.fecha < b.fecha ? -1 : 1; });
         return rows;
@@ -14121,6 +14151,11 @@
         var f = rptFiltro();
         var omitidos = [];
         var filas = [];
+        // Igual que en el reporte: un pago de varias facturas del mismo proveedor se retiene
+        // UNA sola vez por régimen, así que va UN solo registro a SICORE — no uno por factura.
+        // Se suman base, retención e importe de los comprobantes; el registro queda apuntado
+        // al primer comprobante del grupo (es el que encabeza el certificado emitido).
+        var porGrupoSic = {};
         (facturas || []).forEach(function(fa) {
             (fa.pagosHistorial || []).forEach(function(p) {
                 if (!rptEnPeriodo(p.fecha, f, RPT_CORTE_RET)) return;
@@ -14132,7 +14167,18 @@
                     var cuit = (prov && prov.cuit) || fa.cuit || '';
                     if (!String(cuit).replace(/\D/g,'')) { omitidos.push('Factura ' + (fa.numero||'—') + ' (' + (fa.proveedor||'—') + '): no tiene CUIT cargado, se omite.'); return; }
                     if (!fa.fecha) { omitidos.push('Factura ' + (fa.numero||'—') + ' (' + (fa.proveedor||'—') + '): no tiene fecha de emisión, se omite.'); return; }
-                    filas.push({
+                    if (p.grupoPagoId) {
+                        var kS = p.grupoPagoId + '|' + codReg;
+                        var gS = porGrupoSic[kS];
+                        if (gS) {
+                            gS.importe    += (fa.netoGravado || fa.importe || 0);
+                            gS.base       += (p.baseImponible || p.monto || 0);
+                            gS.importeRet += r.monto;
+                            gS._cbtes.push(fa.numero || '');
+                            return;
+                        }
+                    }
+                    var _nueva = {
                         fechaComp: fa.fecha,
                         numComp: fa.numero || '',
                         importe: fa.netoGravado || fa.importe || 0,
@@ -14149,9 +14195,24 @@
                         cp: (prov && (prov.cp || prov.codigoPostal)) || '',
                         numeroFactura: fa.numero || '',
                         desc: r.desc || r.codigo
-                    });
+                    };
+                    if (p.grupoPagoId) {
+                        _nueva.grupoPagoId = p.grupoPagoId;
+                        _nueva._cbtes = [fa.numero || ''];
+                        porGrupoSic[p.grupoPagoId + '|' + codReg] = _nueva;
+                    }
+                    filas.push(_nueva);
                 });
             });
+        });
+        // Los importes prorrateados se guardan redondeados: al volver a sumarlos pueden quedar
+        // centavos de diferencia contra lo realmente retenido.
+        filas.forEach(function(x){
+            if (!x.grupoPagoId) return;
+            x.importe    = Math.round(x.importe * 100) / 100;
+            x.base       = Math.round(x.base * 100) / 100;
+            x.importeRet = Math.round(x.importeRet * 100) / 100;
+            if (x._cbtes && x._cbtes.length > 1) x.numeroFactura = x._cbtes.filter(Boolean).join(' / ');
         });
         if (!filas.length) {
             alert('No hay retenciones de Ganancias sobre pagos de Facturas en el período seleccionado' + (omitidos.length ? ' (se encontraron ' + omitidos.length + ' que se habrían omitido por datos faltantes).' : '.'));
@@ -15863,7 +15924,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v508';
+    var APP_VER = 'v509';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
