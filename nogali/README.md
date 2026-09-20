@@ -35,6 +35,47 @@ responsive, y los títulos son imágenes PNG en vez de texto (técnica jQIR).
 | Librerías | 4 archivos de jQuery | Ninguna |
 | SEO | Sólo meta tags | Meta tags + Open Graph + datos estructurados schema.org |
 
+## Cómo se comporta (no sólo cómo se ve)
+
+El sitio no usa ninguna librería de animación: hay un motor de resortes de unas
+40 líneas adentro del propio `index.html`. Un resorte se define con dos números
+—**amortiguación** (1 = llega y se queda, 0,8 = se pasa un poquito) y
+**respuesta** (segundos hasta llegar)— y se integra cuadro a cuadro. La ventaja
+sobre una transición de CSS es que se le puede cambiar el destino en cualquier
+momento sin cortar la velocidad: por eso el menú se puede agarrar a mitad de la
+animación y dar vuelta sin que pegue un salto.
+
+- **La respuesta va en el apretar, no en el soltar.** Botones, filtros, enlaces
+  del menú y la hamburguesa se hunden apenas los tocás. Si el feedback espera al
+  click, la sensación de estar tocando la cosa se cae a pedazos.
+- **El menú del celular es una hoja que se arrastra.** Sale de la esquina donde
+  está el botón que la abrió (si algo desaparece por un lado, esperamos que
+  vuelva a aparecer por ahí). Se puede tirar para arriba para cerrarla: sigue al
+  dedo aunque te vayas de la hoja, y al soltar decide según **hacia dónde va** el
+  gesto y no dónde lo soltaste, así un envión corto alcanza para cerrar del todo.
+  Si tirás para abajo estando abierta del todo, resiste cada vez más en vez de
+  frenar en seco. La velocidad del dedo pasa tal cual al resorte, así que no hay
+  costura entre arrastrar y animar.
+- **Un toque no rebota, un envión sí.** Al abrir con un toque el resorte va
+  amortiguado a 1 (sin rebote): el gesto no traía impulso, así que rebotar
+  estaría de más. Al soltar un arrastre va a 0,8, porque ahí sí venía con envión.
+- **Nada de divisores duros.** Donde el contenido pasa por debajo de la barra se
+  desvanece contra ella, en vez de cortarse con una línea de 1px.
+- **Filtrar reacomoda, no salta.** Las tarjetas que sobreviven al filtro se
+  deslizan a su posición nueva (View Transitions; donde no está soportado,
+  cambia directo y listo).
+- **Tipografía por tamaño.** El espaciado entre letras y entre líneas no es un
+  valor único: los títulos grandes van más cerrados y el texto chico más
+  abierto. El cuerpo está en `rem` y los botones en `em`, así que si alguien
+  agranda la letra del navegador, el sitio crece con ella en vez de romperse.
+- **Accesibilidad.** Respeta las tres preferencias del sistema: movimiento
+  reducido (se funde en vez de desplazarse, sin perder la respuesta),
+  transparencia reducida (el vidrio se vuelve sólido) y más contraste (fondos
+  opacos y bordes definidos).
+- **Si algo no carga, no queda un agujero.** El mapa se pide sólo si el
+  navegador puede llegar a OpenStreetMap; si hay un bloqueador de rastreadores o
+  no hay red, en lugar de un rectángulo gris queda una tarjeta con la dirección.
+
 ## Formulario de contacto
 
 El sitio es estático (no tiene servidor propio), así que el envío se resuelve de dos
