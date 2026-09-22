@@ -3537,7 +3537,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v509</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v510</div>
         </div>
     </nav>
 
@@ -4750,7 +4750,8 @@
                         <div class="table-card-head">
                             <h3>🔑 Contratos de Alquiler</h3>
                             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                                <input type="text" id="alqBuscador" placeholder="Inquilino o unidad…" oninput="renderAlquileres()" style="padding:7px 10px; font-size:12px; width:170px;">
+                                <input type="text" id="alqBuscador" placeholder="Inquilino, unidad o dirección…" title="Buscá por inquilino, unidad o dirección. Sin tildes y por palabras sueltas: «san martin 1200» y «1200 san martin» traen lo mismo." oninput="renderAlquileres()" onkeydown="if(event.key==='Escape'){this.value='';renderAlquileres();}" style="padding:7px 10px; font-size:12px; width:210px;">
+                                <span id="alqBusqContador" style="font-size:11px;color:var(--text-3);white-space:nowrap;align-self:center;"></span>
                                 <select id="alqFiltroMoneda" onchange="renderAlquileres()" style="padding:7px 10px; font-size:12px; width:auto;">
                                     <option value="">ARS + USD</option>
                                     <option value="ARS">Solo ARS</option>
@@ -15418,13 +15419,25 @@
     // palabras sueltas (todas tienen que aparecer, en cualquier orden), el CUIT
     // también se compara sólo por sus dígitos, y el resultado sale ordenado por
     // qué tan buena es la coincidencia.
-    function _provNorm(x) {
+    // Normalización de texto para buscar: minúsculas, sin tildes y sin espacios de más.
+    // La usan el buscador de proveedores y el de alquileres — misma regla en los dos.
+    function _txtNorm(x) {
         return (x == null ? '' : String(x)).toLowerCase().normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
     }
-    function _provTerminos(q) {
-        return _provNorm(q).split(' ').filter(Boolean);
+    function _txtTerminos(q) {
+        return _txtNorm(q).split(' ').filter(Boolean);
     }
+    // ¿Aparecen TODOS los términos en alguno de los campos? El orden no importa: así
+    // «san martin 1200» y «1200 san martin» encuentran lo mismo.
+    function _txtCoincideTodo(terminos, campos) {
+        if (!terminos.length) return true;
+        var blob = _txtNorm((campos || []).filter(Boolean).join(' '));
+        for (var i = 0; i < terminos.length; i++) if (blob.indexOf(terminos[i]) === -1) return false;
+        return true;
+    }
+    function _provNorm(x)    { return _txtNorm(x); }
+    function _provTerminos(q) { return _txtTerminos(q); }
     // Todo lo buscable de un proveedor, cacheado por render para no recalcularlo por término.
     function _provBlob(p) {
         return _provNorm([p.razonSocial, p.nombreFantasia, p.cuit, p.rubro, p.grupo, p.telefono,
@@ -15924,7 +15937,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v509';
+    var APP_VER = 'v510';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -31860,7 +31873,8 @@
         var tbody = document.getElementById('alquileresBody');
         if (!tbody) return;
         tbody.innerHTML = '';
-        var busq      = ((document.getElementById('alqBuscador')||{}).value||'').toLowerCase();
+        var busq      = ((document.getElementById('alqBuscador')||{}).value||'').trim();
+        var busqT     = _txtTerminos(busq);
         var filtMon   = (document.getElementById('alqFiltroMoneda')||{}).value||'';
         var filtEst   = (document.getElementById('alqFiltroEstado')||{}).value||'';
         var totalCobARS = 0, totalCobUSD = 0, proxFecha = null;
@@ -31869,7 +31883,9 @@
         var hoy = new Date();
         var visibles = alquileres.filter(function(a) {
             if (filtMon && a.moneda !== filtMon) return false;
-            if (busq && !((a.inquilino||'').toLowerCase().includes(busq)||(a.unidad||'').toLowerCase().includes(busq))) return false;
+            // Buscar también por DIRECCIÓN: escribir la calle tiene que traer todas las
+            // unidades de ese edificio. Sin tildes y por palabras sueltas en cualquier orden.
+            if (!_txtCoincideTodo(busqT, [a.unidad, a.direccion, a.inquilino])) return false;
             var fin2 = a.fin ? new Date(a.fin+'T00:00:00') : null;
             var activo = !fin2 || fin2 >= hoy;
             if (filtEst === 'disponible' && !a.disponible) return false;
@@ -31877,6 +31893,9 @@
             if (filtEst === 'vencido' && (activo || a.disponible))  return false;
             return true;
         });
+        var _cntAlq = document.getElementById('alqBusqContador');
+        if (_cntAlq) _cntAlq.textContent = (busqT.length || filtMon || filtEst)
+            ? (visibles.length + ' de ' + alquileres.length) : '';
         // Orden elegido. Se ordenan los DATOS y no el texto de las celdas: una fecha escrita
         // «26/08/2026» se ordena mal como texto, y un importe con puntos de miles, peor.
         // Los contratos sin fecha van siempre al final, en cualquier sentido: no tienen
