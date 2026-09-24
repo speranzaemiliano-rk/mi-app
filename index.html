@@ -31603,13 +31603,13 @@
         while (x <= m && g++ < 600) {
             var ac = _actAcuerdoDe(x), pct, base;
             if (ac) {
-                // Mes de un acuerdo: su % y su base (acumulativo o sueldo de un mes fijo, con o sin sumas).
+                // Mes de un acuerdo: su % sobre la base FIJA del acuerdo (sueldo base del mes anterior al
+                // acuerdo, o el mes elegido), con o sin sumas. Regla del dueño: siempre base fija, también en
+                // acuerdos viejos guardados como «acumulativo».
                 pct = _actNum(ac.t.pct) || 0;
-                if (ac.a.base === 'fijo') {
-                    var bm = _actAcBaseMes(ac.a), vb = _actValorEn(mapa, bm);
-                    var bb = bas[bm] != null ? bas[bm] : (vb != null ? vb : b);
-                    base = bb + (ac.a.conSumas ? _actSumasTot(bm) : 0);
-                } else base = b + (ac.a.conSumas ? _actSumasTot(_actMesSig(x, -1)) : 0);
+                var bm = _actAcBaseMes(ac.a), vb = _actValorEn(mapa, bm);
+                var bb = bas[bm] != null ? bas[bm] : (vb != null ? vb : b);
+                base = bb + (ac.a.conSumas ? _actSumasTot(bm) : 0);
             } else { pct = _actComercio(x); base = b; }
             b = b + base * pct / 100;
             bas[x] = b;
@@ -31860,7 +31860,23 @@
         }).join('') + '</tr>';
         t.innerHTML = h + filas.reverse().join('') + pie + '</tbody>';
     }
+    // Meses con % de Comercio cargado que no pertenecen a ningún acuerdo: ahí el cálculo va mes a mes
+    // (acumulando), porque no se sabe cuál es la base fija del acuerdo. Se avisa para que lo carguen.
+    function _actMesesSinAcuerdo(meses) {
+        return meses.filter(function(m) { return _actComercio(m) && !_actAcuerdoDe(m); });
+    }
     function _actPintarEmpleados(meses) {
+        var av = document.getElementById('actEmpAvisoAcuerdos');
+        if (!av) {
+            var t = document.getElementById('actEmpTabla');
+            if (t && t.parentNode) { av = document.createElement('div'); av.id = 'actEmpAvisoAcuerdos'; t.parentNode.parentNode.insertBefore(av, t.parentNode); }
+        }
+        if (av) {
+            var sin = _actMesesSinAcuerdo(meses).filter(function(m) { return m >= _actMesSig(_actMesHoy(), -12); });
+            av.style.cssText = sin.length ? 'margin:0 16px 10px;padding:8px 12px;border-radius:10px;font-size:12px;background:rgba(255,159,10,.10);border:1px solid rgba(255,159,10,.35);' : 'display:none;';
+            av.innerHTML = sin.length ? '⚠️ Estos meses tienen % de Comercio pero <strong>no tienen un acuerdo cargado</strong>, así que se calculan acumulando mes a mes: <strong>' +
+                sin.map(_actMesLabel).join(', ') + '</strong>. Cargá el acuerdo en <a href="#" onclick="actVista(\'acuerdos\');actNuevoAcuerdo(\'' + sin[0] + '\');return false;">🤝 Acuerdos</a> para que use la base fija del mes anterior.' : '';
+        }
         var dl = document.getElementById('actLegajosList');
         if (dl) dl.innerHTML = (typeof remuneraciones !== 'undefined' ? remuneraciones : []).map(function(e) { return e && e.nombre ? '<option value="' + escHtml(e.nombre) + '">' : ''; }).join('');
         var cats = _actOrden(_act.categorias, true);
@@ -32030,7 +32046,7 @@
     //   fijo        → el básico del mes base elegido [+ sumas del mes base si conSumas]
     // Devuelve [{ mes, valor, manual }].
     function _actAcEncadenar(a, valorBase, valorEnMesBase, manual, totalConSumas) {
-        var ms = _actAcuerdoMeses(a), out = [], fijo = a.base === 'fijo', bm = _actAcBaseMes(a);
+        var ms = _actAcuerdoMeses(a), out = [], fijo = true, bm = _actAcBaseMes(a);   // siempre base fija (regla del dueño)
         var S = totalConSumas ? function(m) { return _actAcSumasEn(a, m); } : function() { return 0; };
         var prev0 = _actMesSig(ms[0], -1);
         if (totalConSumas && (valorBase - S(prev0) <= 0 || valorEnMesBase - S(bm) <= 0)) S = function() { return 0; };
@@ -32047,7 +32063,7 @@
         return out;
     }
     function _actAcBaseTxt(a) {
-        return (a.base === 'fijo' ? 'sobre el sueldo de ' + _actMesLabel(_actAcBaseMes(a)) : 'acumulativo, sobre el mes anterior') +
+        return ('sobre el sueldo base de ' + _actMesLabel(_actAcBaseMes(a)) + ', fijo') +
             (a.conSumas ? ' + sumas no rem.' : '');
     }
     function _actPintarAcuerdos() {
@@ -32072,7 +32088,7 @@
             return '<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-top:10px;">' +
                 '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;">' +
                     '<div><div style="font-weight:700;font-size:14px;">' + escHtml(a.nombre || 'Acuerdo') + '</div>' +
-                    '<div style="font-size:12px;color:var(--text-3);">' + _actMesLabel(ms[0]) + ' a ' + _actMesLabel(ms[ms.length - 1]) + ' · ' + (a.base === 'fijo' ? 'total ' + _actPct(suma) : 'acumulado ' + _actPct((f - 1) * 100)) +
+                    '<div style="font-size:12px;color:var(--text-3);">' + _actMesLabel(ms[0]) + ' a ' + _actMesLabel(ms[ms.length - 1]) + ' · ' + 'total ' + _actPct(suma) +
                     (a.firmado ? ' · firmado ' + escHtml(a.firmado.split('-').reverse().join('/')) : '') + '</div>' +
                     '<div style="font-size:12px;color:var(--text-2);">Cálculo: ' + _actAcBaseTxt(a) + '</div></div>' +
                     '<div style="font-size:12px;">' + estado + '</div></div>' +
@@ -32088,7 +32104,7 @@
                 '</div></div>';
         }).join('');
     }
-    function actNuevoAcuerdo() {
+    function actNuevoAcuerdo(desde) {
         // Arranca en el mes siguiente al último acuerdo (o al mes actual) con 3 tramos vacíos.
         var ult = null;
         Object.keys(_act.acuerdos || {}).forEach(function(id) {
@@ -32096,7 +32112,7 @@
             var ms = _actAcuerdoMeses(a), fin = ms[ms.length - 1];
             if (!ult || fin > ult) ult = fin;
         });
-        _actAcDraft = { id: null, nombre: '', firmado: '', desde: ult ? _actMesSig(ult) : _actMesHoy(), nota: '', tramos: [{}, {}, {}], base: 'fijo', baseMes: null, conSumas: false };   // por defecto: todos los tramos sobre el sueldo del mes anterior al acuerdo
+        _actAcDraft = { id: null, nombre: '', firmado: '', desde: desde || (ult ? _actMesSig(ult) : _actMesHoy()), nota: '', tramos: [{}, {}, {}], base: 'fijo', baseMes: null, conSumas: false };   // por defecto: todos los tramos sobre el sueldo del mes anterior al acuerdo
         _actPintarFormAcuerdo();
     }
     function actEditarAcuerdo(id) {
@@ -32132,11 +32148,8 @@
                 '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">¿Sobre qué sueldo se calcula el %?</div>' +
                 // Regla del dueño: en cada acuerdo la base es constante, el sueldo base del mes anterior al
                 // acuerdo (sin sumas). El acumulativo sólo se muestra si el acuerdo ya estaba cargado así.
-                (d.base === 'acumulativo'
-                    ? '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-bottom:4px;"><input type="radio" name="actAcBase" checked> Acumulativo (acuerdo cargado antes)</label>' +
-                      '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-bottom:4px;"><input type="radio" name="actAcBase" onchange="_actAcDraft.base=\'fijo\';_actAcDraft.baseMes=null;_actPintarFormAcuerdo()"> Pasarlo a base fija</label>'
-                    : '<div style="font-size:12.5px;margin-bottom:4px;">Todos los tramos se calculan sobre el <strong>sueldo base de ' +
-                        '<input type="month" value="' + _actAcBaseMes(d) + '" title="Por defecto, el mes anterior al acuerdo" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.baseMes=this.value;_actPintarFormAcuerdo();}" style="padding:2px 6px;font-size:12px;"></strong> (se mantiene constante en todo el acuerdo).</div>') +
+                '<div style="font-size:12.5px;margin-bottom:4px;">Todos los tramos se calculan sobre el <strong>sueldo base de ' +
+                    '<input type="month" value="' + _actAcBaseMes(d) + '" title="Por defecto, el mes anterior al acuerdo" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.baseMes=this.value;_actPintarFormAcuerdo();}" style="padding:2px 6px;font-size:12px;"></strong> (se mantiene constante en todo el acuerdo).</div>' +
                 '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" ' + (d.conSumas ? 'checked' : '') + ' onchange="_actAcDraft.conSumas=this.checked;_actPintarFormAcuerdo()"> <span>Incluir las <strong>sumas no remunerativas</strong> en la base del cálculo (si no se tilda, el % va sólo sobre el sueldo base; las sumas igual se suman al sueldo final)</span></label>' +
                 '<div style="font-size:12px;color:var(--text-2);margin-top:8px;">' + _actAcEjemplo(d) + '</div>' +
             '</div>' +
@@ -32157,7 +32170,7 @@
         var a = { desde: d.desde, tramos: d.tramos, base: d.base, baseMes: d.baseMes, conSumas: d.conSumas };
         // Ejemplo con un sueldo base de $1.000.000 (sin sumas): por cada mes, sobre qué monto se calcula
         // el %, cuánto suma, el básico que queda y el sueldo final con las sumas vigentes.
-        var ms = _actAcuerdoMeses(a), fijo = a.base === 'fijo', bm = _actAcBaseMes(a), prev0 = _actMesSig(a.desde, -1);
+        var ms = _actAcuerdoMeses(a), fijo = true, bm = _actAcBaseMes(a), prev0 = _actMesSig(a.desde, -1);
         var s0 = _actAcSumasEn(a, prev0);
         var r = _actAcEncadenar(a, 1000000, 1000000, null, false);
         if (!r.length) return '<span id="actAcEjemplo"></span>';
@@ -32187,7 +32200,7 @@
         tramos = tramos.map(function(t) { if (t.pct == null) t.pct = 0; return t; });
         var id = d.id || _actNuevoId('a');
         var reg = { nombre: (d.nombre || '').trim() || ('Acuerdo ' + _actMesLabel(d.desde)), firmado: d.firmado || null, desde: d.desde, tramos: tramos, nota: (d.nota || '').trim() || null,
-                    base: d.base === 'fijo' ? 'fijo' : 'acumulativo', baseMes: d.base === 'fijo' ? _actAcBaseMes(d) : null, conSumas: !!d.conSumas };
+                    base: 'fijo', baseMes: _actAcBaseMes(d), conSumas: !!d.conSumas };
         if (reg.base === 'fijo' && reg.baseMes >= reg.desde) { alert('El mes base tiene que ser anterior al primer mes del acuerdo.'); return; }
         var previo = _act.acuerdos[id];
         if (previo && previo.aplicado) reg.aplicado = previo.aplicado;   // editar no des-aplica: avisa en la tarjeta
@@ -32222,7 +32235,7 @@
             mapa = mapa || {};
             valorEn = valorEn || function(m) { return _actValorEn(mapa, m); };
             var cur = valorEn(_actMesSig(ms[0], -1));
-            var enBase = a.base === 'fijo' ? valorEn(_actAcBaseMes(a)) : cur;
+            var enBase = valorEn(_actAcBaseMes(a));
             if (!cur || !enBase) { cuenta.sinBase.push(nombre); return 0; }
             var n = 0;
             _actAcEncadenar(a, cur, enBase, function(m) { return _actNum(mapa[m]); }, conSumasIncluidas).forEach(function(x) {
