@@ -32096,7 +32096,7 @@
             var ms = _actAcuerdoMeses(a), fin = ms[ms.length - 1];
             if (!ult || fin > ult) ult = fin;
         });
-        _actAcDraft = { id: null, nombre: '', firmado: '', desde: ult ? _actMesSig(ult) : _actMesHoy(), nota: '', tramos: [{}, {}, {}], base: 'acumulativo', baseMes: null, conSumas: false };
+        _actAcDraft = { id: null, nombre: '', firmado: '', desde: ult ? _actMesSig(ult) : _actMesHoy(), nota: '', tramos: [{}, {}, {}], base: 'fijo', baseMes: null, conSumas: false };   // por defecto: todos los tramos sobre el sueldo del mes anterior al acuerdo
         _actPintarFormAcuerdo();
     }
     function actEditarAcuerdo(id) {
@@ -32130,10 +32130,10 @@
             '<div style="margin-top:6px;"><button class="btn btn-outline btn-sm" onclick="_actAcDraft.tramos.push({});_actPintarFormAcuerdo()">＋ Tramo</button></div>' +
             '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--surface,#f7f7f8);">' +
                 '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">¿Sobre qué sueldo se calcula el %?</div>' +
-                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-bottom:4px;"><input type="radio" name="actAcBase" ' + (d.base !== 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'acumulativo\';_actPintarFormAcuerdo()"> Acumulativo: cada mes sobre el sueldo del mes anterior (ya aumentado)</label>' +
-                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><input type="radio" name="actAcBase" ' + (d.base === 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'fijo\';_actPintarFormAcuerdo()"> Todos los tramos sobre el sueldo de' +
-                    ' <input type="month" value="' + _actAcBaseMes(d) + '" ' + (d.base === 'fijo' ? '' : 'disabled') + ' onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.baseMes=this.value;_actPintarFormAcuerdo();}" style="padding:3px 6px;font-size:12px;"></label>' +
-                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" ' + (d.conSumas ? 'checked' : '') + ' onchange="_actAcDraft.conSumas=this.checked;_actPintarFormAcuerdo()"> Calcular el % sobre la base <strong>más las sumas no remunerativas</strong> (si no se tilda, el % va sólo sobre la base; las sumas igual se suman al sueldo final)</label>' +
+                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;"><input type="radio" name="actAcBase" ' + (d.base === 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'fijo\';_actPintarFormAcuerdo()"> Todos los tramos sobre el sueldo de' +
+                    ' <input type="month" value="' + _actAcBaseMes(d) + '" ' + (d.base === 'fijo' ? '' : 'disabled') + ' onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.baseMes=this.value;_actPintarFormAcuerdo();}" style="padding:3px 6px;font-size:12px;"> (no acumulativo)</label>' +
+                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;"><input type="radio" name="actAcBase" ' + (d.base !== 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'acumulativo\';_actPintarFormAcuerdo()"> Acumulativo: cada mes sobre el sueldo del mes anterior ya aumentado</label>' +
+                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" ' + (d.conSumas ? 'checked' : '') + ' onchange="_actAcDraft.conSumas=this.checked;_actPintarFormAcuerdo()"> <span>Calcular el % sobre la base <strong>más las sumas no remunerativas</strong> (si no se tilda, el % va sólo sobre la base; las sumas igual se suman al sueldo final)</span></label>' +
                 '<div style="font-size:12px;color:var(--text-2);margin-top:8px;">' + _actAcEjemplo(d) + '</div>' +
             '</div>' +
             '<label style="font-size:12px;display:block;margin-top:8px;">Nota (opcional)<br><input type="text" value="' + escHtml(d.nota || '') + '" placeholder="Ej. las sumas pasan al básico desde diciembre" oninput="_actAcDraft.nota=this.value" style="width:100%;"></label>' +
@@ -32151,15 +32151,25 @@
     // Ejemplo en vivo con un sueldo de $1.000.000, para ver qué va a hacer el acuerdo antes de aplicarlo.
     function _actAcEjemplo(d) {
         var a = { desde: d.desde, tramos: d.tramos, base: d.base, baseMes: d.baseMes, conSumas: d.conSumas };
-        // Base de $1.000.000 (sin sumas); el sueldo final de cada mes suma las sumas vigentes.
-        var s0 = _actAcSumasEn(a, _actMesSig(a.desde, -1));
+        // Ejemplo con un sueldo base de $1.000.000 (sin sumas): por cada mes, sobre qué monto se calcula
+        // el %, cuánto suma, el básico que queda y el sueldo final con las sumas vigentes.
+        var ms = _actAcuerdoMeses(a), fijo = a.base === 'fijo', bm = _actAcBaseMes(a), prev0 = _actMesSig(a.desde, -1);
+        var s0 = _actAcSumasEn(a, prev0);
         var r = _actAcEncadenar(a, 1000000, 1000000, null, false);
         if (!r.length) return '<span id="actAcEjemplo"></span>';
-        var tot = function(x) { return x.valor + _actAcSumasEn(a, x.mes); };
-        return '<span id="actAcEjemplo">Ejemplo con una base de ' + fmt(1000000) + (s0 ? ' (+ ' + fmt(s0) + ' de sumas = ' + fmt(1000000 + s0) + ')' : '') +
-            ', el % se calcula ' + (a.conSumas ? '<strong>sobre base + sumas</strong>' : '<strong>sólo sobre la base</strong>') + ': ' +
-            r.map(function(x) { var sm = _actAcSumasEn(a, x.mes); return '<strong>' + _actMesLabel(x.mes) + '</strong> base ' + fmt(x.valor) + (sm ? ' → sueldo ' + fmt(tot(x)) : ''); }).join(' · ') +
-            ' · aumento del sueldo ' + _actPct((tot(r[r.length - 1]) / (1000000 + s0) - 1) * 100) + '</span>';
+        var ant = 1000000;
+        var filas = r.map(function(x, i) {
+            var pct = _actNum((a.tramos[i] || {}).pct) || 0;
+            var sPrev = _actAcSumasEn(a, i ? ms[i - 1] : prev0), sMes = _actAcSumasEn(a, x.mes);
+            var sobre = fijo ? 1000000 + (a.conSumas ? _actAcSumasEn(a, bm) : 0) : ant + (a.conSumas ? sPrev : 0);
+            var suma = x.valor - ant; ant = x.valor;
+            return '<div><strong>' + _actMesLabel(x.mes) + ':</strong> ' + _actPctTxt(pct) + ' de ' + fmt(sobre) + ' = +' + fmt(suma) +
+                ' → básico ' + fmt(x.valor) + (sMes ? ' + sumas ' + fmt(sMes) + ' = <strong>sueldo ' + fmt(x.valor + sMes) + '</strong>' : '') + '</div>';
+        }).join('');
+        var fin = r[r.length - 1], sFin = _actAcSumasEn(a, fin.mes);
+        return '<span id="actAcEjemplo" style="display:block;">Ejemplo con un <strong>sueldo base de ' + fmt(1000000) + '</strong>' +
+            (s0 ? ' (+ ' + fmt(s0) + ' de sumas = ' + fmt(1000000 + s0) + ')' : '') + ':' + filas +
+            '<div style="margin-top:2px;">Aumento del sueldo: ' + _actPct(((fin.valor + sFin) / (1000000 + s0) - 1) * 100) + '</div></span>';
     }
     function _actAcQuitar(i) { _actAcDraft.tramos.splice(i, 1); _actPintarFormAcuerdo(); }
     function actGuardarAcuerdo() {
