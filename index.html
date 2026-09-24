@@ -6486,6 +6486,7 @@
                     <button class="btn btn-outline btn-sm" data-actvista="resumen" onclick="actVista('resumen')">📊 Resumen</button>
                     <button class="btn btn-outline btn-sm" data-actvista="meses" onclick="actVista('meses')">📅 Inflación y Comercio</button>
                     <button class="btn btn-outline btn-sm" data-actvista="empleados" onclick="actVista('empleados')">👥 Sueldos de empleados</button>
+                    <button class="btn btn-outline btn-sm" data-actvista="acuerdos" onclick="actVista('acuerdos')">🤝 Acuerdos</button>
                     <button class="btn btn-outline btn-sm" data-actvista="escala" onclick="actVista('escala')">📋 Escala Comercio</button>
                     <button class="btn btn-outline btn-sm" data-actvista="calc" onclick="actVista('calc')">🧮 Calcular aumento</button>
                     <span style="flex:1;"></span>
@@ -6570,8 +6571,21 @@
                                 <button class="btn btn-primary btn-sm" onclick="actAgregarEmpleado()">＋ Empleado</button>
                             </div>
                         </div>
-                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá lo que cobró cada uno ese mes. Si un mes queda vacío se toma el último sueldo cargado. Debajo de cada importe va el % de aumento contra el mes anterior.</div>
+                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá lo que cobró cada uno ese mes. Si un mes queda vacío se toma el último sueldo cargado. Debajo de cada importe va el % de aumento contra el mes anterior. Debajo del nombre elegís la <strong>categoría</strong>: una del convenio (así «Según Comercio» usa los básicos de esa categoría) o <strong>Fuera de convenio</strong> (se compara sólo contra la inflación y los acuerdos no le aumentan el sueldo).</div>
                         <div class="table-wrap"><table id="actEmpTabla"></table></div>
+                    </div>
+                </div>
+
+                <!-- Acuerdos paritarios (cada 3 meses, más o menos) -->
+                <div class="act-vista" id="actVistaAcuerdos" style="display:none;">
+                    <div class="table-card">
+                        <div class="table-card-head">
+                            <h3>Acuerdos paritarios de Comercio</h3>
+                            <button class="btn btn-primary btn-sm" onclick="actNuevoAcuerdo()">＋ Nuevo acuerdo</button>
+                        </div>
+                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá cada acuerdo con sus tramos (ej. Abril 2% · Mayo 1,5% · Junio 1,5%), las sumas no remunerativas vigentes y los bonos. Con <strong>Aplicar</strong> se completa el % de Comercio de esos meses, se actualiza la escala de básicos y se les aumenta el sueldo a los empleados en convenio. Lo que ya estaba cargado a mano en la escala o en los sueldos no se pisa.</div>
+                        <div id="actAcuerdoForm" style="display:none; padding:0 16px 16px;"></div>
+                        <div id="actAcuerdosLista" style="padding:0 16px 16px;"></div>
                     </div>
                 </div>
 
@@ -31421,12 +31435,16 @@
     //                        comercio: % de aumento del básico ese mes, sumas: $ no remunerativos vigentes }
     //   empleados/<id>   = { nombre, sueldos: { <mes>: importe } }
     //   categorias/<id>  = { nombre, orden, basicos: { <mes>: importe } }
+    //   empleados/<id>.categoria = '' (sin asignar, cuenta como convenio) | 'fuera' | <id de categoría>
+    //   acuerdos/<id>    = { nombre, firmado, desde: <mes del 1er tramo>, tramos: [{ pct, sumas, bono }], nota,
+    //                        aplicado: { fecha, meses, basicos, sueldos } }  — un tramo por mes consecutivo
+    //   meses/<mes>.bono = bono extraordinario de ese mes (por única vez: no entra en «Según Comercio»)
     // Vive en la raíz 'remuneracionesActualizacion' (reglas: sólo superadmin). Si esas reglas
     // no están publicadas, cae sola a 'cajaDiaria/<uid>/remuneracionesActualizacion' (que ya
     // está publicada) y avisa — mismo criterio que _remVolverARutaVieja.
     // Convención de cálculo: el sueldo de «Desde» se lleva a «Hasta» con la inflación de los
     // meses POSTERIORES a «Desde» (el IPC de un mes mide la suba de precios de ese mes).
-    var _act = { meses: {}, empleados: {}, categorias: {} };
+    var _act = { meses: {}, empleados: {}, categorias: {}, acuerdos: {} };
     var _actCargado = false, _actCargando = null, _actRutaRaiz = true;
     var _actIpcOficial = {};          // { 'YYYY-MM': % } de argentinadatos (INDEC)
     var _actIpcPedido = null, _actIpcError = false;
@@ -31459,7 +31477,7 @@
         var leer = function() {
             return _actRef().once('value').then(function(sn) {
                 var v = sn.val() || {};
-                _act = { meses: v.meses || {}, empleados: v.empleados || {}, categorias: v.categorias || {} };
+                _act = { meses: v.meses || {}, empleados: v.empleados || {}, categorias: v.categorias || {}, acuerdos: v.acuerdos || {} };
                 _actCargado = true;
             });
         };
@@ -31565,7 +31583,7 @@
     }
     function renderActualizacion() {
         if (!_esDuenoRemun()) return;
-        ['resumen','meses','empleados','escala','calc'].forEach(function(k) {
+        ['resumen','meses','empleados','acuerdos','escala','calc'].forEach(function(k) {
             var el = document.getElementById('actVista' + k.charAt(0).toUpperCase() + k.slice(1));
             if (el) el.style.display = (k === _actVista) ? '' : 'none';
         });
@@ -31604,6 +31622,7 @@
         if (_actVista === 'meses') _actPintarMeses(meses);
         if (_actVista === 'empleados') _actPintarEmpleados(meses);
         if (_actVista === 'escala') _actPintarEscala(meses);
+        if (_actVista === 'acuerdos') _actPintarAcuerdos();
         if (_actVista === 'calc') actCalcular();
     }
 
@@ -31623,29 +31642,48 @@
         set('actKpiBrecha', (brecha >= 0 ? 'Le gana ' : 'Pierde ') + Math.abs(brecha).toFixed(1).replace('.', ',') + '%', _actColor(brecha));
 
         var ids = _actOrden(_act.empleados);
-        var filas = ids.map(function(id) {
+        // Primero los de convenio, después un bloque aparte con los de fuera de convenio.
+        var idsConv = ids.filter(function(id) { return !_actEsFuera(_act.empleados[id]); });
+        var idsFuera = ids.filter(function(id) { return _actEsFuera(_act.empleados[id]); });
+        var fila = function(id) {
             var e = _act.empleados[id], bm = desde, s0 = _actValorEn(e.sueldos, desde), s1 = _actValorEn(e.sueldos, hasta);
             // Si entró después de «Desde», se compara desde su primer sueldo cargado.
             if (s0 == null) {
                 bm = Object.keys(e.sueldos || {}).filter(function(k) { return k > desde && k <= hasta && _actNum(e.sueldos[k]) > 0; }).sort()[0];
                 s0 = bm ? e.sueldos[bm] : null;
             }
-            var nom = '<td><strong>' + escHtml(e.nombre || '(sin nombre)') + '</strong>' + (bm && bm !== desde ? '<div style="font-size:10.5px;color:var(--text-3);">desde ' + _actMesLabel(bm) + '</div>' : '') + '</td>';
+            var cat = _actCatNombre(e);
+            var nom = '<td><strong>' + escHtml(e.nombre || '(sin nombre)') + '</strong>' +
+                (cat ? '<div style="font-size:10.5px;color:var(--text-3);">' + escHtml(cat) + '</div>' : '') +
+                (bm && bm !== desde ? '<div style="font-size:10.5px;color:var(--text-3);">desde ' + _actMesLabel(bm) + '</div>' : '') + '</td>';
             if (s0 == null || s1 == null || bm >= hasta) return '<tr>' + nom + '<td colspan="7" style="color:var(--text-3);font-size:12px;">Sin sueldos cargados entre ' + _actMesLabel(desde) + ' y ' + _actMesLabel(hasta) + '.</td></tr>';
             var fI = bm === desde ? ipc.f : _actFactor(bm, hasta, _actIpc).f;
             var fC = bm === desde ? com.f : _actFactor(bm, hasta, _actComercio).f;
             var aum = (s1 / s0 - 1) * 100, real = (s1 / s0 / fI - 1) * 100;
-            var empate = s0 * fI, segCom = s0 * fC + (sH - _actSumas(bm)), falta = empate - s1;
+            var empate = s0 * fI, falta = empate - s1;
+            var segCom = null, segTit = 'Sueldo de «Desde» × aumentos de Comercio + diferencia de sumas no remunerativas';
+            if (!_actEsFuera(e)) {
+                // Con categoría del convenio y básicos cargados, se usa la suba real de ESA categoría.
+                var c = _act.categorias[e.categoria], b0 = c && _actValorEn(c.basicos, bm), b1 = c && _actValorEn(c.basicos, hasta);
+                if (b0 && b1) { segCom = s0 * (b1 / b0) + (sH - _actSumas(bm)); segTit = 'Sueldo de «Desde» × suba del básico de ' + c.nombre + ' + diferencia de sumas no remunerativas'; }
+                else segCom = s0 * fC + (sH - _actSumas(bm));
+            }
             return '<tr>' + nom +
                 '<td style="text-align:right;">' + fmt(s0) + '</td>' +
                 '<td style="text-align:right;">' + fmt(s1) + '</td>' +
                 '<td style="text-align:right;">' + _actPct(aum) + '</td>' +
                 '<td style="text-align:right;font-weight:700;color:' + _actColor(real) + ';">' + (real >= 0 ? 'Le gana ' : 'Pierde ') + Math.abs(real).toFixed(1).replace('.', ',') + '%</td>' +
                 '<td style="text-align:right;">' + fmt(empate) + '</td>' +
-                '<td style="text-align:right;" title="Sueldo de «Desde» × aumentos de Comercio + diferencia de sumas no remunerativas">' + fmt(segCom) + '</td>' +
+                (segCom == null ? '<td style="text-align:right;color:var(--text-3);font-size:12px;" title="Fuera de convenio: no le corresponde la escala">fuera de convenio</td>'
+                                : '<td style="text-align:right;" title="' + segTit + '">' + fmt(segCom) + '</td>') +
                 '<td style="text-align:right;font-weight:700;color:' + (falta > 0 ? 'var(--danger)' : 'var(--success)') + ';">' + (falta > 0 ? fmt(falta) : '—') + '</td></tr>';
-        });
-        body.innerHTML = filas.length ? filas.join('') : '<tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:20px;">Todavía no hay empleados. Cargalos en «👥 Sueldos de empleados» o importá tu Excel.</td></tr>';
+        };
+        var filas = idsConv.map(fila);
+        if (idsFuera.length) {
+            filas.push('<tr><td colspan="8" style="padding-top:14px;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--text-3);font-weight:700;">Fuera de convenio</td></tr>');
+            filas = filas.concat(idsFuera.map(fila));
+        }
+        body.innerHTML = ids.length ? filas.join('') : '<tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:20px;">Todavía no hay empleados. Cargalos en «👥 Sueldos de empleados» o importá tu Excel.</td></tr>';
         _actPintarGrafico(desde, hasta, ids);
     }
     function _actPintarGrafico(desde, hasta, ids) {
@@ -31694,7 +31732,8 @@
                 '<td style="text-align:right;">' + (ofi != null ? ofi.toFixed(1).replace('.', ',') + '%' : '<span style="color:var(--text-3);">—</span>') + '</td>' +
                 '<td style="text-align:right;">' + (man != null ? '✍️ ' : '') + _actInput(man, "actSetMes('" + m + "','ipc',this.value)", ' placeholder="' + (ofi != null ? 'oficial' : '%') + '"', 80) + '</td>' +
                 '<td style="text-align:right;">' + _actInput(_actNum(reg.comercio), "actSetMes('" + m + "','comercio',this.value)", '', 80) + '</td>' +
-                '<td style="text-align:right;">' + _actInput(_actNum(reg.sumas), "actSetMes('" + m + "','sumas',this.value)", ' placeholder="' + (i > 0 && _actSumas(m) ? _actSumas(m) : '') + '"') + '</td>' +
+                '<td style="text-align:right;">' + _actInput(_actNum(reg.sumas), "actSetMes('" + m + "','sumas',this.value)", ' placeholder="' + (i > 0 && _actSumas(m) ? _actSumas(m) : '') + '"') +
+                    (_actNum(reg.bono) ? '<div style="font-size:10.5px;color:var(--text-3);">+ bono ' + fmt(reg.bono) + '</div>' : '') + '</td>' +
                 '<td style="text-align:right;">' + (i ? _actPct((fI - 1) * 100) : 'base') + '</td>' +
                 '<td style="text-align:right;">' + (i ? _actPct((fC - 1) * 100) : 'base') + '</td>' +
                 '<td style="text-align:right;font-weight:700;color:' + _actColor(br) + ';">' + (i ? _actPct(br) : '') + '</td></tr>');
@@ -31717,13 +31756,14 @@
     }
 
     // Tabla de meses (filas) × columnas (empleados o categorías) con inputs y % de variación.
-    function _actGrilla(tablaId, ids, obj, campo, fnSet, fnBorrar, fnRenombrar, meses) {
+    function _actGrilla(tablaId, ids, obj, campo, fnSet, fnBorrar, fnRenombrar, meses, extraHead) {
         var t = document.getElementById(tablaId); if (!t) return;
         if (!ids.length) { t.innerHTML = '<tr><td style="text-align:center;color:var(--text-3);padding:20px;">Todavía no hay nada cargado.</td></tr>'; return; }
         var h = '<thead><tr><th>Mes</th><th style="text-align:right;">IPC</th>' + ids.map(function(id) {
             return '<th style="text-align:right;white-space:nowrap;">' + escHtml(obj[id].nombre || '?') +
                 ' <button class="btn btn-outline btn-sm" style="padding:1px 5px;" title="Renombrar" onclick="' + fnRenombrar + '(\'' + id + '\')">✏️</button>' +
-                '<button class="btn btn-outline btn-sm" style="padding:1px 5px;" title="Borrar" onclick="' + fnBorrar + '(\'' + id + '\')">🗑️</button></th>';
+                '<button class="btn btn-outline btn-sm" style="padding:1px 5px;" title="Borrar" onclick="' + fnBorrar + '(\'' + id + '\')">🗑️</button>' +
+                (extraHead ? extraHead(id) : '') + '</th>';
         }).join('') + '</tr></thead><tbody>';
         var filas = meses.map(function(m) {
             var ipc = _actIpc(m);
@@ -31748,7 +31788,13 @@
     function _actPintarEmpleados(meses) {
         var dl = document.getElementById('actLegajosList');
         if (dl) dl.innerHTML = (typeof remuneraciones !== 'undefined' ? remuneraciones : []).map(function(e) { return e && e.nombre ? '<option value="' + escHtml(e.nombre) + '">' : ''; }).join('');
-        _actGrilla('actEmpTabla', _actOrden(_act.empleados), _act.empleados, 'sueldos', 'actSetSueldo', 'actBorrarEmpleado', 'actRenombrarEmpleado', meses);
+        var cats = _actOrden(_act.categorias, true);
+        _actGrilla('actEmpTabla', _actOrden(_act.empleados), _act.empleados, 'sueldos', 'actSetSueldo', 'actBorrarEmpleado', 'actRenombrarEmpleado', meses, function(id) {
+            var sel = _act.empleados[id].categoria || '';
+            var op = function(v, t) { return '<option value="' + v + '"' + (sel === v ? ' selected' : '') + '>' + escHtml(t) + '</option>'; };
+            return '<div style="margin-top:4px;"><select onchange="actSetCategoriaEmp(\'' + id + '\',this.value)" title="Categoría del empleado" style="max-width:150px;padding:3px 6px;font-size:11px;">' +
+                op('', '— categoría —') + cats.map(function(c) { return op(c, _act.categorias[c].nombre); }).join('') + op('fuera', 'Fuera de convenio') + '</select></div>';
+        });
     }
     function _actPintarEscala(meses) {
         var ids = _actOrden(_act.categorias, true);
@@ -31762,6 +31808,17 @@
         if (s === '') return null;
         var v = parseFloat(s.replace(/\$|\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'));
         return isFinite(v) ? v : NaN;
+    }
+    function _actEsFuera(e) { return !!e && e.categoria === 'fuera'; }
+    function _actCatNombre(e) {
+        if (!e || !e.categoria) return '';
+        if (e.categoria === 'fuera') return 'Fuera de convenio';
+        var c = _act.categorias[e.categoria]; return c ? c.nombre : '';
+    }
+    function actSetCategoriaEmp(id, v) {
+        var e = _act.empleados[id]; if (!e) return;
+        e.categoria = v || null;
+        _actGuardar('empleados/' + id + '/categoria', v || null).then(_actPintar);
     }
     function actAgregarEmpleado() {
         var inp = document.getElementById('actNuevoEmp'), nom = (inp.value || '').trim();
@@ -31841,6 +31898,181 @@
         if (!confirm('Se va a completar el «Comercio %» de ' + n + ' mes(es) con la suba del básico de ' + c.nombre + '. Pisa lo que haya cargado en esos meses. ¿Seguir?')) return;
         Object.keys(upd).forEach(function(k) { var m = k.split('/')[1]; if (!_act.meses[m]) _act.meses[m] = {}; _act.meses[m].comercio = upd[k]; });
         _actGuardarVarios(upd).then(_actPintar);
+    }
+
+
+    // ── Acuerdos paritarios ──
+    // Un acuerdo = tramos mensuales consecutivos desde «desde». Aplicarlo escribe:
+    //   · meses/<mes>: comercio (%), sumas (si el tramo las trae) y bono;
+    //   · categorias/<id>/basicos/<mes>: básico anterior × (1 + %), sólo si ese mes está vacío;
+    //   · empleados/<id>/sueldos/<mes>: ídem, sólo a los de convenio (opcional también fuera) y sin pisar.
+    // Se puede aplicar de nuevo (ej. después de corregir un %): los meses de Comercio se reescriben,
+    // lo cargado a mano en escala y sueldos se respeta.
+    var _actAcDraft = null;
+    function _actAcuerdoMeses(a) {
+        var out = [], m = a.desde;
+        (a.tramos || []).forEach(function() { out.push(m); m = _actMesSig(m); });
+        return out;
+    }
+    function _actPctTxt(x) { return (Math.round(x * 100) / 100).toString().replace('.', ',') + '%'; }
+    function _actPintarAcuerdos() {
+        var box = document.getElementById('actAcuerdosLista'); if (!box) return;
+        var ids = Object.keys(_act.acuerdos || {}).filter(function(id) { return _act.acuerdos[id] && _act.acuerdos[id].desde; })
+            .sort(function(a, b) { return _act.acuerdos[a].desde < _act.acuerdos[b].desde ? 1 : -1; });
+        if (!ids.length) { box.innerHTML = '<div style="text-align:center;color:var(--text-3);padding:20px;font-size:13px;">Todavía no cargaste ningún acuerdo. Tocá «＋ Nuevo acuerdo».</div>'; return; }
+        box.innerHTML = ids.map(function(id) {
+            var a = _act.acuerdos[id], ms = _actAcuerdoMeses(a), f = 1;
+            var tr = (a.tramos || []).map(function(t, i) {
+                f *= 1 + (_actNum(t.pct) || 0) / 100;
+                var extra = [];
+                if (_actNum(t.sumas) != null) extra.push('sumas ' + fmt(t.sumas));
+                if (_actNum(t.bono)) extra.push('bono ' + fmt(t.bono));
+                return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 9px;border-radius:999px;border:1px solid var(--border);font-size:12px;">' +
+                    '<strong>' + _actMesLabel(ms[i]) + '</strong> ' + _actPctTxt(_actNum(t.pct) || 0) + (extra.length ? ' · ' + extra.join(' · ') : '') + '</span>';
+            }).join('');
+            var ap = a.aplicado;
+            var estado = ap ? '<span style="color:var(--success);font-weight:700;">✅ Aplicado el ' + new Date(ap.fecha).toLocaleDateString('es-AR') + '</span>'
+                            : '<span style="color:var(--danger);font-weight:700;">Pendiente de aplicar</span>';
+            var chk = function(k, txt, on) { return '<label style="font-size:12px;display:inline-flex;align-items:center;gap:4px;margin-right:12px;"><input type="checkbox" id="actAp_' + k + '_' + id + '"' + (on ? ' checked' : '') + '> ' + txt + '</label>'; };
+            return '<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-top:10px;">' +
+                '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;">' +
+                    '<div><div style="font-weight:700;font-size:14px;">' + escHtml(a.nombre || 'Acuerdo') + '</div>' +
+                    '<div style="font-size:12px;color:var(--text-3);">' + _actMesLabel(ms[0]) + ' a ' + _actMesLabel(ms[ms.length - 1]) + ' · acumulado ' + _actPct((f - 1) * 100) +
+                    (a.firmado ? ' · firmado ' + escHtml(a.firmado.split('-').reverse().join('/')) : '') + '</div></div>' +
+                    '<div style="font-size:12px;">' + estado + '</div></div>' +
+                '<div style="margin-top:8px;">' + tr + '</div>' +
+                (a.nota ? '<div style="font-size:12px;color:var(--text-2);margin-top:6px;">' + escHtml(a.nota) + '</div>' : '') +
+                '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' +
+                    chk('meses', 'Comercio % y sumas', true) + chk('basicos', 'Escala de básicos', true) + chk('sueldos', 'Sueldos en convenio', true) + chk('fuera', 'También fuera de convenio', false) +
+                '</div>' +
+                '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' +
+                    '<button class="btn btn-primary btn-sm" onclick="actAplicarAcuerdo(\'' + id + '\')">' + (ap ? '↻ Volver a aplicar' : '✔ Aplicar') + '</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="actEditarAcuerdo(\'' + id + '\')">✏️ Editar</button>' +
+                    '<button class="btn btn-outline btn-sm" onclick="actBorrarAcuerdo(\'' + id + '\')">🗑️ Borrar</button>' +
+                '</div></div>';
+        }).join('');
+    }
+    function actNuevoAcuerdo() {
+        // Arranca en el mes siguiente al último acuerdo (o al mes actual) con 3 tramos vacíos.
+        var ult = null;
+        Object.keys(_act.acuerdos || {}).forEach(function(id) {
+            var a = _act.acuerdos[id]; if (!a || !a.desde) return;
+            var ms = _actAcuerdoMeses(a), fin = ms[ms.length - 1];
+            if (!ult || fin > ult) ult = fin;
+        });
+        _actAcDraft = { id: null, nombre: '', firmado: '', desde: ult ? _actMesSig(ult) : _actMesHoy(), nota: '', tramos: [{}, {}, {}] };
+        _actPintarFormAcuerdo();
+    }
+    function actEditarAcuerdo(id) {
+        var a = _act.acuerdos[id]; if (!a) return;
+        _actAcDraft = JSON.parse(JSON.stringify(a)); _actAcDraft.id = id;
+        if (!_actAcDraft.tramos || !_actAcDraft.tramos.length) _actAcDraft.tramos = [{}];
+        _actPintarFormAcuerdo();
+    }
+    function _actPintarFormAcuerdo() {
+        var box = document.getElementById('actAcuerdoForm'); if (!box) return;
+        var d = _actAcDraft;
+        if (!d) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        var m = d.desde, filas = d.tramos.map(function(t, i) {
+            var lab = _actMesLabel(m); m = _actMesSig(m);
+            var inp = function(campo, ph, ancho) {
+                return '<input type="number" step="any" value="' + (t[campo] == null ? '' : t[campo]) + '" placeholder="' + ph + '" oninput="_actAcSet(' + i + ',\'' + campo + '\',this.value)" style="width:' + ancho + 'px;padding:5px 7px;font-size:12px;text-align:right;">';
+            };
+            return '<tr><td style="white-space:nowrap;"><strong>' + lab + '</strong></td>' +
+                '<td>' + inp('pct', '%', 70) + '</td><td>' + inp('sumas', 'igual', 110) + '</td><td>' + inp('bono', '0', 100) + '</td>' +
+                '<td>' + (d.tramos.length > 1 ? '<button class="btn btn-outline btn-sm" style="padding:1px 6px;" title="Quitar tramo" onclick="_actAcQuitar(' + i + ')">✕</button>' : '') + '</td></tr>';
+        }).join('');
+        box.style.display = '';
+        box.innerHTML = '<div style="border:1px dashed var(--border);border-radius:12px;padding:12px 14px;">' +
+            '<div style="font-weight:700;margin-bottom:8px;">' + (d.id ? 'Editar acuerdo' : 'Nuevo acuerdo') + '</div>' +
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:10px;">' +
+                '<label style="font-size:12px;">Nombre<br><input type="text" value="' + escHtml(d.nombre || '') + '" placeholder="Ej. Acuerdo abril–junio 2026" oninput="_actAcDraft.nombre=this.value" style="width:100%;"></label>' +
+                '<label style="font-size:12px;">Firmado el<br><input type="date" value="' + escHtml(d.firmado || '') + '" oninput="_actAcDraft.firmado=this.value" style="width:100%;"></label>' +
+                '<label style="font-size:12px;">Primer mes<br><input type="month" value="' + d.desde + '" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.desde=this.value;_actPintarFormAcuerdo();}" style="width:100%;"></label>' +
+            '</div>' +
+            '<div style="overflow:auto;"><table><thead><tr><th>Mes</th><th>Aumento %</th><th title="Total de sumas no remunerativas vigentes ese mes. Vacío = siguen las de antes">Sumas no rem. $</th><th title="Bono por única vez">Bono $</th><th></th></tr></thead><tbody>' + filas + '</tbody></table></div>' +
+            '<div style="margin-top:6px;"><button class="btn btn-outline btn-sm" onclick="_actAcDraft.tramos.push({});_actPintarFormAcuerdo()">＋ Tramo</button></div>' +
+            '<label style="font-size:12px;display:block;margin-top:8px;">Nota (opcional)<br><input type="text" value="' + escHtml(d.nota || '') + '" placeholder="Ej. las sumas pasan al básico desde diciembre" oninput="_actAcDraft.nota=this.value" style="width:100%;"></label>' +
+            '<div style="margin-top:10px;display:flex;gap:6px;">' +
+                '<button class="btn btn-primary btn-sm" onclick="actGuardarAcuerdo()">Guardar</button>' +
+                '<button class="btn btn-outline btn-sm" onclick="_actAcDraft=null;_actPintarFormAcuerdo()">Cancelar</button>' +
+            '</div></div>';
+    }
+    function _actAcSet(i, campo, txt) {
+        var v = String(txt).trim() === '' ? null : parseFloat(String(txt).replace(',', '.'));
+        _actAcDraft.tramos[i][campo] = (v == null || !isFinite(v)) ? null : v;
+    }
+    function _actAcQuitar(i) { _actAcDraft.tramos.splice(i, 1); _actPintarFormAcuerdo(); }
+    function actGuardarAcuerdo() {
+        var d = _actAcDraft; if (!d) return;
+        var tramos = d.tramos.map(function(t) {
+            var o = {};
+            ['pct', 'sumas', 'bono'].forEach(function(k) { if (_actNum(t[k]) != null) o[k] = t[k]; });
+            return o;
+        });
+        if (!tramos.some(function(t) { return _actNum(t.pct) != null; })) { alert('Cargá el % de aumento de al menos un mes.'); return; }
+        tramos = tramos.map(function(t) { if (t.pct == null) t.pct = 0; return t; });
+        var id = d.id || _actNuevoId('a');
+        var reg = { nombre: (d.nombre || '').trim() || ('Acuerdo ' + _actMesLabel(d.desde)), firmado: d.firmado || null, desde: d.desde, tramos: tramos, nota: (d.nota || '').trim() || null };
+        var previo = _act.acuerdos[id];
+        if (previo && previo.aplicado) reg.aplicado = previo.aplicado;   // editar no des-aplica: avisa en la tarjeta
+        _act.acuerdos[id] = reg;
+        _actAcDraft = null;
+        _actGuardar('acuerdos/' + id, reg).then(function() {
+            _actPintarFormAcuerdo(); _actPintar();
+            if (previo && previo.aplicado) alert('Guardado. Este acuerdo ya estaba aplicado: tocá «Volver a aplicar» para que los cambios lleguen a Comercio %, escala y sueldos.');
+        });
+    }
+    function actBorrarAcuerdo(id) {
+        var a = _act.acuerdos[id]; if (!a) return;
+        if (!confirm('¿Borrar el acuerdo «' + (a.nombre || '') + '»?' + (a.aplicado ? '\n\nLo que ya se aplicó (Comercio %, escala y sueldos) queda como está.' : ''))) return;
+        delete _act.acuerdos[id];
+        _actGuardar('acuerdos/' + id, null).then(_actPintar);
+    }
+    function actAplicarAcuerdo(id) {
+        var a = _act.acuerdos[id]; if (!a) return;
+        var on = function(k) { var el = document.getElementById('actAp_' + k + '_' + id); return !!(el && el.checked); };
+        var hacerMeses = on('meses'), hacerBas = on('basicos'), hacerSue = on('sueldos'), conFuera = on('fuera');
+        if (!hacerMeses && !hacerBas && !hacerSue) { alert('Marcá al menos una cosa para aplicar.'); return; }
+        var ms = _actAcuerdoMeses(a), tr = a.tramos || [], upd = {};
+        var cuenta = { meses: 0, basicos: 0, sueldos: 0, respetados: 0, sinBase: [] };
+        if (hacerMeses) tr.forEach(function(t, i) {
+            upd['meses/' + ms[i] + '/comercio'] = _actNum(t.pct) || 0; cuenta.meses++;
+            if (_actNum(t.sumas) != null) upd['meses/' + ms[i] + '/sumas'] = t.sumas;
+            if (_actNum(t.bono)) upd['meses/' + ms[i] + '/bono'] = t.bono;
+        });
+        // Lleva un importe mes a mes con los % del acuerdo, partiendo del último valor ANTES del 1er tramo.
+        var encadenar = function(mapa, prefijo, nombre) {
+            mapa = mapa || {};
+            var cur = _actValorEn(mapa, _actMesSig(ms[0], -1));
+            if (!cur) { cuenta.sinBase.push(nombre); return 0; }
+            var n = 0;
+            tr.forEach(function(t, i) {
+                cur = cur * (1 + (_actNum(t.pct) || 0) / 100);
+                if (_actNum(mapa[ms[i]]) != null) { cur = mapa[ms[i]]; cuenta.respetados++; return; }   // cargado a mano: manda y sigue desde ahí
+                upd[prefijo + ms[i]] = Math.round(cur * 100) / 100; n++;
+            });
+            return n;
+        };
+        if (hacerBas) Object.keys(_act.categorias).forEach(function(cid) {
+            var c = _act.categorias[cid]; if (!c) return;
+            cuenta.basicos += encadenar(c.basicos, 'categorias/' + cid + '/basicos/', c.nombre);
+        });
+        if (hacerSue) Object.keys(_act.empleados).forEach(function(eid) {
+            var e = _act.empleados[eid]; if (!e) return;
+            if (_actEsFuera(e) && !conFuera) return;
+            cuenta.sueldos += encadenar(e.sueldos, 'empleados/' + eid + '/sueldos/', e.nombre);
+        });
+        var txt = 'Aplicar «' + (a.nombre || 'acuerdo') + '» (' + _actMesLabel(ms[0]) + ' a ' + _actMesLabel(ms[ms.length - 1]) + '):\n' +
+            (hacerMeses ? '• Comercio % en ' + cuenta.meses + ' mes(es)' + (tr.some(function(t) { return _actNum(t.sumas) != null || _actNum(t.bono); }) ? ', con sumas/bonos' : '') + '\n' : '') +
+            (hacerBas ? '• Escala: ' + cuenta.basicos + ' básico(s) nuevos\n' : '') +
+            (hacerSue ? '• Sueldos: ' + cuenta.sueldos + ' importe(s) nuevos' + (conFuera ? ' (incluye fuera de convenio)' : ' (sólo convenio)') + '\n' : '') +
+            (cuenta.respetados ? '• ' + cuenta.respetados + ' valor(es) ya cargados a mano se respetan\n' : '') +
+            (cuenta.sinBase.length ? '• Sin importe anterior para aumentar (se saltean): ' + cuenta.sinBase.slice(0, 6).join(', ') + (cuenta.sinBase.length > 6 ? '…' : '') + '\n' : '') +
+            '\n¿Seguir?';
+        if (!confirm(txt)) return;
+        upd['acuerdos/' + id + '/aplicado'] = { fecha: Date.now(), meses: cuenta.meses, basicos: cuenta.basicos, sueldos: cuenta.sueldos };
+        _actGuardarVarios(upd).then(function() { _actCargado = false; return _actCargar(); }).then(function() { _actPintar(); });
     }
 
     // ── Lectura de meses escritos de cualquier forma ──
