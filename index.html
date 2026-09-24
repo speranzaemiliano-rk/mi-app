@@ -31574,7 +31574,10 @@
     function _actSigueComercio(e) { return !!e && e.sigueComercio !== false; }
     function _actIncluyeSumas(e) { return !!e && e.sinSumas !== true; }
     // Acuerdo que cubre el mes <m> (si hay varios, el que empezó más tarde) y el tramo que le toca.
-    function _actAcuerdoDe(m) {
+    // Si ningún acuerdo cargado cubre el mes, se usa el TRIMESTRE calendario como acuerdo implícito
+    // (ene–mar, abr–jun, jul–sep, oct–dic) con los % de Comercio de «Inflación y Comercio» y base fija en
+    // el sueldo base del mes anterior al trimestre — así calcula el dueño en su planilla.
+    function _actAcuerdoCargadoDe(m) {
         var res = null;
         Object.keys(_act.acuerdos || {}).forEach(function(id) {
             var a = _act.acuerdos[id]; if (!a || !a.desde || m < a.desde) return;
@@ -31582,6 +31585,14 @@
             if (i >= 0 && (!res || a.desde > res.a.desde)) res = { a: a, t: a.tramos[i] || {} };
         });
         return res;
+    }
+    function _actAcuerdoDe(m) {
+        var res = _actAcuerdoCargadoDe(m);
+        if (res) return res;
+        var mm = parseInt(m.slice(5, 7), 10), ini = m.slice(0, 4) + '-' + String(Math.floor((mm - 1) / 3) * 3 + 1).padStart(2, '0');
+        var tramos = [0, 1, 2].map(function(i) { return { pct: _actComercio(_actMesSig(ini, i)) }; });
+        var a = { desde: ini, tramos: tramos, base: 'fijo', conSumas: false, implicito: true };
+        return { a: a, t: tramos[_actAcuerdoMeses(a).indexOf(m)] || {} };
     }
     // Sumas no remunerativas vigentes en <m>, contando las de un acuerdo cargado aunque no esté aplicado.
     function _actSumasTot(m) {
@@ -31607,8 +31618,17 @@
                 // acuerdo, o el mes elegido), con o sin sumas. Regla del dueño: siempre base fija, también en
                 // acuerdos viejos guardados como «acumulativo».
                 pct = _actNum(ac.t.pct) || 0;
-                var bm = _actAcBaseMes(ac.a), vb = _actValorEn(mapa, bm);
-                var bb = bas[bm] != null ? bas[bm] : (vb != null ? vb : b);
+                var bm = _actAcBaseMes(ac.a), vb = _actValorEn(mapa, bm), bb;
+                if (bas[bm] != null) bb = bas[bm];
+                else if (vb != null) bb = vb;
+                else {
+                    // El primer sueldo cargado cae DENTRO del acuerdo (no hay sueldo en el mes base): se
+                    // despeja la base de ese importe. Con base fija, importe = B + Σ% × (B [+ sumas del mes base]).
+                    var msA = _actAcuerdoMeses(ac.a), iu = msA.indexOf(ult), sp = 0;
+                    for (var k = 0; k <= iu; k++) sp += (_actNum((ac.a.tramos[k] || {}).pct) || 0) / 100;
+                    var sB = ac.a.conSumas ? _actSumasTot(bm) : 0;
+                    bb = iu >= 0 ? (mapa[ult] - sp * sB) / (1 + sp) : b;
+                }
                 base = bb + (ac.a.conSumas ? _actSumasTot(bm) : 0);
             } else { pct = _actComercio(x); base = b; }
             b = b + base * pct / 100;
@@ -31863,7 +31883,7 @@
     // Meses con % de Comercio cargado que no pertenecen a ningún acuerdo: ahí el cálculo va mes a mes
     // (acumulando), porque no se sabe cuál es la base fija del acuerdo. Se avisa para que lo carguen.
     function _actMesesSinAcuerdo(meses) {
-        return meses.filter(function(m) { return _actComercio(m) && !_actAcuerdoDe(m); });
+        return meses.filter(function(m) { return _actComercio(m) && !_actAcuerdoCargadoDe(m); });
     }
     function _actPintarEmpleados(meses) {
         var av = document.getElementById('actEmpAvisoAcuerdos');
@@ -31873,9 +31893,8 @@
         }
         if (av) {
             var sin = _actMesesSinAcuerdo(meses).filter(function(m) { return m >= _actMesSig(_actMesHoy(), -12); });
-            av.style.cssText = sin.length ? 'margin:0 16px 10px;padding:8px 12px;border-radius:10px;font-size:12px;background:rgba(255,159,10,.10);border:1px solid rgba(255,159,10,.35);' : 'display:none;';
-            av.innerHTML = sin.length ? '⚠️ Estos meses tienen % de Comercio pero <strong>no tienen un acuerdo cargado</strong>, así que se calculan acumulando mes a mes: <strong>' +
-                sin.map(_actMesLabel).join(', ') + '</strong>. Cargá el acuerdo en <a href="#" onclick="actVista(\'acuerdos\');actNuevoAcuerdo(\'' + sin[0] + '\');return false;">🤝 Acuerdos</a> para que use la base fija del mes anterior.' : '';
+            av.style.cssText = sin.length ? 'margin:0 16px 10px;padding:8px 12px;border-radius:10px;font-size:12px;background:rgba(0,113,227,.06);border:1px solid rgba(0,113,227,.25);' : 'display:none;';
+            av.innerHTML = sin.length ? 'ℹ️ Los meses sin acuerdo cargado (<strong>' + sin.map(_actMesLabel).join(', ') + '</strong>) se calculan <strong>por trimestre</strong> (ene–mar, abr–jun, jul–sep, oct–dic): cada % sobre el sueldo base del mes anterior al trimestre, sin sumas. Si un acuerdo va distinto, cargalo en <a href="#" onclick="actVista(\'acuerdos\');actNuevoAcuerdo(\'' + sin[0] + '\');return false;">🤝 Acuerdos</a>.' : '';
         }
         var dl = document.getElementById('actLegajosList');
         if (dl) dl.innerHTML = (typeof remuneraciones !== 'undefined' ? remuneraciones : []).map(function(e) { return e && e.nombre ? '<option value="' + escHtml(e.nombre) + '">' : ''; }).join('');
