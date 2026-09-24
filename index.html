@@ -6487,7 +6487,7 @@
                     <button class="btn btn-outline btn-sm" data-actvista="meses" onclick="actVista('meses')">📅 Inflación y Comercio</button>
                     <button class="btn btn-outline btn-sm" data-actvista="empleados" onclick="actVista('empleados')">👥 Sueldos de empleados</button>
                     <button class="btn btn-outline btn-sm" data-actvista="acuerdos" onclick="actVista('acuerdos')">🤝 Acuerdos</button>
-                    <button class="btn btn-outline btn-sm" data-actvista="escala" onclick="actVista('escala')">📋 Escala Comercio</button>
+                    <!-- «📋 Escala Comercio» (vista 'escala') oculta a pedido del dueño: no la usa. El código y los datos siguen. -->
                     <button class="btn btn-outline btn-sm" data-actvista="calc" onclick="actVista('calc')">🧮 Calcular aumento</button>
                     <span style="flex:1;"></span>
                     <button class="btn btn-outline btn-sm" id="btnActImportar" onclick="document.getElementById('actImportFile').click()" title="Importar una planilla con filas Inflacion / Comercio / un empleado por fila y los meses en columnas">📥 Importar Excel</button>
@@ -6571,7 +6571,7 @@
                                 <button class="btn btn-primary btn-sm" onclick="actAgregarEmpleado()">＋ Empleado</button>
                             </div>
                         </div>
-                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá lo que cobró cada uno ese mes. Alcanza con cargar el primero: los meses vacíos siguientes se <strong>calculan solos con el % de Comercio</strong> de cada mes (salen en azul, «calc.»). Si cargás un importe en otro mes, ese manda y el cálculo sigue desde ahí. Debajo de cada importe va el % de aumento contra el mes anterior. Debajo del nombre elegís la <strong>categoría</strong>: una del convenio (así «Según Comercio» usa los básicos de esa categoría) o <strong>Fuera de convenio</strong> (se compara sólo contra la inflación y los acuerdos no le aumentan el sueldo).</div>
+                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá lo que cobró cada uno ese mes. Alcanza con cargar el primero: los meses vacíos siguientes se <strong>calculan solos con el % de Comercio</strong> de cada mes (salen en azul, «calc.»). Lo que cargás es la <strong>base del cálculo, sin las sumas no remunerativas</strong>: el % se aplica sobre la base y debajo de cada mes ves el <strong>sueldo final</strong> = base + sumas vigentes (salvo que un acuerdo diga que el % va sobre base + sumas). Si cargás un importe en otro mes, ese manda y el cálculo sigue desde ahí. Debajo de cada importe va el % de aumento contra el mes anterior. Debajo del nombre elegís la <strong>categoría</strong>: una del convenio (así «Según Comercio» usa los básicos de esa categoría) o <strong>Fuera de convenio</strong> (se compara sólo contra la inflación y los acuerdos no le aumentan el sueldo).</div>
                         <div class="table-wrap"><table id="actEmpTabla"></table></div>
                     </div>
                 </div>
@@ -6583,7 +6583,7 @@
                             <h3>Acuerdos paritarios de Comercio</h3>
                             <button class="btn btn-primary btn-sm" onclick="actNuevoAcuerdo()">＋ Nuevo acuerdo</button>
                         </div>
-                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá cada acuerdo con sus tramos (ej. Abril 2% · Mayo 1,5% · Junio 1,5%), las sumas no remunerativas vigentes y los bonos. Con <strong>Aplicar</strong> se completa el % de Comercio de esos meses, se actualiza la escala de básicos y se les aumenta el sueldo a los empleados en convenio. Lo que ya estaba cargado a mano en la escala o en los sueldos no se pisa.</div>
+                        <div style="font-size:12px; color:var(--text-3); padding:0 16px 8px;">Cargá cada acuerdo con sus tramos (ej. Abril 2% · Mayo 1,5% · Junio 1,5%), las sumas no remunerativas vigentes y los bonos. Con <strong>Aplicar</strong> se completa el % de Comercio de esos meses y se les aumenta el sueldo a los empleados. Lo que ya estaba cargado a mano en los sueldos no se pisa.</div>
                         <div id="actAcuerdoForm" style="display:none; padding:0 16px 16px;"></div>
                         <div id="actAcuerdosLista" style="padding:0 16px 16px;"></div>
                     </div>
@@ -31436,8 +31436,12 @@
     //   empleados/<id>   = { nombre, sueldos: { <mes>: importe } }
     //   categorias/<id>  = { nombre, orden, basicos: { <mes>: importe } }
     //   empleados/<id>.categoria = '' (sin asignar, cuenta como convenio) | 'fuera' | <id de categoría>
-    //   empleados/<id>.sigueComercio = false para NO calcular los meses vacíos (por defecto sí se calculan:
-    //                        cada mes sin sueldo = el anterior × (1 + Comercio % de ese mes), ver _actSueldoEn)
+    //   empleados/<id>.sigueComercio = false para NO calcular los meses vacíos (por defecto sí se calculan, ver _actSueldoEn)
+    //   empleados/<id>.sinSumas = true si el empleado NO cobra las sumas no remunerativas
+    // SUELDOS: lo que se carga en empleados/<id>/sueldos es la BASE del cálculo, SIN las sumas no
+    // remunerativas. El % se aplica sobre esa base (_actBaseEn) y el sueldo final es base + sumas vigentes
+    // ese mes (_actSueldoEn): si las sumas pasan de $40.000 a $100.000, la diferencia aparece en el sueldo.
+    // Única excepción: un acuerdo con conSumas:true calcula el % sobre base + sumas.
     //   acuerdos/<id>    = { nombre, firmado, desde: <mes del 1er tramo>, tramos: [{ pct, sumas, bono }], nota,
     //                        base: 'acumulativo' | 'fijo', baseMes: <mes cuyo sueldo es la base si es fijo>,
     //                        conSumas: true si el % se calcula sobre sueldo + sumas no remunerativas,
@@ -31455,6 +31459,7 @@
     var _actChartObj = null;
     var _actVista = 'resumen';
     try { _actVista = localStorage.getItem('rk_act_vista') || 'resumen'; } catch (e) {}
+    if (_actVista === 'escala') _actVista = 'resumen';   // la pestaña Escala está oculta
     var _ACT_MES_NOM = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
     var _ACT_CATS_CCT = [
         'Maestranza A','Maestranza B','Maestranza C',
@@ -31567,14 +31572,56 @@
     // calculan con el % de Comercio de cada mes (si el empleado «sigue Comercio», que es lo normal),
     // o repiten el último sueldo si se le destildó esa opción. Antes del primer sueldo cargado: null.
     function _actSigueComercio(e) { return !!e && e.sigueComercio !== false; }
-    function _actSueldoEn(e, m) {
+    function _actIncluyeSumas(e) { return !!e && e.sinSumas !== true; }
+    // Acuerdo que cubre el mes <m> (si hay varios, el que empezó más tarde) y el tramo que le toca.
+    function _actAcuerdoDe(m) {
+        var res = null;
+        Object.keys(_act.acuerdos || {}).forEach(function(id) {
+            var a = _act.acuerdos[id]; if (!a || !a.desde || m < a.desde) return;
+            var i = _actAcuerdoMeses(a).indexOf(m);
+            if (i >= 0 && (!res || a.desde > res.a.desde)) res = { a: a, t: a.tramos[i] || {} };
+        });
+        return res;
+    }
+    // Sumas no remunerativas vigentes en <m>, contando las de un acuerdo cargado aunque no esté aplicado.
+    function _actSumasTot(m) {
+        var ac = _actAcuerdoDe(m);
+        return ac ? _actAcSumasEn(ac.a, m) : _actSumas(m);
+    }
+    // Base del cálculo (sin sumas) de un empleado en un mes: lo cargado manda; los meses vacíos
+    // posteriores se calculan con el % de Comercio (o el del acuerdo que cubra ese mes).
+    function _actBaseEn(e, m) {
         var mapa = (e && e.sueldos) || {};
         if (!_actSigueComercio(e)) return _actValorEn(mapa, m);
         var ks = Object.keys(mapa).filter(function(k) { return k <= m && _actNum(mapa[k]) > 0; }).sort();
         if (!ks.length) return null;
-        var ult = ks[ks.length - 1], v = mapa[ult], x = _actMesSig(ult), g = 0;
-        while (x <= m && g++ < 600) { v = v * (1 + _actComercio(x) / 100); x = _actMesSig(x); }
-        return v;
+        var ult = ks[ks.length - 1];
+        if (ult === m) return mapa[m];
+        var b = mapa[ult];
+        var bas = {}; bas[ult] = b;
+        var x = _actMesSig(ult), g = 0;
+        while (x <= m && g++ < 600) {
+            var ac = _actAcuerdoDe(x), pct, base;
+            if (ac) {
+                // Mes de un acuerdo: su % y su base (acumulativo o sueldo de un mes fijo, con o sin sumas).
+                pct = _actNum(ac.t.pct) || 0;
+                if (ac.a.base === 'fijo') {
+                    var bm = _actAcBaseMes(ac.a), vb = _actValorEn(mapa, bm);
+                    var bb = bas[bm] != null ? bas[bm] : (vb != null ? vb : b);
+                    base = bb + (ac.a.conSumas ? _actSumasTot(bm) : 0);
+                } else base = b + (ac.a.conSumas ? _actSumasTot(_actMesSig(x, -1)) : 0);
+            } else { pct = _actComercio(x); base = b; }
+            b = b + base * pct / 100;
+            bas[x] = b;
+            x = _actMesSig(x);
+        }
+        return b;
+    }
+    // Sueldo final = base + sumas no remunerativas vigentes ese mes (si el empleado las cobra).
+    function _actSueldoEn(e, m) {
+        var b = _actBaseEn(e, m);
+        if (b == null) return null;
+        return b + (_actIncluyeSumas(e) ? _actSumasTot(m) : 0);
     }
     function _actPct(x) { return (x >= 0 ? '+' : '') + x.toFixed(1).replace('.', ',') + '%'; }
     function _actColor(x) { return x > 0.05 ? 'var(--success)' : x < -0.05 ? 'var(--danger)' : 'var(--text-2)'; }
@@ -31667,7 +31714,7 @@
             // Si entró después de «Desde», se compara desde su primer sueldo cargado.
             if (s0 == null) {
                 bm = Object.keys(e.sueldos || {}).filter(function(k) { return k > desde && k <= hasta && _actNum(e.sueldos[k]) > 0; }).sort()[0];
-                s0 = bm ? e.sueldos[bm] : null;
+                s0 = bm ? _actSueldoEn(e, bm) : null;
             }
             var cat = _actCatNombre(e);
             var nom = '<td><strong>' + escHtml(e.nombre || '(sin nombre)') + '</strong>' +
@@ -31682,8 +31729,10 @@
             if (!_actEsFuera(e)) {
                 // Con categoría del convenio y básicos cargados, se usa la suba real de ESA categoría.
                 var c = _act.categorias[e.categoria], b0 = c && _actValorEn(c.basicos, bm), b1 = c && _actValorEn(c.basicos, hasta);
-                if (b0 && b1) { segCom = s0 * (b1 / b0) + (sH - _actSumas(bm)); segTit = 'Sueldo de «Desde» × suba del básico de ' + c.nombre + ' + diferencia de sumas no remunerativas'; }
-                else segCom = s0 * fC + (sH - _actSumas(bm));
+                // Las sumas no remunerativas no se aumentan: se sacan, se aplica la suba y se suman las de «Hasta».
+                var sum1 = _actIncluyeSumas(e) ? _actSumasTot(hasta) : 0, neto0 = _actBaseEn(e, bm) || s0;
+                if (b0 && b1) { segCom = neto0 * (b1 / b0) + sum1; segTit = 'Base de «Desde» (sin sumas no rem.) × suba del básico de ' + c.nombre + ' + sumas vigentes en «Hasta»'; }
+                else { segCom = neto0 * fC + sum1; segTit = 'Base de «Desde» (sin sumas no rem.) × aumentos de Comercio + sumas vigentes en «Hasta»'; }
             }
             return '<tr>' + nom +
                 '<td style="text-align:right;">' + fmt(s0) + '</td>' +
@@ -31773,7 +31822,7 @@
     }
 
     // Tabla de meses (filas) × columnas (empleados o categorías) con inputs y % de variación.
-    function _actGrilla(tablaId, ids, obj, campo, fnSet, fnBorrar, fnRenombrar, meses, extraHead, valorEn) {
+    function _actGrilla(tablaId, ids, obj, campo, fnSet, fnBorrar, fnRenombrar, meses, extraHead, valorEn, extraCelda) {
         // valorEn(id, mes) = importe efectivo (con los meses vacíos calculados); por defecto, el último cargado.
         valorEn = valorEn || function(id, m) { return _actValorEn(obj[id][campo], m); };
         var t = document.getElementById(tablaId); if (!t) return;
@@ -31792,7 +31841,7 @@
                 var calc = v == null && act != null && prev != null && Math.abs(act - prev) > 0.005;   // mes vacío que se calculó
                 var pct = (prev && act && (v != null || calc)) ? (act / prev - 1) * 100 : null;
                 var pctTxt = pct != null ? '<div style="font-size:10.5px;color:' + (calc ? 'var(--blue,#0071E3)' : (ipc != null ? _actColor(pct - ipc) : 'var(--text-3)')) + ';"' + (calc ? ' title="Calculado con el % de Comercio del mes. Cargá un importe para reemplazarlo."' : '') + '>' + (calc ? 'calc. ' : '') + _actPct(pct) + '</div>' : '';
-                return '<td style="text-align:right;">' + _actInput(v, fnSet + "('" + id + "','" + m + "',this.value)", ' placeholder="' + (v == null && act ? Math.round(act) : '') + '"') + pctTxt + '</td>';
+                return '<td style="text-align:right;">' + _actInput(v, fnSet + "('" + id + "','" + m + "',this.value)", ' placeholder="' + (v == null && act ? Math.round(act) : '') + '"') + pctTxt + (extraCelda ? extraCelda(id, m) : '') + '</td>';
             }).join('') + '</tr>';
         });
         // Fila final: variación total contra la inflación del mismo período.
@@ -31800,7 +31849,8 @@
             // Desde el primer importe cargado hasta el último mes de la tabla (incluye los meses calculados).
             var mapa = obj[id][campo] || {}, ks = Object.keys(mapa).filter(function(k) { return _actNum(mapa[k]) > 0; }).sort();
             if (!ks.length) return '<td></td>';
-            var a = ks[0], b = meses[meses.length - 1], va = mapa[a], vb = valorEn(id, b);
+            var tot = extraCelda && campo === 'sueldos' ? function(m) { return _actSueldoEn(obj[id], m); } : function(m) { return valorEn(id, m); };
+            var a = ks[0], b = meses[meses.length - 1], va = tot(a), vb = tot(b);
             if (b <= a || !vb) return '<td></td>';
             var sub = (vb / va - 1) * 100, f = _actFactor(a, b, _actIpc).f, real = (vb / va / f - 1) * 100;
             return '<td style="text-align:right;font-size:11.5px;">' + _actPct(sub) + ' vs ' + _actPct((f - 1) * 100) +
@@ -31818,8 +31868,14 @@
             return '<div style="margin-top:4px;"><select onchange="actSetCategoriaEmp(\'' + id + '\',this.value)" title="Categoría del empleado" style="max-width:150px;padding:3px 6px;font-size:11px;">' +
                 op('', '— categoría —') + cats.map(function(c) { return op(c, _act.categorias[c].nombre); }).join('') + op('fuera', 'Fuera de convenio') + '</select></div>' +
                 '<label style="display:inline-flex;align-items:center;gap:4px;margin-top:4px;font-size:10.5px;font-weight:400;text-transform:none;letter-spacing:0;" title="Los meses sin sueldo cargado se calculan con el % de Comercio de cada mes">' +
-                    '<input type="checkbox"' + (_actSigueComercio(_act.empleados[id]) ? ' checked' : '') + ' onchange="actSetSigueComercio(\'' + id + '\',this.checked)"> calcular con Comercio</label>';
-        }, function(id, m) { return _actSueldoEn(_act.empleados[id], m); });
+                    '<input type="checkbox"' + (_actSigueComercio(_act.empleados[id]) ? ' checked' : '') + ' onchange="actSetSigueComercio(\'' + id + '\',this.checked)"> calcular con Comercio</label><br>' +
+                '<label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:400;text-transform:none;letter-spacing:0;" title="Al sueldo final se le suman las sumas no remunerativas vigentes cada mes (lo cargado es la base, sin sumas)">' +
+                    '<input type="checkbox"' + (_actIncluyeSumas(_act.empleados[id]) ? ' checked' : '') + ' onchange="actSetIncluyeSumas(\'' + id + '\',this.checked)"> cobra sumas no rem.</label>';
+        }, function(id, m) { return _actBaseEn(_act.empleados[id], m); }, function(id, m) {
+            // Debajo de cada mes: el sueldo final con las sumas no remunerativas.
+            var e = _act.empleados[id], b = _actBaseEn(e, m), sm = _actIncluyeSumas(e) ? _actSumasTot(m) : 0;
+            return (b != null && sm) ? '<div style="font-size:10.5px;color:var(--text-2);" title="Base + ' + fmt(sm) + ' de sumas no remunerativas">sueldo ' + fmt(b + sm) + '</div>' : '';
+        });
     }
     function _actPintarEscala(meses) {
         var ids = _actOrden(_act.categorias, true);
@@ -31839,6 +31895,11 @@
         if (!e || !e.categoria) return '';
         if (e.categoria === 'fuera') return 'Fuera de convenio';
         var c = _act.categorias[e.categoria]; return c ? c.nombre : '';
+    }
+    function actSetIncluyeSumas(id, on) {
+        var e = _act.empleados[id]; if (!e) return;
+        e.sinSumas = on ? null : true;   // por defecto sí las incluye: sólo se guarda el «no»
+        _actGuardar('empleados/' + id + '/sinSumas', on ? null : true).then(_actPintar);
     }
     function actSetSigueComercio(id, on) {
         var e = _act.empleados[id]; if (!e) return;
@@ -31954,20 +32015,26 @@
     }
     // Aplica los tramos a un importe. valorBase = importe del mes anterior al 1er tramo; valorEnMesBase =
     // importe del mes base (sólo modo 'fijo'); manual(m) = importe cargado a mano ese mes (se respeta).
-    // Cada tramo SUMA pct × base, donde la base es:
-    //   acumulativo → el importe del mes anterior (ya aumentado) [+ sumas vigentes ese mes anterior]
-    //   fijo        → el importe del mes base elegido [+ sumas vigentes en el mes base]
+    // totalConSumas = los importes son sueldos que YA incluyen las sumas no remunerativas: se descuentan
+    // antes de aplicar el % y se vuelven a sumar (las del mes nuevo) al final. Los básicos de la escala no.
+    // Cada tramo SUMA pct × base, donde la base es (sin sumas):
+    //   acumulativo → el básico del mes anterior (ya aumentado) [+ sumas de ese mes si conSumas]
+    //   fijo        → el básico del mes base elegido [+ sumas del mes base si conSumas]
     // Devuelve [{ mes, valor, manual }].
-    function _actAcEncadenar(a, valorBase, valorEnMesBase, manual) {
-        var ms = _actAcuerdoMeses(a), out = [], cur = valorBase, fijo = a.base === 'fijo', bm = _actAcBaseMes(a);
+    function _actAcEncadenar(a, valorBase, valorEnMesBase, manual, totalConSumas) {
+        var ms = _actAcuerdoMeses(a), out = [], fijo = a.base === 'fijo', bm = _actAcBaseMes(a);
+        var S = totalConSumas ? function(m) { return _actAcSumasEn(a, m); } : function() { return 0; };
+        var prev0 = _actMesSig(ms[0], -1);
+        if (totalConSumas && (valorBase - S(prev0) <= 0 || valorEnMesBase - S(bm) <= 0)) S = function() { return 0; };
+        var cur = valorBase - S(prev0), enBase = valorEnMesBase - S(bm);
         (a.tramos || []).forEach(function(t, i) {
-            var prev = i ? ms[i - 1] : _actMesSig(ms[0], -1);
-            var base = fijo ? valorEnMesBase + (a.conSumas ? _actAcSumasEn(a, bm) : 0)
+            var prev = i ? ms[i - 1] : prev0;
+            var base = fijo ? enBase + (a.conSumas ? _actAcSumasEn(a, bm) : 0)
                             : cur + (a.conSumas ? _actAcSumasEn(a, prev) : 0);
             cur = cur + base * (_actNum(t.pct) || 0) / 100;
             var man = manual ? manual(ms[i]) : null;
-            if (man != null) { cur = man; out.push({ mes: ms[i], valor: man, manual: true }); return; }
-            out.push({ mes: ms[i], valor: Math.round(cur * 100) / 100, manual: false });
+            if (man != null) { cur = man - S(ms[i]); out.push({ mes: ms[i], valor: man, manual: true }); return; }
+            out.push({ mes: ms[i], valor: Math.round((cur + S(ms[i])) * 100) / 100, manual: false });
         });
         return out;
     }
@@ -32004,7 +32071,7 @@
                 '<div style="margin-top:8px;">' + tr + '</div>' +
                 (a.nota ? '<div style="font-size:12px;color:var(--text-2);margin-top:6px;">' + escHtml(a.nota) + '</div>' : '') +
                 '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' +
-                    chk('meses', 'Comercio % y sumas', true) + chk('basicos', 'Escala de básicos', true) + chk('sueldos', 'Sueldos en convenio', true) + chk('fuera', 'También fuera de convenio', false) +
+                    chk('meses', 'Comercio % y sumas', true) + (Object.keys(_act.categorias || {}).length ? chk('basicos', 'Escala de básicos', true) : '') + chk('sueldos', 'Sueldos en convenio', true) + chk('fuera', 'También fuera de convenio', false) +
                 '</div>' +
                 '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' +
                     '<button class="btn btn-primary btn-sm" onclick="actAplicarAcuerdo(\'' + id + '\')">' + (ap ? '↻ Volver a aplicar' : '✔ Aplicar') + '</button>' +
@@ -32058,7 +32125,7 @@
                 '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-bottom:4px;"><input type="radio" name="actAcBase" ' + (d.base !== 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'acumulativo\';_actPintarFormAcuerdo()"> Acumulativo: cada mes sobre el sueldo del mes anterior (ya aumentado)</label>' +
                 '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><input type="radio" name="actAcBase" ' + (d.base === 'fijo' ? 'checked' : '') + ' onchange="_actAcDraft.base=\'fijo\';_actPintarFormAcuerdo()"> Todos los tramos sobre el sueldo de' +
                     ' <input type="month" value="' + _actAcBaseMes(d) + '" ' + (d.base === 'fijo' ? '' : 'disabled') + ' onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){_actAcDraft.baseMes=this.value;_actPintarFormAcuerdo();}" style="padding:3px 6px;font-size:12px;"></label>' +
-                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" ' + (d.conSumas ? 'checked' : '') + ' onchange="_actAcDraft.conSumas=this.checked;_actPintarFormAcuerdo()"> Incluir las <strong>sumas no remunerativas</strong> vigentes en la base del cálculo</label>' +
+                '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" ' + (d.conSumas ? 'checked' : '') + ' onchange="_actAcDraft.conSumas=this.checked;_actPintarFormAcuerdo()"> Calcular el % sobre la base <strong>más las sumas no remunerativas</strong> (si no se tilda, el % va sólo sobre la base; las sumas igual se suman al sueldo final)</label>' +
                 '<div style="font-size:12px;color:var(--text-2);margin-top:8px;">' + _actAcEjemplo(d) + '</div>' +
             '</div>' +
             '<label style="font-size:12px;display:block;margin-top:8px;">Nota (opcional)<br><input type="text" value="' + escHtml(d.nota || '') + '" placeholder="Ej. las sumas pasan al básico desde diciembre" oninput="_actAcDraft.nota=this.value" style="width:100%;"></label>' +
@@ -32076,12 +32143,15 @@
     // Ejemplo en vivo con un sueldo de $1.000.000, para ver qué va a hacer el acuerdo antes de aplicarlo.
     function _actAcEjemplo(d) {
         var a = { desde: d.desde, tramos: d.tramos, base: d.base, baseMes: d.baseMes, conSumas: d.conSumas };
-        var r = _actAcEncadenar(a, 1000000, 1000000, null);
+        // Base de $1.000.000 (sin sumas); el sueldo final de cada mes suma las sumas vigentes.
+        var s0 = _actAcSumasEn(a, _actMesSig(a.desde, -1));
+        var r = _actAcEncadenar(a, 1000000, 1000000, null, false);
         if (!r.length) return '<span id="actAcEjemplo"></span>';
-        var sb = a.conSumas ? _actAcSumasEn(a, a.base === 'fijo' ? _actAcBaseMes(a) : _actMesSig(a.desde, -1)) : 0;
-        return '<span id="actAcEjemplo">Ejemplo con un sueldo de ' + fmt(1000000) + (a.conSumas ? ' (+ ' + fmt(sb) + ' de sumas en la base)' : '') + ': ' +
-            r.map(function(x) { return '<strong>' + _actMesLabel(x.mes) + '</strong> ' + fmt(x.valor); }).join(' → ') +
-            ' · aumento total ' + _actPct((r[r.length - 1].valor / 1000000 - 1) * 100) + '</span>';
+        var tot = function(x) { return x.valor + _actAcSumasEn(a, x.mes); };
+        return '<span id="actAcEjemplo">Ejemplo con una base de ' + fmt(1000000) + (s0 ? ' (+ ' + fmt(s0) + ' de sumas = ' + fmt(1000000 + s0) + ')' : '') +
+            ', el % se calcula ' + (a.conSumas ? '<strong>sobre base + sumas</strong>' : '<strong>sólo sobre la base</strong>') + ': ' +
+            r.map(function(x) { var sm = _actAcSumasEn(a, x.mes); return '<strong>' + _actMesLabel(x.mes) + '</strong> base ' + fmt(x.valor) + (sm ? ' → sueldo ' + fmt(tot(x)) : ''); }).join(' · ') +
+            ' · aumento del sueldo ' + _actPct((tot(r[r.length - 1]) / (1000000 + s0) - 1) * 100) + '</span>';
     }
     function _actAcQuitar(i) { _actAcDraft.tramos.splice(i, 1); _actPintarFormAcuerdo(); }
     function actGuardarAcuerdo() {
@@ -32126,14 +32196,14 @@
         });
         // Lleva un importe mes a mes con los % del acuerdo (ver _actAcEncadenar), partiendo del último
         // valor ANTES del 1er tramo; en modo 'fijo' el % se calcula sobre el importe del mes base.
-        var encadenar = function(mapa, prefijo, nombre, valorEn) {
+        var encadenar = function(mapa, prefijo, nombre, valorEn, conSumasIncluidas) {
             mapa = mapa || {};
             valorEn = valorEn || function(m) { return _actValorEn(mapa, m); };
             var cur = valorEn(_actMesSig(ms[0], -1));
             var enBase = a.base === 'fijo' ? valorEn(_actAcBaseMes(a)) : cur;
             if (!cur || !enBase) { cuenta.sinBase.push(nombre); return 0; }
             var n = 0;
-            _actAcEncadenar(a, cur, enBase, function(m) { return _actNum(mapa[m]); }).forEach(function(x) {
+            _actAcEncadenar(a, cur, enBase, function(m) { return _actNum(mapa[m]); }, conSumasIncluidas).forEach(function(x) {
                 if (x.manual) { cuenta.respetados++; return; }   // cargado a mano: manda y sigue desde ahí
                 upd[prefijo + x.mes] = x.valor; n++;
             });
@@ -32146,7 +32216,7 @@
         if (hacerSue) Object.keys(_act.empleados).forEach(function(eid) {
             var e = _act.empleados[eid]; if (!e) return;
             if (_actEsFuera(e) && !conFuera) return;
-            cuenta.sueldos += encadenar(e.sueldos, 'empleados/' + eid + '/sueldos/', e.nombre, function(m) { return _actSueldoEn(e, m); });
+            cuenta.sueldos += encadenar(e.sueldos, 'empleados/' + eid + '/sueldos/', e.nombre, function(m) { return _actBaseEn(e, m); }, false);
         });
         var txt = 'Aplicar «' + (a.nombre || 'acuerdo') + '» (' + _actMesLabel(ms[0]) + ' a ' + _actMesLabel(ms[ms.length - 1]) + ')\nCálculo: ' + _actAcBaseTxt(a) + '\n\n' +
             (hacerMeses ? '• Comercio % en ' + cuenta.meses + ' mes(es)' + (tr.some(function(t) { return _actNum(t.sumas) != null || _actNum(t.bono); }) ? ', con sumas/bonos' : '') + '\n' : '') +
