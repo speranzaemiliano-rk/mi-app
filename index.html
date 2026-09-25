@@ -3540,7 +3540,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v524</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v525</div>
         </div>
     </nav>
 
@@ -5036,7 +5036,7 @@
                         </div>
                         <div class="stats-grid" id="remStatsGrid" style="margin-bottom:16px; margin-top:0;">
                             <div class="stat-card"><div class="stat-label">Empleados</div><div class="stat-value" id="remTotalEmpleados">0</div></div>
-                            <div class="stat-card"><div class="stat-label">Masa salarial mensual (básicos)</div><div class="stat-value" id="remMasaNeta" style="font-size:18px;">$0</div></div>
+                            <div class="stat-card"><div class="stat-label">Masa salarial mensual</div><div class="stat-value" id="remMasaNeta" style="font-size:18px;">$0</div><div id="remMasaDesglose" style="font-size:11px;color:var(--text-3);margin-top:2px;"></div></div>
                             <div class="stat-card"><div class="stat-label">Aguinaldo (SAC) semestral estimado</div><div class="stat-value" id="remSacTotal" style="font-size:18px;">$0</div></div>
                             <div class="stat-card"><div class="stat-label">Vacaciones estimadas (año)</div><div class="stat-value" id="remVacTotal" style="font-size:18px;">$0</div></div>
                         </div>
@@ -5054,17 +5054,21 @@
                                     <thead>
                                         <tr>
                                             <th>Empleado</th><th>CUIL</th><th>Ingreso</th><th>Contrato</th>
-                                            <th style="text-align:right">Sueldo básico</th>
+                                            <th style="text-align:right" title="Sueldo básico: es la base de los aportes, del SAC y de las vacaciones">🅰️ Remunerativo</th>
+                                            <th style="text-align:right" title="No remunerativo mensual: se cobra pero no tributa, y no entra en el SAC ni en vacaciones">🅱️ No remun.</th>
+                                            <th style="text-align:right" title="Lo que cobra por mes: remunerativo + no remunerativo">Total mensual</th>
                                             <th style="text-align:right">Vac. (días)</th><th style="text-align:right">SAC sem.</th><th>Acciones</th>
                                         </tr>
                                     </thead>
                                     <tbody id="remBody">
-                                        <tr><td colspan="8" class="empty-msg">No hay empleados cargados.</td></tr>
+                                        <tr><td colspan="10" class="empty-msg">No hay empleados cargados.</td></tr>
                                     </tbody>
                                 </table>
                             </div>
                             <div class="form-hint" style="color:var(--text-3); padding:10px 14px;">
-                                El legajo guarda el <strong>sueldo básico</strong> de cada empleado. Lo que efectivamente cobra sale de la
+                                El legajo guarda el reparto del sueldo: <strong>🅰️ remunerativo</strong> (el básico, sobre el que se calculan los
+                                aportes, el SAC y las vacaciones) y <strong>🅱️ no remunerativo</strong>, que se cobra pero no tributa y por eso
+                                <strong>no</strong> entra en el SAC ni en las vacaciones. Lo que efectivamente cobra sale de la
                                 <strong>liquidación del mes</strong> (💰 Liquidar sueldo), y el recibo se imprime desde ahí o se reimprime
                                 desde «Recibos anteriores» — no desde este listado.
                                 Los cálculos de vacaciones y aguinaldo (SAC) son <strong>estimaciones</strong> según la antigüedad y el sueldo básico
@@ -16183,7 +16187,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v524';
+    var APP_VER = 'v525';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -28896,15 +28900,22 @@
 
         // El legajo trabaja con SUELDOS BÁSICOS. Lo que se cobra de verdad sale de la
         // liquidación del mes (Parte A + Parte B), que se ve en el Resumen mensual.
-        var totalBasico = 0, totalSac = 0, totalVac = 0;
+        // El SAC y las vacaciones se calculan SÓLO sobre el básico (Parte A): la Parte B no
+        // es remunerativa y no entra en esos cálculos. La masa salarial sí muestra las dos.
+        var totalBasico = 0, totalNoRem = 0, totalSac = 0, totalVac = 0;
         remuneraciones.forEach(function(emp) {
             totalBasico += (emp.sueldoBasico || 0);
+            totalNoRem  += (emp.sueldoNoRemun || 0);
             totalSac  += remSacSemestral(emp);
             totalVac  += remMontoVacaciones(emp);
         });
         var sEl = function(id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
         sEl('remTotalEmpleados', remuneraciones.length);
-        sEl('remMasaNeta', fmt(totalBasico));
+        sEl('remMasaNeta', fmt(totalBasico + totalNoRem));
+        var _desg = document.getElementById('remMasaDesglose');
+        if (_desg) _desg.innerHTML = totalNoRem
+            ? '🅰️ ' + fmt(totalBasico) + ' remunerativo · 🅱️ ' + fmt(totalNoRem) + ' no remunerativo'
+            : 'Todo remunerativo (🅰️)';
         sEl('remSacTotal', fmt(totalSac));
         sEl('remVacTotal', fmt(totalVac));
         _renderRemunResumen();        // resumen mensual: liquidado vs pagado vs pendiente
@@ -28917,13 +28928,14 @@
             return !q || ((emp.nombre || '') + ' ' + (emp.cuil || '') + ' ' + (emp.puesto || '')).toLowerCase().indexOf(q) !== -1;
         });
         if (!visibles.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">' + (remuneraciones.length ? 'Sin resultados.' : 'No hay empleados cargados.') + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-msg">' + (remuneraciones.length ? 'Sin resultados.' : 'No hay empleados cargados.') + '</td></tr>';
             return;
         }
         tbody.innerHTML = '';
         visibles.forEach(function(emp) {
             var idx = remuneraciones.indexOf(emp);
             var contrato = emp.tipoContrato === 'monotributo' ? 'Monotributo' : 'Dependencia';
+            var _nr = emp.sueldoNoRemun || 0;
             var tr = document.createElement('tr');
             tr.innerHTML =
                 '<td><strong>' + escHtml(emp.nombre || '—') + '</strong>' + (emp.puesto ? '<br><span style="font-size:11px;color:var(--text-3);">' + escHtml(emp.puesto) + '</span>' : '') + '</td>' +
@@ -28933,6 +28945,8 @@
                 // El legajo muestra el SUELDO BÁSICO. El neto sale de la liquidación del mes
                 // (Parte A + Parte B), no de acá, y el recibo se imprime desde «Liquidar sueldo».
                 '<td style="text-align:right;font-weight:700;">' + fmt(emp.sueldoBasico) + '</td>' +
+                '<td style="text-align:right;' + (_nr ? '' : 'color:var(--text-3);') + '">' + (_nr ? fmt(_nr) : '—') + '</td>' +
+                '<td style="text-align:right;font-weight:700;' + (_nr ? 'color:var(--gold);' : '') + '">' + fmt((emp.sueldoBasico || 0) + _nr) + '</td>' +
                 '<td style="text-align:right;">' + remDiasVacaciones(emp.fechaIngreso) + '</td>' +
                 '<td style="text-align:right;">' + fmt(remSacSemestral(emp)) + '</td>' +
                 '<td><div class="action-btns">' +
@@ -28964,7 +28978,11 @@
         celdas.push(info('Condición', emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia'));
         if (emp.obraSocial) celdas.push(info('Obra social', escHtml(emp.obraSocial)));
         if (emp.convenio)   celdas.push(info('Convenio', escHtml(emp.convenio)));
-        celdas.push(info('Sueldo básico', fmt(emp.sueldoBasico)));
+        celdas.push(info('Sueldo básico (🅰️ remunerativo)', fmt(emp.sueldoBasico)));
+        if ((emp.sueldoNoRemun || 0) > 0) {
+            celdas.push(info('No remunerativo (🅱️)', fmt(emp.sueldoNoRemun)));
+            celdas.push(info('Total mensual', fmt((emp.sueldoBasico || 0) + emp.sueldoNoRemun)));
+        }
         celdas.push(info('Días de vacaciones', String(remDiasVacaciones(emp.fechaIngreso))));
         celdas.push(info('SAC semestral estimado', fmt(remSacSemestral(emp))));
         var css =
