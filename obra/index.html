@@ -335,10 +335,23 @@
 
   #reporte .pie{margin-top:8mm;padding-top:2mm;border-top:.4pt solid #bbb;font-size:7.5pt;color:#777}
 
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:74px;z-index:50;background:var(--tinta);color:var(--casco);padding:10px 16px;border-radius:4px;font-size:13px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s}
+  .asis-row{display:flex;align-items:center;gap:10px;margin:2px 0 10px}
+  .asis-cuenta{flex:1;min-width:0;font-size:12px;color:var(--lapiz)}
+  .asis-btn{flex:0 0 auto;padding:9px 15px;font-size:12.5px}
+
+  /* El texto del toast era azul sobre tinta: 3,6 de contraste, poco para 13px
+     al sol de la obra. En blanco da 15,8, y ahora además lleva el "Deshacer",
+     que hay que poder leer para usarlo. */
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:74px;z-index:50;background:var(--tinta);color:#fff;padding:10px 16px;border-radius:4px;font-size:13px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s;display:flex;align-items:center;gap:14px;width:max-content;max-width:calc(100vw - 24px)}
   .toast.show{opacity:1}
+  .toast.con-accion{pointer-events:auto}
+  .toast-msg{flex:0 1 auto}
+  /* El área invisible lo lleva a 45px sin engordar el toast: con guantes, a
+     23px de alto no se le acierta. */
+  .toast-btn{flex:0 0 auto;background:none;border:0;color:#7FBEFF;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;padding:6px 4px;text-decoration:underline;position:relative}
+  .toast-btn::after{content:"";position:absolute;top:-9px;bottom:-9px;left:-10px;right:-10px}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
-  @media print{.barra,.add-item,.icono,.stepper button,.btn{display:none!important}}
+  @media print{.barra,.add-item,.icono,.stepper button,.btn,.asis-row{display:none!important}}
 </style>
 </head>
 <body>
@@ -384,6 +397,13 @@
 </header>
 
 <div class="wrap">
+  <!-- Los dias de poca gente, destildar 24 personas de a una era el trabajo
+       más pesado de la planilla: el día nuevo arranca con toda la nómina
+       presente (asegurarDia). -->
+  <div class="asis-row" id="asisRow" hidden>
+    <span class="asis-cuenta" id="asisCuenta"></span>
+    <button class="btn asis-btn" id="btnTodos" type="button"></button>
+  </div>
   <div id="gremios">
     <div class="vacio" id="avisoJS" style="padding:28px 10px;line-height:1.6">
       <b style="color:#D70015">La planilla no se está ejecutando.</b><br><br>
@@ -629,6 +649,43 @@
   }
   function vino(pid){ return vinoEn(fechaActual, pid); }
   function marcarVino(pid, v){ asistenciaDe(fechaActual)[pid] = !!v; }
+  function presentesHoy(){
+    return personalActivo().filter(function(p){ return vino(p.id); }).length;
+  }
+
+  /* Tildar o destildar toda la nómina de una. El día nuevo arranca con todos
+     presentes, así que los días de poca gente el capataz destildaba de a uno;
+     ahora destilda todo y tilda a los tres que vinieron.
+     El rótulo dice lo que va a pasar al tocarlo: con un solo botón que
+     alterna, en estado mixto no habría forma de saber para dónde va.
+     Toca sólo a la nómina: los renglones sin nombre (changas, subcontratos)
+     son otro conteo y no se tocan. */
+  function marcarTodos(v){
+    var f = fechaActual;            // la fecha, no el objeto: cuando baja algo
+    var previo = {}, a = asistenciaDe(f);   // de la nube, `datos` se reemplaza
+    Object.keys(a).forEach(function(k){ previo[k] = a[k]; });
+    personalActivo().forEach(function(p){ asistenciaDe(f)[p.id] = !!v; });
+    guardar(); render();
+    toast(v ? "Toda la nómina en obra" : "Nadie en obra", "Deshacer", function(){
+      asegurarDia(f);
+      datos.dias[f].asistencia = previo;
+      guardar(); render();
+    });
+  }
+
+  function pintarBotonTodos(){
+    var row = document.getElementById("asisRow");
+    var btn = document.getElementById("btnTodos");
+    var cta = document.getElementById("asisCuenta");
+    if (!row || !btn || !cta) return;
+    var total = personalActivo().length;
+    row.hidden = !total;
+    if (!total) return;
+    var presentes = presentesHoy(), todos = presentes === total;
+    btn.textContent = todos ? "Destildar todos" : "Tildar todos";
+    btn.setAttribute("data-v", todos ? "0" : "1");
+    cta.textContent = presentes + " de " + total + " de la nómina en obra";
+  }
   // Suma a alguien al día abierto SIN pisar lo que ya esté marcado. Antes
   // ponía true a secas y volver a importar la nómina de ART borraba todos
   // los "no vino" que el capataz ya había cargado: los daba por presentes
@@ -767,6 +824,7 @@
     if (!datos.gremios.length && !personalActivo().length) {
       elGremios.innerHTML = '<div class="vacio">Todavía no hay nada cargado.<br><br>' +
         'Tocá «Personal» para traer la nómina,<br>o «Gremios» para armar la lista de gremios.</div>';
+      pintarBotonTodos();
       actualizarTablero();
       return;
     }
@@ -776,6 +834,7 @@
     var sueltos = personalSinGremio();
     if (sueltos.length) elGremios.appendChild(tarjetaSinGremio(sueltos));
 
+    pintarBotonTodos();
     actualizarTablero();
   }
 
@@ -1050,11 +1109,39 @@
   document.getElementById("btnCerrar").addEventListener("click", cerrarModal);
   modal.addEventListener("click", function(e){ if (e.target === modal) cerrarModal(); });
 
-  function toast(msg){
+  var tToast = null;
+  // Con `etiqueta` y `accion` el toast suma un boton (hoy: el "Deshacer" de
+  // tildar/destildar todo) y se queda mas tiempo en pantalla.
+  function toast(msg, etiqueta, accion){
     var t = document.getElementById("toast");
-    t.textContent = msg; t.classList.add("show");
-    setTimeout(function(){ t.classList.remove("show"); }, 1800);
+    if (tToast) clearTimeout(tToast);
+    t.textContent = "";
+    var m = document.createElement("span");
+    m.className = "toast-msg";
+    m.textContent = msg;
+    t.appendChild(m);
+    t.classList.toggle("con-accion", !!accion);
+    if (accion) {
+      var b = document.createElement("button");
+      b.className = "toast-btn";
+      b.type = "button";
+      b.textContent = etiqueta;
+      b.addEventListener("click", function(){
+        if (tToast) clearTimeout(tToast);
+        t.classList.remove("show", "con-accion");
+        accion();
+      });
+      t.appendChild(b);
+    }
+    t.classList.add("show");
+    tToast = setTimeout(function(){
+      t.classList.remove("show", "con-accion");
+    }, accion ? 6000 : 1800);
   }
+
+  document.getElementById("btnTodos").addEventListener("click", function(){
+    marcarTodos(this.getAttribute("data-v") === "1");
+  });
 
   /* ---- Enviar parte ---- */
   document.getElementById("btnEnviar").addEventListener("click", function(){
