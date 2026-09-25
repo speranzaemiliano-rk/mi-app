@@ -6490,6 +6490,8 @@
                     <!-- «📋 Escala Comercio» (vista 'escala') oculta a pedido del dueño: no la usa. El código y los datos siguen. -->
                     <button class="btn btn-outline btn-sm" data-actvista="calc" onclick="actVista('calc')">🧮 Calcular aumento</button>
                     <span style="flex:1;"></span>
+                    <button class="btn btn-outline btn-sm" onclick="actBloquear()" title="Bloquear la sección: para volver a entrar pide la clave">🔒 Bloquear</button>
+                    <button class="btn btn-outline btn-sm" onclick="actCambiarClave()" title="Cambiar la clave de esta sección">🔑 Cambiar clave</button>
                     <button class="btn btn-outline btn-sm" onclick="actImprimirPDF()" title="Informe para imprimir o guardar en PDF: evolución de cada sueldo mes a mes y comparación con la inflación (usa el período «Desde / Hasta» del Resumen)">🖨️ PDF</button>
                     <button class="btn btn-outline btn-sm" id="btnActImportar" onclick="document.getElementById('actImportFile').click()" title="Importar una planilla con filas Inflacion / Comercio / un empleado por fila y los meses en columnas">📥 Importar Excel</button>
                     <input type="file" id="actImportFile" accept=".xlsx,.xls,.csv" style="display:none;" onchange="actImportarExcel(this)">
@@ -13650,6 +13652,7 @@
         if (nombre === 'CuentasBancarias') { _prellenar30dias('cbDesde'); renderCuentasBancarias(); }
         if (nombre === 'Tesoreria')       renderTesoreria();
         if (nombre === 'Actualizacion')   renderActualizacion();
+        else if (typeof _actDesbloqueado !== 'undefined') _actDesbloqueado = false;   // al salir, la sección vuelve a pedir la clave
         if (nombre === 'Reportes')        rptInit();
         if (nombre === 'Documentos')       { renderDocumentos(); }
         if (nombre === 'CuentaCorriente')  renderCuentaCorriente();
@@ -31487,7 +31490,7 @@
         var leer = function() {
             return _actRef().once('value').then(function(sn) {
                 var v = sn.val() || {};
-                _act = { meses: v.meses || {}, empleados: v.empleados || {}, categorias: v.categorias || {}, acuerdos: v.acuerdos || {} };
+                _act = { meses: v.meses || {}, empleados: v.empleados || {}, categorias: v.categorias || {}, acuerdos: v.acuerdos || {}, clave: v.clave || null };
                 _actCargado = true;
             });
         };
@@ -31688,6 +31691,8 @@
         _actPintar();
     }
     function _actPintar() {
+        if (!_actDesbloqueado) { _actMostrarBloqueo(); return; }
+        _actOcultarBloqueo();
         var meses = _actMeses();
         var ultEmp = null;
         Object.keys(_act.empleados).forEach(function(id) {
@@ -32439,6 +32444,84 @@
         });
     }
 
+
+
+    // ── Clave de la sección ──
+    // La sección pide una clave para entrar (pedido del dueño). Se guarda sólo el hash SHA-256 con sal
+    // en <nodo>/clave = { hash, salt, fecha }, así vale igual en la Caja y en el Sistema. Es una traba de
+    // pantalla (alguien que use la compu abierta), no un control de seguridad: los datos siguen
+    // protegidos por las reglas de Firebase. Se vuelve a bloquear al salir de la sección o recargar.
+    var _actDesbloqueado = false, _actModoClave = null;   // null | 'cambiar'
+    function _actHash(txt, salt) {
+        return crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + '|' + txt)).then(function(b) {
+            return Array.prototype.map.call(new Uint8Array(b), function(x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+        });
+    }
+    function _actLockBox() {
+        var el = document.getElementById('actLock');
+        if (!el) {
+            var bar = document.getElementById('actVistasBar'); if (!bar) return null;
+            el = document.createElement('div'); el.id = 'actLock';
+            bar.parentNode.insertBefore(el, bar);
+        }
+        return el;
+    }
+    function _actContenido(ver) {
+        var bar = document.getElementById('actVistasBar'); if (bar) bar.style.display = ver ? '' : 'none';
+        if (!ver) {
+            var av = document.getElementById('actAviso'); if (av) av.style.display = 'none';
+            document.querySelectorAll('.act-vista').forEach(function(v) { v.style.display = 'none'; });
+        }
+    }
+    function _actOcultarBloqueo() {
+        var box = document.getElementById('actLock'); if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+        _actContenido(true);
+    }
+    function _actMostrarBloqueo() {
+        var box = _actLockBox(); if (!box) return;
+        _actContenido(false);
+        var hay = !!(_act.clave && _act.clave.hash), cambiar = hay && _actModoClave === 'cambiar';
+        var inp = function(id, ph) { return '<input type="password" id="' + id + '" placeholder="' + ph + '" autocomplete="off" onkeydown="if(event.key===\'Enter\')actEnviarClave()" style="width:100%;padding:10px 12px;font-size:15px;margin-top:8px;border-radius:10px;">'; };
+        box.style.display = '';
+        box.innerHTML = '<div style="max-width:360px;margin:30px auto;padding:24px;border:1px solid var(--border);border-radius:16px;text-align:center;">' +
+            '<div style="font-size:34px;">🔒</div>' +
+            '<div style="font-weight:700;font-size:17px;margin-top:6px;">Actualización de sueldos</div>' +
+            '<div style="font-size:12.5px;color:var(--text-3);margin-top:4px;">' +
+                (!hay ? 'Creá una clave para proteger esta sección. Te la va a pedir cada vez que entres (en la Caja y en el Sistema).'
+                      : cambiar ? 'Cambiar la clave de la sección.' : 'Ingresá la clave para ver los sueldos.') + '</div>' +
+            (!hay ? inp('actClave1', 'Clave nueva') + inp('actClave2', 'Repetir clave')
+                  : cambiar ? inp('actClave0', 'Clave actual') + inp('actClave1', 'Clave nueva') + inp('actClave2', 'Repetir clave nueva')
+                  : inp('actClave0', 'Clave')) +
+            '<div id="actClaveErr" style="color:var(--danger,#c53434);font-size:12.5px;min-height:18px;margin-top:6px;"></div>' +
+            '<button class="btn btn-primary btn-sm" style="width:100%;margin-top:4px;padding:10px;justify-content:center;" onclick="actEnviarClave()">' + (!hay ? 'Crear clave y entrar' : cambiar ? 'Cambiar clave' : 'Entrar') + '</button>' +
+            (cambiar ? '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;" onclick="_actModoClave=null;_actPintar()">Cancelar</button>' : '') +
+            (hay && !cambiar ? '<div style="font-size:11px;color:var(--text-3);margin-top:12px;">¿Te olvidaste la clave? No se puede recuperar: se puede borrar desde Firebase (nodo <code>clave</code> de la actualización de sueldos) y crear una nueva.</div>' : '') +
+            '</div>';
+        setTimeout(function() { var f = document.getElementById(hay ? 'actClave0' : 'actClave1'); if (f) f.focus(); }, 50);
+    }
+    function actEnviarClave() {
+        var val = function(id) { var el = document.getElementById(id); return el ? el.value : ''; };
+        var err = function(t) { var e = document.getElementById('actClaveErr'); if (e) e.textContent = t; };
+        var hay = !!(_act.clave && _act.clave.hash), cambiar = hay && _actModoClave === 'cambiar';
+        var guardarNueva = function() {
+            var c1 = val('actClave1'), c2 = val('actClave2');
+            if (c1.length < 4) { err('La clave tiene que tener al menos 4 caracteres.'); return; }
+            if (c1 !== c2) { err('Las dos claves no coinciden.'); return; }
+            var salt = Math.random().toString(36).slice(2) + Date.now().toString(36);
+            _actHash(c1, salt).then(function(h) {
+                _act.clave = { hash: h, salt: salt, fecha: Date.now() };
+                return _actGuardar('clave', _act.clave);
+            }).then(function() { _actDesbloqueado = true; _actModoClave = null; renderActualizacion(); if (cambiar) alert('Clave cambiada.'); });
+        };
+        if (!hay) { guardarNueva(); return; }
+        _actHash(val('actClave0'), _act.clave.salt).then(function(h) {
+            if (h !== _act.clave.hash) { err(cambiar ? 'La clave actual no es correcta.' : 'Clave incorrecta.'); var f = document.getElementById('actClave0'); if (f) { f.value = ''; f.focus(); } return; }
+            if (cambiar) { guardarNueva(); return; }
+            _actDesbloqueado = true; renderActualizacion();
+        });
+    }
+    function actBloquear() { _actDesbloqueado = false; _actModoClave = null; _actPintar(); }
+    function actCambiarClave() { _actDesbloqueado = false; _actModoClave = 'cambiar'; _actPintar(); }
 
     // ── Informe PDF ──
     // Abre una ventana con el informe y el cuadro de imprimir (ahí se elige «Guardar como PDF»).
