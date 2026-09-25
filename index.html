@@ -3540,7 +3540,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v523</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v524</div>
         </div>
     </nav>
 
@@ -16183,7 +16183,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v523';
+    var APP_VER = 'v524';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -30083,6 +30083,27 @@
     function _empConceptoHTML(c)  { return _empConceptoFilaHTML(c, false); }
     function _empConceptoBHTML(c) { return _empConceptoFilaHTML(c, true); }
 
+    // ── Parte B fija del legajo ────────────────────────────────────────────────
+    // El legajo guarda cuánto del sueldo es Parte A (el básico, que tributa) y cuánto
+    // Parte B (no remunerativo). La Parte B no se calcula aparte: al abrir la liquidación
+    // se baja como UNA fila de la Parte B con este nombre reservado, y de ahí en adelante
+    // la maneja la maquinaria que ya existe (preview, netos, recibo, recibo guardado).
+    // Se identifica por el nombre porque _remNormConcepto devuelve una forma fija y
+    // cualquier marca extra se perdería al normalizar.
+    var REM_PARTE_B_FIJA = 'No remunerativo (sueldo)';
+    function _empRecalcPartes() {
+        var a = parseFloat((document.getElementById('empSueldo') || {}).value) || 0;
+        var b = parseFloat((document.getElementById('empSueldoParteB') || {}).value) || 0;
+        var h = document.getElementById('empPartesHint');
+        if (!h) return;
+        var fmt = function(n){ return '$' + (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        if (!a && !b) { h.textContent = 'El básico (Parte A) es la base de los aportes de ley. Lo que cargues como Parte B baja solo a la liquidación de cada mes, sin tributar.'; return; }
+        h.innerHTML = 'Total mensual: <strong>' + fmt(a + b) + '</strong> — 🅰️ ' + fmt(a) + ' con aportes'
+            + (b ? ' · 🅱️ ' + fmt(b) + ' sin aportes' : '')
+            + '. La Parte B aparece sola en la liquidación como «' + escHtml(REM_PARTE_B_FIJA) + '»; ahí se puede ajustar mes a mes.';
+    }
+    window._empRecalcPartes = _empRecalcPartes;
+
     // Mueve un concepto de la Parte A a la B (o al revés): lo único que cambia es si tributa.
     window._empMoverConcepto = function(btn) {
         var fila = btn.closest('.emp-concepto-fila') || btn.closest('.emp-concepto-fila-b');
@@ -30440,6 +30461,8 @@
         setVal('empPuesto', emp ? emp.puesto : '');
         setVal('empTipoContrato', emp ? (emp.tipoContrato || 'dependencia') : 'dependencia');
         setVal('empSueldo', emp ? emp.sueldoBasico : '');
+        setVal('empSueldoParteB', (emp && emp.sueldoNoRemun) ? emp.sueldoNoRemun : '');
+        _empRecalcPartes();
         setVal('empObraSocial', emp ? emp.obraSocial : '');
         setVal('empDni', emp ? emp.dni : '');
         setVal('empFechaNac', emp ? emp.fechaNac : '');
@@ -30497,12 +30520,20 @@
         setVal('empleadoNombre', emp.nombre); setVal('empCuil', emp.cuil); setVal('empDni', emp.dni);
         setVal('empFechaIngreso', emp.fechaIngreso); setVal('empPuesto', emp.puesto);
         setVal('empTipoContrato', emp.tipoContrato || 'dependencia'); setVal('empSueldo', emp.sueldoBasico);
+        setVal('empSueldoParteB', emp.sueldoNoRemun || '');
         setVal('empObraSocial', emp.obraSocial); setVal('empConvenio', emp.convenio); setVal('empLegajoNro', emp.legajoNro);
         // Los conceptos se reparten según tributen o no: Parte A los remunerativos, Parte B el
         // resto (incluye los guardados con el formato viejo "fuera de recibo", que no tributaban).
         var contA = document.getElementById('empConceptosLista');
         var contB = document.getElementById('empConceptosListaB');
         var norm = _remConceptos(emp.conceptos).map(_remNormConcepto);
+        // La Parte B fija del legajo se vuelve a bajar desde el legajo en cada apertura: se
+        // saca la fila vieja con ese nombre y se pone el importe vigente. Así seguir el
+        // legajo no duplica la fila ni deja pegado un importe viejo, y si se pone en 0
+        // directamente desaparece. Todo lo demás que se haya cargado a mano queda igual.
+        norm = norm.filter(function(c){ return c.nombre !== REM_PARTE_B_FIJA; });
+        var _pb = (emp.sueldoNoRemun || 0);
+        if (_pb > 0) norm.push(_remNormConcepto({ nombre: REM_PARTE_B_FIJA, tipo: 'haber', remun: false, parte: 'B', monto: _pb }));
         if (contA) contA.innerHTML = norm.filter(function(c){ return c.parte === 'A'; }).map(_empConceptoHTML).join('');
         if (contB) contB.innerHTML = norm.filter(function(c){ return c.parte !== 'A'; }).map(_empConceptoBHTML).join('');
         document.getElementById('modalLiquidarTitle').textContent = '💰 Liquidar sueldo — ' + (emp.nombre || '');
@@ -30512,7 +30543,11 @@
             infoEl.innerHTML = '<strong>' + escHtml(emp.nombre || '—') + '</strong>' +
                 (emp.cuil ? ' · CUIL ' + escHtml(emp.cuil) : '') + (emp.puesto ? ' · ' + escHtml(emp.puesto) : '') +
                 ' · ' + (emp.tipoContrato === 'monotributo' ? 'Monotributista' : 'Relación de dependencia') +
-                '<br>Sueldo básico: <strong>' + fmt(emp.sueldoBasico) + '</strong> <span style="color:var(--text-3);">(para cambiarlo, editá el legajo)</span>';
+                '<br>Sueldo básico (🅰️): <strong>' + fmt(emp.sueldoBasico) + '</strong>'
+                + ((emp.sueldoNoRemun || 0) > 0
+                    ? ' · No remunerativo (🅱️): <strong>' + fmt(emp.sueldoNoRemun) + '</strong> · Total: <strong>' + fmt((emp.sueldoBasico||0) + emp.sueldoNoRemun) + '</strong>'
+                    : '')
+                + ' <span style="color:var(--text-3);">(para cambiarlo, editá el legajo)</span>';
         }
         var mesEl = document.getElementById('empLiqMes');
         if (mesEl) { var d = new Date(); mesEl.value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
@@ -30538,6 +30573,7 @@
             puesto: (document.getElementById('empPuesto').value || '').trim(),
             tipoContrato: document.getElementById('empTipoContrato').value || 'dependencia',
             sueldoBasico: sueldo,
+            sueldoNoRemun: parseFloat((document.getElementById('empSueldoParteB') || {}).value) || 0,
             obraSocial: (document.getElementById('empObraSocial').value || '').trim(),
             dni: (document.getElementById('empDni').value || '').trim(),
             fechaNac: document.getElementById('empFechaNac').value || '',
@@ -30627,6 +30663,7 @@
             puesto:       (document.getElementById('empPuesto').value || '').trim(),
             tipoContrato: document.getElementById('empTipoContrato').value || 'dependencia',
             sueldoBasico: parseFloat(document.getElementById('empSueldo').value) || 0,
+            sueldoNoRemun: parseFloat((document.getElementById('empSueldoParteB') || {}).value) || 0,
             conceptos:    _empLeerConceptos(),
             dni:          (document.getElementById('empDni').value || '').trim(),
             obraSocial:   (document.getElementById('empObraSocial').value || '').trim(),
@@ -43374,13 +43411,21 @@
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
-          <label>Sueldo básico / mensual *</label>
-          <input type="number" id="empSueldo" step="0.01" min="0" placeholder="0" oninput="renderPreviewLiquidacion()">
+          <label>🅰️ Sueldo básico / mensual * <span style="font-weight:400;color:var(--text-3);font-size:11px;">(Parte A — paga aportes)</span></label>
+          <input type="number" id="empSueldo" step="0.01" min="0" placeholder="0" oninput="_empRecalcPartes(); renderPreviewLiquidacion();">
         </div>
+        <div class="form-group">
+          <label>🅱️ No remunerativo mensual <span style="font-weight:400;color:var(--text-3);font-size:11px;">(Parte B — no paga aportes)</span></label>
+          <input type="number" id="empSueldoParteB" step="0.01" min="0" placeholder="0" oninput="_empRecalcPartes()">
+        </div>
+      </div>
+      <div class="form-hint" id="empPartesHint" style="margin:-4px 0 10px;"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Obra social</label>
           <input type="text" id="empObraSocial" placeholder="Ej: OSDE, Swiss Medical…">
         </div>
+        <div></div>
       </div>
 
       <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:12px;">
