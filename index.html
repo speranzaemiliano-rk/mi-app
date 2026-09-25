@@ -6492,7 +6492,7 @@
                     <span style="flex:1;"></span>
                     <button class="btn btn-outline btn-sm" onclick="actBloquear()" title="Bloquear la sección: para volver a entrar pide la clave">🔒 Bloquear</button>
                     <button class="btn btn-outline btn-sm" onclick="actCambiarClave()" title="Cambiar la clave de esta sección">🔑 Cambiar clave</button>
-                    <button class="btn btn-outline btn-sm" onclick="actImprimirPDF()" title="Informe para imprimir o guardar en PDF: evolución de cada sueldo mes a mes y comparación con la inflación (usa el período «Desde / Hasta» del Resumen)">🖨️ PDF</button>
+                    <button class="btn btn-outline btn-sm" onclick="actOpcionesPDF()" title="Informe para imprimir o guardar en PDF (primero elegís qué incluir): evolución de cada sueldo mes a mes y comparación con la inflación (usa el período «Desde / Hasta» del Resumen)">🖨️ PDF</button>
                     <button class="btn btn-outline btn-sm" id="btnActImportar" onclick="document.getElementById('actImportFile').click()" title="Importar una planilla con filas Inflacion / Comercio / un empleado por fila y los meses en columnas">📥 Importar Excel</button>
                     <input type="file" id="actImportFile" accept=".xlsx,.xls,.csv" style="display:none;" onchange="actImportarExcel(this)">
                 </div>
@@ -32524,22 +32524,135 @@
     function actCambiarClave() { _actDesbloqueado = false; _actModoClave = 'cambiar'; _actPintar(); }
 
     // ── Informe PDF ──
-    // Abre una ventana con el informe y el cuadro de imprimir (ahí se elige «Guardar como PDF»).
-    // Período: el «Desde / Hasta» del Resumen. Contenido: inflación vs Comercio, resumen por
-    // empleado contra el IPC, evolución mes a mes de cada sueldo y el gráfico si está dibujado.
-    function actImprimirPDF() {
+    // El botón 🖨️ PDF abre primero un cuadro (actOpcionesPDF) para marcar qué va en el informe:
+    // secciones, columnas de cada tabla y empleados. Hay dos atajos (Completo / Simple) y la
+    // última elección queda en localStorage 'rk_act_pdf_opts'. Después actImprimirPDF(opts) abre
+    // una ventana con el informe y el cuadro de imprimir (ahí se elige «Guardar como PDF»).
+    // Período: el «Desde / Hasta» del Resumen.
+    var ACT_PDF_SECC = [['totales', 'Totales (inflación vs. Comercio)'], ['resumen', 'Resumen por empleado'], ['cuadro', 'Cuadro de sueldos (un mes por columna)'],
+        ['grafico', 'Gráfico de evolución'], ['mesAMes', 'Inflación y Comercio mes a mes'], ['evolucion', 'Evolución de cada sueldo'], ['nota', 'Nota aclaratoria al pie']];
+    var ACT_PDF_RES = [['categoria', 'Categoría'], ['inicial', 'Sueldo inicial'], ['final', 'Sueldo final'], ['aumento', 'Aumento %'], ['ipc', 'IPC %'], ['vsIpc', 'vs IPC'], ['empatar', 'Para empatar IPC'], ['falta', 'Falta']];
+    var ACT_PDF_MES = [['ipc', 'IPC del mes'], ['ipcAcum', 'IPC acum.'], ['com', 'Comercio %'], ['comAcum', 'Comercio acum.'], ['sumas', 'Sumas no rem.']];
+    var ACT_PDF_EVO = [['base', 'Sueldo base'], ['sumas', 'Sumas no rem.'], ['final', 'Sueldo final'], ['varMes', 'Var. mes'], ['acum', 'Aumento acum.'], ['ipcAcum', 'IPC acum.'], ['vsIpc', 'vs IPC']];
+    var ACT_PDF_GRUPOS = [['secc', 'Qué secciones incluir', ACT_PDF_SECC], ['res', 'Columnas del resumen por empleado', ACT_PDF_RES],
+        ['mes', 'Columnas de inflación y Comercio mes a mes', ACT_PDF_MES], ['evo', 'Columnas de la evolución de cada sueldo', ACT_PDF_EVO]];
+
+    function _actPdfPreset(tipo) {
+        var o = { secc: {}, res: {}, mes: {}, evo: {}, sinEmp: {}, horizontal: false };
+        ACT_PDF_GRUPOS.forEach(function(g) { g[2].forEach(function(c) { o[g[0]][c[0]] = true; }); });
+        o.secc.cuadro = false;
+        if (tipo === 'simple') {
+            o.secc = { totales: true, resumen: true };
+            o.res = { inicial: true, final: true, aumento: true, ipc: true, vsIpc: true };
+            o.evo = { final: true, acum: true, ipcAcum: true, vsIpc: true };
+            o.mes = { ipc: true, com: true };
+        }
+        return o;
+    }
+    function _actPdfLeerOpts() {
+        var o = null;
+        try { o = JSON.parse(localStorage.getItem('rk_act_pdf_opts') || 'null'); } catch (e) {}
+        if (!o || typeof o !== 'object' || !o.secc) return _actPdfPreset('completo');
+        ['secc', 'res', 'mes', 'evo', 'sinEmp'].forEach(function(k) { if (!o[k] || typeof o[k] !== 'object') o[k] = {}; });
+        return o;
+    }
+    function _actPdfCerrar() { var ov = document.getElementById('actPdfOpts'); if (ov) ov.remove(); }
+    function _actPdfMarcar(o) {
+        var ov = document.getElementById('actPdfOpts'); if (!ov) return;
+        ov.querySelectorAll('input[data-g]').forEach(function(ch) {
+            var g = ch.getAttribute('data-g'), k = ch.getAttribute('data-k');
+            if (g === 'emp') ch.checked = !o.sinEmp[k];
+            else if (g === 'horizontal') ch.checked = !!o.horizontal;
+            else ch.checked = !!o[g][k];
+        });
+        _actPdfRefrescar();
+    }
+    // Atenúa las columnas de una sección que no se va a imprimir.
+    function _actPdfRefrescar() {
+        var ov = document.getElementById('actPdfOpts'); if (!ov) return;
+        var secc = function(k) { var ch = ov.querySelector('input[data-g="secc"][data-k="' + k + '"]'); return ch && ch.checked; };
+        var dep = { res: secc('resumen'), mes: secc('mesAMes'), evo: secc('evolucion'), emp: secc('resumen') || secc('evolucion') || secc('cuadro') };
+        Object.keys(dep).forEach(function(g) { var b = ov.querySelector('[data-bloque="' + g + '"]'); if (b) b.style.opacity = dep[g] ? '1' : '.4'; });
+    }
+    function _actPdfTomar() {
+        var ov = document.getElementById('actPdfOpts');
+        var o = { secc: {}, res: {}, mes: {}, evo: {}, sinEmp: {}, horizontal: false };
+        ov.querySelectorAll('input[data-g]').forEach(function(ch) {
+            var g = ch.getAttribute('data-g'), k = ch.getAttribute('data-k');
+            if (g === 'emp') { if (!ch.checked) o.sinEmp[k] = true; }
+            else if (g === 'horizontal') o.horizontal = ch.checked;
+            else if (ch.checked) o[g][k] = true;
+        });
+        return o;
+    }
+    function actOpcionesPDF() {
         if (!_actCargado) { alert('Esperá a que terminen de cargar los datos.'); return; }
+        _actPdfCerrar();
+        var o = _actPdfLeerOpts();
+        var chk = function(g, k, txt) {
+            return '<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer;font-size:13px;"><input type="checkbox" data-g="' + g + '" data-k="' + escHtml(k) + '" onchange="_actPdfRefrescar()"> ' + escHtml(txt) + '</label>';
+        };
+        var caja = function(g, tit, cuerpo) {
+            return '<div data-bloque="' + g + '" style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin-top:10px;">' +
+                '<div style="font-weight:700;font-size:13px;margin-bottom:4px;">' + tit + '</div>' +
+                '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:0 12px;">' + cuerpo + '</div></div>';
+        };
+        var html = ACT_PDF_GRUPOS.map(function(g) {
+            return caja(g[0], g[1], g[2].map(function(c) { return chk(g[0], c[0], c[1]); }).join(''));
+        }).join('');
+        var ids = _actOrden(_act.empleados);
+        if (ids.length) html += caja('emp', 'Empleados', ids.map(function(id) { return chk('emp', id, _act.empleados[id].nombre || '(sin nombre)'); }).join(''));
+        html += '<div style="margin-top:10px;">' + chk('horizontal', 'h', 'Hoja horizontal (conviene para el cuadro con muchos meses)') + '</div>';
+        var ov = document.createElement('div');
+        ov.id = 'actPdfOpts';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;padding:12px;';
+        ov.innerHTML = '<div style="background:#fff;color:#222;border-radius:12px;max-width:720px;width:100%;max-height:92vh;overflow:auto;padding:16px 18px;box-shadow:0 10px 40px rgba(0,0,0,.3);">' +
+            '<div style="display:flex;align-items:center;gap:8px;"><h3 style="margin:0;flex:1;font-size:17px;">🖨️ ¿Qué querés incluir en el informe?</h3>' +
+            '<button type="button" onclick="_actPdfCerrar()" style="border:none;background:none;font-size:22px;cursor:pointer;color:#666;" title="Cerrar">×</button></div>' +
+            '<div style="color:#666;font-size:12px;margin-top:4px;">Período: el «Desde / Hasta» del Resumen. La elección queda guardada para la próxima vez.</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;"><span style="font-size:13px;align-self:center;">Atajos:</span>' +
+            '<button type="button" id="actPdfCompleto" style="padding:5px 12px;border:1px solid #bbb;border-radius:6px;background:#f5f5f5;cursor:pointer;">Completo</button>' +
+            '<button type="button" id="actPdfSimple" style="padding:5px 12px;border:1px solid #bbb;border-radius:6px;background:#f5f5f5;cursor:pointer;">Simple (menos datos)</button></div>' +
+            html +
+            '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">' +
+            '<button type="button" onclick="_actPdfCerrar()" style="padding:8px 14px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;">Cancelar</button>' +
+            '<button type="button" id="actPdfGenerar" style="padding:8px 16px;border:none;border-radius:6px;background:#1f5fae;color:#fff;font-weight:700;cursor:pointer;">🖨️ Generar PDF</button></div></div>';
+        ov.addEventListener('click', function(ev) { if (ev.target === ov) _actPdfCerrar(); });
+        document.body.appendChild(ov);
+        document.getElementById('actPdfCompleto').onclick = function() { _actPdfMarcar(_actPdfPreset('completo')); };
+        document.getElementById('actPdfSimple').onclick = function() { _actPdfMarcar(_actPdfPreset('simple')); };
+        document.getElementById('actPdfGenerar').onclick = function() {
+            var op = _actPdfTomar();
+            if (!Object.keys(op.secc).length) { alert('Marcá al menos una sección.'); return; }
+            try { localStorage.setItem('rk_act_pdf_opts', JSON.stringify(op)); } catch (e) {}
+            if (actImprimirPDF(op) !== false) _actPdfCerrar();
+        };
+        _actPdfMarcar(o);
+    }
+
+    function actImprimirPDF(opts) {
+        if (!_actCargado) { alert('Esperá a que terminen de cargar los datos.'); return false; }
+        var o = opts || _actPdfPreset('completo');
         if (!document.getElementById('actBase').value) _actPintar();
         var desde = document.getElementById('actBase').value, hasta = document.getElementById('actHasta').value;
-        if (!desde || !hasta) { alert('Elegí el período en el Resumen.'); return; }
+        if (!desde || !hasta) { alert('Elegí el período en el Resumen.'); return false; }
         if (hasta < desde) { var t0 = desde; desde = hasta; hasta = t0; }
         var w = window.open('', '_blank');
-        if (!w) { alert('El navegador bloqueó la ventana del informe. Permití las ventanas emergentes para este sitio.'); return; }
+        if (!w) { alert('El navegador bloqueó la ventana del informe. Permití las ventanas emergentes para este sitio.'); return false; }
         var meses = [], m = desde, g = 0;
         while (m <= hasta && g++ < 600) { meses.push(m); m = _actMesSig(m); }
         var pc = function(x) { return x == null ? '—' : _actPct(x); };
         var num = function(x) { return x == null ? '—' : fmt(x); };
         var col = function(x) { return x > 0.05 ? '#1f7a44' : x < -0.05 ? '#c53434' : '#444'; };
+        var ganaPierde = function(x) { return (x >= 0 ? 'Gana ' : 'Pierde ') + Math.abs(x).toFixed(1).replace('.', ',') + '%'; };
+        // Arma una tabla con sólo las columnas marcadas; cols = [[clave, título], …], celdas = {clave: '<td>…</td>'}.
+        var cabeza = function(primera, cols, sel) {
+            return '<thead><tr><th>' + primera + '</th>' + cols.filter(function(c) { return sel[c[0]]; }).map(function(c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr></thead>';
+        };
+        var fila = function(primera, cols, sel, celdas) {
+            return '<tr><td>' + primera + '</td>' + cols.filter(function(c) { return sel[c[0]]; }).map(function(c) { return celdas[c[0]]; }).join('') + '</tr>';
+        };
+        var td = function(v, estilo) { return '<td class="n"' + (estilo ? ' style="' + estilo + '"' : '') + '>' + v + '</td>'; };
         var ipcT = _actFactor(desde, hasta, _actIpc), comT = _actFactor(desde, hasta, _actComercio);
         var brecha = (comT.f / ipcT.f - 1) * 100;
 
@@ -32548,14 +32661,16 @@
         var filasMes = meses.map(function(mm, i) {
             var ipc = _actIpc(mm), com = _actComercio(mm);
             if (i > 0) { fI *= 1 + (ipc || 0) / 100; fC *= 1 + com / 100; }
-            return '<tr><td>' + _actMesLabel(mm) + '</td><td class="n">' + (ipc != null ? ipc.toFixed(2).replace('.', ',') + '%' : '—') + '</td>' +
-                '<td class="n">' + (i ? pc((fI - 1) * 100) : 'base') + '</td><td class="n">' + (com ? com.toString().replace('.', ',') + '%' : '—') + '</td>' +
-                '<td class="n">' + (i ? pc((fC - 1) * 100) : 'base') + '</td><td class="n">' + num(_actSumasTot(mm) || null) + '</td></tr>';
+            return fila(_actMesLabel(mm), ACT_PDF_MES, o.mes, {
+                ipc: td(ipc != null ? ipc.toFixed(2).replace('.', ',') + '%' : '—'), ipcAcum: td(i ? pc((fI - 1) * 100) : 'base'),
+                com: td(com ? com.toString().replace('.', ',') + '%' : '—'), comAcum: td(i ? pc((fC - 1) * 100) : 'base'),
+                sumas: td(num(_actSumasTot(mm) || null))
+            });
         }).join('');
 
-        // 2) Resumen por empleado y 3) evolución de cada uno
-        var ids = _actOrden(_act.empleados);
-        var resumen = [], detalle = [];
+        // 2) Resumen por empleado, 3) cuadro de sueldos y 4) evolución de cada uno
+        var ids = _actOrden(_act.empleados).filter(function(id) { return !o.sinEmp[id]; });
+        var resumen = [], cuadro = [], detalle = [];
         ids.forEach(function(id) {
             var e = _act.empleados[id];
             var conSueldo = meses.filter(function(mm) { return _actSueldoEn(e, mm) != null; });
@@ -32564,10 +32679,13 @@
             var s0 = _actSueldoEn(e, m0), s1 = _actSueldoEn(e, m1), fIe = _actFactor(m0, m1, _actIpc).f;
             var real = (s1 / s0 / fIe - 1) * 100, empate = s0 * fIe;
             var cat = _actCatNombre(e);
-            resumen.push('<tr><td><b>' + escHtml(e.nombre) + '</b>' + (cat ? '<br><small>' + escHtml(cat) + '</small>' : '') + (m0 !== desde ? '<br><small>desde ' + _actMesLabel(m0) + '</small>' : '') + '</td>' +
-                '<td class="n">' + num(s0) + '</td><td class="n">' + num(s1) + '</td><td class="n">' + pc((s1 / s0 - 1) * 100) + '</td>' +
-                '<td class="n">' + pc((fIe - 1) * 100) + '</td><td class="n" style="color:' + col(real) + ';font-weight:700;">' + (real >= 0 ? 'Gana ' : 'Pierde ') + Math.abs(real).toFixed(1).replace('.', ',') + '%</td>' +
-                '<td class="n">' + num(empate) + '</td><td class="n" style="color:' + (empate - s1 > 0 ? '#c53434' : '#1f7a44') + ';">' + (empate - s1 > 0 ? num(empate - s1) : '—') + '</td></tr>');
+            resumen.push(fila('<b>' + escHtml(e.nombre) + '</b>' + (cat && !o.res.categoria ? '<br><small>' + escHtml(cat) + '</small>' : '') + (m0 !== desde ? '<br><small>desde ' + _actMesLabel(m0) + '</small>' : ''), ACT_PDF_RES, o.res, {
+                categoria: '<td>' + escHtml(cat || '—') + '</td>',
+                inicial: td(num(s0)), final: td(num(s1)), aumento: td(pc((s1 / s0 - 1) * 100)), ipc: td(pc((fIe - 1) * 100)),
+                vsIpc: td(ganaPierde(real), 'color:' + col(real) + ';font-weight:700;'),
+                empatar: td(num(empate)), falta: td(empate - s1 > 0 ? num(empate - s1) : '—', 'color:' + (empate - s1 > 0 ? '#c53434' : '#1f7a44') + ';')
+            }));
+            cuadro.push('<tr><td><b>' + escHtml(e.nombre) + '</b></td>' + meses.map(function(mm) { return td(num(_actSueldoEn(e, mm))); }).join('') + '</tr>');
             var ant = null, fIa = 1;
             var filas = conSueldo.map(function(mm, i) {
                 var b = _actBaseEn(e, mm), sm = _actIncluyeSumas(e) ? _actSumasTot(mm) : 0, su = b + sm;
@@ -32575,36 +32693,43 @@
                 var var_ = ant ? (su / ant - 1) * 100 : null, acum = (su / s0 - 1) * 100, re = (su / s0 / fIa - 1) * 100;
                 var cargado = _actNum((e.sueldos || {})[mm]) != null;
                 ant = su;
-                return '<tr><td>' + _actMesLabel(mm) + (cargado ? ' <small>(cargado)</small>' : '') + '</td><td class="n">' + num(b) + '</td><td class="n">' + (sm ? num(sm) : '—') + '</td>' +
-                    '<td class="n"><b>' + num(su) + '</b></td><td class="n">' + pc(var_) + '</td><td class="n">' + (i ? pc(acum) : 'base') + '</td>' +
-                    '<td class="n">' + (i ? pc((fIa - 1) * 100) : 'base') + '</td><td class="n" style="color:' + col(re) + ';">' + (i ? pc(re) : '') + '</td></tr>';
+                return fila(_actMesLabel(mm) + (cargado ? ' <small>(cargado)</small>' : ''), ACT_PDF_EVO, o.evo, {
+                    base: td(num(b)), sumas: td(sm ? num(sm) : '—'), final: td('<b>' + num(su) + '</b>'), varMes: td(pc(var_)),
+                    acum: td(i ? pc(acum) : 'base'), ipcAcum: td(i ? pc((fIa - 1) * 100) : 'base'), vsIpc: td(i ? pc(re) : '', 'color:' + col(re) + ';')
+                });
             }).join('');
             detalle.push('<div class="emp"><h3>' + escHtml(e.nombre) + (cat ? ' <small>· ' + escHtml(cat) + '</small>' : '') + '</h3>' +
-                '<table><thead><tr><th>Mes</th><th>Sueldo base</th><th>Sumas no rem.</th><th>Sueldo final</th><th>Var. mes</th><th>Aumento acum.</th><th>IPC acum.</th><th>vs IPC</th></tr></thead><tbody>' + filas + '</tbody></table></div>');
+                '<table>' + cabeza('Mes', ACT_PDF_EVO, o.evo) + '<tbody>' + filas + '</tbody></table></div>');
         });
 
-        // 4) Gráfico (si ya está dibujado en el Resumen)
+        // 5) Gráfico (si ya está dibujado en el Resumen)
         var img = '';
-        try { if (_actChartObj) img = _actChartObj.toBase64Image(); } catch (e) {}
+        if (o.secc.grafico) { try { if (_actChartObj) img = _actChartObj.toBase64Image(); } catch (e) {} }
 
         var hoy = new Date().toLocaleDateString('es-AR');
+        var cuerpo = '';
+        if (o.secc.totales) cuerpo += '<div class="kpis"><div class="kpi">Inflación acumulada (IPC)<b>' + pc((ipcT.f - 1) * 100) + '</b>' + (ipcT.faltan ? '<small>' + ipcT.faltan + ' mes(es) sin dato</small>' : '') + '</div>' +
+            '<div class="kpi">Aumentos Comercio<b>' + pc((comT.f - 1) * 100) + '</b></div>' +
+            '<div class="kpi">Comercio vs inflación<b style="color:' + col(brecha) + '">' + ganaPierde(brecha) + '</b></div></div>';
+        if (o.secc.resumen && resumen.length) cuerpo += '<h2>Resumen por empleado</h2><table>' + cabeza('Empleado', ACT_PDF_RES, o.res) + '<tbody>' + resumen.join('') + '</tbody></table>';
+        if (o.secc.cuadro && cuadro.length) cuerpo += '<h2>Cuadro de sueldos (sueldo final de cada mes)</h2><table class="cuadro"><thead><tr><th>Empleado</th>' +
+            meses.map(function(mm) { return '<th>' + _actMesLabel(mm) + '</th>'; }).join('') + '</tr></thead><tbody>' + cuadro.join('') + '</tbody></table>';
+        if (img) cuerpo += '<h2>Evolución (base 100 = ' + _actMesLabel(desde) + ')</h2><img src="' + img + '">';
+        if (o.secc.mesAMes) cuerpo += '<h2>Inflación y Comercio mes a mes</h2><table>' + cabeza('Mes', ACT_PDF_MES, o.mes) + '<tbody>' + filasMes + '</tbody></table>';
+        if (o.secc.evolucion && detalle.length) cuerpo += '<h2>Evolución de cada sueldo</h2>' + detalle.join('');
+        if (o.secc.nota) cuerpo += '<div class="nota">Sueldo final = sueldo base + sumas no remunerativas vigentes. Los meses sin sueldo cargado se calculan con los acuerdos de Comercio (base fija en el mes anterior al acuerdo o al trimestre). «vs IPC» = poder de compra ganado o perdido desde el primer mes del período.</div>';
+
         var html = '<!doctype html><html><head><meta charset="utf-8"><title>Actualización de sueldos ' + _actMesLabel(desde) + ' a ' + _actMesLabel(hasta) + '</title><style>' +
             'body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px;font-size:11px}h1{font-size:18px;margin:0}h2{font-size:14px;margin:22px 0 6px;border-bottom:2px solid #222;padding-bottom:3px}h3{font-size:12.5px;margin:14px 0 4px}' +
             '.sub{color:#666;margin:2px 0 14px}.kpis{display:flex;gap:10px}.kpi{flex:1;border:1px solid #ccc;border-radius:8px;padding:8px 10px}.kpi b{display:block;font-size:17px;margin-top:3px}' +
             'table{width:100%;border-collapse:collapse;margin-top:4px}th,td{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}th{background:#f2f2f2;font-size:10px;text-transform:uppercase}th:not(:first-child){text-align:right}' +
-            '.n{text-align:right;white-space:nowrap}small{color:#777;font-weight:400}.emp{page-break-inside:avoid}.nota{color:#666;font-size:10px;margin-top:4px}img{max-width:100%}' +
+            '.n{text-align:right;white-space:nowrap}small{color:#777;font-weight:400}.emp{page-break-inside:avoid}.nota{color:#666;font-size:10px;margin-top:10px}img{max-width:100%}' +
+            'table.cuadro th,table.cuadro td{padding:3px 4px;font-size:' + (meses.length > 9 ? '9' : '10.5') + 'px}' +
+            (o.horizontal ? '@page{size:A4 landscape}' : '') +
             '@media print{body{margin:10mm}.noprint{display:none}}</style></head><body>' +
             '<div class="noprint" style="margin-bottom:12px;"><button onclick="window.print()" style="padding:8px 14px;font-size:13px;">🖨️ Imprimir / Guardar como PDF</button></div>' +
             '<h1>Actualización de sueldos — Comercio vs. inflación</h1><div class="sub">Período ' + _actMesLabel(desde) + ' a ' + _actMesLabel(hasta) + ' · emitido el ' + hoy + '</div>' +
-            '<div class="kpis"><div class="kpi">Inflación acumulada (IPC)<b>' + pc((ipcT.f - 1) * 100) + '</b>' + (ipcT.faltan ? '<small>' + ipcT.faltan + ' mes(es) sin dato</small>' : '') + '</div>' +
-            '<div class="kpi">Aumentos Comercio<b>' + pc((comT.f - 1) * 100) + '</b></div>' +
-            '<div class="kpi">Comercio vs inflación<b style="color:' + col(brecha) + '">' + (brecha >= 0 ? 'Gana ' : 'Pierde ') + Math.abs(brecha).toFixed(1).replace('.', ',') + '%</b></div></div>' +
-            (resumen.length ? '<h2>Resumen por empleado</h2><table><thead><tr><th>Empleado</th><th>Sueldo inicial</th><th>Sueldo final</th><th>Aumento</th><th>IPC</th><th>vs IPC</th><th>Para empatar IPC</th><th>Falta</th></tr></thead><tbody>' + resumen.join('') + '</tbody></table>' : '') +
-            (img ? '<h2>Evolución (base 100 = ' + _actMesLabel(desde) + ')</h2><img src="' + img + '">' : '') +
-            '<h2>Inflación y Comercio mes a mes</h2><table><thead><tr><th>Mes</th><th>IPC del mes</th><th>IPC acum.</th><th>Comercio %</th><th>Comercio acum.</th><th>Sumas no rem.</th></tr></thead><tbody>' + filasMes + '</tbody></table>' +
-            (detalle.length ? '<h2>Evolución de cada sueldo</h2>' + detalle.join('') : '') +
-            '<div class="nota">Sueldo final = sueldo base + sumas no remunerativas vigentes. Los meses sin sueldo cargado se calculan con los acuerdos de Comercio (base fija en el mes anterior al acuerdo o al trimestre). «vs IPC» = poder de compra ganado o perdido desde el primer mes del período.</div>' +
-            '</body></html>';
+            cuerpo + '</body></html>';
         w.document.open(); w.document.write(html); w.document.close();
         setTimeout(function() { try { w.focus(); w.print(); } catch (e) {} }, 500);
     }
