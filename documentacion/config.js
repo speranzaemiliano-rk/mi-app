@@ -53,6 +53,33 @@ window.DOCU_CONFIG = {
   // Etiquetas sugeridas al subir. Son libres: se puede escribir cualquier otra.
   etiquetas: ['Escritura', 'Posesión', 'Fondos', 'Contable', 'Plano', 'Reglamento',
               'Boleto', 'Impuestos', 'Seguro', 'Contrato', 'Acta', 'Otro'],
+  // ── Con qué se editan las planillas ────────────────────────────────
+  // 'google'    → Google Drive / Hojas de cálculo. No necesita licencia paga.
+  //               Sheets abre el .xlsx en «modo Office» y lo guarda en ese
+  //               mismo formato, sin convertirlo: va y vuelve .xlsx.
+  // 'microsoft' → Excel para la web. Mejor fidelidad (lo edita Excel), pero
+  //               necesita licencia de Microsoft 365 de EMPRESA.
+  // Los dos caminos están hechos y probados; se cambia sólo esta línea.
+  editor: 'google',
+
+  // ── Google Drive / Hojas de cálculo ────────────────────────────────
+  // El ID de cliente NO se configura acá: sale de `global/config/googleClientId`,
+  // el mismo que ya usa la lectura de Gmail (Config → Lectura automática de
+  // Gmail). Así hay un solo lugar donde cambiarlo.
+  //
+  // Qué hace falta del lado de Google, una sola vez:
+  //  1) En la consola de Google Cloud, en el MISMO proyecto de ese client ID:
+  //     APIs y servicios → Biblioteca → habilitar «Google Drive API».
+  //  2) Pantalla de consentimiento → Permisos → agregar
+  //     `.../auth/drive.file`. Ese permiso da acceso SÓLO a los archivos que
+  //     crea o abre esta app: no ve el resto del Drive de nadie.
+  //  3) Si la app está en modo «Prueba», sumar como usuarios de prueba a
+  //     quienes vayan a editar planillas.
+  google: {
+    scope: 'https://www.googleapis.com/auth/drive.file',
+    carpeta: 'Documentación — Mess'
+  },
+
   // ── Editar planillas en Excel para la web (Microsoft 365) ──────────
   // El sistema sigue siendo el dueño del archivo: OneDrive es sólo el taller
   // donde Excel lo edita, y lo editado vuelve como una versión nueva acá.

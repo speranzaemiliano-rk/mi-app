@@ -197,6 +197,7 @@ td.acc{text-align:right;white-space:nowrap}
 <input type="file" id="archivoInput" multiple class="hid">
 <div id="aviso"></div>
 
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
@@ -287,6 +288,7 @@ var carpetas = {}, docs = {};          // índices del proyecto activo
 var carpActual = '';                   // '' = raíz
 var filtroTexto = '', filtroEtiqueta = '';
 var _refCarp = null, _refDocs = null;  // listeners activos, para desengancharlos
+var _gClientId = '';                   // ID de cliente de Google (global/config)
 
 /* ── Utilidades ────────────────────────────────────────────────────── */
 function esc(s){
@@ -384,6 +386,12 @@ function bloquear(tit, txt, accionHTML){
       }
       puedeEditar = ['superadmin','admin','editor'].indexOf(rol) >= 0;
       document.getElementById('quien').textContent = mail + ' · ' + rol;
+      // El ID de cliente de Google vive donde lo dejó el sistema: un solo lugar
+      // para las dos cosas. Si falla la lectura no se rompe nada: el editor de
+      // planillas avisa cuando hace falta.
+      db.ref('global/config/googleClientId').once('value')
+        .then(function(g){ _gClientId = (g.val() || '').trim(); })
+        .catch(function(){});
       cargarEmpresas();
     }).catch(function(){
       bloquear('No se pudo leer tu permiso',
@@ -1008,6 +1016,18 @@ function diagnostico(){
             _esPermiso(e) ? 'PERMISO DENEGADO — es esto lo que te impide subir archivos' : String(e));
     });
   }).then(function(){
+    // Editor de planillas: no impide usar el módulo, pero si falta lo mejor es
+    // enterarse acá y no cuando hay una planilla abierta a medio editar.
+    var ed = CFG.editor || 'google';
+    if (ed === 'google') {
+      linea(!!_gClientId, 'Editar planillas (Google Drive)',
+            _gClientId ? 'ID de cliente cargado' :
+            'falta el ID de cliente de Google — se carga en el sistema, en Config → Lectura automática de Gmail (es el mismo)');
+    } else {
+      linea(true, 'Editar planillas (Excel para la web)',
+            'necesita licencia de Microsoft 365 de empresa y Files.ReadWrite con consentimiento de administrador');
+    }
+  }).then(function(){
     var fallo = filas.some(function(f){ return f.indexOf('var(--bad)') >= 0; });
     var reglas = '"documentacion": {\n' +
       '  ".read": "auth != null && root.child(\'roles\').child(auth.uid).exists()",\n' +
@@ -1040,6 +1060,119 @@ function diagnostico(){
     };
     document.getElementById('dCerrar').onclick = cerrarModal;
   });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GOOGLE DRIVE / HOJAS DE CÁLCULO
+
+   La planilla se sube a Drive, la edita Hojas de cálculo y vuelve. Sheets
+   abre un .xlsx en «modo Office»: lo edita y lo guarda EN ESE MISMO
+   formato, sin convertirlo a su formato propio, así que va y vuelve .xlsx
+   sin pasar por ninguna conversión.
+
+   El permiso que se pide es `drive.file`, que da acceso SÓLO a los archivos
+   que esta app crea o que la persona abre con ella: no ve el resto del
+   Drive de nadie. Como consecuencia, buscar la carpeta de trabajo con
+   files.list sólo puede encontrar la que creamos nosotros, que es
+   exactamente lo que queremos.
+   ══════════════════════════════════════════════════════════════════ */
+var GOO = CFG.google || {};
+var _gTok = null;                      // { token, vence }
+var _gCarpetas = {};                   // ruta → id, para no re-buscarla
+
+function _googleToken(forzar){
+  if (!forzar && _gTok && _gTok.vence > Date.now() + 60000) return Promise.resolve(_gTok.token);
+  if (!_gClientId) {
+    return Promise.reject(new Error('Falta el ID de cliente de Google. Cargalo en el sistema, en Config → Lectura automática de Gmail: es el mismo.'));
+  }
+  if (!window.google || !google.accounts || !google.accounts.oauth2) {
+    return Promise.reject(new Error('La librería de Google todavía no cargó. Esperá unos segundos y volvé a intentar.'));
+  }
+  return new Promise(function(res, rej){
+    var cliente = google.accounts.oauth2.initTokenClient({
+      client_id: _gClientId,
+      scope: GOO.scope || 'https://www.googleapis.com/auth/drive.file',
+      callback: function(r){
+        if (!r || r.error) {
+          rej(new Error('Google no dio permiso' + (r && r.error ? ': ' + r.error : '.') +
+            ' Revisá que el permiso drive.file esté en la pantalla de consentimiento y, si la app está en modo Prueba, que tu cuenta esté como usuario de prueba.'));
+          return;
+        }
+        // GIS no dice cuándo vence; una hora es lo habitual y ante un 401 se
+        // vuelve a pedir igual, así que alcanza con quedarse corto.
+        _gTok = { token: r.access_token, vence: Date.now() + 50 * 60 * 1000 };
+        res(r.access_token);
+      }
+    });
+    // Siempre el selector de cuenta: cada uno entra desde su navegador, a
+    // veces logueado con su cuenta personal, y con la equivocada Google
+    // contesta «acceso denegado». Mismo criterio que la lectura de Gmail.
+    cliente.requestAccessToken({ prompt: forzar ? 'consent' : 'select_account' });
+  });
+}
+function _gFetch(url, opts, reintento){
+  return _googleToken().then(function(tok){
+    var o = Object.assign({}, opts || {});
+    o.headers = Object.assign({}, o.headers, { Authorization: 'Bearer ' + tok });
+    return fetch(url, o);
+  }).then(function(r){
+    if (r.status === 401 && !reintento) { _gTok = null; return _gFetch(url, opts, true); }
+    return r;
+  });
+}
+function _gError(r){
+  return r.text().then(function(t){
+    var m = '';
+    try { m = (JSON.parse(t).error || {}).message || ''; } catch(e) { m = t.slice(0, 180); }
+    return new Error('Google respondió ' + r.status + (m ? ': ' + m : ''));
+  });
+}
+// Busca la carpeta por nombre y, si no está, la crea. Con `drive.file` sólo
+// se ven las carpetas que creó esta app, así que no hay riesgo de meterse en
+// una carpeta homónima de la persona.
+function _gCarpeta(nombre, padre){
+  var clave = (padre || 'raiz') + '/' + nombre;
+  if (_gCarpetas[clave]) return Promise.resolve(_gCarpetas[clave]);
+  var q = "mimeType='application/vnd.google-apps.folder' and trashed=false and name='" +
+          nombre.replace(/'/g, "\\'") + "'" + (padre ? " and '" + padre + "' in parents" : '');
+  return _gFetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=files(id)')
+    .then(function(r){ return r.ok ? r.json() : _gError(r).then(function(e){ throw e; }); })
+    .then(function(j){
+      if (j.files && j.files.length) return j.files[0].id;
+      return _gFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: nombre, mimeType: 'application/vnd.google-apps.folder',
+          parents: padre ? [padre] : undefined
+        })
+      }).then(function(r){ return r.ok ? r.json() : _gError(r).then(function(e){ throw e; }); })
+        .then(function(c){ return c.id; });
+    }).then(function(id){ _gCarpetas[clave] = id; return id; });
+}
+function _gSubir(nombre, blob){
+  var partes = _carpetaTrabajo().split('/');
+  return partes.reduce(function(prev, nm){
+    return prev.then(function(padre){ return _gCarpeta(nm, padre); });
+  }, Promise.resolve(null)).then(function(carpetaId){
+    // multipart/related: primero los metadatos en JSON, después el archivo.
+    // FormData no sirve acá, Drive pide este formato puntual.
+    var lim = '-------314159265358979323846';
+    var meta = { name: nombre, parents: [carpetaId] };
+    var cuerpo = new Blob([
+      '--' + lim + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n',
+      JSON.stringify(meta),
+      '\r\n--' + lim + '\r\nContent-Type: ' + (blob.type || 'application/octet-stream') + '\r\n\r\n',
+      blob,
+      '\r\n--' + lim + '--'
+    ], { type: 'multipart/related; boundary=' + lim });
+    return _gFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+      method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + lim }, body: cuerpo
+    }).then(function(r){ return r.ok ? r.json() : _gError(r).then(function(e){ throw e; }); });
+  }).then(function(j){ return { id: j.id, url: j.webViewLink }; });
+}
+function _gBajar(itemId){
+  return _gFetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(itemId) + '?alt=media')
+    .then(function(r){ return r.ok ? r.blob() : _gError(r).then(function(e){ throw e; }); });
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1154,66 +1287,96 @@ function _msSubir(nombreRuta, blob){
     });
 }
 
+/* ── El taller: dos proveedores, una sola mecánica ──────────────────
+   El sistema no deja de ser el dueño del archivo en ningún momento. Lo que
+   cambia entre Google y Microsoft es sólo DÓNDE se edita; la subida, la
+   vuelta y el guardado como versión nueva son los mismos. */
+function _taller(){
+  if ((CFG.editor || 'google') === 'microsoft') {
+    return { nombre: 'Excel para la web', donde: 'OneDrive', boton: 'Abrir en Excel',
+             subir: function(n, b){ return _msSubir(_msCarpeta() + '/' + n, b).then(function(it){
+               if (!it || !it.id) throw new Error('OneDrive no devolvió el archivo subido.');
+               return { id: it.id, url: it.webUrl || '' }; }); },
+             bajar: function(itemId){
+               return _graph('/me/drive/items/' + encodeURIComponent(itemId) + '/content')
+                 .then(function(r){ return r.ok ? r.blob() : _msError(r).then(function(e){ throw e; }); }); } };
+  }
+  return { nombre: 'Hojas de cálculo de Google', donde: 'Google Drive', boton: 'Abrir en Google',
+           subir: _gSubir, bajar: _gBajar };
+}
+// Carpeta de trabajo: una por obra, para no mezclar proyectos.
+function _carpetaTrabajo(){
+  var e = empresas.find(function(x){ return x.id === empId; }) || {};
+  var pr = ((e.proyectos || []).find(function(x){ return x.id === proyId; }) || {});
+  var limpio = function(x){ return String(x || '').replace(/[\\/:*?"<>|#%]/g, '-').trim() || 'sin-nombre'; };
+  return limpio((CFG.google || {}).carpeta || (CFG.ms || {}).carpeta || 'Documentación') +
+         '/' + limpio(e.nombre || empId) + ' - ' + limpio(pr.nombre || proyId);
+}
+
 function editarEnExcel(id){
   var d = docs[id]; if (!d) return;
   if (!puedeEditar) { aviso('Tu rol no puede modificar documentos.'); return; }
-  modal('<h3>Editar en Excel</h3>' +
+  var T = _taller();
+  modal('<h3>Editar la planilla</h3>' +
     '<div class="sub">' + esc(d.nombre) + '</div>' +
     '<ol style="color:var(--ink2);font-size:13px;line-height:1.7;padding-left:19px;margin:0">' +
-      '<li>Se sube la planilla a tu OneDrive, a la carpeta <b>' + esc(_msCarpeta()) + '</b>.</li>' +
-      '<li>Se abre en Excel para la web, en otra pestaña. Editás como siempre: fórmulas, formato y gráficos quedan intactos.</li>' +
+      '<li>Se sube la planilla a tu ' + esc(T.donde) + ', a la carpeta <b>' + esc(_carpetaTrabajo()) + '</b>.</li>' +
+      '<li>Se abre en <b>' + esc(T.nombre) + '</b>, en otra pestaña. Editás como siempre: el archivo sigue siendo un .xlsx, no se convierte.</li>' +
       '<li>Cuando termines, volvé acá y tocá «Ya terminé». El archivo vuelve al sistema como <b>versión nueva</b>; la actual no se pierde.</li>' +
     '</ol>' +
     '<div class="err" id="xErr"></div>' +
     '<div class="pie">' +
       '<button class="btn" id="xCerrar">Cerrar</button>' +
       '<button class="btn" id="xTraer" disabled>Ya terminé — traer los cambios</button>' +
-      '<button class="btn pri" id="xAbrir">Abrir en Excel</button>' +
+      '<button class="btn pri" id="xAbrir">' + esc(T.boton) + '</button>' +
     '</div>');
   var err = document.getElementById('xErr');
   document.getElementById('xCerrar').onclick = cerrarModal;
   document.getElementById('xAbrir').onclick = function(){
     var bAbrir = document.getElementById('xAbrir');
     bAbrir.disabled = true; err.textContent = ''; err.style.color = '';
-    aviso('Subiendo a OneDrive…');
+    aviso('Subiendo a ' + T.donde + '…');
     _leerArchivo(id, d).then(function(blob){
-      return _msSubir(_msCarpeta() + '/' + d.nombre, blob);
+      return T.subir(d.nombre, blob);
     }).then(function(item){
-      if (!item || !item.id) throw new Error('OneDrive no devolvió el archivo subido.');
-      // Se recuerda a qué archivo de OneDrive corresponde, para poder traerlo
-      // de vuelta aunque se cierre la ventana o se siga desde otro equipo.
+      if (!item || !item.id) throw new Error(T.donde + ' no devolvió el archivo subido.');
+      // Se recuerda a qué archivo corresponde, para poder traerlo de vuelta
+      // aunque se cierre la ventana o se siga desde otro equipo.
       return db.ref(basePath() + '/docs/' + id).update({
-        msItemId: item.id, msWebUrl: item.webUrl || '', msSubido: Date.now(), msPor: mail
+        edItemId: item.id, edUrl: item.url || '', edProv: (CFG.editor || 'google'),
+        edSubido: Date.now(), edPor: mail
       }).then(function(){ return item; });
     }).then(function(item){
       document.getElementById('xTraer').disabled = false;
       bAbrir.disabled = false;
-      if (item.webUrl) window.open(item.webUrl, '_blank', 'noopener');
-      else err.textContent = 'Se subió, pero OneDrive no devolvió el link para abrirlo.';
+      if (item.url) window.open(item.url, '_blank', 'noopener');
+      else err.textContent = 'Se subió, pero no vino el link para abrirlo.';
     }).catch(function(e){
       bAbrir.disabled = false;
-      err.textContent = (e && e.message) ? e.message : 'No se pudo abrir en Excel.';
+      err.textContent = (e && e.message) ? e.message : 'No se pudo abrir la planilla.';
     });
   };
   document.getElementById('xTraer').onclick = function(){ traerDeExcel(id, err); };
   // Si ya se había subido antes, se puede traer sin volver a subir.
-  if (d.msItemId) {
+  if (_edItem(d)) {
     document.getElementById('xTraer').disabled = false;
     err.style.color = 'var(--ink3)';
-    err.textContent = 'Ya hay una copia en OneDrive desde el ' + fecha(d.msSubido) +
-                      (d.msPor ? ' (' + d.msPor + ')' : '') + '. Podés traerla directamente.';
+    err.textContent = 'Ya hay una copia en ' + T.donde + ' desde el ' + fecha(d.edSubido || d.msSubido) +
+                      ((d.edPor || d.msPor) ? ' (' + (d.edPor || d.msPor) + ')' : '') + '. Podés traerla directamente.';
   }
 }
 
+// `msItemId` es el nombre viejo, de cuando el único camino era Microsoft.
+function _edItem(d){ return d.edItemId || d.msItemId || ''; }
+
 function traerDeExcel(id, err){
-  var d = docs[id]; if (!d || !d.msItemId) return;
+  var d = docs[id]; if (!d || !_edItem(d)) return;
   var b = document.getElementById('xTraer');
   if (b) b.disabled = true;
   if (err) { err.style.color = ''; err.textContent = ''; }
   aviso('Trayendo los cambios…');
-  _graph('/me/drive/items/' + encodeURIComponent(d.msItemId) + '/content')
-    .then(function(r){ return r.ok ? r.blob() : _msError(r).then(function(e){ throw e; }); })
-    .then(function(blob){ return _guardarVersion(id, blob, 'excel'); })
+  _taller().bajar(_edItem(d))
+    .then(function(blob){ return _guardarVersion(id, blob, 'planilla editada'); })
     .then(function(ver){
       cerrarModal();
       aviso('Guardado como versión ' + ver + '. La anterior quedó en el historial.');
