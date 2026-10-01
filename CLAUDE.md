@@ -85,11 +85,12 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 | App | Proyecto (nombre en la consola) | `projectId` | Config |
 |---|---|---|---|
 | Sistema de gestión (`index.html`) | Sistema RK | `modo-prueba-bb8c2` | `config.js` |
+| Documentación (`documentacion/`) | Sistema RK — **el mismo que el sistema**, a propósito | `modo-prueba-bb8c2` | `documentacion/config.js` |
 | Parte de personal (`obra/`) | Control Personal Obra | `control-caja-965ad` | `obra/config.js` |
 | Final de obra (`final-obra/`) | Final de Obra | `dash-rk` ⚠️ | `final-obra/config.js` |
 | Caja diaria (**otro repo**) | Caja RK Final | `rk-cajadiaria-5-6` | fuera de acá |
 
-Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad.
+Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad. **La excepción es `documentacion/`**, que comparte el proyecto del sistema justamente porque su público es el mismo que ya ve la contabilidad (y así reusa cuentas, roles, sesión y el árbol de obras).
 
 ## Parte de obra (`obra/`) — aparte de la app
 
@@ -99,6 +100,10 @@ Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una 
 
 `final-obra/index.html` es un **tablero independiente** para controlar pendientes de entrega por unidad/espacio común/rubro, con su propio proyecto de Firebase, sincronización multiusuario por colecciones planas y un asistente con Gemini. Ver `final-obra/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta) para el modelo de datos, la sincronización, las fotos y el asistente.
 
+## Documentación, escribanía y contable (`documentacion/`) — aparte de la app
+
+`documentacion/index.html` es un **repositorio de papeles por obra** (escrituras en PDF, Excel, boletos, posesiones, fondos, documentación contable), con carpetas, etiquetas, buscador y trabajo simultáneo de varias personas. ⚠️ A diferencia de `obra/` y `final-obra/`, usa **el mismo proyecto de Firebase que el sistema** (`modo-prueba-bb8c2`): las mismas cuentas y roles, la sesión abierta vale, y las obras salen del mismo nodo `empresas`. El contenido de los archivos vive en `documentacion/archivos/<docId>/partes/<n>` (base64 en pedazos de 512 KB), **fuera** del índice que se escucha al abrir — misma lección que el nodo `documentos`. Ver `documentacion/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta) para el modelo de datos, los permisos y las trampas conocidas.
+
 ## Despliegue
 
 - Frontend: estático (GitHub Pages en `/mi-app/`; también listo para Firebase Hosting vía `firebase.json`).
@@ -107,6 +112,7 @@ Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una 
 ## Al trabajar acá
 
 - Cambios de **frontend** → editar `index.html`. Es grande: usar grep para ubicar funciones, no leerlo entero.
+- **Módulos** (la pantalla «¿A dónde entrás?»): se agregan en la constante `MODULOS` y en la lista `todos` de `_modulosDeUsuario()`, las dos arriba de todo en `index.html`. Con eso aparecen solos en el selector Y en los atajos del pie del menú lateral. Qué módulos ve cada persona sale de `usuarios/<uid>/modulos` (sin configurar = ve todo); todavía no hay pantalla para editarlo, se carga a mano en Firebase.
 - Cambios de **backend** → `functions/server.js`.
 - **No commitear secretos.** Las credenciales van en variables de entorno de Railway / config de Firebase, no en el repo.
 - Idioma de la UI, comentarios y commits: **español**.
