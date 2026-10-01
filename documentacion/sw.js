@@ -3,7 +3,7 @@
 // no se pisa con el sw.js de la app principal, que cubre la raíz.
 // Objetivo: que la pantalla abra aunque la conexión esté floja. El CONTENIDO
 // de los documentos nunca se cachea: va por Firebase, que está excluido abajo.
-const CACHE = 'documentacion-v3';
+const CACHE = 'documentacion-v4';
 // La ruta base se deriva de dónde está servido este archivo (ej. /mi-app/obra/sw.js → /mi-app/obra/).
 const BASE  = self.location.pathname.replace(/[^/]*$/, '');
 const SHELL = [BASE, BASE + 'index.html', BASE + 'config.js', BASE + 'manifest.json',

@@ -44,9 +44,25 @@ Un documento **nunca se pisa**: cada guardado escribe la versión n+1 y la anter
 
 `_guardarVersion(id, blob, origen)` es el único camino para cambiar el contenido de un documento, y lo usan tanto el ida y vuelta con Excel como «Restaurar». Restaurar **no borra nada**: copia el contenido de la versión elegida como una versión nueva, así el historial queda lineal y siempre se puede volver.
 
-## Editar en Excel de verdad (Microsoft 365)
+## Editar planillas de verdad — dos talleres, una sola mecánica
 
-El sistema **sigue siendo el dueño del archivo**; OneDrive es un taller prestado. Se sube la planilla, la edita **Excel para la web** —con fórmulas, formato, gráficos y tablas dinámicas intactos, porque la edita Excel y no nosotros— y al volver se trae y se guarda como versión nueva. El botón «Excel» aparece sólo en `xlsx/xlsm/xls/csv` y sólo con permiso de edición.
+El sistema **sigue siendo el dueño del archivo**; Drive o OneDrive son un taller prestado. Se sube la planilla, la edita el editor de afuera, y al volver se trae y se guarda como versión nueva. El botón «Excel» aparece sólo en `xlsx/xlsm/xls/csv` y sólo con permiso de edición.
+
+`_taller()` devuelve `{nombre, donde, boton, subir, bajar}` según `CFG.editor`. **Lo único que cambia entre los dos es DÓNDE se edita**: la subida, la vuelta y el guardado como versión nueva son el mismo código. El documento guarda `edItemId`/`edUrl`/`edProv`/`edSubido`/`edPor`, así se pueden traer los cambios aunque se haya cerrado la ventana o se siga desde otro equipo (`_edItem(d)` lee además el nombre viejo `msItemId`, de cuando el único camino era Microsoft).
+
+### `editor: 'google'` — Drive / Hojas de cálculo (el activo)
+
+Sheets abre un `.xlsx` en **modo Office**: lo edita y lo guarda en ese mismo formato, **sin convertirlo**, así que va y vuelve `.xlsx`. No necesita licencia paga. La fidelidad es buena pero no es Excel: en planillas con macros o formato muy armado puede haber diferencias.
+
+El permiso es `drive.file`, que da acceso **sólo a los archivos que esta app crea o que la persona abre con ella** — no ve el resto del Drive de nadie. Como consecuencia, buscar la carpeta de trabajo con `files.list` sólo puede encontrar la que creamos nosotros, que es justo lo que queremos: no hay forma de meterse en una carpeta homónima de la persona.
+
+El **ID de cliente sale de `global/config/googleClientId`**, el mismo que ya usa la lectura de Gmail: un solo lugar donde cambiarlo. La subida es `multipart/related` armada a mano (`FormData` no sirve, Drive pide ese formato puntual). `_gCarpetas` cachea ruta→id para no re-buscar la carpeta en cada subida.
+
+**Lo que hay que hacer una vez en Google Cloud**, en el mismo proyecto de ese client ID: habilitar la **Google Drive API**; agregar `.../auth/drive.file` a la pantalla de consentimiento; y si la app está en modo «Prueba», sumar como usuarios de prueba a quienes vayan a editar.
+
+### `editor: 'microsoft'` — Excel para la web
+
+Mejor fidelidad: lo edita Excel, así que fórmulas, formato, gráficos y tablas dinámicas quedan idénticos. **Necesita licencia de Microsoft 365 de empresa** — con una cuenta personal gratuita no edita.
 
 **El permiso de Graph sale del MISMO login con Microsoft que ya usa el sistema** (`OAuthProvider('microsoft.com')`), pidiendo además el scope `Files.ReadWrite`. Así no hace falta un segundo registro de app ni un segundo login, y el tenant se lee del mismo lugar (`localStorage rk_ms_tenant`, que el sistema cachea de `global/config/msTenant`).
 
@@ -57,7 +73,11 @@ Dos cosas a respetar en `_graphToken()`:
 
 `_msSubir` manda de una los archivos de menos de 4 MB y por **sesión de carga** los más grandes, que es lo que pide Graph. `msItemId` queda guardado en el documento, así se pueden traer los cambios aunque se haya cerrado la ventana o se siga desde otro equipo.
 
-**Lo que hay que hacer una vez en Entra** (el mismo registro de app que ya usa el botón «Continuar con Microsoft»): Permisos de API → Microsoft Graph → delegados → `Files.ReadWrite` y `offline_access`, y después **conceder consentimiento de administrador**. Y una licencia de Microsoft 365 de **empresa**: con una cuenta personal gratuita, Excel para la web no edita.
+**Lo que hay que hacer una vez en Entra** (el mismo registro de app que ya usa el botón «Continuar con Microsoft»): Permisos de API → Microsoft Graph → delegados → `Files.ReadWrite` y `offline_access`, y después **conceder consentimiento de administrador**.
+
+## Diagnóstico (🔧)
+
+Hace **las mismas operaciones que la app** —leer `empresas`, leer el índice de la obra, escribir y borrar, y revisar el editor de planillas— y dice cuál falló. Existe porque «permiso denegado» a secas no distingue entre *falta publicar la rama de reglas* y *esta cuenta no tiene rol*, que se arreglan en lugares distintos; y porque Firebase, cuando falta la rama, **no falla con estrépito**: niega todo y la pantalla se ve vacía, como ya pasó con `cajaDiaria`. Si algo falla, muestra la rama de reglas lista para copiar. `_esPermiso()`/`_txtError()` traducen el `PERMISSION_DENIED` crudo en el resto de la pantalla.
 
 ## Varias personas a la vez
 
