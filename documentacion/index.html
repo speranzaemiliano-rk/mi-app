@@ -174,6 +174,7 @@ td.acc{text-align:right;white-space:nowrap}
     <div class="sp"></div>
     <input id="busca" type="text" placeholder="Buscar por nombre, etiqueta o nota…" autocomplete="off">
     <button class="btn pri" id="btnSubir">⬆ Subir archivos</button>
+    <button class="btn sm" id="btnDiag" title="Revisar permisos y conexión">🔧</button>
     <span id="quien"></span>
     <a class="btn sm" href="../" title="Volver a elegir módulo">← Módulos</a>
   </div>
@@ -319,6 +320,22 @@ function claseExt(e){
   if (['jpg','jpeg','png','webp','gif','heic','bmp','tif','tiff'].indexOf(e) >= 0) return 'img';
   if (['doc','docx','odt','txt','rtf'].indexOf(e) >= 0) return 'doc';
   return '';
+}
+// Firebase contesta PERMISSION_DENIED tanto si falta publicar la rama de
+// reglas como si al usuario le falta el rol. Son dos arreglos muy distintos y
+// el mensaje crudo no dice ninguno, así que acá se traduce. Es el error número
+// uno de este repo: `database.rules.json` NO se aplica solo.
+function _esPermiso(e){
+  var t = (e && (e.code || e.message) || '') + '';
+  return /permission[_ ]denied/i.test(t);
+}
+function _txtError(e){
+  if (_esPermiso(e)) {
+    return 'Firebase dice «permiso denegado». Falta publicar la rama "documentacion" ' +
+           'en Firebase → Realtime Database → Reglas. El archivo del repositorio no se ' +
+           'aplica solo. Usá 🔧 Diagnóstico para confirmarlo.';
+  }
+  return (e && e.message) ? e.message : String(e || 'error desconocido');
 }
 var _avisoT = null;
 function aviso(txt){
@@ -609,6 +626,7 @@ function pintarLista(){
 function pintar(){ pintarArbol(); pintarRuta(); pintarAcciones(); pintarChips(); pintarLista(); }
 
 document.getElementById('busca').oninput = function(){ filtroTexto = this.value; pintar(); };
+document.getElementById('btnDiag').onclick = diagnostico;
 
 /* ── Carpetas ──────────────────────────────────────────────────────── */
 function nuevaCarpeta(padre){
@@ -620,7 +638,7 @@ function nuevaCarpeta(padre){
   var ref = db.ref(basePath() + '/carpetas').push();
   ref.set({ nombre: nombre, padre: padre || '', creado: Date.now(), por: uid, porMail: mail })
     .then(function(){ carpActual = ref.key; pintar(); aviso('Carpeta creada.'); })
-    .catch(function(){ aviso('No se pudo crear. ¿Están publicadas las reglas?'); });
+    .catch(function(e){ alert('No se pudo crear la carpeta.\n\n' + _txtError(e)); });
 }
 document.getElementById('btnNuevaCarp').onclick = function(){ nuevaCarpeta(carpActual); };
 
@@ -713,7 +731,11 @@ function subirVarios(archivos){
     if (i >= archivos.length) {
       cerrarProgreso();
       if (fallo.length) {
-        alert('Subidos: ' + ok + '\n\nNo se pudieron subir:\n\n' + fallo.join('\n'));
+        alert('Subidos: ' + ok + '\n\nNo se pudieron subir:\n\n' + fallo.join('\n') +
+              (fallo.some(function(x){ return /permiso denegado/i.test(x); })
+                ? '\n\n⚠️ Es un problema de permisos, no de los archivos. ' +
+                  'Abrí 🔧 Diagnóstico (arriba a la derecha) para ver exactamente qué falta.'
+                : ''));
       } else {
         aviso(ok === 1 ? 'Documento subido.' : ok + ' documentos subidos.');
       }
@@ -724,7 +746,7 @@ function subirVarios(archivos){
     subirUno(f, function(pct){
       mostrarProgreso('Subiendo ' + i + ' de ' + archivos.length, pct, f.name + ' · ' + peso(f.size));
     }).then(function(){ ok++; siguiente(); })
-      .catch(function(err){ fallo.push('· ' + f.name + ' — ' + (err && err.message ? err.message : err)); siguiente(); });
+      .catch(function(err){ fallo.push('· ' + f.name + ' — ' + _txtError(err)); siguiente(); });
   }
   siguiente();
 }
@@ -937,6 +959,87 @@ function borrarDoc(id){
     return db.ref('documentacion/versiones/' + id).remove();
   }).then(function(){ aviso('Documento borrado.'); })
     .catch(function(){ aviso('No se pudo borrar del todo.'); });
+}
+
+/* ── Diagnóstico ───────────────────────────────────────────────────
+   Hace las MISMAS operaciones que hace la app y cuenta cuál falló. Existe
+   porque «permiso denegado» a secas no distingue entre «falta publicar la
+   rama de reglas» y «esta cuenta no tiene rol», que se arreglan en lugares
+   distintos; y porque Firebase, cuando falta la rama, no falla con estrépito:
+   simplemente niega todo y la pantalla se ve vacía. Mismo espíritu que el
+   verificador del índice de documentos en el sistema. */
+function diagnostico(){
+  var filas = [];
+  function linea(ok, titulo, detalle){
+    filas.push('<div style="display:flex;gap:9px;align-items:flex-start;padding:8px 0;' +
+      'border-bottom:1px solid var(--line)">' +
+      '<span style="flex:0 0 18px;color:' + (ok ? 'var(--ok)' : 'var(--bad)') + '">' + (ok ? '✓' : '✕') + '</span>' +
+      '<span><b>' + esc(titulo) + '</b>' + (detalle ? '<br><span style="color:var(--ink3);font-size:12px">' +
+      esc(detalle) + '</span>' : '') + '</span></div>');
+  }
+  modal('<h3>🔧 Diagnóstico</h3><div class="sub">Probando…</div>');
+  var pruebaId = 'diag_' + Date.now();
+  var rutaPrueba = 'documentacion/_diagnostico/' + uid;
+
+  linea(!!uid, 'Sesión abierta', mail || 'sin sesión');
+  linea(!!rol, 'Rol en el sistema', rol ? ('es «' + rol + '»' + (puedeEditar ? ', puede escribir' : ', SÓLO LECTURA: un lector no sube archivos')) : 'sin rol — pedí que te habiliten en Config → Usuarios');
+
+  db.ref('empresas').once('value').then(function(){
+    linea(true, 'Leer las obras (nodo empresas)', 'bien');
+  }).catch(function(e){
+    linea(false, 'Leer las obras (nodo empresas)', _esPermiso(e) ? 'permiso denegado' : String(e));
+  }).then(function(){
+    return db.ref(basePath() + '/docs').once('value').then(function(s){
+      var n = s.val() ? Object.keys(s.val()).length : 0;
+      linea(true, 'Leer los documentos de esta obra', n + ' documento(s) en el índice');
+    }).catch(function(e){
+      linea(false, 'Leer los documentos de esta obra',
+            _esPermiso(e) ? 'permiso denegado — falta la rama "documentacion" en las reglas' : String(e));
+    });
+  }).then(function(){
+    // La prueba que importa: escribir y borrar, que es lo que falla al subir.
+    return db.ref(rutaPrueba).set({ cuando: Date.now(), por: mail, id: pruebaId }).then(function(){
+      linea(true, 'Escribir en la base', 'bien — se puede subir');
+      return db.ref(rutaPrueba).remove().then(function(){
+        linea(true, 'Borrar de la base', 'bien');
+      }).catch(function(e){ linea(false, 'Borrar de la base', String(e)); });
+    }).catch(function(e){
+      linea(false, 'Escribir en la base',
+            _esPermiso(e) ? 'PERMISO DENEGADO — es esto lo que te impide subir archivos' : String(e));
+    });
+  }).then(function(){
+    var fallo = filas.some(function(f){ return f.indexOf('var(--bad)') >= 0; });
+    var reglas = '"documentacion": {\n' +
+      '  ".read": "auth != null && root.child(\'roles\').child(auth.uid).exists()",\n' +
+      '  ".write": "root.child(\'roles\').child(auth.uid).val() === \'superadmin\' || ' +
+      'root.child(\'roles\').child(auth.uid).val() === \'admin\' || ' +
+      'root.child(\'roles\').child(auth.uid).val() === \'editor\'"\n}';
+    modal('<h3>🔧 Diagnóstico</h3>' +
+      '<div class="sub">' + esc(mail) + ' · ' + esc(empId) + ' / ' + esc(proyId) + '</div>' +
+      filas.join('') +
+      (fallo
+        ? '<div style="margin-top:16px;padding:13px;border:1px solid var(--line2);border-radius:10px;background:var(--card2)">' +
+          '<b style="font-size:13px">Qué hacer</b>' +
+          '<div style="color:var(--ink2);font-size:12.5px;line-height:1.6;margin-top:7px">' +
+          'Entrá a <b>Firebase → Realtime Database → Reglas</b> y agregá esta rama al mismo nivel que ' +
+          '<code>empresas</code>. El archivo <code>database.rules.json</code> del repositorio ' +
+          '<b>no se aplica solo</b>: hay que pegarlo y publicarlo a mano.' +
+          '</div>' +
+          '<textarea readonly style="width:100%;margin-top:10px;min-height:120px;font-family:var(--mono);' +
+          'font-size:11.5px;background:var(--bg2);border:1px solid var(--line);border-radius:8px;' +
+          'padding:9px;color:var(--ink2)">' + esc(reglas) + '</textarea>' +
+          '<button class="btn sm" id="dCopiar" style="margin-top:8px">Copiar</button>' +
+          '</div>'
+        : '<div style="margin-top:14px;color:var(--ok);font-size:13px">Todo en orden.</div>') +
+      '<div class="pie"><button class="btn pri" id="dCerrar">Cerrar</button></div>');
+    var c = document.getElementById('dCopiar');
+    if (c) c.onclick = function(){
+      var t = document.querySelector('#modal textarea');
+      t.select();
+      try { document.execCommand('copy'); aviso('Copiado.'); } catch(e) { aviso('Copialo a mano.'); }
+    };
+    document.getElementById('dCerrar').onclick = cerrarModal;
+  });
 }
 
 /* ══════════════════════════════════════════════════════════════════
