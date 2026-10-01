@@ -53,6 +53,33 @@ window.DOCU_CONFIG = {
   // Etiquetas sugeridas al subir. Son libres: se puede escribir cualquier otra.
   etiquetas: ['Escritura', 'Posesión', 'Fondos', 'Contable', 'Plano', 'Reglamento',
               'Boleto', 'Impuestos', 'Seguro', 'Contrato', 'Acta', 'Otro'],
+  // ── Editar planillas en Excel para la web (Microsoft 365) ──────────
+  // El sistema sigue siendo el dueño del archivo: OneDrive es sólo el taller
+  // donde Excel lo edita, y lo editado vuelve como una versión nueva acá.
+  //
+  // Qué hace falta del lado de Microsoft, una sola vez:
+  //  1) Licencia de Microsoft 365 de EMPRESA. Excel para la web con edición no
+  //     anda con una cuenta personal gratuita.
+  //  2) En el registro de la app en Entra (el mismo que ya usa el botón
+  //     «Continuar con Microsoft»): Permisos de API → Microsoft Graph →
+  //     Permisos delegados → agregar `Files.ReadWrite` y `offline_access`, y
+  //     después «Conceder consentimiento de administrador». Sin el
+  //     consentimiento, a cada persona le va a pedir autorización suelta.
+  //  3) Nada más. La carpeta de trabajo se crea sola en el OneDrive de quien
+  //     edita, con el nombre de abajo.
+  //
+  // El tenant no se configura acá: sale del mismo lugar que el login del
+  // sistema (`global/config/msTenant`, cacheado en localStorage rk_ms_tenant),
+  // así se cambia en un solo lugar para las dos cosas.
+  ms: {
+    // Permisos que se le piden a Microsoft al abrir Excel. Files.ReadWrite
+    // alcanza para el OneDrive de la propia persona; no toca el de nadie más.
+    scopes: ['Files.ReadWrite', 'offline_access'],
+    // Carpeta de trabajo dentro del OneDrive de quien edita.
+    carpeta: 'Documentación — Mess',
+    // Tenant por defecto, sólo si no hay ninguno guardado en la nube.
+    tenant: 'ec157e74-8ae3-404a-9f98-f413ad1bb3a1'
+  },
   brand: {
     nombre: 'Documentación',
     tagline: 'Escribanía y contable',

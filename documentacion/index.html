@@ -218,7 +218,9 @@ td.acc{text-align:right;white-space:nowrap}
          { nombre, carpeta, etiqueta, nota, mime, ext, tam, partes,
            creado, por, porMail, mod, modPor }
 
-     documentacion/archivos/<docId>/partes/<n> = "<pedazo de base64>"
+     documentacion/archivos/<docId>/v/<n>/partes/<k> = "<pedazo de base64>"
+     documentacion/versiones/<docId>/<n> = { tam, partes, creado, porMail,
+                                             origen, ver }
 
    El CONTENIDO del archivo NUNCA está en el índice. Es la lección que ya
    dejó el nodo `documentos` del sistema: si los adjuntos cuelgan de lo
@@ -239,6 +241,28 @@ td.acc{text-align:right;white-space:nowrap}
    es un nodo con su propio id, dos personas trabajando al mismo tiempo
    no se pisan — nunca se reescribe la colección entera, igual que el
    criterio de `_colPersist` en el sistema.
+
+   ── Versiones ───────────────────────────────────────────────────────
+   Un documento nunca se pisa: cada guardado nuevo escribe la versión n+1 y
+   la anterior queda entera, con su contenido y quién la hizo. `docs/<id>.ver`
+   apunta a la vigente; el listado de versiones vive en su propia rama y se
+   lee sólo cuando alguien lo abre. Los documentos subidos antes de que esto
+   existiera no tienen `ver` y su contenido está en la ruta vieja
+   (`archivos/<id>/partes`): `_rutaPartes` lo contempla, y el registro de cada
+   versión guarda su propio `ver` para saber de dónde leerla.
+
+   ── Editar en Excel de verdad (Microsoft 365) ────────────────────────
+   El sistema sigue siendo el dueño del archivo. OneDrive es un taller
+   prestado: se sube la planilla, la edita Excel para la web —con fórmulas,
+   formato, gráficos y tablas dinámicas intactos, porque la edita Excel y no
+   nosotros— y al volver se trae y se guarda como versión nueva.
+
+   El permiso para Graph sale del MISMO login con Microsoft que ya usa el
+   sistema (`OAuthProvider('microsoft.com')`), pidiendo además el scope
+   `Files.ReadWrite`: así no hace falta un segundo registro de app ni un
+   segundo login. Firebase no devuelve refresh token del proveedor, así que
+   el token de Graph dura lo que dura y se vuelve a pedir con una ventanita
+   cuando vence o cuando Graph contesta 401.
 
    ── Permisos ────────────────────────────────────────────────────────
    Los mismos del sistema: hace falta tener rol en `roles/<uid>` para
@@ -561,6 +585,10 @@ function pintarLista(){
       '<td class="num ocu">' + fecha(d.creado) + '</td>' +
       '<td class="ocu" style="color:var(--ink3);font-size:12px">' + esc(d.porMail || '') + '</td>' +
       '<td class="acc">' +
+        (esExcel(d) && puedeEditar
+          ? '<button class="btn sm" data-xls="' + esc(d.id) + '" title="Abrir en Excel para la web y traer los cambios como versión nueva">Excel</button> ' : '') +
+        ((d.ver || 1) > 1
+          ? '<button class="btn sm" data-vers="' + esc(d.id) + '" title="Ver el historial de versiones">v' + (d.ver || 1) + '</button> ' : '') +
         '<button class="btn sm" data-ver="' + esc(d.id) + '">Abrir</button> ' +
         '<button class="btn sm" data-baj="' + esc(d.id) + '">↓</button>' +
         (puedeEditar ? ' <button class="btn sm" data-ed="' + esc(d.id) + '">✎</button>' +
@@ -571,6 +599,8 @@ function pintarLista(){
     '<th>Documento</th><th class="ocu">Etiqueta</th><th>Tamaño</th>' +
     '<th class="ocu">Subido</th><th class="ocu">Por</th><th></th>' +
     '</tr></thead><tbody>' + filas + '</tbody></table>';
+  el.querySelectorAll('[data-xls]').forEach(function(b){ b.onclick = function(){ editarEnExcel(b.dataset.xls); }; });
+  el.querySelectorAll('[data-vers]').forEach(function(b){ b.onclick = function(){ verVersiones(b.dataset.vers); }; });
   el.querySelectorAll('[data-ver]').forEach(function(b){ b.onclick = function(){ abrirDoc(b.dataset.ver); }; });
   el.querySelectorAll('[data-baj]').forEach(function(b){ b.onclick = function(){ bajarDoc(b.dataset.baj); }; });
   el.querySelectorAll('[data-ed]').forEach(function(b){ b.onclick = function(){ editarDoc(b.dataset.ed); }; });
@@ -742,22 +772,11 @@ function subirUno(file, onProgreso){
     }
     return _leerBase64(f).then(function(b64){
       var id = db.ref(basePath() + '/docs').push().key;
-      var partes = [];
-      for (var p = 0; p < b64.length; p += PEDAZO) partes.push(b64.slice(p, p + PEDAZO));
       // Primero el contenido, de a un pedazo (así se ve el avance de verdad y
       // ninguna escritura pasa el tope de la base). El índice se escribe AL
       // FINAL: si la subida se corta a la mitad, el documento no aparece
       // listado como si estuviera completo.
-      var hecho = 0;
-      var cadena = partes.reduce(function(prev, pedazo, n){
-        return prev.then(function(){
-          return db.ref('documentacion/archivos/' + id + '/partes/' + n).set(pedazo).then(function(){
-            hecho++;
-            if (onProgreso) onProgreso(Math.round(hecho / partes.length * 96));
-          });
-        });
-      }, Promise.resolve());
-      return cadena.then(function(){
+      return _subirPartes(id, 1, b64, onProgreso).then(function(partes){
         return db.ref(basePath() + '/docs/' + id).set({
           nombre: f.name,
           carpeta: carpActual || '',
@@ -766,7 +785,8 @@ function subirUno(file, onProgreso){
           mime: f.type || '',
           ext: extDe(f.name),
           tam: f.size,
-          partes: partes.length,
+          partes: partes,
+          ver: 1,
           creado: Date.now(), por: uid, porMail: mail
         });
       }).then(function(){ if (onProgreso) onProgreso(100); });
@@ -774,9 +794,38 @@ function subirUno(file, onProgreso){
   });
 }
 
+/* ── Contenido: rutas, lectura y escritura ─────────────────────────── */
+// `ver` vacío = documento de antes de las versiones, contenido en la ruta
+// vieja. Los nuevos siempre nacen con ver 1.
+function _rutaPartes(docId, ver){
+  return 'documentacion/archivos/' + docId + (ver ? '/v/' + ver : '') + '/partes';
+}
+// Escribe el contenido de a un pedazo. Devuelve cuántos pedazos quedaron.
+function _subirPartes(docId, ver, b64, onProgreso){
+  var partes = [];
+  for (var i = 0; i < b64.length; i += PEDAZO) partes.push(b64.slice(i, i + PEDAZO));
+  var hecho = 0, ruta = _rutaPartes(docId, ver);
+  return partes.reduce(function(prev, pedazo, n){
+    return prev.then(function(){
+      return db.ref(ruta + '/' + n).set(pedazo).then(function(){
+        hecho++;
+        if (onProgreso) onProgreso(Math.round(hecho / partes.length * 96));
+      });
+    });
+  }, Promise.resolve()).then(function(){ return partes.length; });
+}
+function _blobABase64(blob){
+  return new Promise(function(res, rej){
+    var fr = new FileReader();
+    fr.onload = function(){ var t = String(fr.result || ''), c = t.indexOf(','); res(c >= 0 ? t.slice(c+1) : t); };
+    fr.onerror = function(){ rej(new Error('no se pudo leer el archivo')); };
+    fr.readAsDataURL(blob);
+  });
+}
+
 /* ── Leer un archivo (sólo cuando alguien lo pide) ─────────────────── */
 function _leerArchivo(id, d){
-  return db.ref('documentacion/archivos/' + id + '/partes').once('value').then(function(s){
+  return db.ref(_rutaPartes(id, d && d.ver)).once('value').then(function(s){
     var v = s.val();
     if (!v) throw new Error('El contenido de este documento no está en la base.');
     // El nodo puede volver como objeto o como array según cómo lo serialice
@@ -806,8 +855,11 @@ function abrirDoc(id){
   var esPDF = e === 'pdf' || d.mime === 'application/pdf';
   var esImg = /^image\//.test(d.mime || '') || claseExt(e) === 'img';
   if (!esPDF && !esImg) {
-    // Excel, Word y compañía no se pueden mostrar en el navegador: se bajan.
-    bajarDoc(id);
+    // Excel, Word y compañía no se pueden mostrar en el navegador. Si es una
+    // planilla y la persona puede editar, el camino útil es Excel para la web;
+    // el resto se baja.
+    if (esExcel(d) && puedeEditar) editarEnExcel(id);
+    else bajarDoc(id);
     return;
   }
   aviso('Abriendo…');
@@ -881,8 +933,281 @@ function borrarDoc(id){
   // contenido ya no existe.
   db.ref(basePath() + '/docs/' + id).remove().then(function(){
     return db.ref('documentacion/archivos/' + id).remove();
+  }).then(function(){
+    return db.ref('documentacion/versiones/' + id).remove();
   }).then(function(){ aviso('Documento borrado.'); })
     .catch(function(){ aviso('No se pudo borrar del todo.'); });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   EDITAR EN EXCEL PARA LA WEB (Microsoft 365)
+
+   El sistema no deja de ser el dueño del archivo: OneDrive es un taller
+   prestado. Se sube la planilla, la edita Excel —con fórmulas, formato,
+   gráficos y tablas dinámicas intactos, porque la edita Excel y no
+   nosotros— y al volver se trae y se guarda como versión nueva.
+   ══════════════════════════════════════════════════════════════════ */
+var MS = CFG.ms || {};
+var _msTok = null;                     // { token, vence }
+var EXT_EXCEL = ['xlsx','xlsm','xls','csv'];
+
+function esExcel(d){
+  return EXT_EXCEL.indexOf(d.ext || extDe(d.nombre)) >= 0;
+}
+function _msTenant(){
+  // El tenant sale del MISMO lugar que el login del sistema, que lo cachea en
+  // localStorage después del primer ingreso. Así se cambia en un solo lado.
+  try { var c = localStorage.getItem('rk_ms_tenant'); if (c) return c; } catch(e) {}
+  return MS.tenant || 'common';
+}
+// Permiso de Graph a partir del login con Microsoft que ya usa el sistema.
+// Firebase no devuelve refresh token del proveedor, así que el token dura lo
+// que dura: se vuelve a pedir al vencer o cuando Graph contesta 401.
+function _graphToken(forzar){
+  if (!forzar && _msTok && _msTok.vence > Date.now() + 60000) return Promise.resolve(_msTok.token);
+  var user = auth.currentUser;
+  if (!user) return Promise.reject(new Error('No hay sesión abierta.'));
+  var prov = new firebase.auth.OAuthProvider('microsoft.com');
+  (MS.scopes || ['Files.ReadWrite']).forEach(function(x){ prov.addScope(x); });
+  prov.setCustomParameters({ tenant: _msTenant(), prompt: 'select_account' });
+  var yaEsta = (user.providerData || []).some(function(x){ return x.providerId === 'microsoft.com'; });
+  // Si la cuenta ya tiene Microsoft vinculado hay que REAUTENTICAR (vincular
+  // de nuevo daría 'provider-already-linked'); si no, se vincula — igual que
+  // hace el sistema para no duplicar el uid y perder el rol.
+  function pedir(reauth){
+    return reauth ? user.reauthenticateWithPopup(prov) : user.linkWithPopup(prov);
+  }
+  return pedir(yaEsta).catch(function(e){
+    var c = (e && e.code) || '';
+    // El estado del vínculo puede no ser el que creíamos (por ejemplo si se
+    // vinculó desde otro dispositivo): se prueba una vez por el otro camino.
+    if (c === 'auth/provider-already-linked' || c === 'auth/credential-already-in-use') return pedir(true);
+    if (c === 'auth/user-mismatch') {
+      throw new Error('Esa cuenta de Microsoft no es la misma con la que entraste al sistema.');
+    }
+    throw e;
+  }).then(function(r){
+    var t = r && r.credential && r.credential.accessToken;
+    if (!t) throw new Error('Microsoft no devolvió el permiso para los archivos. Revisá que la app tenga Files.ReadWrite con consentimiento de administrador.');
+    _msTok = { token: t, vence: Date.now() + 50 * 60 * 1000 };
+    return t;
+  });
+}
+function _graph(ruta, opts, reintento){
+  return _graphToken().then(function(tok){
+    var o = Object.assign({}, opts || {});
+    o.headers = Object.assign({}, o.headers, { Authorization: 'Bearer ' + tok });
+    return fetch(ruta.indexOf('http') === 0 ? ruta : 'https://graph.microsoft.com/v1.0' + ruta, o);
+  }).then(function(r){
+    if (r.status === 401 && !reintento) { _msTok = null; return _graph(ruta, opts, true); }
+    return r;
+  });
+}
+function _msError(r){
+  return r.text().then(function(t){
+    var m = '';
+    try { m = (JSON.parse(t).error || {}).message || ''; } catch(e) { m = t.slice(0, 180); }
+    return new Error('Microsoft respondió ' + r.status + (m ? ': ' + m : ''));
+  });
+}
+function _msCarpeta(){
+  var e = empresas.find(function(x){ return x.id === empId; }) || {};
+  var pr = ((e.proyectos || []).find(function(x){ return x.id === proyId; }) || {});
+  // OneDrive no acepta estos caracteres en nombres de archivo ni de carpeta.
+  var limpio = function(x){ return String(x || '').replace(/[\\/:*?"<>|#%]/g, '-').trim() || 'sin-nombre'; };
+  return limpio(MS.carpeta || 'Documentación') + '/' + limpio(e.nombre || empId) + ' - ' + limpio(pr.nombre || proyId);
+}
+// Sube a OneDrive. Hasta 4 MB va de una; más grande, por sesión de carga en
+// pedazos, que es lo que pide Graph.
+function _msSubir(nombreRuta, blob){
+  var url = '/me/drive/root:/' + nombreRuta.split('/').map(encodeURIComponent).join('/');
+  if (blob.size < 4 * 1024 * 1024) {
+    return _graph(url + ':/content', {
+      method: 'PUT',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob
+    }).then(function(r){ return r.ok ? r.json() : _msError(r).then(function(e){ throw e; }); });
+  }
+  return _graph(url + ':/createUploadSession', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'replace' } })
+  }).then(function(r){ return r.ok ? r.json() : _msError(r).then(function(e){ throw e; }); })
+    .then(function(ses){
+      var TROZO = 3200 * 1024, pos = 0, ultimo = null;
+      function trozo(){
+        if (pos >= blob.size) return Promise.resolve(ultimo);
+        var fin = Math.min(pos + TROZO, blob.size), ini = pos;
+        return fetch(ses.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Range': 'bytes ' + ini + '-' + (fin - 1) + '/' + blob.size },
+          body: blob.slice(ini, fin)
+        }).then(function(r){
+          if (!r.ok && r.status !== 202) return _msError(r).then(function(e){ throw e; });
+          pos = fin;
+          return r.status === 202 ? null : r.json();
+        }).then(function(j){ if (j) ultimo = j; return trozo(); });
+      }
+      return trozo();
+    });
+}
+
+function editarEnExcel(id){
+  var d = docs[id]; if (!d) return;
+  if (!puedeEditar) { aviso('Tu rol no puede modificar documentos.'); return; }
+  modal('<h3>Editar en Excel</h3>' +
+    '<div class="sub">' + esc(d.nombre) + '</div>' +
+    '<ol style="color:var(--ink2);font-size:13px;line-height:1.7;padding-left:19px;margin:0">' +
+      '<li>Se sube la planilla a tu OneDrive, a la carpeta <b>' + esc(_msCarpeta()) + '</b>.</li>' +
+      '<li>Se abre en Excel para la web, en otra pestaña. Editás como siempre: fórmulas, formato y gráficos quedan intactos.</li>' +
+      '<li>Cuando termines, volvé acá y tocá «Ya terminé». El archivo vuelve al sistema como <b>versión nueva</b>; la actual no se pierde.</li>' +
+    '</ol>' +
+    '<div class="err" id="xErr"></div>' +
+    '<div class="pie">' +
+      '<button class="btn" id="xCerrar">Cerrar</button>' +
+      '<button class="btn" id="xTraer" disabled>Ya terminé — traer los cambios</button>' +
+      '<button class="btn pri" id="xAbrir">Abrir en Excel</button>' +
+    '</div>');
+  var err = document.getElementById('xErr');
+  document.getElementById('xCerrar').onclick = cerrarModal;
+  document.getElementById('xAbrir').onclick = function(){
+    var bAbrir = document.getElementById('xAbrir');
+    bAbrir.disabled = true; err.textContent = ''; err.style.color = '';
+    aviso('Subiendo a OneDrive…');
+    _leerArchivo(id, d).then(function(blob){
+      return _msSubir(_msCarpeta() + '/' + d.nombre, blob);
+    }).then(function(item){
+      if (!item || !item.id) throw new Error('OneDrive no devolvió el archivo subido.');
+      // Se recuerda a qué archivo de OneDrive corresponde, para poder traerlo
+      // de vuelta aunque se cierre la ventana o se siga desde otro equipo.
+      return db.ref(basePath() + '/docs/' + id).update({
+        msItemId: item.id, msWebUrl: item.webUrl || '', msSubido: Date.now(), msPor: mail
+      }).then(function(){ return item; });
+    }).then(function(item){
+      document.getElementById('xTraer').disabled = false;
+      bAbrir.disabled = false;
+      if (item.webUrl) window.open(item.webUrl, '_blank', 'noopener');
+      else err.textContent = 'Se subió, pero OneDrive no devolvió el link para abrirlo.';
+    }).catch(function(e){
+      bAbrir.disabled = false;
+      err.textContent = (e && e.message) ? e.message : 'No se pudo abrir en Excel.';
+    });
+  };
+  document.getElementById('xTraer').onclick = function(){ traerDeExcel(id, err); };
+  // Si ya se había subido antes, se puede traer sin volver a subir.
+  if (d.msItemId) {
+    document.getElementById('xTraer').disabled = false;
+    err.style.color = 'var(--ink3)';
+    err.textContent = 'Ya hay una copia en OneDrive desde el ' + fecha(d.msSubido) +
+                      (d.msPor ? ' (' + d.msPor + ')' : '') + '. Podés traerla directamente.';
+  }
+}
+
+function traerDeExcel(id, err){
+  var d = docs[id]; if (!d || !d.msItemId) return;
+  var b = document.getElementById('xTraer');
+  if (b) b.disabled = true;
+  if (err) { err.style.color = ''; err.textContent = ''; }
+  aviso('Trayendo los cambios…');
+  _graph('/me/drive/items/' + encodeURIComponent(d.msItemId) + '/content')
+    .then(function(r){ return r.ok ? r.blob() : _msError(r).then(function(e){ throw e; }); })
+    .then(function(blob){ return _guardarVersion(id, blob, 'excel'); })
+    .then(function(ver){
+      cerrarModal();
+      aviso('Guardado como versión ' + ver + '. La anterior quedó en el historial.');
+    })
+    .catch(function(e){
+      if (b) b.disabled = false;
+      if (err) err.textContent = (e && e.message) ? e.message : 'No se pudieron traer los cambios.';
+      else alert('No se pudieron traer los cambios.\n\n' + (e && e.message ? e.message : e));
+    });
+}
+
+/* ── Versiones ─────────────────────────────────────────────────────── */
+// Guarda `blob` como la versión siguiente. La actual NO se pisa: se anota en
+// documentacion/versiones/<id> con su propio `ver`, que es de dónde hay que
+// leerla (los documentos viejos, sin `ver`, viven en la ruta de antes).
+function _guardarVersion(id, blob, origen){
+  var d = docs[id];
+  var verAnterior = d.ver || null;
+  var verNueva = (d.ver || 1) + 1;
+  return _blobABase64(blob).then(function(b64){
+    return _subirPartes(id, verNueva, b64, null);
+  }).then(function(partes){
+    return db.ref('documentacion/versiones/' + id + '/' + (d.ver || 1)).set({
+      ver: verAnterior, tam: d.tam || 0, partes: d.partes || 0,
+      creado: d.creado || 0, porMail: d.porMail || '', origen: d.origen || 'subida'
+    }).then(function(){
+      return db.ref(basePath() + '/docs/' + id).update({
+        tam: blob.size, partes: partes, ver: verNueva,
+        origen: origen || 'edicion', mod: Date.now(), modPor: mail
+      });
+    });
+  }).then(function(){ return verNueva; });
+}
+
+function verVersiones(id){
+  var d = docs[id]; if (!d) return;
+  db.ref('documentacion/versiones/' + id).once('value').then(function(s){
+    var v = s.val() || {};
+    var nums = Object.keys(v).sort(function(a, b){ return (+b) - (+a); });
+    var filas = '<div class="crow" style="display:flex;justify-content:space-between;align-items:center;' +
+      'padding:9px 0;border-bottom:1px solid var(--line)">' +
+      '<span><b>Versión ' + (d.ver || 1) + '</b> · actual · ' + peso(d.tam) + ' · ' +
+        fecha(d.mod || d.creado) + ' · ' + esc(d.modPor || d.porMail || '') + '</span>' +
+      '<button class="btn sm" id="vAct">↓</button></div>' +
+      nums.map(function(n){
+        var x = v[n];
+        return '<div style="display:flex;justify-content:space-between;align-items:center;' +
+          'padding:9px 0;border-bottom:1px solid var(--line)">' +
+          '<span style="color:var(--ink2)">Versión ' + esc(n) + ' · ' + peso(x.tam) + ' · ' +
+            fecha(x.creado) + ' · ' + esc(x.porMail || '') + '</span>' +
+          '<span><button class="btn sm" data-vbaj="' + esc(n) + '">↓</button> ' +
+          (puedeEditar ? '<button class="btn sm" data-vrest="' + esc(n) + '">Restaurar</button>' : '') +
+          '</span></div>';
+      }).join('');
+    modal('<h3>Versiones</h3><div class="sub">' + esc(d.nombre) + '</div>' + filas +
+      (nums.length ? '' : '<div style="color:var(--ink3);font-size:12.5px;margin-top:10px">Todavía no tiene versiones anteriores.</div>') +
+      '<div class="pie"><button class="btn pri" id="vCerrar">Cerrar</button></div>');
+    document.getElementById('vCerrar').onclick = cerrarModal;
+    document.getElementById('vAct').onclick = function(){ bajarDoc(id); };
+    document.querySelectorAll('[data-vbaj]').forEach(function(b){
+      b.onclick = function(){ bajarVersion(id, b.dataset.vbaj, v[b.dataset.vbaj]); };
+    });
+    document.querySelectorAll('[data-vrest]').forEach(function(b){
+      b.onclick = function(){ restaurarVersion(id, b.dataset.vrest, v[b.dataset.vrest]); };
+    });
+  });
+}
+function _blobDeVersion(id, reg){
+  // `reg.ver` dice de dónde sale esa versión: null = la ruta vieja, de antes
+  // de que existieran las versiones.
+  return _leerArchivo(id, { ver: reg.ver, mime: (docs[id] || {}).mime });
+}
+function bajarVersion(id, n, reg){
+  var d = docs[id]; if (!d || !reg) return;
+  aviso('Preparando la versión ' + n + '…');
+  _blobDeVersion(id, reg).then(function(blob){
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    var punto = (d.nombre || '').lastIndexOf('.');
+    a.href = url;
+    a.download = punto > 0 ? d.nombre.slice(0, punto) + ' (v' + n + ')' + d.nombre.slice(punto)
+                           : (d.nombre || 'documento') + ' (v' + n + ')';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+  }).catch(function(e){ alert('No se pudo descargar esa versión.\n\n' + (e && e.message ? e.message : e)); });
+}
+function restaurarVersion(id, n, reg){
+  var d = docs[id]; if (!d || !reg || !puedeEditar) return;
+  if (!confirm('¿Volver a la versión ' + n + '?\n\n' +
+               'No se borra nada: la versión actual (' + (d.ver || 1) + ') queda en el historial ' +
+               'y la ' + n + ' pasa a ser la vigente.')) return;
+  aviso('Restaurando…');
+  _blobDeVersion(id, reg).then(function(blob){
+    return _guardarVersion(id, blob, 'restaurada de v' + n);
+  }).then(function(ver){
+    cerrarModal();
+    aviso('Listo: ahora rige el contenido de la versión ' + n + ' (guardado como ' + ver + ').');
+  }).catch(function(e){ alert('No se pudo restaurar.\n\n' + (e && e.message ? e.message : e)); });
 }
 
 /* ── Modal ─────────────────────────────────────────────────────────── */
