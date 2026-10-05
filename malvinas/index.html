@@ -513,10 +513,10 @@
 
   // ============================================================
   //  Portada: las Malvinas en relieve sobre la bandera, con el Sol de Mayo
-  //  - Con Three.js (WebGL): la bandera es un plano y las islas salen de
-  //    ella como un bloque (con las franjas pasando por encima), iluminadas
-  //    con sombras reales. El sol es de oro: refleja el cielo del entorno.
-  //    La cámara se mece apenas para que se note la profundidad.
+  //  - Con Three.js (WebGL): la bandera es una tela que flamea y las islas
+  //    salen de ella como un bloque (con las franjas pasando por encima),
+  //    ondulando junto con la tela, con sombras reales. El sol es de oro:
+  //    refleja el cielo del entorno.
   //  - Si no hay WebGL o la librería no carga, se dibuja lo mismo en 2D
   //    (islas con sombra y sol dorado), quieto.
   // ============================================================
@@ -667,32 +667,71 @@
       escena.environment = pmrem.fromEquirectangular(texCielo).texture;
       texCielo.dispose(); pmrem.dispose();
 
-      // Luz principal desde arriba a la izquierda (como en la referencia)
-      var luz = new T.DirectionalLight(0xffffff, 0.75);
+      // Luz principal desde arriba a la izquierda, baja: sombras largas
+      var luz = new T.DirectionalLight(0xffffff, 0.95);
       luz.castShadow = true;
       luz.shadow.mapSize.set(2048, 2048);
       luz.shadow.bias = -0.0004;
       luz.shadow.radius = 3;
       escena.add(luz); escena.add(luz.target);
-      escena.add(new T.HemisphereLight(0xffffff, 0x9fb3c8, 0.42));
+      escena.add(new T.HemisphereLight(0xffffff, 0x9fb3c8, 0.3));
 
-      // Bandera: una textura con las franjas, compartida por el plano y las islas
-      var tc = document.createElement('canvas');
-      var texBandera = new T.CanvasTexture(tc);
+      // ---- La onda de la tela, calculada en la placa de video ----
+      // Todo lo que está sobre la bandera (tela, islas, sol) usa la MISMA
+      // onda según su posición, así el relieve acompaña los pliegues.
+      var ONDA = { uT: { value: 0 }, uA: { value: 0 }, uK: { value: 1 } };
+      var GLSL = [
+        'uniform float uT; uniform float uA; uniform float uK;',
+        'float ondaZ(vec2 p) {',
+        '  float x = p.x * uK, y = p.y * uK;',
+        '  return uA * (sin(x - uT * 1.5 + y * 0.35)',
+        '    + 0.42 * sin(x * 1.9 - uT * 2.2 + 1.7 + y * 0.6)',
+        '    + 0.22 * sin(y * 2.3 + x * 0.4 - uT * 0.9));',
+        '}',
+        'vec2 ondaGrad(vec2 p) {',
+        '  float e = 0.02;',
+        '  return vec2(ondaZ(p + vec2(e, 0.)) - ondaZ(p - vec2(e, 0.)), ondaZ(p + vec2(0., e)) - ondaZ(p - vec2(0., e))) / (2. * e);',
+        '}'
+      ].join('\n');
+      function ondear(mat) {
+        mat.onBeforeCompile = function (sh) {
+          sh.uniforms.uT = ONDA.uT; sh.uniforms.uA = ONDA.uA; sh.uniforms.uK = ONDA.uK;
+          sh.vertexShader = GLSL + '\n' + sh.vertexShader
+            .replace('#include <beginnormal_vertex>', [
+              '#include <beginnormal_vertex>',
+              'vec2 ondaD = ondaGrad((modelMatrix * vec4(position, 1.0)).xy);',
+              // la normal se inclina con la pendiente de la tela
+              'objectNormal = normalize(vec3(objectNormal.xy - ondaD * objectNormal.z, objectNormal.z + dot(objectNormal.xy, ondaD)));'
+            ].join('\n'))
+            .replace('#include <begin_vertex>', [
+              '#include <begin_vertex>',
+              'transformed.z += ondaZ((modelMatrix * vec4(position, 1.0)).xy);'
+            ].join('\n'));
+        };
+        return mat;
+      }
+      // Sombra que también ondula (para los costados de las islas)
+      var depthOndulado = ondear(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }));
+
+      // Texturas: la bandera (franjas) y la máscara con la forma de las islas
+      var tc = document.createElement('canvas'), tk = document.createElement('canvas');
+      var texBandera = new T.CanvasTexture(tc), texMascara = new T.CanvasTexture(tk);
       texBandera.encoding = T.sRGBEncoding;
       texBandera.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      var matBandera = new T.MeshStandardMaterial({ map: texBandera, roughness: 1, metalness: 0, envMapIntensity: 0.35 });
+      var matTela = ondear(new T.MeshStandardMaterial({ map: texBandera, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
+      // arriba de las islas: la misma tela, recortada con la forma de las islas
+      var matTapa = ondear(new T.MeshStandardMaterial({ map: texBandera, alphaMap: texMascara, alphaTest: 0.5, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
+      var matPared = ondear(new T.MeshStandardMaterial({ map: texBandera, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
 
-      // Sol: un plano con el dibujo del sol (transparente alrededor), de oro
+      // Sol: el dibujo del sol (transparente alrededor), de oro con algo de luz propia
       var ts = document.createElement('canvas'); ts.width = ts.height = 1024;
       solDeMayo(ts.getContext('2d'), 512, 512, 500);
       var texSol = new T.CanvasTexture(ts);
       texSol.encoding = T.sRGBEncoding;
-      // un poco de luz propia para que el oro brille aun en la parte en sombra
-      var matSol = new T.MeshStandardMaterial({
+      var matSol = ondear(new T.MeshStandardMaterial({
         map: texSol, alphaTest: 0.5, metalness: 0.45, roughness: 0.35, envMapIntensity: 1.0,
         emissive: 0xffffff, emissiveMap: texSol, emissiveIntensity: 0.5
-      });
+      }));
 
       var grupo = new T.Group();
       escena.add(grupo);
@@ -704,64 +743,93 @@
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.setSize(w, h, false);
         camara.aspect = w / h; camara.updateProjectionMatrix();
+        var tamSombra = w < 700 ? 1024 : 2048;
+        if (luz.shadow.mapSize.x !== tamSombra) {
+          luz.shadow.mapSize.set(tamSombra, tamSombra);
+          if (luz.shadow.map) { luz.shadow.map.dispose(); luz.shadow.map = null; }
+        }
 
         // Paso de píxeles a unidades del mundo en el plano de la bandera
         var vh = 2 * DIST * Math.tan(T.MathUtils.degToRad(camara.fov / 2));
         var px = vh / h, m = medidas(w, h);
-        var PW = w * px * 1.5, PH = vh * 1.5;              // plano con margen: no se ven los bordes
+        var PW = w * px * 1.5, PH = vh * 1.5;              // tela con margen: no se ven los bordes
         centro = (h / 2 - m.cy) * px;                        // centro de la franja (arriba de la tarjeta)
         var franja = m.franja * px;
+        var IH = m.altoIslas * px, k = IH / MALVINAS.h, IW = MALVINAS.w * k;
+        var prof = IH * 0.1;
+
+        // Onda: largo según el ancho visible, altura proporcional a las islas
+        ONDA.uK.value = (Math.PI * 2) / Math.max(w * px * 0.95, IH * 3);
+        ONDA.uA.value = IH * 0.11;
 
         // Textura de la bandera
         var tw = Math.min(2048, renderer.capabilities.maxTextureSize), th = Math.round(tw * PH / PW);
-        tc.width = tw; tc.height = th;
+        tc.width = tk.width = tw; tc.height = tk.height = th;
         var c = tc.getContext('2d');
         c.fillStyle = CELESTE; c.fillRect(0, 0, tw, th);
         var yb = (PH / 2 - centro - franja / 2) / PH * th;
         c.fillStyle = '#FFFFFF'; c.fillRect(0, yb, tw, franja / PH * th);
         texBandera.needsUpdate = true;
 
+        // Máscara: blanco donde hay islas (mismo lugar que el relieve)
+        var ck = tk.getContext('2d');
+        ck.fillStyle = '#000'; ck.fillRect(0, 0, tw, th);
+        ck.fillStyle = '#fff'; ck.beginPath();
+        cadaIsla(function (pts) {
+          pts.forEach(function (p, i) {
+            var x = -IW / 2 + p[0] * k, y = centro + IH / 2 - p[1] * k;
+            ck[i ? 'lineTo' : 'moveTo']((x + PW / 2) / PW * tw, (1 - (y + PH / 2) / PH) * th);
+          });
+          ck.closePath();
+        });
+        ck.fill();
+        texMascara.needsUpdate = true;
+
         // Rearmar la escena
         while (grupo.children.length) {
           var hijo = grupo.children.pop();
           if (hijo.geometry) hijo.geometry.dispose();
         }
-        var plano = new T.Mesh(new T.PlaneGeometry(PW, PH), matBandera);
-        plano.receiveShadow = true;
-        grupo.add(plano);
+        // la tela necesita muchos puntos para que la onda se vea curva
+        // (en pantallas chicas, menos puntos y sombra más liviana: cuida la batería)
+        var segX = Math.min(w < 700 ? 120 : 180, Math.round(PW / IH * 60)), segY = Math.max(40, Math.round(segX * PH / PW));
+        var tela = new T.Mesh(new T.PlaneGeometry(PW, PH, segX, segY), matTela);
+        tela.receiveShadow = true;
+        grupo.add(tela);
 
-        // Islas en relieve
-        var IH = m.altoIslas * px, k = IH / MALVINAS.h, IW = MALVINAS.w * k;
+        // Tapa de las islas: otra tela igual, levantada a la altura del relieve
+        var tapa = new T.Mesh(new T.PlaneGeometry(PW, PH, segX, segY), matTapa);
+        tapa.position.z = prof;
+        tapa.receiveShadow = true;
+        grupo.add(tapa);
+
+        // Costados del relieve: sólo las paredes del bloque extruido
         var formas = [];
         cadaIsla(function (pts) {
           formas.push(new T.Shape(pts.map(function (p) {
             return new T.Vector2(-IW / 2 + p[0] * k, centro + IH / 2 - p[1] * k);
           })));
         });
-        var prof = IH * 0.1, bisel = IH * 0.008;
-        var geo = new T.ExtrudeGeometry(formas, {
-          depth: prof, bevelEnabled: true, bevelThickness: bisel, bevelSize: bisel * 0.8, bevelSegments: 2, curveSegments: 1
-        });
-        // Las franjas pasan por encima de las islas: UV según la posición
+        var geo = new T.ExtrudeGeometry(formas, { depth: prof, bevelEnabled: false, curveSegments: 1 });
+        geo.groups = geo.groups.filter(function (g) { return g.materialIndex === 1; });
         var pos = geo.attributes.position, uv = geo.attributes.uv;
         for (var i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) + PW / 2) / PW, (pos.getY(i) + PH / 2) / PH);
         uv.needsUpdate = true;
-        geo.computeVertexNormals();
-        var islas = new T.Mesh(geo, matBandera);
-        islas.castShadow = islas.receiveShadow = true;
-        grupo.add(islas);
+        var paredes = new T.Mesh(geo, [matPared, matPared]);
+        paredes.castShadow = true;
+        paredes.customDepthMaterial = depthOndulado;
+        grupo.add(paredes);
 
         // Sol apoyado arriba de todo
         var R = m.radioSol * px;
-        var solMalla = new T.Mesh(new T.PlaneGeometry(R * 2, R * 2), matSol);
-        solMalla.position.set(0, centro, prof + bisel * 2 + 0.004);
+        var solMalla = new T.Mesh(new T.PlaneGeometry(R * 2, R * 2, 24, 24), matSol);
+        solMalla.position.set(0, centro, prof + 0.006);
         grupo.add(solMalla);
 
         // Sombra: la cámara de la luz cubre las islas
-        var s = luz.shadow.camera, lado = Math.max(IW, IH) * 0.75;
+        var s = luz.shadow.camera, lado = Math.max(IW, IH) * 0.8;
         s.left = -lado; s.right = lado; s.top = lado; s.bottom = -lado; s.near = 0.1; s.far = 40;
         s.updateProjectionMatrix();
-        // luz baja y de costado: sombras largas que marcan el relieve
         luz.position.set(-IW * 0.6, centro + IH * 0.75, IH * 1.1);
         luz.target.position.set(0, centro, 0);
 
@@ -769,8 +837,9 @@
       };
 
       pintar = function (t) {
-        // la cámara se mece despacio: el relieve se ve "vivo" sin marear
-        var mx = Math.sin(t * 0.22) * 0.45, my = Math.cos(t * 0.17) * 0.25;
+        ONDA.uT.value = t;
+        // la cámara se mece muy despacio: acompaña sin marear
+        var mx = Math.sin(t * 0.22) * 0.3, my = Math.cos(t * 0.17) * 0.18;
         camara.position.set(mx, centro - 2.6 + my, DIST);
         camara.lookAt(0, centro, 0);
         renderer.render(escena, camara);
