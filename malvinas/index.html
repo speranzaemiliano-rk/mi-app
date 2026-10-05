@@ -76,19 +76,27 @@
   nav a.activo { background: var(--celeste-osc); color: #fff; }
   @media (prefers-color-scheme: dark) { nav a.activo { color: #0f1620; } }
 
-  /* Portada con los colores de la bandera */
+  /* Portada: la bandera flamea detrás (canvas). El degradé queda de
+     respaldo por si el navegador no puede dibujarla. */
   .portada {
+    position: relative; overflow: hidden; isolation: isolate;
     background: linear-gradient(180deg, var(--celeste) 0 33.3%, #fff 33.3% 66.6%, var(--celeste) 66.6% 100%);
-    padding: 56px 16px;
-    text-align: center;
+    height: clamp(300px, 58vh, 540px);
   }
+  /* La tarjeta se apoya sobre la franja de abajo de la bandera */
+  .portada-pie { position: relative; z-index: 1; padding: 0 16px; margin-top: -120px; text-align: center; }
+  .bandera { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; display: block; }
+  /* Tarjeta de vidrio esmerilado: deja ver la bandera sin perder la lectura */
   .portada-tarjeta {
-    background: rgba(255,255,255,.95);
+    background: rgba(255,255,255,.74);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    backdrop-filter: blur(14px) saturate(150%);
+    border: 1px solid rgba(255,255,255,.65);
     color: #1f2a36;
     max-width: 640px; margin: 0 auto;
-    border-radius: 14px;
+    border-radius: 16px;
     padding: 32px 24px;
-    box-shadow: 0 10px 30px rgba(0,0,0,.15);
+    box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 18px 50px rgba(20,40,70,.28);
   }
   .foto-principal {
     width: 160px; height: 160px; margin: 0 auto 16px;
@@ -98,10 +106,9 @@
     display: flex; align-items: center; justify-content: center;
     color: #5b6b7c; font-size: 14px;
   }
-  .portada h1 { margin: 8px 0 4px; font-size: clamp(28px, 6vw, 42px); line-height: 1.1; letter-spacing: -0.02em; }
-  .portada .grado { color: #3d6f9e; font-weight: 600; margin: 0; }
-  .portada .lema { margin: 16px 0 0; font-style: italic; }
-  .sol { width: 56px; height: 56px; }
+  .portada-tarjeta h1 { margin: 8px 0 4px; font-size: clamp(28px, 6vw, 42px); line-height: 1.1; letter-spacing: -0.02em; }
+  .portada-tarjeta .grado { color: #3d6f9e; font-weight: 600; margin: 0; }
+  .portada-tarjeta .lema { margin: 16px 0 0; font-style: italic; }
 
   section { padding: 56px 0; border-bottom: 1px solid var(--linea); }
   section h2 { margin-top: 0; font-size: 30px; }
@@ -235,10 +242,12 @@
     button:active, nav a:active { transform: none; }
   }
   @media (prefers-reduced-transparency: reduce) {
+    .portada-tarjeta { background: #fff; -webkit-backdrop-filter: none; backdrop-filter: none; }
     .visor-fondo { background: #0a0f16; -webkit-backdrop-filter: none; backdrop-filter: none; }
     nav { background: var(--fondo); -webkit-backdrop-filter: none; backdrop-filter: none; }
   }
   @media (prefers-contrast: more) {
+    .portada-tarjeta { background: #fff; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: #1f2a36; }
     nav { background: var(--fondo); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 1px 0 var(--texto); }
     .dato, .galeria figure, .testimonio { border-color: var(--texto); }
   }
@@ -342,19 +351,16 @@
 </nav>
 
 <header class="portada">
+  <canvas class="bandera" aria-hidden="true"></canvas>
+</header>
+<div class="portada-pie">
   <div class="portada-tarjeta">
     <div class="foto-principal" id="fotoPrincipal">Foto</div>
-    <svg class="sol" viewBox="0 0 100 100" aria-hidden="true">
-      <g fill="#F6B40E">
-        <circle cx="50" cy="50" r="18"/>
-        <g id="rayos"></g>
-      </g>
-    </svg>
     <h1 id="nombre"></h1>
     <p class="grado" id="grado"></p>
     <p class="lema" id="lema"></p>
   </div>
-</header>
+</div>
 
 <main class="contenedor">
 
@@ -441,13 +447,6 @@
     return dia + meses[parseInt(p[1], 10) - 1] + ' de ' + p[0];
   }
 
-  // Rayos del sol de mayo
-  var rayos = '';
-  for (var i = 0; i < 16; i++) {
-    rayos += '<polygon points="48,6 52,6 50,28" transform="rotate(' + (i * 22.5) + ' 50 50)"/>';
-  }
-  document.getElementById('rayos').innerHTML = rayos;
-
   // Portada
   document.getElementById('nombre').innerHTML = txt(SOLDADO.nombre);
   document.getElementById('grado').innerHTML = txt(SOLDADO.grado) + ' · ' + txt(SOLDADO.unidad);
@@ -509,6 +508,127 @@
   document.getElementById('listaTestimonios').innerHTML = SOLDADO.testimonios.filter(function (t) { return tiene(t.texto); }).map(function (t) {
     return '<blockquote class="testimonio"><p>' + txt(t.texto) + '</p><cite>— ' + txt(t.autor) + '</cite></blockquote>';
   }).join('');
+
+  // ============================================================
+  //  Bandera que flamea
+  //  1) Se dibuja la bandera plana una sola vez (franjas + Sol de Mayo).
+  //  2) En cada cuadro se la copia en tiras verticales finitas; cada tira
+  //     sube o baja según una onda que avanza, y se oscurece o aclara según
+  //     la pendiente de la onda: eso da los pliegues con luz y sombra.
+  // ============================================================
+  (function bandera() {
+    var lienzo = document.querySelector('.bandera');
+    var portada = document.querySelector('.portada');
+    if (!lienzo || !lienzo.getContext) return;
+    var ctx = lienzo.getContext('2d');
+    var plana = document.createElement('canvas');
+    var pctx = plana.getContext('2d');
+    var W = 0, H = 0, dpr = 1, A = 0, tira = 2;
+    var quieta = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var visible = true, pedido = 0;
+
+    function solDeMayo(c, x, y, r) {
+      c.save();
+      c.translate(x, y);
+      c.fillStyle = '#F6B40E';
+      c.strokeStyle = '#85340A';
+      c.lineWidth = Math.max(1, r * 0.03);
+      // 32 rayos: rectos y flamígeros intercalados
+      for (var i = 0; i < 32; i++) {
+        c.save();
+        c.rotate(i * Math.PI / 16);
+        c.beginPath();
+        if (i % 2 === 0) {
+          c.moveTo(-r * 0.09, r * 0.5); c.lineTo(0, r * 1.05); c.lineTo(r * 0.09, r * 0.5);
+        } else {
+          c.moveTo(-r * 0.06, r * 0.5);
+          c.quadraticCurveTo(r * 0.16, r * 0.68, -r * 0.02, r * 0.86);
+          c.quadraticCurveTo(-r * 0.12, r * 0.95, 0, r * 1.0);
+          c.quadraticCurveTo(-r * 0.02, r * 0.86, r * 0.06, r * 0.5);
+        }
+        c.closePath(); c.fill(); c.stroke();
+        c.restore();
+      }
+      c.beginPath(); c.arc(0, 0, r * 0.5, 0, Math.PI * 2); c.fill(); c.stroke();
+      c.restore();
+    }
+
+    function medir() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = Math.round(portada.clientWidth * dpr);
+      H = Math.round(portada.clientHeight * dpr);
+      if (!W || !H) return;
+      lienzo.width = W; lienzo.height = H;
+      A = H * 0.035;                      // altura de la onda
+      tira = Math.max(2, Math.round(dpr * 2));
+      // bandera plana, un poco más alta para que la onda no deje huecos
+      plana.width = W; plana.height = Math.round(H + A * 4);
+      var h3 = plana.height / 3;
+      pctx.fillStyle = '#75AADB'; pctx.fillRect(0, 0, W, plana.height);
+      pctx.fillStyle = '#FFFFFF'; pctx.fillRect(0, h3, W, h3);
+      solDeMayo(pctx, W / 2, plana.height / 2, h3 * 0.42);
+      // textura de trama, apenas visible
+      pctx.globalAlpha = 0.035; pctx.fillStyle = '#000';
+      for (var y = 0; y < plana.height; y += 3 * dpr) pctx.fillRect(0, y, W, dpr);
+      pctx.globalAlpha = 1;
+      pintar(quieta ? 2.2 : ultimo);
+    }
+
+    // Altura de la tela en x (dos ondas sumadas para que no sea regular)
+    function onda(x, t) {
+      // largo de onda: en pantallas angostas no baja de ~500 px, así no deforma el sol
+      var k = (Math.PI * 2) / Math.max(W * 0.55, 500 * dpr);
+      return Math.sin(x * k - t * 1.6) + 0.45 * Math.sin(x * k * 1.9 - t * 2.3 + 1.7);
+    }
+
+    function pintar(t) {
+      if (!W) return;
+      ctx.clearRect(0, 0, W, H);
+      for (var x = 0; x < W; x += tira) {
+        var d = onda(x, t);
+        var pend = onda(x + tira, t) - d;                 // pendiente: de qué lado le da la luz
+        var y = d * A - A * 2;
+        ctx.drawImage(plana, x, 0, tira, plana.height, x, y, tira, plana.height);
+        var luz = pend * (W / 90) / tira;                 // normalizada a la escala de la onda
+        if (luz > 0) ctx.fillStyle = 'rgba(255,255,255,' + Math.min(luz * 0.55, 0.28) + ')';
+        else ctx.fillStyle = 'rgba(10,30,60,' + Math.min(-luz * 0.75, 0.32) + ')';
+        ctx.fillRect(x, 0, tira, H);
+      }
+      // viñeta suave: la tela se aleja en los bordes
+      var g = ctx.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, Math.max(W, H) * 0.75);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,20,50,.22)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+
+    var ultimo = 0, inicio = 0;
+    function cuadro(ahora) {
+      pedido = 0;
+      if (!inicio) inicio = ahora - ultimo * 1000;
+      ultimo = (ahora - inicio) / 1000;
+      pintar(ultimo);
+      seguir();
+    }
+    function seguir() {
+      if (!quieta && visible && !document.hidden && !pedido) pedido = requestAnimationFrame(cuadro);
+    }
+    function frenar() {
+      if (pedido) cancelAnimationFrame(pedido);
+      pedido = 0; inicio = 0;
+    }
+
+    medir();
+    if (window.ResizeObserver) new ResizeObserver(function () { medir(); }).observe(portada);
+    else window.addEventListener('resize', medir);
+    // Sólo se anima mientras la portada está a la vista y la pestaña activa
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (e) {
+        visible = e[0].isIntersecting;
+        visible ? seguir() : frenar();
+      }).observe(portada);
+    }
+    document.addEventListener('visibilitychange', function () { document.hidden ? frenar() : seguir(); });
+    seguir();
+  })();
 
   // ============================================================
   //  Visor de fotos
