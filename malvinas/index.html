@@ -142,7 +142,46 @@
     aspect-ratio: 4 / 3; background: #dfe8f1 center/cover no-repeat;
     display: flex; align-items: center; justify-content: center; color: #5b6b7c; font-size: 14px;
   }
-  .galeria a { display: block; }
+  /* La miniatura es un botón: se puede tocar y también usar con teclado */
+  button.img {
+    width: 100%; border: 0; padding: 0; border-radius: 0; cursor: zoom-in;
+    -webkit-tap-highlight-color: transparent;
+    transition: filter 100ms ease-out;
+  }
+  button.img:active { transform: none; filter: brightness(.9); }
+  button.img:focus-visible { outline: 3px solid var(--celeste-osc); outline-offset: -3px; }
+
+  /* Visor de fotos: crece desde la miniatura y vuelve a ella al cerrarse */
+  .visor { position: fixed; inset: 0; z-index: 50; touch-action: none; }
+  .visor[hidden] { display: none; }
+  .visor-fondo {
+    position: absolute; inset: 0;
+    background: rgba(10,15,22,.82);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    opacity: 0; transition: opacity 380ms ease;
+  }
+  .visor.abierto .visor-fondo { opacity: 1; }
+  .visor-img {
+    position: fixed; left: 0; top: 0; margin: 0;
+    border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+    transform-origin: 0 0; will-change: transform;
+    cursor: grab; user-select: none; -webkit-user-drag: none;
+  }
+  .visor-img.arrastrando { cursor: grabbing; }
+  .visor-pie {
+    position: absolute; left: 16px; right: 16px; bottom: 16px; margin: 0 auto; max-width: 720px;
+    color: #f1f5f9; font-size: 16px; line-height: 1.45; text-align: center; letter-spacing: 0.01em;
+    opacity: 0; transition: opacity 250ms ease;
+  }
+  .visor.abierto .visor-pie { opacity: 1; transition-delay: 150ms; }
+  .visor-cerrar {
+    position: absolute; top: 12px; right: 12px; width: 44px; height: 44px; padding: 0;
+    border-radius: 50%; font-size: 20px; line-height: 44px;
+    background: rgba(255,255,255,.16); color: #fff;
+    opacity: 0; transition: opacity 250ms ease, transform 100ms ease-out;
+  }
+  .visor.abierto .visor-cerrar { opacity: 1; }
+  @media (prefers-color-scheme: dark) { .visor-cerrar { color: #fff; } }
   .galeria figcaption strong { display: block; color: var(--texto); font-size: 16px; margin-bottom: 4px; }
   .galeria figcaption { padding: 10px 12px; font-size: 15px; color: var(--suave); }
 
@@ -196,6 +235,7 @@
     button:active, nav a:active { transform: none; }
   }
   @media (prefers-reduced-transparency: reduce) {
+    .visor-fondo { background: #0a0f16; -webkit-backdrop-filter: none; backdrop-filter: none; }
     nav { background: var(--fondo); -webkit-backdrop-filter: none; backdrop-filter: none; }
   }
   @media (prefers-contrast: more) {
@@ -363,6 +403,13 @@
 
 </main>
 
+<div class="visor" id="visor" hidden role="dialog" aria-modal="true" aria-label="Foto ampliada">
+  <div class="visor-fondo"></div>
+  <img class="visor-img" alt="" draggable="false">
+  <p class="visor-pie"></p>
+  <button class="visor-cerrar" aria-label="Cerrar">✕</button>
+</div>
+
 <footer>
   <strong>Las Malvinas son argentinas</strong>
   Gloria y honor a los veteranos y caídos en la Guerra de Malvinas.
@@ -439,17 +486,22 @@
       '<h3>' + txt(x.e.titulo) + '</h3><p>' + txt(x.e.texto) + '</p></li>';
   }).join('');
 
+  // Miniatura que abre el visor
+  function miniatura(src, pie) {
+    var url = esc(encodeURI(src));
+    return '<button type="button" class="img" data-src="' + url + '" data-pie="' + esc(pie) + '"' +
+      ' aria-label="Ver en grande: ' + esc(pie) + '" style="background-image:url(&quot;' + url + '&quot;)"></button>';
+  }
+
   // Galería
   document.getElementById('galeria').innerHTML = SOLDADO.fotos.map(function (f) {
-    var estilo = f.src ? ' style="background-image:url(&quot;' + esc(encodeURI(f.src)) + '&quot;)"' : '';
-    return '<figure><div class="img"' + estilo + '>' + (f.src ? '' : 'Foto') + '</div>' +
-      '<figcaption>' + txt(f.texto) + '</figcaption></figure>';
+    if (!f.src) return '<figure><div class="img">Foto</div><figcaption>' + txt(f.texto) + '</figcaption></figure>';
+    return '<figure>' + miniatura(f.src, limpio(f.texto)) + '<figcaption>' + txt(f.texto) + '</figcaption></figure>';
   }).join('');
 
   // Reconocimientos (tocar la foto la abre en grande)
   document.getElementById('listaReconocimientos').innerHTML = SOLDADO.reconocimientos.map(function (r) {
-    var url = esc(encodeURI(r.src));
-    return '<figure><a href="' + url + '" target="_blank" rel="noopener"><div class="img" style="background-image:url(&quot;' + url + '&quot;)"></div></a>' +
+    return '<figure>' + miniatura(r.src, limpio(r.titulo) + '. ' + limpio(r.texto)) +
       '<figcaption><strong>' + txt(r.titulo) + '</strong>' + txt(r.texto) + '</figcaption></figure>';
   }).join('');
 
@@ -457,6 +509,162 @@
   document.getElementById('listaTestimonios').innerHTML = SOLDADO.testimonios.filter(function (t) { return tiene(t.texto); }).map(function (t) {
     return '<blockquote class="testimonio"><p>' + txt(t.texto) + '</p><cite>— ' + txt(t.autor) + '</cite></blockquote>';
   }).join('');
+
+  // ============================================================
+  //  Visor de fotos
+  //  - Se abre creciendo desde la miniatura y se cierra volviendo a ella.
+  //  - Se cierra arrastrando hacia abajo: la foto sigue al dedo 1:1 y,
+  //    al soltar, se proyecta el impulso para decidir si se va o vuelve.
+  //  - Se puede agarrar en medio de una animación: arranca desde donde
+  //    está en pantalla, nunca desde el destino.
+  // ============================================================
+  var visor = document.getElementById('visor');
+  var vFondo = visor.querySelector('.visor-fondo');
+  var vImg = visor.querySelector('.visor-img');
+  var vPie = visor.querySelector('.visor-pie');
+  var vCerrar = visor.querySelector('.visor-cerrar');
+  var sinMovimiento = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var CURVA = 'cubic-bezier(.2,.8,.2,1)'; // sin rebote: entra y se asienta
+  var origen = null;   // miniatura desde la que se abrió
+  var destino = null;  // rectángulo final de la foto ampliada
+  var cerrando = false;
+  var vuelta = 0;      // cada cierre tiene su número: sólo el último oculta el visor
+
+  // Rectángulo donde entra la foto ampliada, respetando su proporción
+  function rectFinal(ancho, alto) {
+    var maxW = window.innerWidth * 0.92, maxH = window.innerHeight * 0.78;
+    var k = Math.min(maxW / ancho, maxH / alto, 1.5);
+    var w = ancho * k, h = alto * k;
+    return { x: (window.innerWidth - w) / 2, y: (window.innerHeight - h) / 2 - 24, w: w, h: h };
+  }
+  // Transformación que lleva la foto ampliada a la posición de la miniatura
+  function haciaMiniatura() {
+    var r = origen.getBoundingClientRect();
+    var k = r.width / destino.w;
+    return 'translate(' + r.left + 'px,' + (r.top + (r.height - destino.h * k) / 2) + 'px) scale(' + k + ')';
+  }
+  function enDestino(dy, k) {
+    k = k || 1;
+    // la escala se aplica desde el centro de la foto
+    var x = destino.x + destino.w * (1 - k) / 2, y = destino.y + dy + destino.h * (1 - k) / 2;
+    return 'translate(' + x + 'px,' + y + 'px) scale(' + k + ')';
+  }
+  function animar(transform, ms) {
+    vImg.style.transition = sinMovimiento ? 'opacity 200ms ease' : 'transform ' + ms + 'ms ' + CURVA + ', opacity 200ms ease';
+    vImg.style.transform = transform;
+  }
+  // Lee la posición REAL en pantalla (aunque esté a mitad de una animación)
+  function congelar() {
+    var m = new DOMMatrix(getComputedStyle(vImg).transform);
+    vImg.style.transition = 'none';
+    vImg.style.transform = 'translate(' + m.e + 'px,' + m.f + 'px) scale(' + m.a + ')';
+    return m;
+  }
+
+  function abrirVisor(boton) {
+    origen = boton;
+    cerrando = false;
+    var src = boton.getAttribute('data-src');
+    vPie.textContent = boton.getAttribute('data-pie');
+    vImg.onload = null;
+    var empezar = function () {
+      destino = rectFinal(vImg.naturalWidth || 4, vImg.naturalHeight || 3);
+      vImg.style.width = destino.w + 'px';
+      vImg.style.height = destino.h + 'px';
+      vImg.style.transition = 'none';
+      vImg.style.opacity = sinMovimiento ? '0' : '1';
+      vImg.style.transform = sinMovimiento ? enDestino(0) : haciaMiniatura();
+      visor.hidden = false;
+      document.documentElement.style.overflow = 'hidden';
+      void vImg.offsetWidth;
+      visor.classList.add('abierto');
+      vImg.style.opacity = '1';
+      animar(enDestino(0), 420);
+      vCerrar.focus({ preventScroll: true });
+    };
+    vImg.src = src;
+    if (vImg.complete && vImg.naturalWidth) empezar(); else vImg.onload = empezar;
+  }
+
+  function cerrarVisor() {
+    if (visor.hidden || cerrando) return;
+    cerrando = true;
+    var esta = ++vuelta;
+    visor.classList.remove('abierto');
+    vFondo.style.opacity = '';
+    if (sinMovimiento) { vImg.style.opacity = '0'; vImg.style.transition = 'opacity 200ms ease'; }
+    else { congelar(); void vImg.offsetWidth; animar(haciaMiniatura(), 360); }
+    setTimeout(function () {
+      if (!cerrando || esta !== vuelta) return; // lo volvieron a agarrar en el camino
+      visor.hidden = true;
+      document.documentElement.style.overflow = '';
+      if (origen) origen.focus({ preventScroll: true });
+    }, sinMovimiento ? 200 : 360);
+  }
+
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button.img[data-src]');
+    if (b) abrirVisor(b);
+  });
+  vCerrar.addEventListener('click', cerrarVisor);
+  vFondo.addEventListener('click', cerrarVisor);
+  document.addEventListener('keydown', function (e) {
+    if (visor.hidden) return;
+    if (e.key === 'Escape') cerrarVisor();
+    if (e.key === 'Tab') { e.preventDefault(); vCerrar.focus(); } // el foco no se escapa del visor
+  });
+  window.addEventListener('resize', function () {
+    if (visor.hidden || cerrando) return;
+    destino = rectFinal(vImg.naturalWidth, vImg.naturalHeight);
+    vImg.style.width = destino.w + 'px'; vImg.style.height = destino.h + 'px';
+    vImg.style.transition = 'none'; vImg.style.transform = enDestino(0);
+  });
+
+  // Arrastrar para cerrar
+  var arrastre = null;
+  // Cuánto más va a recorrer la foto por el impulso (misma fórmula que el scroll de iOS)
+  function proyectar(v) { var d = 0.998; return (v / 1000) * d / (1 - d); }
+
+  vImg.addEventListener('pointerdown', function (e) {
+    if (visor.hidden) return;
+    e.preventDefault();
+    vImg.setPointerCapture(e.pointerId);
+    var m = congelar();
+    // si estaba volviendo a la miniatura, el gesto la recupera
+    if (cerrando) { cerrando = false; visor.classList.add('abierto'); }
+    var k = m.a || 1;
+    var dy0 = m.f - (destino.y + destino.h * (1 - k) / 2);
+    arrastre = { id: e.pointerId, y0: e.clientY - dy0, dy: dy0, hist: [{ y: e.clientY, t: e.timeStamp }] };
+    vImg.classList.add('arrastrando');
+  });
+  vImg.addEventListener('pointermove', function (e) {
+    if (!arrastre || e.pointerId !== arrastre.id) return;
+    var dy = e.clientY - arrastre.y0;
+    arrastre.dy = dy;
+    arrastre.hist.push({ y: e.clientY, t: e.timeStamp });
+    if (arrastre.hist.length > 5) arrastre.hist.shift();
+    var avance = Math.min(Math.abs(dy) / 600, 1);
+    vImg.style.transform = enDestino(dy, 1 - avance * 0.25);   // se achica al alejarse
+    vFondo.style.transition = 'none';
+    vFondo.style.opacity = String(1 - avance * 0.8);            // y se ve la página detrás
+  });
+  function soltar(e) {
+    if (!arrastre || e.pointerId !== arrastre.id) return;
+    var h = arrastre.hist, a = h[0], b = h[h.length - 1];
+    var v = b.t > a.t ? (b.y - a.y) / (b.t - a.t) * 1000 : 0;   // px por segundo
+    var dy = arrastre.dy;
+    arrastre = null;
+    vImg.classList.remove('arrastrando');
+    vFondo.style.transition = '';
+    if (Math.abs(dy + proyectar(v)) > 160) {
+      cerrarVisor();
+    } else {
+      vFondo.style.opacity = '';
+      animar(enDestino(0), 320);   // vuelve a su lugar desde donde quedó
+    }
+  }
+  vImg.addEventListener('pointerup', soltar);
+  vImg.addEventListener('pointercancel', soltar);
 
   // Velas (se guardan sólo en este navegador)
   var velas = 0;
