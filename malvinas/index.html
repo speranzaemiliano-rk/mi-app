@@ -610,6 +610,10 @@
       var c = lienzo2d.getContext('2d'), m = medidas(W, H);
       c.fillStyle = CELESTE; c.fillRect(0, 0, W, H);
       c.fillStyle = '#fff'; c.fillRect(0, m.cy - m.franja / 2, W, m.franja);
+      c.globalAlpha = 0.05; c.fillStyle = '#000';                       // trama de tela
+      for (var ty = 0; ty < H; ty += 3 * dpr) c.fillRect(0, ty, W, dpr);
+      for (var tx = 0; tx < W; tx += 3 * dpr) c.fillRect(tx, 0, dpr, H);
+      c.globalAlpha = 1;
       var k = m.altoIslas / MALVINAS.h, x0 = W / 2 - MALVINAS.w * k / 2, y0 = m.cy - m.altoIslas / 2;
       c.save();
       c.beginPath();
@@ -686,7 +690,10 @@
         '  float x = p.x * uK, y = p.y * uK;',
         '  return uA * (sin(x - uT * 1.5 + y * 0.35)',
         '    + 0.42 * sin(x * 1.9 - uT * 2.2 + 1.7 + y * 0.6)',
-        '    + 0.22 * sin(y * 2.3 + x * 0.4 - uT * 0.9));',
+        '    + 0.22 * sin(y * 2.3 + x * 0.4 - uT * 0.9)',
+        // arrugas finas: la tela se pliega en chiquito sobre las ondas grandes
+        '    + 0.10 * sin(x * 5.3 + y * 1.3 - uT * 3.1)',
+        '    + 0.07 * sin(x * 3.7 - y * 4.9 - uT * 2.6 + 0.8));',
         '}',
         'vec2 ondaGrad(vec2 p) {',
         '  float e = 0.02;',
@@ -718,9 +725,40 @@
       var texBandera = new T.CanvasTexture(tc), texMascara = new T.CanvasTexture(tk);
       texBandera.encoding = T.sRGBEncoding;
       texBandera.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      var matTela = ondear(new T.MeshStandardMaterial({ map: texBandera, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
+      // Trama del tejido: un "mapa de normales" con los hilos cruzados.
+      // No cambia la forma, pero le dice a la luz para dónde mira cada hilo.
+      var tn = document.createElement('canvas');
+      var texTrama = new T.CanvasTexture(tn);
+      var TELA = { roughness: 0.82, metalness: 0, envMapIntensity: 0.45, normalMap: texTrama, normalScale: new T.Vector2(0.55, 0.55) };
+      var matTela = ondear(new T.MeshStandardMaterial(Object.assign({ map: texBandera }, TELA)));
       // arriba de las islas: la misma tela, recortada con la forma de las islas
-      var matTapa = ondear(new T.MeshStandardMaterial({ map: texBandera, alphaMap: texMascara, alphaTest: 0.5, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
+      var matTapa = ondear(new T.MeshStandardMaterial(Object.assign({ map: texBandera, alphaMap: texMascara, alphaTest: 0.5 }, TELA)));
+
+      // Un "ladrillito" de 2 × 2 hilos (tafetán: un hilo pasa por arriba y
+      // el siguiente por abajo), que después se repite en toda la bandera
+      function baldosaTrama(hilo) {
+        var n = Math.max(4, Math.round(hilo)) * 2;
+        var b = document.createElement('canvas'); b.width = b.height = n;
+        var bc = b.getContext('2d'), img = bc.createImageData(n, n), d = img.data;
+        function alto(px, py) {
+          px = (px + n) % n; py = (py + n) % n;
+          var u = px / (n / 2), v = py / (n / 2), i = Math.floor(u), j = Math.floor(v);
+          var fu = u - i, fv = v - j;
+          return ((i + j) % 2 === 0)
+            ? Math.sqrt(Math.sin(Math.PI * fu)) * (0.75 + 0.25 * Math.sin(Math.PI * fv))   // hilo vertical arriba
+            : Math.sqrt(Math.sin(Math.PI * fv)) * (0.75 + 0.25 * Math.sin(Math.PI * fu));  // hilo horizontal arriba
+        }
+        for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
+          var dx = (alto(x + 1, y) - alto(x - 1, y)) * 1.5, dy = (alto(x, y + 1) - alto(x, y - 1)) * 1.5;
+          var l = Math.sqrt(dx * dx + dy * dy + 1), o = (y * n + x) * 4;
+          d[o] = (-dx / l * 0.5 + 0.5) * 255;
+          d[o + 1] = (dy / l * 0.5 + 0.5) * 255;     // en el lienzo la y crece hacia abajo
+          d[o + 2] = (1 / l * 0.5 + 0.5) * 255;
+          d[o + 3] = 255;
+        }
+        bc.putImageData(img, 0, 0);
+        return b;
+      }
       var matPared = ondear(new T.MeshStandardMaterial({ map: texBandera, roughness: 1, metalness: 0, envMapIntensity: 0.35 }));
 
       // Sol: el dibujo del sol (transparente alrededor), de oro con algo de luz propia
@@ -769,7 +807,22 @@
         c.fillStyle = CELESTE; c.fillRect(0, 0, tw, th);
         var yb = (PH / 2 - centro - franja / 2) / PH * th;
         c.fillStyle = '#FFFFFF'; c.fillRect(0, yb, tw, franja / PH * th);
+        // leve variación de color, como un tejido teñido
+        c.globalAlpha = 0.025;
+        for (var r = 0; r < 140; r++) {
+          c.fillStyle = r % 2 ? '#000' : '#fff';
+          c.fillRect(0, Math.random() * th, tw, 1 + Math.random() * 2);
+          c.fillRect(Math.random() * tw, 0, 1 + Math.random() * 2, th);
+        }
+        c.globalAlpha = 1;
         texBandera.needsUpdate = true;
+
+        // Trama: cada hilo mide unos 3 px en pantalla
+        tn.width = tw; tn.height = th;
+        var cn = tn.getContext('2d');
+        cn.fillStyle = cn.createPattern(baldosaTrama(tw / (w * 1.5) * 3), 'repeat');
+        cn.fillRect(0, 0, tw, th);
+        texTrama.needsUpdate = true;
 
         // Máscara: blanco donde hay islas (mismo lugar que el relieve)
         var ck = tk.getContext('2d');
