@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v530</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v531</div>
         </div>
     </nav>
 
@@ -16235,7 +16235,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v530';
+    var APP_VER = 'v531';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -37142,6 +37142,68 @@
     }
     window._toggleFichaLegacy = function(){ var el = document.getElementById('fichaProvLegacy'); if (el) el.style.display = (el.style.display === 'none') ? '' : 'none'; };
 
+    /* ── Por qué queda saldo ───────────────────────────────────────────────
+       Cuando un comprobante muestra deuda que el usuario da por pagada, la
+       pregunta siempre es la misma: ¿qué se guardó realmente en ese pago? Esta
+       pantalla lo muestra crudo —importe, monto de cada pago, totalRet, la suma
+       del desglose por régimen— y dice cuánto falta y por qué. Sin esto hay que
+       adivinar desde una captura, que es lento y lleva a tocar lo que no es. */
+    window.diagRetenciones = function(nombre) {
+        var items = (facturas || []).filter(function(f){ return f.proveedor === nombre && !f.esNotaCredito; })
+            .map(function(f){ return { it: f, tipo: 'Factura' }; })
+            .concat(((typeof documentos !== 'undefined' ? documentos : []) || [])
+                .filter(function(d){ return d.proveedor === nombre; })
+                .map(function(d){ return { it: d, tipo: 'Documento' }; }));
+        var fmt = function(n){ return '$' + (Math.round((n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var txt = 'Mess ' + (typeof APP_VER !== 'undefined' ? APP_VER : '?') + ' · ' + nombre + '\n';
+        var conSaldo = 0;
+        items.forEach(function(x){
+            var it = x.it, hist = it.pagosHistorial || [];
+            var sumMonto = 0, sumRet = 0, sumDesglose = 0, sumFR = 0;
+            hist.forEach(function(p){
+                sumMonto += (p.monto || 0);
+                sumRet += (p.totalRet || 0);
+                sumFR += (p.fondoReparo || 0);
+                (p.retenciones || []).forEach(function(r){ sumDesglose += (r.monto || 0); });
+            });
+            var saldo = _saldoFactDoc(it);
+            if (saldo <= 0.5) return;        // sólo los que tienen saldo: es lo que se está mirando
+            conSaldo++;
+            txt += '\n── ' + x.tipo + ' ' + (it.numero || 's/n') + ' · ' + (it.fecha || '') + '\n';
+            txt += '   importe ........ ' + fmt(it.importe) + '\n';
+            txt += '   pagado (Σmonto)  ' + fmt(it.pagado) + '   (' + hist.length + ' pago/s)\n';
+            txt += '   Σ totalRet ..... ' + fmt(sumRet) + '\n';
+            txt += '   Σ retenciones[]  ' + fmt(sumDesglose) + (Math.abs(sumRet - sumDesglose) > 0.5 ? '   ⚠️ NO coincide con totalRet' : '') + '\n';
+            if (sumFR > 0.5) txt += '   Σ fondo reparo .. ' + fmt(sumFR) + '\n';
+            txt += '   SALDO que muestra ' + fmt(saldo) + '\n';
+            var faltaSinRet = Math.round(((it.importe||0) - (it.pagado||0)) * 100) / 100;
+            txt += '   → importe − pagado = ' + fmt(faltaSinRet) + '\n';
+            if (Math.abs(faltaSinRet - sumRet) < 0.5) {
+                txt += '   → LO QUE FALTA ES EXACTAMENTE LA RETENCIÓN.\n';
+            }
+            hist.forEach(function(p, i){
+                var d = 0; (p.retenciones || []).forEach(function(r){ d += (r.monto || 0); });
+                txt += '   · pago ' + (i+1) + ': monto ' + fmt(p.monto) + ' · totalRet ' + fmt(p.totalRet) +
+                       ' · desglose ' + fmt(d) + (p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '') + '\n';
+            });
+        });
+        if (!conSaldo) txt += '\nNingún comprobante de este proveedor tiene saldo. Está todo en cero.\n';
+        var esc2 = (typeof escHtml === 'function') ? escHtml : function(z){ return z; };
+        document.getElementById('fichaProv_titulo').textContent = '🔧 Por qué queda saldo — ' + nombre;
+        document.getElementById('fichaProv_contenido').innerHTML =
+            '<div style="margin-bottom:14px;"><button class="btn btn-outline btn-sm" onclick="verCtaCteProv(\'' +
+                String(nombre).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">← Volver a la cuenta corriente</button></div>' +
+            '<div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">' +
+            'Esto es lo que hay guardado en cada pago. Si «lo que falta» es exactamente la retención, ' +
+            'quiere decir que el pago se cargó por el importe <b>menos</b> la retención, y hay que decidir si ' +
+            'la retención tiene que cancelar esa diferencia. Sacale una foto a este texto y mandámelo.' +
+            '</div>' +
+            '<textarea readonly style="width:100%;min-height:340px;font-family:ui-monospace,Menlo,Consolas,monospace;' +
+            'font-size:12px;line-height:1.55;background:var(--surface-2);border:1px solid var(--border);' +
+            'border-radius:8px;padding:11px;color:var(--text-1);">' + esc2(txt) + '</textarea>' +
+            '<button class="btn btn-outline btn-sm" style="margin-top:9px;" onclick="(function(t){t.select();try{document.execCommand(\'copy\');alert(\'Copiado.\');}catch(e){alert(\'Copialo a mano.\');}})(this.previousElementSibling)">Copiar</button>';
+    };
+
     // Extracto de cuenta corriente del proveedor (se muestra en el mismo modal de la ficha).
     window.verCtaCteProv = function(nombre) {
         window._fichaProvNombre = nombre;
@@ -37151,7 +37213,10 @@
         var _nombreEsc = String(nombre).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
         document.getElementById('fichaProv_titulo').textContent = '💳 Cuenta Corriente — ' + nombre;
         var _edBtn = document.getElementById('fichaProvEditBtn'); if (_edBtn) _edBtn.style.display = 'none';
-        var h = '<div style="margin-bottom:14px;"><button class="btn btn-outline btn-sm" onclick="verFichaProveedor(\'' + _nombreEsc + '\')">← Volver a los datos</button></div>';
+        var h = '<div style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;">'
+            + '<button class="btn btn-outline btn-sm" onclick="verFichaProveedor(\'' + _nombreEsc + '\')">← Volver a los datos</button>'
+            + '<button class="btn btn-outline btn-sm" onclick="diagRetenciones(\'' + _nombreEsc + '\')" title="Ver los números guardados de cada pago y por qué queda saldo">🔧 Por qué queda saldo</button>'
+            + '</div>';
         h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px;">'
             + _ccKpiHTML('Adeudado', fmtA(Math.max(0, cc.saldoComprob)), 'var(--danger)')
             + _ccKpiHTML('Total pagado', fmtA(cc.totalPagado), 'var(--success)')
