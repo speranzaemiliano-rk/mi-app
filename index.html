@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v529</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v530</div>
         </div>
     </nav>
 
@@ -11331,6 +11331,15 @@
     // que se le retuvo al proveedor y se deposita a AFIP por su cuenta: cancela esa parte de la
     // factura igual que el neto transferido. Por eso cuenta como pago que salda la deuda.
     function _totalRetenidoHist(hist) { return (hist||[]).reduce(function(s,p){ return s + (p.totalRet||0); }, 0); }
+    // Retenciones de pagos SIN monto. Un pago normal trae el bruto en `monto` y la
+    // retención ya está adentro; uno con monto 0 no trae nada, así que su retención es
+    // todo lo que le aporta al comprobante. Desde la app no se puede cargar así —el
+    // monto es obligatorio y mayor a cero— pero un pago editado después puede quedar
+    // en ese estado, y sin esto el listado y la cuenta corriente dirían cosas
+    // distintas para el mismo comprobante.
+    function _retSinMontoHist(hist) {
+        return (hist||[]).reduce(function(s,p){ return s + (((p.monto||0) === 0) ? (p.totalRet||0) : 0); }, 0);
+    }
     // ── Fondo de reparo (garantía de obra) ────────────────────────────────────
     // Se le retiene al proveedor al pagarle y se le devuelve al terminar la obra. NO es
     // impositivo: no va al certificado de retención ni a los reportes de ARCA.
@@ -11352,7 +11361,23 @@
     // crédito aplicadas. Nunca negativo. Una nota de crédito NO es deuda: su saldo es 0.
     function _saldoFactDoc(item) {
         if (item && item.esNotaCredito) return 0;
-        return Math.max(0, (item.importe||0) - (item.pagado||0) - _totalRetenidoHist(item.pagosHistorial) - _ncAplicadasA(item.id));
+        // ⚠️ NO se resta la retención acá: `pagado` es la suma de los `monto` de
+        // los pagos, y ese monto es el BRUTO — la retención ya está adentro. Se ve
+        // en los tres caminos de carga: el monto se precarga con este mismo saldo
+        // (`_saldoFactDoc`), el pago múltiple guarda `monto = x.pend`, y de la caja
+        // sale `monto − retención − fondo` (`_netoPagado`). El FONDO DE REPARO, que
+        // funciona igual, nunca se restó acá; la retención era la única excepción.
+        //
+        // Restarla de nuevo la descontaba DOS VECES: un pago parcial con retención
+        // dejaba el comprobante más saldado de lo que estaba (y con el comprobante
+        // pagado entero el `Math.max(0, …)` lo tapaba, por eso no saltaba). La cuenta
+        // corriente siempre lo calculó bien, así que las dos pantallas se
+        // contradecían. Reportado con una factura que figuraba pagada en el listado
+        // y con saldo en la ficha del proveedor.
+        //
+        // El `estado` guardado no hace falta migrarlo: las facturas lo recalculan en
+        // memoria al cargar (`_estadoFactDoc`) y los documentos lo calculan al vuelo.
+        return Math.max(0, (item.importe||0) - (item.pagado||0) - _retSinMontoHist(item.pagosHistorial) - _ncAplicadasA(item.id));
     }
     // ¿Está totalmente saldada? (importe > 0 y saldo 0)
     function _estaSaldada(item) { return (item.importe||0) > 0 && _saldoFactDoc(item) <= 0; }
@@ -16210,7 +16235,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v529';
+    var APP_VER = 'v530';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
