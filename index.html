@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v527</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v528</div>
         </div>
     </nav>
 
@@ -16193,7 +16193,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v527';
+    var APP_VER = 'v528';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -21592,6 +21592,7 @@
     function abrirImportarGmail() {
         document.getElementById('modalGmail').classList.add('active');
         document.getElementById('gmailLista').innerHTML = '';
+        _gmailItems = [];
         var _btnImp = document.getElementById('gmailBtnImportar');
         _btnImp.style.display = 'none';
         _btnImp.disabled = false;   // si la importación anterior salió bien quedaba deshabilitado
@@ -21708,31 +21709,174 @@
                 (muestras.length ? muestras.map(function(s) { return '• ' + s; }).join('<br>') : '<em>(ningún adjunto con nombre ni attachmentId — Gmail no devolvió las partes)</em>');
             return;
         }
-        document.getElementById('gmailEstado').textContent = '[v29] Encontrados ' + validos.length + ' mails con PDF. Seleccioná uno para importar:';
+        document.getElementById('gmailEstado').textContent =
+            'Encontrados ' + validos.length + ' mail(s) con PDF. Marcá los que quieras importar — podés elegir varios del mismo proveedor de una vez.';
+        _gmailPintarLista(validos);
+    }
+
+    // ── Elegir VARIAS facturas de un mismo proveedor ──────────────────
+    // Antes era de a una: click en el renglón e «Importar este PDF». Pedido del
+    // usuario: poder traer varias de un proveedor juntas. La lista se agrupa por
+    // REMITENTE (que en la práctica es el proveedor) con una casilla por renglón
+    // y una por grupo, y lo elegido se le pasa al mismo motor de tanda que ya usa
+    // la carga de varios archivos locales (`_lfLeerLote`): lee todo con IA,
+    // muestra qué encontró y se revisa uno por uno. No hay camino paralelo de
+    // guardado, que es la regla de este flujo.
+    var _gmailItems = [];
+
+    function _gmailRemitente(de) {
+        // "Proveedor SA <facturas@prov.com>" → "facturas@prov.com". Agrupar por el
+        // mail y no por el nombre visible: el nombre cambia solo (a veces viene
+        // vacío, a veces con la sucursal), la casilla no.
+        var m = /<([^>]+)>/.exec(de || '');
+        return (m ? m[1] : (de || '(sin remitente)')).trim().toLowerCase();
+    }
+
+    function _gmailPintarLista(validos) {
         var lista = document.getElementById('gmailLista');
         lista.innerHTML = '';
+        _gmailItems = [];
         validos.forEach(function(msg) {
-            msg.pdfs.forEach(function(pdf) {
+            (msg.pdfs || []).forEach(function(pdf) {
+                _gmailItems.push({ msg: msg, pdf: pdf, grupo: _gmailRemitente(msg.de) });
+            });
+        });
+        // Agrupados por remitente, respetando el orden en que llegaron.
+        var orden = [], porGrupo = {};
+        _gmailItems.forEach(function(it, i) {
+            if (!porGrupo[it.grupo]) { porGrupo[it.grupo] = []; orden.push(it.grupo); }
+            porGrupo[it.grupo].push(i);
+        });
+        orden.forEach(function(g) {
+            var idxs = porGrupo[g];
+            var cab = document.createElement('div');
+            cab.style.cssText = 'display:flex;align-items:center;gap:8px;margin:14px 0 6px;padding-bottom:5px;border-bottom:1px solid var(--border);';
+            cab.innerHTML =
+                '<label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;font-weight:700;color:var(--text-2);">' +
+                '<input type="checkbox" class="gmail-grupo" data-grupo="' + escHtml(g) + '">' +
+                escHtml(_gmailItems[idxs[0]].msg.de || g) + '</label>' +
+                '<span style="margin-left:auto;font-size:11px;color:var(--text-3);">' + idxs.length + ' PDF</span>';
+            lista.appendChild(cab);
+            idxs.forEach(function(i) {
+                var it = _gmailItems[i];
                 var div = document.createElement('div');
-                div.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer;transition:background .15s;';
+                div.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;display:flex;gap:10px;align-items:flex-start;';
                 div.innerHTML =
-                    '<div style="font-size:13px;font-weight:600;color:var(--text-1)">📄 ' + (pdf.nombre || 'factura.pdf') + '</div>' +
-                    '<div style="font-size:12px;color:var(--text-3);margin-top:4px;">De: ' + msg.de + '</div>' +
-                    '<div style="font-size:12px;color:var(--text-3);">Asunto: ' + msg.asunto + '</div>' +
-                    '<div style="font-size:11px;color:var(--text-3);">' + msg.fecha + '</div>';
-                div.onmouseenter = function() { div.style.background = 'var(--surface-2)'; };
-                div.onmouseleave = function() { div.style.background = ''; };
-                div.onclick = function() {
-                    lista.querySelectorAll('div').forEach(function(d) { d.style.outline = ''; });
-                    div.style.outline = '2px solid var(--gold)';
-                    document.getElementById('gmailBtnImportar').style.display = '';
-                    document.getElementById('gmailBtnImportar').onclick = function() {
-                        importarPDFdeGmail(msg.id, pdf.attachmentId, pdf.nombre);
-                    };
+                    '<input type="checkbox" class="gmail-chk" data-i="' + i + '" data-grupo="' + escHtml(g) + '" style="margin-top:3px;flex:0 0 auto;">' +
+                    '<label style="flex:1;cursor:pointer;min-width:0;">' +
+                    '<div style="font-size:13px;font-weight:600;color:var(--text-1)">📄 ' + escHtml(it.pdf.nombre || 'factura.pdf') + '</div>' +
+                    '<div style="font-size:12px;color:var(--text-3);">Asunto: ' + escHtml(it.msg.asunto || '') + '</div>' +
+                    '<div style="font-size:11px;color:var(--text-3);">' + escHtml(it.msg.fecha || '') + '</div>' +
+                    '</label>';
+                // El label entero alterna la casilla: el renglón se toca cómodo.
+                div.querySelector('label').onclick = function(ev) {
+                    ev.preventDefault();
+                    var c = div.querySelector('.gmail-chk');
+                    c.checked = !c.checked;
+                    _gmailSincronizarGrupos();
                 };
+                div.querySelector('.gmail-chk').onchange = _gmailSincronizarGrupos;
                 lista.appendChild(div);
             });
         });
+        lista.querySelectorAll('.gmail-grupo').forEach(function(cg) {
+            cg.onchange = function() {
+                lista.querySelectorAll('.gmail-chk[data-grupo="' + cg.dataset.grupo.replace(/"/g, '\\"') + '"]')
+                    .forEach(function(c) { c.checked = cg.checked; });
+                _gmailActualizarBotonImportar();
+            };
+        });
+        _gmailSincronizarGrupos();
+    }
+
+    // La casilla del grupo refleja lo que hay marcado abajo (todo / nada / parte).
+    function _gmailSincronizarGrupos() {
+        var lista = document.getElementById('gmailLista');
+        lista.querySelectorAll('.gmail-grupo').forEach(function(cg) {
+            var hijos = lista.querySelectorAll('.gmail-chk[data-grupo="' + cg.dataset.grupo.replace(/"/g, '\\"') + '"]');
+            var n = 0;
+            hijos.forEach(function(c) { if (c.checked) n++; });
+            cg.checked = n > 0 && n === hijos.length;
+            cg.indeterminate = n > 0 && n < hijos.length;
+        });
+        _gmailActualizarBotonImportar();
+    }
+
+    function _gmailSeleccion() {
+        var out = [];
+        document.querySelectorAll('#gmailLista .gmail-chk').forEach(function(c) {
+            if (c.checked) out.push(_gmailItems[parseInt(c.dataset.i)]);
+        });
+        return out;
+    }
+
+    function _gmailActualizarBotonImportar() {
+        var b = document.getElementById('gmailBtnImportar');
+        if (!b) return;
+        var n = _gmailSeleccion().length;
+        b.style.display = n ? '' : 'none';
+        b.textContent = n === 1 ? '📎 Importar este PDF con IA' : ('📎 Importar ' + n + ' PDF con IA');
+        b.onclick = importarGmailSeleccionados;
+    }
+
+    // Baja el adjunto y devuelve su base64. Gmail usa base64url: hay que pasarlo
+    // a base64 estándar y completarle el relleno, si no el PDF no abre.
+    async function _gmailBajarAdjunto(messageId, attachmentId) {
+        var resp = await fetch(
+            'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + messageId + '/attachments/' + attachmentId,
+            { headers: { Authorization: 'Bearer ' + _gmailToken } }
+        );
+        if (!resp.ok) throw new Error('Gmail respondió ' + resp.status);
+        var data = await resp.json();
+        var b64 = (data.data || '').replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        return b64;
+    }
+
+    async function importarGmailSeleccionados() {
+        var sel = _gmailSeleccion();
+        if (!sel.length) return;
+        // Uno solo: el camino directo de siempre, que ya abre la revisión sin
+        // pasar por la pantalla de tanda.
+        if (sel.length === 1) {
+            return importarPDFdeGmail(sel[0].msg.id, sel[0].pdf.attachmentId, sel[0].pdf.nombre);
+        }
+        var est = document.getElementById('gmailEstado');
+        var b = document.getElementById('gmailBtnImportar');
+        if (b) b.disabled = true;
+        var archivos = [], fallos = [];
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var it = sel[i];
+                var nom = it.pdf.nombre || ('factura-' + (i + 1) + '.pdf');
+                if (est) est.textContent = '⬇️ Descargando ' + (i + 1) + ' de ' + sel.length + ': ' + nom + '…';
+                try {
+                    var b64 = await _gmailBajarAdjunto(it.msg.id, it.pdf.attachmentId);
+                    // Se arma un File de verdad para entrar al MISMO motor de tanda
+                    // que usa la carga de varios archivos locales.
+                    var bin = atob(b64), buf = new Uint8Array(bin.length);
+                    for (var k = 0; k < bin.length; k++) buf[k] = bin.charCodeAt(k);
+                    archivos.push(new File([buf], nom, { type: 'application/pdf' }));
+                } catch (e) {
+                    fallos.push('· ' + nom + ' — ' + (e && e.message ? e.message : e));
+                }
+            }
+        } finally {
+            if (b) b.disabled = false;
+        }
+        if (!archivos.length) {
+            if (est) est.textContent = '';
+            alert('No se pudo descargar ninguno:\n\n' + fallos.join('\n'));
+            return;
+        }
+        if (fallos.length) alert('Algunos no se pudieron descargar:\n\n' + fallos.join('\n') + '\n\nSigo con los ' + archivos.length + ' que sí bajaron.');
+        if (est) est.textContent = '';
+        cerrarGmail();
+        document.getElementById('modalLeerFactPDF').classList.add('active');
+        document.getElementById('leerFactTitle').textContent = '📎 ' + archivos.length + ' facturas de Gmail';
+        document.getElementById('leerFactPaso1').style.display = '';
+        document.getElementById('leerFactPaso2').style.display = 'none';
+        await _lfLeerLote(archivos);
     }
 
     async function importarPDFdeGmail(messageId, attachmentId, nombre) {
