@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v528</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v529</div>
         </div>
     </nav>
 
@@ -12013,12 +12013,29 @@
         var nroCorr = await obtenerProximoComprobante(mod, 'OP');   // un solo correlativo (serie OP) para todo el pago
         var grupoId = 'GP-' + Date.now();
         var provNombre = _pagoFDMulti.prov, facturasPagadas = [], acumRet = 0, tsBase = Date.now();
+        var acumPorReg = [];   // lo ya repartido de cada régimen, para que el último cierre
         sel.forEach(function(x, k){
             var f = x.f;
             // Retención total repartida en proporción al monto de cada factura (la última ajusta el redondeo)
-            var share = (k === sel.length - 1) ? (totalRet - acumRet) : Math.round(totalRet * (x.pend / montoTotal));
+            // `totalRet` del pago y la suma de sus regímenes tienen que dar LO MISMO.
+            // Antes se calculaban por separado —el reparto del total con el último
+            // absorbiendo el redondeo, y cada régimen prorrateado por su cuenta y
+            // redondeado a pesos enteros—, así que podían diferir. Y como la cuenta
+            // corriente usa uno para el neto y el otro para la fila de retención, esa
+            // diferencia aparecía como saldo fantasma en el comprobante. Ahora se
+            // reparte RÉGIMEN POR RÉGIMEN (con el último comprobante absorbiendo el
+            // redondeo de cada uno) y el total del pago se define como la suma de ese
+            // desglose: iguales por construcción, no por casualidad.
+            var retsF = rets.map(function(r, j){
+                var prev = acumPorReg[j] || 0;
+                var m = (k === sel.length - 1)
+                    ? Math.round((r.monto - prev) * 100) / 100
+                    : Math.round(r.monto * (x.pend / montoTotal) * 100) / 100;
+                acumPorReg[j] = Math.round((prev + m) * 100) / 100;
+                return { codigo: r.codigo, desc: r.desc, monto: m };
+            });
+            var share = Math.round(retsF.reduce(function(s, r){ return s + r.monto; }, 0) * 100) / 100;
             acumRet += share;
-            var retsF = rets.map(function(r){ return { codigo:r.codigo, desc:r.desc, monto: Math.round(r.monto * (x.pend / montoTotal)) }; });
             var entry = {
                 pagoId: 'FD-' + tsBase + '-' + k, fecha: fecha, modalidad: mod, monto: x.pend,
                 baseImponible: x.neto, retenciones: retsF, totalRet: share,
@@ -16193,7 +16210,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v528';
+    var APP_VER = 'v529';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -37029,6 +37046,21 @@
                 totalFR += frTotal;
             }
             // Retenciones combinadas por régimen (mismo código sumado): una fila por régimen, no por factura.
+            //
+            // ⚠️ Lo que un pago le acredita al comprobante es su `monto`, ni más ni
+            // menos. Acá el Haber se arma en pedazos —neto + fondo de reparo +
+            // retenciones— y el neto sale de `totalRet` (`_netoPagado`). Si las filas
+            // de retención salieran de `retenciones[]` y esa suma no coincidiera con
+            // `totalRet`, el Haber no llegaría al monto y quedaría un SALDO FANTASMA
+            // en la cuenta corriente: el comprobante figuraría pagado en el listado
+            // pero con deuda acá. Pasa de verdad — un pago prorrateado entre varias
+            // facturas, o uno editado después de cargado, pueden dejar las dos cuentas
+            // distintas. Por eso el que manda es `totalRet` (el mismo que define el
+            // neto) y `retenciones[]` sólo aporta el DESGLOSE por régimen, ajustado
+            // para que cierre.
+            var retTotalGrupo = 0;
+            es.forEach(function(e){ retTotalGrupo += (e.p.totalRet || 0); });
+            retTotalGrupo = Math.round(retTotalGrupo * 100) / 100;
             var retByCod = {}, ordenRet = [], conDetalle = false;
             es.forEach(function(e){
                 (e.p.retenciones || []).forEach(function(r){
@@ -37039,16 +37071,25 @@
                     retByCod[cod].monto += (r.monto || 0);
                 });
             });
-            if (conDetalle) {
+            if (conDetalle && retTotalGrupo > 0) {
                 ordenRet.sort(function(a, b){ return (_esRetSUSS(a) ? 1 : 0) - (_esRetSUSS(b) ? 1 : 0); }); // ganancias antes que SUSS
-                ordenRet.forEach(function(cod){
+                // La diferencia contra `totalRet` se absorbe en el último régimen: el
+                // desglose se muestra lo más fiel posible, pero la suma cierra siempre.
+                var sumaDesglose = 0;
+                ordenRet.forEach(function(cod){ sumaDesglose += retByCod[cod].monto; });
+                sumaDesglose = Math.round(sumaDesglose * 100) / 100;
+                var ajuste = Math.round((retTotalGrupo - sumaDesglose) * 100) / 100;
+                ordenRet.forEach(function(cod, j){
                     var rr = retByCod[cod];
-                    movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (rr.desc || rr.codigo || ''), debe: 0, haber: rr.monto, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: (_esRetSUSS(cod) ? 'suss' : 'ganancias'), grupo: grupoId } });
-                    totalRet += rr.monto;
+                    var monto = rr.monto + (j === ordenRet.length - 1 ? ajuste : 0);
+                    monto = Math.round(monto * 100) / 100;
+                    if (monto <= 0) return;
+                    movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (rr.desc || rr.codigo || ''), debe: 0, haber: monto, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: (_esRetSUSS(cod) ? 'suss' : 'ganancias'), grupo: grupoId } });
+                    totalRet += monto;
                 });
-            } else {
-                var rt = 0; es.forEach(function(e){ rt += (e.p.totalRet || 0); });
-                if (rt > 0) { movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p0), debe: 0, haber: rt, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: '', grupo: grupoId } }); totalRet += rt; }
+            } else if (retTotalGrupo > 0) {
+                movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p0), debe: 0, haber: retTotalGrupo, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: '', grupo: grupoId } });
+                totalRet += retTotalGrupo;
             }
         });
         // Orden: por fecha y, a igual fecha, Debe (comprobantes) → Nota de Crédito → Pago → Ret. Ganancias → Ret. SUSS.
