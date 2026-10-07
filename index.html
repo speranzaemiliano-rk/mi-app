@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v531</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v532</div>
         </div>
     </nav>
 
@@ -16235,7 +16235,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v531';
+    var APP_VER = 'v532';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -33309,7 +33309,26 @@
         document.getElementById('cobroAlqDesglosePanel').style.display = on ? '' : 'none';
         var montoInput = document.getElementById('cobroAlqMonto');
         montoInput.disabled = on;
-        if (on) _cobroAlqPreview();
+        if (on) {
+            // Las dos partes arrancan donde diga el «Comprobante» de arriba, así quien
+            // cobra todo junto no tiene que tocar nada; y quien reparte —la parte
+            // gravada por banco y la no gravada en mano, que es lo habitual— lo cambia
+            // acá. El destino define también la letra del comprobante de cada recibo:
+            // en esta app van juntos (A = banco, B = efectivo).
+            var _base = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
+            ['cobroAlqMedioA','cobroAlqMedioB'].forEach(function(id){
+                var el = document.getElementById(id); if (el) el.value = _base;
+            });
+            _cobroAlqPreview();
+        }
+    }
+    // Destino (y letra) de cada parte del desglose. Fuera del desglose manda el
+    // «Comprobante» de arriba, que es el único que hay.
+    function _cobroAlqMedioParte(parte) {
+        var el = document.getElementById(parte === 'A' ? 'cobroAlqMedioA' : 'cobroAlqMedioB');
+        var v = el ? el.value : '';
+        if (v !== 'A' && v !== 'B') v = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
+        return v;
     }
     function _cobroAlqPreview() {
         var idx = parseInt(document.getElementById('cobroAlqIdx').value);
@@ -33320,8 +33339,12 @@
         var totalA = grav + iva;
         var f = function(n){ return mon + (n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var el = document.getElementById('cobroAlqDesglosePreview');
-        if (el) el.innerHTML = '<strong>Recibo A</strong> (gravada): ' + f(grav) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
-            + ' &nbsp;·&nbsp; <strong>Recibo B</strong> (no gravada): ' + f(nog)
+        var _dst = function(m){ return m === 'A' ? 'banco' : 'efectivo'; };
+        var mA = _cobroAlqMedioParte('A'), mB = _cobroAlqMedioParte('B');
+        if (el) el.innerHTML = '<strong>Recibo ' + mA + '</strong> (gravada): ' + f(grav) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
+            + ' → <strong>' + _dst(mA) + '</strong>'
+            + ' &nbsp;·&nbsp; <strong>Recibo ' + mB + '</strong> (no gravada): ' + f(nog)
+            + ' → <strong>' + _dst(mB) + '</strong>'
             + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>';
         var montoInput = document.getElementById('cobroAlqMonto');
         if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
@@ -33393,16 +33416,20 @@
             }
             var facturaNro = document.getElementById('cobroAlqFacturaNro').value.trim();
             var recibos = [];
+            // Cada parte puede entrar por un lado distinto: lo habitual es la gravada
+            // por banco (va con factura) y la no gravada en mano. `tipoAB` es el que
+            // decide dónde suma en Caja y Bancos, y además la serie del comprobante.
+            var medioA = _cobroAlqMedioParte('A'), medioB = _cobroAlqMedioParte('B');
             if (totalA > 0) {
-                var nroA = await obtenerProximoComprobante(tipoAB);
-                var regA = _conMoneda({ fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: tipoAB,
+                var nroA = await obtenerProximoComprobante(medioA);
+                var regA = _conMoneda({ fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: medioA,
                              parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro });
                 if (facturaMeta) { regA.facturaId = facturaMeta.facturaId; regA.facturaNombre = facturaMeta.facturaNombre; regA.facturaTipo = facturaMeta.facturaTipo; }
                 a.cobrosHistorial.push(regA); recibos.push(regA);
             }
             if (nog > 0) {
-                var nroB = await obtenerProximoComprobante(tipoAB);
-                var regB = _conMoneda({ fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: tipoAB, parteIva: 'nograv' });
+                var nroB = await obtenerProximoComprobante(medioB);
+                var regB = _conMoneda({ fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: medioB, parteIva: 'nograv' });
                 a.cobrosHistorial.push(regB); recibos.push(regB);
             }
             cerrarModalCobroAlquiler();
@@ -43367,16 +43394,30 @@
         </label>
         <div id="cobroAlqDesglosePanel" style="display:none;background:var(--surface);border-radius:8px;padding:10px;margin-bottom:10px;">
           <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Parte A — gravada (con IVA)</div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
             <div class="form-group" style="margin:0;"><label>Neto gravado</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
             <div class="form-group" style="margin:0;"><label>IVA</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
+              <select id="cobroAlqMedioA" onchange="_cobroAlqPreview()">
+                <option value="A">A — Banco</option>
+                <option value="B">B — Efectivo</option>
+              </select>
+            </div>
           </div>
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px;">
             <div class="form-group" style="margin:0;"><label>Nº factura emitida (opcional)</label><input type="text" id="cobroAlqFacturaNro" placeholder="Ej: A 0001-00000123" autocomplete="off"></div>
             <div class="form-group" style="margin:0;"><label>Factura emitida (archivo)</label><input type="file" id="cobroAlqFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:4px;"></div>
           </div>
           <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — no gravada (sin IVA)</div>
-          <div class="form-group" style="margin:0;"><label>Monto no gravado</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+          <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
+            <div class="form-group" style="margin:0;"><label>Monto no gravado</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
+              <select id="cobroAlqMedioB" onchange="_cobroAlqPreview()">
+                <option value="A">A — Banco</option>
+                <option value="B">B — Efectivo</option>
+              </select>
+            </div>
+          </div>
           <div class="form-hint" id="cobroAlqDesglosePreview" style="margin-top:8px;"></div>
         </div>
       </div>
