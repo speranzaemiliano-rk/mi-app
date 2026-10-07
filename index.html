@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v536</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v537</div>
         </div>
     </nav>
 
@@ -16368,7 +16368,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v536';
+    var APP_VER = 'v537';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -30157,16 +30157,58 @@
         } catch(e) { console.error(e); alert('No se pudo abrir el recibo.'); }
     }
 
-    function eliminarRemunPago(id) {
-        var rp = (remunPagos||[]).find(function(x){ return x.id===id; });
-        if (!rp) return;
-        var extra = rp.consolidado ? '\n\nOJO: ya fue consolidado en Caja/Banco. Borrarlo acá NO elimina el movimiento «Remuneraciones» de Caja/Banco (si querés, sacalo desde ahí).' : '';
-        if (!confirm('¿Eliminar el pago de '+(rp.nombre||'este empleado')+'?'+extra)) return;
-        remunPagos = remunPagos.filter(function(x){ return x.id!==id; });
+    // Borra un pago Y, si ya había ido a Caja/Banco, su movimiento. Si la consolidación juntaba
+    // VARIOS pagos no se toca nada: borrar media consolidación descuadra la caja, así que se
+    // manda a revertirla desde «Consolidaciones», que la deshace entera y libera los pagos.
+    // Devuelve true si borró.
+    function _remBorrarPagoCompleto(id, opts) {
+        opts = opts || {};
+        var rp = (remunPagos || []).find(function(x){ return x.id === id; });
+        if (!rp) return false;
+        var _m = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var total = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+        var cons = (rp.consolidado && rp.consolidadoId)
+            ? (remunConsolidados || []).find(function(c){ return c.id === rp.consolidadoId; }) : null;
+        if (cons && (cons.pagoIds || []).length > 1) {
+            alert('Este pago se mandó a Caja/Banco JUNTO con otros ' + ((cons.pagoIds || []).length - 1) + ' pago(s), '
+                + 'en un solo movimiento.\n\nPara borrarlo hay que revertir primero esa consolidación '
+                + '(Remuneraciones → 📊 Consolidaciones → ↩️). Eso borra el movimiento de Caja/Banco y deja '
+                + 'todos esos pagos pendientes; después borrás el que sobra.');
+            return false;
+        }
+        if (!opts.silencioso) {
+            var txt = '¿Borrar el pago de ' + _m(total) + ' de ' + (rp.nombre || 'este empleado')
+                + ' (' + _mesLabel(rp.mes) + ')?';
+            if (cons) txt += '\n\nTambién se borra su movimiento «Remuneraciones» de Caja/Banco del ' + formatearFecha(cons.fecha) + '.';
+            if (!confirm(txt)) return false;
+        }
+        if (cons) {
+            var ids = {}; if (cons.cajaMovId) ids[cons.cajaMovId] = 1; if (cons.bancoMovId) ids[cons.bancoMovId] = 1;
+            if (Object.keys(ids).length) { ingGeneral = ingGeneral.filter(function(m){ return !(m && m.id && ids[m.id]); }); persistirIngGeneral(); }
+            remunConsolidados = remunConsolidados.filter(function(c){ return c.id !== cons.id; });
+            persistirRemunConsolidados();
+        }
+        remunPagos = remunPagos.filter(function(x){ return x.id !== id; });
         delete _remPagoSel[id];
         persistirRemunPagos();
         renderRemuneraciones();
+        if (typeof renderCajaGeneral === 'function')   renderCajaGeneral();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD === 'function')   renderEfectivoUSD();
+        if (typeof renderIngGeneral === 'function')    renderIngGeneral();
+        return true;
     }
+    function eliminarRemunPago(id) {
+        if (!_esDuenoRemun()) return;
+        _remBorrarPagoCompleto(id);
+    }
+    // Desde el modal de liquidación: borra el pago y refresca lo que se ve ahí mismo.
+    window.empBorrarPagoDelMes = function(id) {
+        if (!_esDuenoRemun()) return;
+        if (!_remBorrarPagoCompleto(id)) return;
+        if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
+        if (typeof _liqPagoRefrescar === 'function') _liqPagoRefrescar(true);
+    };
 
     // ═══════════ Consolidaciones — adjuntar comprobante/factura/recibo, revertir ═══════════
     function _remConsolidadosDelProyecto() {
@@ -30719,10 +30761,33 @@
                     '</div>';
                 return;
             }
+            // Cada pago con su ✕: es la respuesta a «me lo cargué dos veces, cómo lo borro».
+            var _n = _remNorm(nombre);
+            var lista = (remunPagos || []).filter(function(rp){ return rp && rp.mes === mes && _remNorm(rp.nombre || '') === _n; })
+                .sort(function(a,b){ return (a.fecha || '').localeCompare(b.fecha || ''); });
+            var _tipoLbl = { pago:'Pago', parcial:'Pago a cuenta', adelanto:'Adelanto' };
+            var filas = lista.map(function(rp){
+                var t = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
+                var como = [];
+                if (rp.montoBanco > 0) como.push('🏦 ' + m(rp.montoBanco));
+                if (((rp.montoEfectivo || 0) + (rp.montoNoOficial || 0)) > 0) como.push('💵 ' + m((rp.montoEfectivo || 0) + (rp.montoNoOficial || 0)));
+                return '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:5px 0; border-top:1px solid var(--border);">' +
+                    '<span style="flex:1; min-width:170px;"><strong>' + m(t) + '</strong>' +
+                        ' <span style="color:var(--text-3);">' + escHtml(_tipoLbl[rp.tipo] || 'Pago') +
+                        (rp.fecha ? ' · ' + escHtml(formatearFecha(rp.fecha)) : '') +
+                        (como.length ? ' · ' + como.join(' + ') : '') +
+                        (rp.consolidado ? ' · ya en Caja/Banco' : '') + '</span></span>' +
+                    '<button type="button" class="btn btn-danger-sm" onclick="empBorrarPagoDelMes(\'' + escHtml(rp.id) + '\')" ' +
+                        'title="Borrar este pago. Si ya fue a Caja/Banco, también se borra ese movimiento.">✕ Borrar</button>' +
+                '</div>';
+            }).join('');
             box.style.borderColor = 'var(--warn)';
             box.style.background = 'rgba(230,160,60,.08)';
-            box.innerHTML = '💵 Este mes ya tiene <strong>' + m(ya) + '</strong> registrados como pago/adelanto en «Pagos de sueldo». ' +
-                'El recibo los resta solo y muestra el <strong>saldo a cobrar</strong>: <u>no</u> los cargues también como descuento acá.' + boton;
+            box.innerHTML = '💵 Este mes ya tiene <strong>' + m(ya) + '</strong> registrados como pago/adelanto. ' +
+                'El recibo los resta solo y muestra el <strong>saldo a cobrar</strong>: <u>no</u> los cargues también como descuento acá.' +
+                '<div style="margin-top:6px;">' + filas + '</div>' +
+                '<div class="form-hint" style="color:var(--text-3); margin-top:6px;">¿Lo cargaste dos veces? Borrá con ✕ el que sobra y el saldo se recalcula solo.</div>' +
+                boton;
         }
     };
     // Filas de concepto del modal (Parte A + Parte B), en el mismo orden que _empLeerConceptos.
@@ -30943,6 +31008,7 @@
         // quede pegado el de otro empleado.
         _liqPagoAMano = false;
         var _fp = document.getElementById('liqPagoFecha'); if (_fp) _fp.value = '';
+        if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
         _liqPagoRefrescar(true);
         document.getElementById('modalLiquidar').classList.add('active');
     };
@@ -31515,9 +31581,26 @@
         // Pagar de menos es normal (queda saldo). Pagar de MÁS se avisa, porque suele ser
         // un adelanto cargado dos veces (una como pago y otra como descuento del recibo).
         if (aPagar - n.pend >= 1) {
-            if (!confirm('⚠️ Te pasás del total a cobrar de ' + _mesLabel(mes) + '.\n\n'
-                + 'Total a cobrar: ' + m(n.total) + '\nYa entregado: ' + m(n.yaPagado) + '\nEste pago: ' + m(aPagar) + '\n'
-                + '➕ Excedente: ' + m(_liqR2(aPagar - n.pend)) + '\n\n¿Guardar igual?')) return;
+            var _aviso;
+            if (n.pend <= 0.5 && n.yaPagado > 0.5) {
+                // Caso típico: ya se liquidó y se pagó este mes, y se está repitiendo la operación.
+                // Lo que hay que decir no es «excedente», es «lo vas a cargar dos veces» y dónde se borra.
+                _aviso = '⚠️ ' + _mesLabel(mes) + ' YA figura pagado.\n\n'
+                    + 'Total a cobrar: ' + m(n.total) + '\n'
+                    + 'Ya entregado:   ' + m(n.yaPagado) + '\n\n'
+                    + 'Si guardás este pago de ' + m(aPagar) + ', el mes queda cargado DOS VECES.\n\n'
+                    + 'Para corregirlo: cerrá este cartel y, en el recuadro naranja «Este mes ya tiene…» '
+                    + 'de más arriba, borrá con ✕ el pago que sobra. Se borra también su movimiento de Caja/Banco.\n\n'
+                    + '¿Guardarlo igual de todos modos?';
+            } else {
+                _aviso = '⚠️ Este pago se pasa de lo que falta cobrar de ' + _mesLabel(mes) + '.\n\n'
+                    + 'Total a cobrar: ' + m(n.total) + '\n'
+                    + 'Ya entregado:   ' + m(n.yaPagado) + '\n'
+                    + 'Falta pagar:    ' + m(n.pend) + '\n'
+                    + 'Este pago:      ' + m(aPagar) + '\n'
+                    + '➕ De más:       ' + m(_liqR2(aPagar - n.pend)) + '\n\n¿Guardar igual?';
+            }
+            if (!confirm(_aviso)) return;
         }
 
         var _res = _guardarReciboSnap(emp, mes, {});
