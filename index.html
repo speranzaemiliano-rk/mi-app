@@ -3367,6 +3367,9 @@
                 <button class="nav-item nav-sub" id="tabBtnEfectivoUSD" data-navkey="efectivousd" onclick="mostrarTab('EfectivoUSD')" title="Movimientos en efectivo en dólares">
                     <span class="nav-drag-handle">⠿</span><span class="nav-icon">attach_money</span> Efectivo en Dólares
                 </button>
+                <button class="nav-item nav-sub" id="tabBtnCambioUSD" data-navkey="cambiousd" onclick="mostrarTab('CambioUSD')" title="Comprar o vender dólares: los dos movimientos de caja salen solos">
+                    <span class="nav-drag-handle">⠿</span><span class="nav-icon">currency_exchange</span> Compra / venta USD
+                </button>
                 <button class="nav-item nav-sub" id="tabBtnCuentasBancarias" data-navkey="banco" onclick="mostrarTab('CuentasBancarias')" title="Cuentas corrientes y bancarias">
                     <span class="nav-drag-handle">⠿</span><span class="nav-icon">account_balance_wallet</span> Banco
                 </button>
@@ -3565,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v535</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v536</div>
         </div>
     </nav>
 
@@ -6516,6 +6519,99 @@
                     </div>
                 </div>
             </div><!-- /panelEfectivoUSD -->
+
+            <!-- TAB: COMPRA Y VENTA DE DÓLARES ──────────────────────────────────────
+                 Una operación, dos movimientos. Se carga una sola vez acá y las dos
+                 cajas se mueven solas: vender dólares los baja de la caja en USD y
+                 sube los pesos; comprar hace lo contrario. Antes había que cargar un
+                 egreso y un ingreso a mano, con el riesgo de olvidarse una punta. -->
+            <div class="tab-panel" id="panelCambioUSD">
+                <div class="stats-grid" style="margin-top:0; grid-template-columns: repeat(auto-fit, minmax(210px,1fr));">
+                    <div class="stat-card" style="border-left:4px solid var(--success);">
+                        <div class="stat-label">Dólares comprados</div>
+                        <div class="stat-value" id="fxKpiComprados" style="font-size:20px;">USD 0</div>
+                        <div class="stat-sub" id="fxKpiCompradosSub">—</div>
+                    </div>
+                    <div class="stat-card" style="border-left:4px solid var(--danger);">
+                        <div class="stat-label">Dólares vendidos</div>
+                        <div class="stat-value" id="fxKpiVendidos" style="font-size:20px;">USD 0</div>
+                        <div class="stat-sub" id="fxKpiVendidosSub">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Posición neta</div>
+                        <div class="stat-value" id="fxKpiNeto" style="font-size:20px;">USD 0</div>
+                        <div class="stat-sub">Comprados − vendidos, en el período filtrado</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Tipo de cambio de referencia</div>
+                        <div class="stat-value" id="fxKpiTC" style="font-size:20px;">$0</div>
+                        <div class="stat-sub">El del proyecto. En cada operación podés poner otro.</div>
+                    </div>
+                </div>
+
+                <div class="table-card" id="fxFormCard" style="margin-bottom:14px;">
+                    <div class="table-card-head"><h3>💱 Registrar una operación</h3></div>
+                    <div style="padding:12px 16px 16px;">
+                        <div class="form-hint" style="margin-bottom:10px;">
+                            Cargás la operación <strong>una sola vez</strong> y los dos movimientos salen solos: si <strong>vendés</strong> dólares, bajan de la caja en dólares y suben los pesos; si <strong>comprás</strong>, al revés. No hay que tocar nada en Caja a mano.
+                        </div>
+                        <div class="modalidad-toggle" style="margin-bottom:12px;">
+                            <button type="button" class="modalidad-btn selected-A" id="fxOpVentaBtn" onclick="fxSetOp('venta')">💵 Vendo dólares <span style="font-weight:400;">· entran pesos</span></button>
+                            <button type="button" class="modalidad-btn" id="fxOpCompraBtn" onclick="fxSetOp('compra')">💰 Compro dólares <span style="font-weight:400;">· salen pesos</span></button>
+                        </div>
+                        <input type="hidden" id="fxOp" value="venta">
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; align-items:end;">
+                            <label style="font-size:11px;">Fecha<br><input type="date" id="fxFecha" style="width:100%; padding:7px; font-size:13px;"></label>
+                            <label style="font-size:11px;" title="Cuántos dólares entran o salen">💵 Dólares (USD)<br><input type="number" id="fxUsd" step="0.01" min="0" placeholder="0" oninput="fxRecalc('usd')" style="width:100%; padding:7px; font-size:13px;"></label>
+                            <label style="font-size:11px;" title="Pesos por cada dólar de esta operación">Tipo de cambio ($ por USD)<br><input type="number" id="fxTC" step="0.01" min="0" placeholder="0" oninput="fxRecalc('tc')" style="width:100%; padding:7px; font-size:13px;"></label>
+                            <label style="font-size:11px;" title="Si ponés el total, el tipo de cambio se calcula solo">💲 Total en pesos<br><input type="number" id="fxArs" step="0.01" min="0" placeholder="0" oninput="fxRecalc('ars')" style="width:100%; padding:7px; font-size:13px;"></label>
+                            <label style="font-size:11px;" id="fxLblUsd">De dónde salen los dólares<br><select id="fxCtaUsd" onchange="fxPreview()" style="width:100%; padding:7px; font-size:13px;"></select></label>
+                            <label style="font-size:11px;" id="fxLblArs">Dónde entran los pesos<br><select id="fxCtaArs" onchange="fxPreview()" style="width:100%; padding:7px; font-size:13px;"></select></label>
+                            <label style="font-size:11px;" title="Casa de cambio, banco o persona con la que operaste. Opcional.">Contraparte<br><input type="text" id="fxContra" placeholder="Casa de cambio…" style="width:100%; padding:7px; font-size:13px;"></label>
+                            <label style="font-size:11px;">Nota<br><input type="text" id="fxNota" placeholder="Opcional" style="width:100%; padding:7px; font-size:13px;"></label>
+                        </div>
+                        <div id="fxPreview" style="margin-top:10px; padding:9px 12px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border); font-size:12px; color:var(--text-2);"></div>
+                        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+                            <button type="button" class="btn btn-outline btn-sm" onclick="fxLimpiarForm()">Limpiar</button>
+                            <button type="button" class="btn btn-gold" id="fxBtnGuardar" onclick="fxRegistrar()">💾 Registrar operación</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <div class="table-card-head">
+                        <h3>📒 Operaciones de cambio</h3>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <span class="filter-label">Desde</span>
+                            <input type="date" id="fxDesde" onchange="renderCambioUSD()" style="width:auto; padding:6px 8px; font-size:12px;">
+                            <span class="filter-label">Hasta</span>
+                            <input type="date" id="fxHasta" onchange="renderCambioUSD()" style="width:auto; padding:6px 8px; font-size:12px;">
+                            <select id="fxFiltroOp" onchange="renderCambioUSD()" style="width:auto; padding:6px 8px; font-size:12px;">
+                                <option value="">Compras y ventas</option>
+                                <option value="compra">Solo compras</option>
+                                <option value="venta">Solo ventas</option>
+                            </select>
+                            <button class="btn-clear-filters" onclick="fxLimpiarFiltros()">✕ Limpiar</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr>
+                                <th>Fecha</th><th>Operación</th>
+                                <th style="text-align:right;">Dólares</th>
+                                <th style="text-align:right;">T. de cambio</th>
+                                <th style="text-align:right;">Pesos</th>
+                                <th>Dólares</th><th>Pesos</th><th>Detalle</th>
+                                <th style="width:50px;"></th>
+                            </tr></thead>
+                            <tbody id="fxBody"><tr><td colspan="9" class="empty-msg">Todavía no registraste ninguna operación.</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div class="form-hint" style="color:var(--text-3); padding:10px 14px;">
+                        Cada operación genera <strong>dos movimientos</strong> en Caja/Banco con la misma referencia. Se ven en «Caja General», «Efectivo en Pesos», «Efectivo en Dólares» y en el extracto bancario, según de dónde salga y a dónde entre la plata. Borrar la operación acá <strong>borra las dos puntas juntas</strong>, así nunca queda una colgada.
+                    </div>
+                </div>
+            </div><!-- /panelCambioUSD -->
 
             <!-- TAB: BANCO / CUENTAS CORRIENTES -->
             <!-- ACTUALIZACIÓN DE SUELDOS: Comercio (CCT 130/75) vs inflación (IPC INDEC).
@@ -13586,7 +13682,7 @@
             'Presupuestos','Proveedores','CuentaCorriente','Facturas','Documentos','DocumentosEmitidos','Vencimientos',
             'ResumenIngresos','Ventas','Alquileres','Servicios','IngGeneral','Inversiones',
             'Egresos','CompRecibidos','Pagos','Caja','CajaGeneral','PlanTrabajo',
-            'EfectivoPesos','EfectivoUSD','CuentasBancarias','Actualizacion','Config','Tesoreria','Reportes','Remuneraciones'
+            'EfectivoPesos','EfectivoUSD','CambioUSD','CuentasBancarias','Actualizacion','Config','Tesoreria','Reportes','Remuneraciones'
         ];
         ALL_TABS.forEach(t => {
             const panel = document.getElementById('panel' + t);
@@ -13676,7 +13772,7 @@
         }
 
         // Submenú Principal (Caja y Bancos)
-        const SUB_PRINCIPAL = ['CajaGeneral','EfectivoPesos','EfectivoUSD','CuentasBancarias','Actualizacion'];
+        const SUB_PRINCIPAL = ['CajaGeneral','EfectivoPesos','EfectivoUSD','CambioUSD','CuentasBancarias','Actualizacion'];
         SUB_PRINCIPAL.forEach(t => {
             const btn = document.getElementById('tabBtn' + t);
             if (btn) btn.classList.toggle('active', t === nombre);
@@ -13709,6 +13805,7 @@
             'PlanTrabajo':       'Plan de Trabajo',
             'EfectivoPesos':     'Efectivo en Pesos',
             'EfectivoUSD':       'Efectivo en Dólares',
+            'CambioUSD':         'Compra y venta de dólares',
             'CuentasBancarias':  'Banco — Cuentas Corrientes',
             'Actualizacion':     'Actualización de sueldos — Comercio vs. inflación',
             'Tesoreria':         'Tesorería Interempresa',
@@ -13730,6 +13827,7 @@
         if (nombre === 'PlanTrabajo')      renderPlanTrabajo();
         if (nombre === 'EfectivoPesos')    { _prellenar30dias('efpFiltroDesde'); renderEfectivoPesos(); }
         if (nombre === 'EfectivoUSD')      { _prellenar30dias('efuFiltroDesde'); renderEfectivoUSD(); }
+        if (nombre === 'CambioUSD')        { renderCambioUSD(); }
         if (nombre === 'CuentasBancarias') { _prellenar30dias('cbDesde'); renderCuentasBancarias(); }
         if (nombre === 'Tesoreria')       renderTesoreria();
         if (nombre === 'Actualizacion')   renderActualizacion();
@@ -14828,6 +14926,7 @@
         {key:'cajageneral',        label:'— Caja General'},
         {key:'efectivopesos',      label:'— Efectivo en Pesos'},
         {key:'efectivousd',        label:'— Efectivo en Dólares'},
+        {key:'cambiousd',          label:'— Compra / venta USD'},
         {key:'banco',              label:'— Banco'},
         {key:'ingresos',       label:'📈 Ingresos'},
         {key:'comprobantes',       label:'— Comprobantes (ARCA)'},
@@ -16269,7 +16368,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v535';
+    var APP_VER = 'v536';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -16760,7 +16859,7 @@
 
     function aplicarPermisos() {
         const show = puedeEditar ? '' : 'none';
-        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv','btnLeerPresup','btnPresupExcel'].forEach(id => {
+        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv','btnLeerPresup','btnPresupExcel','fxFormCard'].forEach(id => {
             const el = document.getElementById(id); if (el) el.style.display = show;
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
@@ -35880,6 +35979,271 @@
         });
         _prellenar30dias('cgFiltroDesde');
         renderCajaGeneral();
+    }
+
+    // ══════════════ COMPRA Y VENTA DE DÓLARES ══════════════
+    // Una operación de cambio son SIEMPRE dos movimientos: lo que sale de una moneda y lo
+    // que entra en la otra. Se guardan como un par en `ingGeneral` con el mismo `cambioId`,
+    // en vez de en una colección nueva: así los ven sin tocar nada Caja General, Efectivo
+    // en Pesos, Efectivo en Dólares y el extracto bancario, que es donde tienen que estar.
+    // El `cambioId` es lo que permite borrar las dos puntas juntas y no dejar una colgada.
+    function _fxR2(n) { return Math.round((n || 0) * 100) / 100; }
+    function _fxPesos(n) { return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+    function _fxUSD(n)   { return 'USD ' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
+    // Cuentas bancarias de una moneda (el valor vacío = efectivo).
+    function _fxCuentasDe(moneda) {
+        return ((typeof cuentasBancarias !== 'undefined' ? cuentasBancarias : []) || []).filter(function(c){
+            return (c.moneda || 'ARS') === moneda;
+        });
+    }
+    function _fxNombreCuenta(cuentaId) {
+        var c = ((typeof cuentasBancarias !== 'undefined' ? cuentasBancarias : []) || [])
+                    .find(function(x){ return (x.id || x.banco) === cuentaId; });
+        return c ? ((c.banco || 'Cuenta') + (c.alias ? ' · ' + c.alias : '')) : 'Banco';
+    }
+    function _fxDonde(ig) {
+        if (!ig) return '—';
+        if (ig.esBancario) return '🏦 ' + _fxNombreCuenta(ig.cuentaId);
+        return (ig.moneda === 'USD') ? '💵 Efectivo USD' : '💵 Efectivo $';
+    }
+
+    // Arma la lista de operaciones juntando los pares por cambioId.
+    function _fxOperaciones() {
+        var mapa = {};
+        (typeof ingGeneral !== 'undefined' ? ingGeneral : []).forEach(function(ig){
+            if (!ig || !ig.esCambio || !ig.cambioId) return;
+            var o = mapa[ig.cambioId];
+            if (!o) {
+                o = mapa[ig.cambioId] = { id: ig.cambioId, op: ig.fxOp || 'venta', fecha: ig.fecha || '',
+                                          tc: ig.fxTC || 0, contra: ig.fxContra || '', nota: ig.fxNota || '',
+                                          usd: 0, ars: 0, dondeUsd: '—', dondeArs: '—', partes: 0 };
+            }
+            o.partes++;
+            if ((ig.moneda || 'ARS') === 'USD') { o.usd = ig.monto || 0; o.dondeUsd = _fxDonde(ig); }
+            else                                { o.ars = ig.monto || 0; o.dondeArs = _fxDonde(ig); }
+        });
+        return Object.keys(mapa).map(function(k){ return mapa[k]; })
+            .sort(function(a,b){ return (b.fecha || '').localeCompare(a.fecha || '') || (b.id || '').localeCompare(a.id || ''); });
+    }
+
+    // Vender dólares o comprarlos cambia qué sale y qué entra, y con eso el texto de los dos
+    // selectores. Es la única diferencia entre las dos operaciones.
+    window.fxSetOp = function(op) {
+        op = (op === 'compra') ? 'compra' : 'venta';
+        var h = document.getElementById('fxOp'); if (h) h.value = op;
+        var bV = document.getElementById('fxOpVentaBtn'), bC = document.getElementById('fxOpCompraBtn');
+        if (bV) bV.classList.toggle('selected-A', op === 'venta');
+        if (bC) bC.classList.toggle('selected-A', op === 'compra');
+        var lU = document.getElementById('fxLblUsd'), lA = document.getElementById('fxLblArs');
+        var txt = function(el, t) { if (el && el.firstChild) el.firstChild.textContent = t; };
+        txt(lU, op === 'venta' ? 'De dónde salen los dólares' : 'Dónde entran los dólares');
+        txt(lA, op === 'venta' ? 'Dónde entran los pesos'      : 'De dónde salen los pesos');
+        fxPreview();
+    };
+
+    // Dólares × tipo de cambio = pesos. Se puede completar cualquiera de los tres y los
+    // otros se acomodan: muchas veces lo que se sabe es el total en pesos, no el TC exacto.
+    window.fxRecalc = function(cual) {
+        var eU = document.getElementById('fxUsd'), eT = document.getElementById('fxTC'), eA = document.getElementById('fxArs');
+        if (!eU || !eT || !eA) return;
+        var usd = parseFloat(eU.value) || 0, tc = parseFloat(eT.value) || 0, ars = parseFloat(eA.value) || 0;
+        if (cual === 'ars') { if (usd > 0 && ars > 0) eT.value = Math.round((ars / usd) * 100) / 100; }
+        else                { if (usd > 0 && tc  > 0) eA.value = _fxR2(usd * tc); }
+        fxPreview();
+    };
+
+    window.fxPreview = function() {
+        var box = document.getElementById('fxPreview'); if (!box) return;
+        var op  = (document.getElementById('fxOp') || {}).value || 'venta';
+        var usd = parseFloat((document.getElementById('fxUsd') || {}).value) || 0;
+        var tc  = parseFloat((document.getElementById('fxTC')  || {}).value) || 0;
+        var ars = parseFloat((document.getElementById('fxArs') || {}).value) || 0;
+        var cU  = (document.getElementById('fxCtaUsd') || {}).value || '';
+        var cA  = (document.getElementById('fxCtaArs') || {}).value || '';
+        if (!(usd > 0) || !(ars > 0)) {
+            box.innerHTML = '<span style="color:var(--text-3);">Cargá los dólares y el tipo de cambio (o el total en pesos) y acá te muestro los dos movimientos que se van a generar.</span>';
+            return;
+        }
+        var dU = cU ? ('🏦 ' + escHtml(_fxNombreCuenta(cU))) : '💵 Efectivo USD';
+        var dA = cA ? ('🏦 ' + escHtml(_fxNombreCuenta(cA))) : '💵 Efectivo $';
+        var flechaU = (op === 'venta') ? '↓ sale' : '↑ entra';
+        var flechaA = (op === 'venta') ? '↑ entra' : '↓ sale';
+        box.innerHTML = '<strong>' + (op === 'venta' ? 'Vendés' : 'Comprás') + ' ' + escHtml(_fxUSD(usd))
+            + '</strong> a ' + escHtml(_fxPesos(tc)) + ' por dólar = <strong>' + escHtml(_fxPesos(ars)) + '</strong>.'
+            + '<br>Se generan dos movimientos: <strong>' + flechaU + ' ' + escHtml(_fxUSD(usd)) + '</strong> en ' + dU
+            + ' y <strong>' + flechaA + ' ' + escHtml(_fxPesos(ars)) + '</strong> en ' + dA + '.';
+    };
+
+    // Llena los dos selectores con «Efectivo» + las cuentas de esa moneda, conservando lo elegido.
+    function _fxPoblarCuentas() {
+        [['fxCtaUsd', 'USD', '💵 Efectivo (caja en dólares)'],
+         ['fxCtaArs', 'ARS', '💵 Efectivo (caja en pesos)']].forEach(function(cfg){
+            var sel = document.getElementById(cfg[0]); if (!sel) return;
+            var cur = sel.value;
+            sel.innerHTML = '<option value="">' + cfg[2] + '</option>' +
+                _fxCuentasDe(cfg[1]).map(function(c){
+                    var cid = c.id || c.banco;
+                    return '<option value="' + escHtml(cid) + '">🏦 ' + escHtml((c.banco || 'Cuenta') + (c.alias ? ' · ' + c.alias : '')) + '</option>';
+                }).join('');
+            if (cur) sel.value = cur;
+        });
+    }
+
+    window.fxLimpiarForm = function() {
+        ['fxUsd','fxArs','fxContra','fxNota'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
+        var t = document.getElementById('fxTC');
+        if (t) t.value = (typeof exchangeRate !== 'undefined' && exchangeRate > 0) ? exchangeRate : '';
+        var f = document.getElementById('fxFecha'); if (f) f.value = new Date().toISOString().slice(0,10);
+        ['fxCtaUsd','fxCtaArs'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
+        fxPreview();
+    };
+    window.fxLimpiarFiltros = function() {
+        ['fxDesde','fxHasta','fxFiltroOp'].forEach(function(id){ var e = document.getElementById(id); if (e) e.value = ''; });
+        renderCambioUSD();
+    };
+
+    // Un movimiento de una punta. Si hay cuenta es bancario; si no, va por caja.
+    function _fxMov(idMov, moneda, monto, esEgreso, cuentaId, base) {
+        var mov = {
+            id: idMov, fecha: base.fecha, moneda: moneda, monto: _fxR2(monto),
+            origen: base.origen, referencia: base.cambioId, obs: base.obs,
+            esEgreso: !!esEgreso,
+            esCambio: true, cambioId: base.cambioId, fxOp: base.op,
+            fxTC: base.tc, fxContra: base.contra, fxNota: base.nota
+        };
+        if (cuentaId) {
+            var cb = ((typeof cuentasBancarias !== 'undefined' ? cuentasBancarias : []) || [])
+                        .find(function(c){ return (c.id || c.banco) === cuentaId; }) || {};
+            mov.tipo = esEgreso ? 'mov_banco_salida' : 'mov_banco_entrada';
+            mov.cuentaId = cuentaId; mov.esBancario = true;
+            mov.medio = 'Transferencia'; mov.origenDest = base.contra || '';
+            mov.tipoAB = 'A';
+            if (cb.moneda && cb.moneda !== moneda) mov.moneda = moneda;   // manda la moneda de la operación
+        } else {
+            mov.tipo = esEgreso ? 'mov_egreso_caja' : 'mov_ingreso_caja';
+            mov.tipoAB = 'B';
+        }
+        return mov;
+    }
+
+    window.fxRegistrar = async function() {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permiso para cargar movimientos.'); return; }
+        var op    = (document.getElementById('fxOp') || {}).value || 'venta';
+        var fecha = (document.getElementById('fxFecha') || {}).value || '';
+        var usd   = _fxR2(parseFloat((document.getElementById('fxUsd') || {}).value) || 0);
+        var tc    = parseFloat((document.getElementById('fxTC')  || {}).value) || 0;
+        var ars   = _fxR2(parseFloat((document.getElementById('fxArs') || {}).value) || 0);
+        var ctaU  = (document.getElementById('fxCtaUsd') || {}).value || '';
+        var ctaA  = (document.getElementById('fxCtaArs') || {}).value || '';
+        var contra= ((document.getElementById('fxContra') || {}).value || '').trim();
+        var nota  = ((document.getElementById('fxNota') || {}).value || '').trim();
+        if (!fecha)   { alert('Elegí la fecha de la operación.'); return; }
+        if (!(usd > 0)) { alert('Cargá cuántos dólares son.'); return; }
+        if (!(ars > 0)) { alert('Cargá el tipo de cambio o el total en pesos.'); return; }
+        if (!(tc > 0)) tc = Math.round((ars / usd) * 100) / 100;
+
+        var etiqueta = (op === 'venta') ? 'Venta de dólares' : 'Compra de dólares';
+        var detalle  = etiqueta + ' — ' + _fxUSD(usd) + ' a ' + _fxPesos(tc) + (contra ? ' · ' + contra : '');
+        if (!confirm('¿Registrar la operación?\n\n' + detalle + '\n\n'
+                + (op === 'venta' ? '↓ Salen ' : '↑ Entran ') + _fxUSD(usd) + ' de ' + (ctaU ? _fxNombreCuenta(ctaU) : 'la caja en dólares') + '\n'
+                + (op === 'venta' ? '↑ Entran ' : '↓ Salen ') + _fxPesos(ars) + ' ' + (op === 'venta' ? 'en ' : 'de ') + (ctaA ? _fxNombreCuenta(ctaA) : 'la caja en pesos'))) return;
+
+        var btn = document.getElementById('fxBtnGuardar');
+        if (btn) btn.disabled = true;
+        try {
+            var cambioId = 'FX-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            var base = { fecha: fecha, cambioId: cambioId, op: op, tc: tc, contra: contra, nota: nota,
+                         origen: etiqueta + (contra ? ' · ' + contra : ''),
+                         obs: nota || detalle };
+            // Vender = salen dólares y entran pesos. Comprar es exactamente al revés.
+            var movUsd = _fxMov(cambioId + '-USD', 'USD', usd, (op === 'venta'), ctaU, base);
+            var movArs = _fxMov(cambioId + '-ARS', 'ARS', ars, (op === 'compra'), ctaA, base);
+            ingGeneral.push(movUsd, movArs);
+            await persistirIngGeneral();
+            fxLimpiarForm();
+            renderCambioUSD();
+            if (typeof renderCajaGeneral === 'function')   renderCajaGeneral();
+            if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+            if (typeof renderEfectivoUSD === 'function')   renderEfectivoUSD();
+            if (typeof renderCuentasBancarias === 'function' && (ctaU || ctaA)) renderCuentasBancarias();
+            alert('✅ Operación registrada.\n\n' + detalle + '\n\nYa está reflejada en las dos cajas.');
+        } catch (e) {
+            console.error('Cambio USD — no se pudo registrar:', e);
+            alert('❌ No se pudo registrar la operación.\n\nMotivo: ' + ((e && (e.code || e.message)) || e));
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
+    // Borra las DOS puntas juntas: media operación dejaría una caja descuadrada.
+    window.fxEliminar = function(cambioId) {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permiso para borrar movimientos.'); return; }
+        var o = _fxOperaciones().find(function(x){ return x.id === cambioId; });
+        if (!o) return;
+        if (!confirm('¿Borrar la ' + (o.op === 'venta' ? 'venta' : 'compra') + ' de ' + _fxUSD(o.usd) + ' del ' + formatearFecha(o.fecha) + '?\n\n'
+            + 'Se borran los DOS movimientos juntos: los ' + _fxUSD(o.usd) + ' y los ' + _fxPesos(o.ars) + '.')) return;
+        ingGeneral = ingGeneral.filter(function(ig){ return !(ig && ig.cambioId === cambioId); });
+        persistirIngGeneral();
+        renderCambioUSD();
+        if (typeof renderCajaGeneral === 'function')   renderCajaGeneral();
+        if (typeof renderEfectivoPesos === 'function') renderEfectivoPesos();
+        if (typeof renderEfectivoUSD === 'function')   renderEfectivoUSD();
+        if (typeof renderCuentasBancarias === 'function') renderCuentasBancarias();
+    };
+
+    function renderCambioUSD() {
+        var tbody = document.getElementById('fxBody'); if (!tbody) return;
+        _fxPoblarCuentas();
+        var f = document.getElementById('fxFecha'); if (f && !f.value) f.value = new Date().toISOString().slice(0,10);
+        var t = document.getElementById('fxTC');
+        if (t && !t.value && typeof exchangeRate !== 'undefined' && exchangeRate > 0) t.value = exchangeRate;
+        var kTC = document.getElementById('fxKpiTC');
+        if (kTC) kTC.textContent = _fxPesos(typeof exchangeRate !== 'undefined' ? exchangeRate : 0);
+        fxPreview();
+
+        var desde = (document.getElementById('fxDesde') || {}).value || '';
+        var hasta = (document.getElementById('fxHasta') || {}).value || '';
+        var fOp   = (document.getElementById('fxFiltroOp') || {}).value || '';
+        var ops = _fxOperaciones().filter(function(o){
+            if (desde && (o.fecha || '') < desde) return false;
+            if (hasta && (o.fecha || '') > hasta) return false;
+            if (fOp && o.op !== fOp) return false;
+            return true;
+        });
+
+        var cU = 0, cA = 0, vU = 0, vA = 0;
+        ops.forEach(function(o){ if (o.op === 'compra') { cU += o.usd; cA += o.ars; } else { vU += o.usd; vA += o.ars; } });
+        var set = function(id, txt){ var e = document.getElementById(id); if (e) e.textContent = txt; };
+        set('fxKpiComprados', _fxUSD(cU));
+        set('fxKpiCompradosSub', cU > 0 ? ('por ' + _fxPesos(cA) + ' · promedio ' + _fxPesos(cA / cU)) : '—');
+        set('fxKpiVendidos', _fxUSD(vU));
+        set('fxKpiVendidosSub', vU > 0 ? ('por ' + _fxPesos(vA) + ' · promedio ' + _fxPesos(vA / vU)) : '—');
+        set('fxKpiNeto', _fxUSD(cU - vU));
+
+        if (!ops.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">' +
+                ((desde || hasta || fOp) ? 'No hay operaciones con esos filtros.' : 'Todavía no registraste ninguna operación.') + '</td></tr>';
+            return;
+        }
+        tbody.innerHTML = ops.map(function(o){
+            var esV = (o.op === 'venta');
+            // Una operación a la que le falta una punta es un dato roto (se borró un movimiento
+            // suelto desde Caja): se avisa acá, que es donde se puede arreglar.
+            var aviso = (o.partes < 2) ? ' <span class="pill badge-warn" title="Falta uno de los dos movimientos: lo más probable es que se haya borrado desde Caja. Borrá la operación y volvé a cargarla.">⚠️ incompleta</span>' : '';
+            return '<tr>' +
+                '<td>' + escHtml(o.fecha ? formatearFecha(o.fecha) : '—') + '</td>' +
+                '<td><span style="font-weight:600;color:' + (esV ? 'var(--danger)' : 'var(--success)') + ';">' +
+                    (esV ? '💵 Venta' : '💰 Compra') + '</span>' + aviso + '</td>' +
+                '<td style="text-align:right;font-weight:600;">' + escHtml(_fxUSD(o.usd)) + '</td>' +
+                '<td style="text-align:right;">' + escHtml(_fxPesos(o.tc)) + '</td>' +
+                '<td style="text-align:right;font-weight:600;">' + escHtml(_fxPesos(o.ars)) + '</td>' +
+                '<td style="font-size:12px;">' + (esV ? '↓ ' : '↑ ') + escHtml(o.dondeUsd) + '</td>' +
+                '<td style="font-size:12px;">' + (esV ? '↑ ' : '↓ ') + escHtml(o.dondeArs) + '</td>' +
+                '<td style="font-size:12px;color:var(--text-3);">' + escHtml([o.contra, o.nota].filter(Boolean).join(' · ') || '—') + '</td>' +
+                '<td><button class="btn btn-danger-sm" onclick="fxEliminar(\'' + escHtml(o.id) + '\')" title="Borrar la operación y sus dos movimientos">✕</button></td>' +
+            '</tr>';
+        }).join('');
     }
 
     function renderCajaGeneral() {
