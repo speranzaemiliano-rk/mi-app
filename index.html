@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v537</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v538</div>
         </div>
     </nav>
 
@@ -8953,7 +8953,7 @@
             var resp, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
-                    estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
+                    estadoEl.textContent = '⚠️ ' + _pos + 'Reintentando con ' + MODELOS_PDF[_mi] + '… (intento ' + (_mi + 1) + ' de ' + MODELOS_PDF.length + ')';
                     await new Promise(function(r){ setTimeout(r, 4000); });
                 }
                 // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
@@ -16368,7 +16368,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v537';
+    var APP_VER = 'v538';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17795,7 +17795,7 @@
         return null;
     }
 
-    function _geminiProxy(model, body) {
+    function _geminiProxy(model, body, timeoutMs) {
         var url = _backendUrl();
         var headers = { 'Content-Type': 'application/json' };
         var t = getAppToken();
@@ -17807,11 +17807,22 @@
             : Promise.resolve(null);
         return _idTokenP.then(function(idTok) {
             if (idTok) headers['Authorization'] = 'Bearer ' + idTok;
+            // Tope de tiempo: sin esto, un pedido que no vuelve deja la pantalla colgada para
+            // siempre (y en una tanda de facturas, frena todas las que faltan).
+            var _ms = timeoutMs || 150000;
+            var _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            var _to = _ctrl ? setTimeout(function(){ _ctrl.abort(); }, _ms) : null;
             return fetch(url + '/gemini', {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify({ model: model, body: body })
-            });
+                body: JSON.stringify({ model: model, body: body }),
+                signal: _ctrl ? _ctrl.signal : undefined
+            }).then(function(r){ if (_to) clearTimeout(_to); return r; },
+                    function(e){
+                        if (_to) clearTimeout(_to);
+                        if (e && e.name === 'AbortError') throw new Error('El servidor no respondió en ' + Math.round(_ms/1000) + ' segundos.');
+                        throw e;
+                    });
         });
     }
 
@@ -19119,25 +19130,78 @@
     // corrido, se muestran en una lista con lo que entendió la IA, y recién ahí se
     // tilda qué entra al sistema. Un archivo ilegible no corta la tanda.
     var _lfLote = [], _lfModoLote = false, _lfDesdeLote = false;
+    // Progreso de la tanda. Va en una variable aparte porque el estado por archivo
+    // (`leerFactEstado`) lo pisa procesarFacturaPDF en cada paso: sin esto, el «3 de 11»
+    // desaparecía apenas empezaba a leer y la pantalla parecía colgada.
+    var _lfLotePos = '', _lfLoteFrenada = false;
+
+    function _lfLoteBarra(i, total, nombre) {
+        var barra = document.getElementById('lfLoteBarra');
+        var txt   = document.getElementById('lfLoteTxt');
+        var prog  = document.getElementById('lfLoteProgreso');
+        if (barra) barra.style.display = (total > 0) ? '' : 'none';
+        if (txt) {
+            var leidas = _lfLote.filter(function(x){ return !x.error; }).length;
+            var fallaron = _lfLote.filter(function(x){ return x.error; }).length;
+            txt.innerHTML = '\ud83d\udcce Leyendo <strong>' + i + ' de ' + total + '</strong>' +
+                (nombre ? ' · ' + escHtml(nombre) : '') +
+                (leidas ? ' · <span style="color:var(--success);">' + leidas + ' lista(s)</span>' : '') +
+                (fallaron ? ' · <span style="color:var(--danger);">' + fallaron + ' con problema</span>' : '');
+        }
+        if (prog) prog.style.width = total ? Math.round(((i - 1) / total) * 100) + '%' : '0%';
+    }
+    // Ojo con el nombre: `lfLoteCancelar` ya existe más abajo (el «Cancelar» de la pantalla de
+    // revisión, que vacía la lista y cierra). Esto es otra cosa —cortar la LECTURA a mitad de
+    // camino y quedarse con lo leído— y por eso va con nombre propio.
+    window.lfLoteFrenar = function() {
+        _lfLoteFrenada = true;
+        var txt = document.getElementById('lfLoteTxt');
+        if (txt) txt.innerHTML = '⏸️ Frenando… se termina de leer la que está en curso y se muestran las que ya salieron.';
+    };
 
     async function _lfLeerLote(archivos) {
         var MAX_MB = 20;
         var estadoEl = document.getElementById('leerFactEstado');
         _lfLote = []; _lfModoLote = true; _lfDesdeLote = false;
         _lfCola = []; _lfColaIdx = 0;
+        _lfLoteFrenada = false;
+        var btnC = document.getElementById('lfLoteBtnCancelar'); if (btnC) btnC.disabled = false;
+        var btnE = document.getElementById('lfBtnExtraer'); if (btnE) btnE.disabled = true;
+        // Mientras lee, el selector de archivos sobra y confunde («sin archivos seleccionados»
+        // cuando las facturas vinieron de Gmail). La barra de progreso ocupa su lugar.
+        var elArch = document.getElementById('lfElegirArchivo'); if (elArch) elArch.style.display = 'none';
         try {
             for (var i = 0; i < archivos.length; i++) {
                 var f = archivos[i];
-                if (estadoEl) estadoEl.textContent = '⏳ Leyendo ' + (i + 1) + ' de ' + archivos.length + ': ' + f.name + '…';
+                if (_lfLoteFrenada) {
+                    // Lo que falta se anota como no leído: así queda claro qué entró y qué no.
+                    for (var j = i; j < archivos.length; j++) {
+                        _lfLote.push({ nombre: archivos[j].name, b64: null, tipo: null, datos: null,
+                                       elegido: false, error: 'No se leyó (frenaste la tanda).' });
+                    }
+                    break;
+                }
+                _lfLotePos = '(' + (i + 1) + ' de ' + archivos.length + ') ';
+                _lfLoteBarra(i + 1, archivos.length, f.name);
                 if (f.size > MAX_MB * 1024 * 1024) {
                     _lfLote.push({ nombre: f.name, b64: null, tipo: null, datos: null, elegido: false,
                                    error: 'Supera los ' + MAX_MB + ' MB.' });
                     continue;
                 }
-                await procesarFacturaPDF(f);   // en modo lote empuja a _lfLote y vuelve
+                // procesarFacturaPDF atrapa su propio error en modo lote, pero si alguna vez
+                // escapara uno, no puede llevarse puesta la tanda entera.
+                try { await procesarFacturaPDF(f); }
+                catch (e) {
+                    _lfLote.push({ nombre: f.name, b64: null, tipo: null, datos: null, elegido: false,
+                                   error: (e && e.message) ? e.message : String(e) });
+                }
             }
         } finally {
             _lfModoLote = false;
+            _lfLotePos = '';
+            var barra = document.getElementById('lfLoteBarra'); if (barra) barra.style.display = 'none';
+            var btnE2 = document.getElementById('lfBtnExtraer'); if (btnE2) btnE2.disabled = false;
+            var elArch2 = document.getElementById('lfElegirArchivo'); if (elArch2) elArch2.style.display = '';
         }
         if (estadoEl) estadoEl.textContent = '';
         _lfPintarLote();
@@ -19610,7 +19674,9 @@
         if (file.size > MAX_MB * 1024 * 1024) { alert('El archivo «' + file.name + '» supera los ' + MAX_MB + ' MB.'); return; }
 
         var estadoEl = document.getElementById('leerFactEstado');
-        var _pos = _lfCola.length > 1 ? ('(' + (_lfColaIdx + 1) + ' de ' + _lfCola.length + ') ') : '';
+        // En una tanda manda el contador de la tanda; si no, el de la cola de a uno.
+        var _pos = _lfModoLote ? _lfLotePos
+                 : (_lfCola.length > 1 ? ('(' + (_lfColaIdx + 1) + ' de ' + _lfCola.length + ') ') : '');
         estadoEl.textContent = '⏳ ' + _pos + 'Leyendo ' + file.name + '…';
 
         try {
@@ -45328,18 +45394,29 @@
 
       <!-- PASO 1: Seleccionar archivo -->
       <div id="leerFactPaso1">
-        <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;">
-          Subí el PDF de la factura. El sistema va a extraer los datos automáticamente para que los confirmes antes de guardar. Funciona con facturas electrónicas AFIP y la mayoría de formatos estándar.
-          <br><strong>Podés elegir varias de una vez</strong>: se leen y se cargan una atrás de otra, mostrándote cada una para que la confirmes.
-        </p>
-        <div class="form-group">
-          <label>Archivo(s) PDF de la/s factura/s *</label>
-          <input type="file" id="leerFactArchivo" accept=".pdf,image/*" multiple style="font-size:14px;">
+        <div id="lfElegirArchivo">
+          <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;">
+            Subí el PDF de la factura. El sistema va a extraer los datos automáticamente para que los confirmes antes de guardar. Funciona con facturas electrónicas AFIP y la mayoría de formatos estándar.
+            <br><strong>Podés elegir varias de una vez</strong>: se leen todas y después elegís cuáles cargar.
+          </p>
+          <div class="form-group">
+            <label>Archivo(s) PDF de la/s factura/s *</label>
+            <input type="file" id="leerFactArchivo" accept=".pdf,image/*" multiple style="font-size:14px;">
+          </div>
+        </div>
+        <div id="lfLoteBarra" style="display:none; margin-top:12px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); font-size:13px;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <span id="lfLoteTxt" style="flex:1; min-width:180px;"></span>
+            <button type="button" class="btn btn-outline btn-sm" id="lfLoteBtnCancelar" onclick="lfLoteFrenar()" title="Dejar de leer las que faltan y quedarse con las que ya se leyeron">✕ Frenar</button>
+          </div>
+          <div style="height:6px; border-radius:4px; background:var(--border); margin-top:8px; overflow:hidden;">
+            <div id="lfLoteProgreso" style="height:100%; width:0%; background:var(--gold); transition:width .25s;"></div>
+          </div>
         </div>
         <div id="leerFactEstado" style="margin-top:12px;font-size:13px;color:var(--text-3);min-height:20px;"></div>
         <div class="modal-footer" style="margin-top:20px;">
           <button class="btn btn-outline" onclick="cerrarLeerFactPDF()">Cancelar</button>
-          <button class="btn btn-gold" onclick="procesarFacturaPDF()">📄 Extraer datos del PDF</button>
+          <button class="btn btn-gold" id="lfBtnExtraer" onclick="procesarFacturaPDF()">📄 Extraer datos del PDF</button>
         </div>
       </div>
 
