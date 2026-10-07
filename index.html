@@ -3541,7 +3541,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v532</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v533</div>
         </div>
     </nav>
 
@@ -16235,7 +16235,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v532';
+    var APP_VER = 'v533';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -28426,10 +28426,17 @@
         if (!a || !a.ivaActivo) return { activo:false, gravado:base, iva:0, noGravado:0, total:base, alicuota:0, pct:100 };
         var pct  = Math.max(0, Math.min(100, a.ivaPctGravado != null ? a.ivaPctGravado : 100));
         var alic = (a.ivaAlicuota != null ? a.ivaAlicuota : 21);
-        var gravado = base * pct / 100;
-        var noGravado = base - gravado;
-        var iva = gravado * alic / 100;
-        return { activo:true, gravado:gravado, iva:iva, noGravado:noGravado, total:base + iva, alicuota:alic, pct:pct };
+        // Devuelve los importes YA redondeados a centavos y cerrando entre sí: el no
+        // gravado sale por RESTA del canon y el IVA sale del gravado redondeado. Antes
+        // devolvía los valores exactos y cada pantalla redondeaba por su cuenta, así
+        // que la ficha del contrato y el modal de cobro mostraban centavos distintos
+        // para el mismo contrato — justamente lo que se reportó.
+        var gravado   = Math.round(base * pct) / 100;        // base * pct/100, a 2 decimales
+        var baseR     = Math.round(base * 100) / 100;
+        var noGravado = Math.round((baseR - gravado) * 100) / 100;
+        var iva       = Math.round(gravado * alic) / 100;    // gravado * alic/100, a 2 decimales
+        return { activo:true, gravado:gravado, iva:iva, noGravado:noGravado,
+                 total: Math.round((baseR + iva) * 100) / 100, alicuota:alic, pct:pct };
     }
 
     // ── Mover alquileres seleccionados del proyecto actual a otra empresa/proyecto ──
@@ -31524,20 +31531,29 @@
             if (total > 0) { sin = Math.max(0, total - con); pct = (con / total) * 100; }
             else { pct = (con + sin) ? (con / (con + sin)) * 100 : 100; }
             document.getElementById('alqIvaSinIva').value = _r2(sin);
-            document.getElementById('alqIvaPct').value = _r2(pct);
+            document.getElementById('alqIvaPct').value = _alqPctTexto(pct);
         } else if (src === 'sin') {
             if (total > 0) { con = Math.max(0, total - sin); pct = (con / total) * 100; }
             else { pct = (con + sin) ? (con / (con + sin)) * 100 : 100; }
             document.getElementById('alqIvaConIva').value = _r2(con);
-            document.getElementById('alqIvaPct').value = _r2(pct);
+            document.getElementById('alqIvaPct').value = _alqPctTexto(pct);
         } else { // 'pct' o refresco
             pct = Math.max(0, Math.min(100, pct));
             con = total * pct / 100; sin = Math.max(0, total - con);
             document.getElementById('alqIvaConIva').value = total ? _r2(con) : '';
             document.getElementById('alqIvaSinIva').value = total ? _r2(sin) : '';
-            document.getElementById('alqIvaPct').value = _r2(pct);
+            document.getElementById('alqIvaPct').value = _alqPctTexto(pct);
         }
         _alqIvaPreview();
+    }
+    // La proporción gravada se guarda con MÁS decimales de los que suele tener a la
+    // vista. No es cosmética: es un porcentaje que después se aplica al canon
+    // ACTUALIZADO, así que recortarlo a dos decimales corre el resultado. Con un canon
+    // de $5.000.000, medio centésimo de punto son $250 de diferencia entre lo que
+    // cargaste y lo que termina facturando. Se guardan 6 decimales (±0,003 sobre ese
+    // canon) y se le sacan los ceros de sobra para que «54,75» se siga viendo así.
+    function _alqPctTexto(p) {
+        return String(Math.round((p || 0) * 1e6) / 1e6);
     }
     function _alqIvaPreview() {
         var el = document.getElementById('alqIvaPreview'); if (!el) return;
@@ -33294,11 +33310,33 @@
         if (activo) {
             var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
             var brk = _alqCalcIVA(a, canon);
-            document.getElementById('cobroAlqGravado').value   = _r2(brk.gravado);
-            document.getElementById('cobroAlqIvaMonto').value  = _r2(brk.iva);
-            document.getElementById('cobroAlqNoGravado').value = _r2(brk.noGravado);
+            // Redondear los tres por separado deja al gravado + el no gravado sin dar
+            // el canon (hasta un centavo de diferencia). El no gravado se calcula por
+            // RESTA del canon redondeado, así la suma cierra siempre; y el IVA sale
+            // del gravado YA redondeado, que es el número que se ve en pantalla.
+            var _gr = _r2(brk.gravado);
+            document.getElementById('cobroAlqGravado').value   = _gr;
+            document.getElementById('cobroAlqIvaMonto').value  = _r2(_gr * (brk.alicuota || 0) / 100);
+            document.getElementById('cobroAlqNoGravado').value = _r2(_r2(canon) - _gr);
+            _cobroAlqIvaAMano = false;
         }
         _cobroAlqToggleDesglose();
+    }
+    // Si el IVA se tipeó a mano, no se vuelve a pisar: a veces hay que copiar el
+    // importe exacto de la factura y no es centavo por centavo el 21%. Mientras no
+    // se toque, sigue al neto gravado — que es lo que fallaba: se cambiaba el neto
+    // y el IVA quedaba con el valor del canon viejo, sin corresponderse con nada.
+    var _cobroAlqIvaAMano = false;
+    function _cobroAlqAlicuota() {
+        var a = alquileres[parseInt(document.getElementById('cobroAlqIdx').value)];
+        return (a && a.ivaAlicuota != null) ? a.ivaAlicuota : 21;
+    }
+    function _cobroAlqGravadoChange() {
+        if (!_cobroAlqIvaAMano) {
+            var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
+            document.getElementById('cobroAlqIvaMonto').value = _r2(g * _cobroAlqAlicuota() / 100);
+        }
+        _cobroAlqPreview();
     }
     function _cobroAlqDesgloseActivo() {
         return document.getElementById('cobroAlqDesglose').checked
@@ -33324,6 +33362,12 @@
     }
     // Destino (y letra) de cada parte del desglose. Fuera del desglose manda el
     // «Comprobante» de arriba, que es el único que hay.
+    window._cobroAlqCorregirIva = function() {
+        var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
+        document.getElementById('cobroAlqIvaMonto').value = _r2(g * _cobroAlqAlicuota() / 100);
+        _cobroAlqIvaAMano = false;
+        _cobroAlqPreview();
+    };
     function _cobroAlqMedioParte(parte) {
         var el = document.getElementById(parte === 'A' ? 'cobroAlqMedioA' : 'cobroAlqMedioB');
         var v = el ? el.value : '';
@@ -33341,11 +33385,20 @@
         var el = document.getElementById('cobroAlqDesglosePreview');
         var _dst = function(m){ return m === 'A' ? 'banco' : 'efectivo'; };
         var mA = _cobroAlqMedioParte('A'), mB = _cobroAlqMedioParte('B');
+        // El IVA que corresponde al neto que está escrito. Si no coincide se avisa:
+        // un IVA que no es el de su neto se arrastra al recibo y al libro de ventas.
+        var alic = _cobroAlqAlicuota();
+        var ivaOk = _r2(grav * alic / 100);
+        var _aviso = (grav > 0 && Math.abs(iva - ivaOk) > 0.011)
+            ? '<div style="margin-top:6px;color:var(--danger);font-weight:600;">⚠️ El IVA no da: ' + alic + '% de ' +
+              f(grav) + ' es ' + f(ivaOk) + ' (hay ' + f(Math.abs(iva - ivaOk)) + ' de diferencia). ' +
+              '<button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="_cobroAlqCorregirIva()">Corregir</button></div>'
+            : '';
         if (el) el.innerHTML = '<strong>Recibo ' + mA + '</strong> (gravada): ' + f(grav) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
             + ' → <strong>' + _dst(mA) + '</strong>'
             + ' &nbsp;·&nbsp; <strong>Recibo ' + mB + '</strong> (no gravada): ' + f(nog)
             + ' → <strong>' + _dst(mB) + '</strong>'
-            + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>';
+            + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>' + _aviso;
         var montoInput = document.getElementById('cobroAlqMonto');
         if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
     }
@@ -43395,8 +43448,8 @@
         <div id="cobroAlqDesglosePanel" style="display:none;background:var(--surface);border-radius:8px;padding:10px;margin-bottom:10px;">
           <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Parte A — gravada (con IVA)</div>
           <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
-            <div class="form-group" style="margin:0;"><label>Neto gravado</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
-            <div class="form-group" style="margin:0;"><label>IVA</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>Neto gravado</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqGravadoChange()"></div>
+            <div class="form-group" style="margin:0;"><label>IVA</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqIvaAMano=true;_cobroAlqPreview()"></div>
             <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
               <select id="cobroAlqMedioA" onchange="_cobroAlqPreview()">
                 <option value="A">A — Banco</option>
