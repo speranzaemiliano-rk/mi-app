@@ -90,9 +90,11 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 | Documentación (`documentacion/`) | Sistema RK — **el mismo que el sistema**, a propósito | `modo-prueba-bb8c2` | `documentacion/config.js` |
 | Parte de personal (`obra/`) | Control Personal Obra | `control-caja-965ad` | `obra/config.js` |
 | Final de obra (`final-obra/`) | Final de Obra | `dash-rk` ⚠️ | `final-obra/config.js` |
-| Caja diaria (**otro repo**) | Caja RK Final | `rk-cajadiaria-5-6` | fuera de acá |
+| Caja diaria (**otro repo**) | Sistema RK — **el mismo que el sistema** ⚠️ | `modo-prueba-bb8c2` | `app.html` (embebido) |
 
-Cada app tiene su propia base **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad. **La excepción es `documentacion/`**, que comparte el proyecto del sistema justamente porque su público es el mismo que ya ve la contabilidad (y así reusa cuentas, roles, sesión y el árbol de obras).
+⚠️ **La Caja NO tiene base propia.** Esta tabla decía `rk-cajadiaria-5-6` / «Caja RK Final» y era **falso**: `caja-diaria/app.html` tiene un solo `initializeApp`, contra `modo-prueba-bb8c2` — el proyecto del sistema (`caja-diaria/CLAUDE.md:133`: «una sola cuenta para las dos apps… el MISMO Firebase»). Sus datos viven en `cajaDiaria/<uid>` y los gobiernan **las reglas de este repo** (`caja-diaria/CLAUDE.md:134`); el nombre `rk-cajadiaria-5-6` no aparece en ningún archivo de la Caja. Es decir: la Caja comparte cuentas, roles y base con el sistema, igual que `documentacion/`. Lo único que las separa es el repo y la URL.
+
+`obra/` y `final-obra/` sí tienen base propia **a propósito**: las cuentas y las reglas de una no pueden alcanzar los datos de otra. En el proyecto del sistema, `empresas` se lee con cualquier rol —`lector` incluido—, así que darle cuenta ahí a un capataz o a un contratista le abriría toda la contabilidad. **La excepción es `documentacion/`**, que comparte el proyecto del sistema justamente porque su público es el mismo que ya ve la contabilidad (y así reusa cuentas, roles, sesión y el árbol de obras).
 
 ## Parte de obra (`obra/`) — aparte de la app
 
