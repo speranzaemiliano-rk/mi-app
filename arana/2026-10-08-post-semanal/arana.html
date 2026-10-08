@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>La Araña · visor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap">
+<style>
+/* Visor de La Araña: un lienzo fijo de 1080×1350 (4:5, formato de feed) escalado a la ventana.
+   Todo el dibujo sale de dibujar(t): el mismo t da siempre el mismo cuadro, así se puede grabar cuadro por cuadro. */
+html,body{margin:0;height:100%;background:#050608;overflow:hidden;color:#e8eaf0;font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
+#escenario{position:absolute;left:50%;top:50%;width:1080px;height:1350px;transform-origin:0 0}
+canvas{display:block;width:1080px;height:1350px}
+#ayuda{position:fixed;right:12px;bottom:10px;font-size:11px;color:#6b7080;opacity:.8;user-select:none}
+body.captura #ayuda{display:none}
+</style>
+</head>
+<body>
+<div id="escenario"><canvas id="lienzo"></canvas></div>
+<div id="ayuda">espacio pausa · R reinicia · F final</div>
+<script>
+const DATOS = {"titulo": "post de esta semana", "proyecto": "mi-app", "fecha": "2026-10-08", "puntaje": {"inicial": 55, "final": 63}, "fuentes": ["MARCA.md", "registro-de-marca/MESS-registro-marca-INPI.md", "CLAUDE.md", "README.md"], "secciones": [{"r": "rol", "fragmentos": [], "aportes": []}, {"r": "resultado", "fragmentos": [{"t": "Armame", "k": "neutro"}, {"t": "un post", "k": "spec"}, {"t": "para esta semana", "k": "vago", "pregunta": "¿Qué día sale y en qué red?"}], "aportes": []}, {"r": "referencias", "fragmentos": [{"t": "sobre lo que vendo,", "k": "vago", "fuente": "MARCA.md:7", "dice": "el producto es Mess, software de gestión"}], "aportes": [{"fuente": "registro-de-marca/MESS-registro-marca-INPI.md:68", "dice": "SaaS de gestión contable y facturación: corazón del negocio"}]}, {"r": "responsables", "fragmentos": [], "aportes": []}, {"r": "reglas", "fragmentos": [{"t": "con el tono de siempre,", "k": "vago", "pregunta": "¿Cuál es el tono de siempre?"}], "aportes": [{"fuente": "MARCA.md:30", "dice": "color principal violeta #7C5CFF"}, {"fuente": "MARCA.md:16", "dice": "logo transparente assets/mess-logo.svg"}]}, {"r": "revision", "fragmentos": [{"t": "y", "k": "neutro"}, {"t": "pasámelo antes de publicar.", "k": "aprobacion"}], "aportes": []}, {"r": "arranque", "fragmentos": [], "aportes": []}]};
+
+/* ---------- constantes ---------- */
+const W = 1080, H = 1350;
+const R_ORDEN = ["rol","resultado","referencias","responsables","reglas","revision","arranque"];
+const R_INFO = {
+  rol:          {nombre:"ROL", ab:"ROL",          sub:"quién responde y para quién trabaja", color:"#E9ECF2"},
+  resultado:    {nombre:"RESULTADO", ab:"RES",    sub:"qué tiene que existir al final",      color:"#3FC8E4"},
+  referencias:  {nombre:"REFERENCIAS", ab:"REF",  sub:"sobre qué material se apoya",         color:"#F0457E"},
+  responsables: {nombre:"RESPONSABLES", ab:"RSP", sub:"quién hace, quién decide",            color:"#F4B740"},
+  reglas:       {nombre:"REGLAS", ab:"REG",       sub:"qué no se hace y qué tono va",        color:"#4FD6A8"},
+  revision:     {nombre:"REVISIÓN", ab:"REV",     sub:"cómo se sabe que está bien",          color:"#9A7BFF"},
+  arranque:     {nombre:"ARRANQUE", ab:"ARR",     sub:"el primer paso, la entrega mínima",   color:"#FF8A3D"}
+};
+const TIPO = {neutro:"neutro", afirmacion:"afirmación", responsable:"responsable", archivo:"archivo",
+              aprobacion:"aprobación", spec:"spec", vago:"vago"};
+const VERDE = "#5BE3A1", ROSA = "#FF3D7F", GRIS = "#5c6170", TINTA = "#e8eaf0", FONDO = "#050608";
+const F = '"JetBrains Mono", ui-monospace, Consolas, monospace';
+
+/* ---------- datos de ejemplo si el visor se abre vacío ---------- */
+const EJEMPLO = {
+  titulo:"ejemplo", proyecto:"tu-proyecto", fecha:"", puntaje:{inicial:31, final:78},
+  fuentes:["CLAUDE.md","notas/oferta.md","notas/voz.md"],
+  secciones:[
+    {r:"rol", fragmentos:[{t:"Sos mi asistente", k:"responsable", fuente:"CLAUDE.md:3", dice:"asistente de contenido"}], aportes:[]},
+    {r:"resultado", fragmentos:[{t:"armame", k:"neutro"},{t:"un post", k:"spec"},{t:"para mañana", k:"vago", fuente:"notas/plan.md:14", dice:"martes: post de caso"}], aportes:[]},
+    {r:"referencias", fragmentos:[{t:"con el caso de siempre", k:"vago", fuente:"notas/oferta.md:22", dice:"caso de cliente con cifra"}], aportes:[]},
+    {r:"responsables", fragmentos:[], aportes:[{fuente:"CLAUDE.md:9", dice:"aprueba el dueño"}]},
+    {r:"reglas", fragmentos:[{t:"que suene como yo", k:"vago", fuente:"notas/voz.md:1", dice:"corto, directo, sin jerga"}], aportes:[]},
+    {r:"revision", fragmentos:[{t:"pasámelo antes", k:"aprobacion"}], aportes:[]},
+    {r:"arranque", fragmentos:[{t:"y la keyword", k:"vago", pregunta:"¿Qué keyword va?"}], aportes:[]}
+  ]
+};
+const D = normalizar(DATOS || EJEMPLO);
+
+function normalizar(d){
+  const porR = {};
+  (d.secciones||[]).forEach(s => { porR[s.r] = s; });
+  d.secciones = R_ORDEN.map(r => ({r, fragmentos:(porR[r]&&porR[r].fragmentos)||[], aportes:(porR[r]&&porR[r].aportes)||[]}));
+  d.puntaje = d.puntaje || {inicial:0, final:0};
+  const fu = new Set(d.fuentes||[]);
+  d.secciones.forEach(s => { s.fragmentos.forEach(f => { if (f.fuente) fu.add(f.fuente.split(":")[0]); });
+                             s.aportes.forEach(a => { if (a.fuente) fu.add(a.fuente.split(":")[0]); }); });
+  d.fuentes = [...fu].slice(0, 8);
+  return d;
+}
+const archivoDe = f => (f||"").split(":")[0];
+const palabrasDe = t => (t||"").trim().split(/\s+/).filter(Boolean);
+
+/* ---------- azar con semilla (para que cada t dé siempre el mismo cuadro) ---------- */
+function mulberry(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function gauss(rnd){ let u=0,v=0; while(!u) u=rnd(); while(!v) v=rnd(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+/* ---------- geometría ---------- */
+const AREA = {x:0, y:150, w:W, h:880};           // donde viven los cúmulos
+const CENTRO = {x:W/2, y:AREA.y+AREA.h/2+6};
+const ANILLO = {rx:372, ry:322};
+const CUMULOS = R_ORDEN.map((r,i) => {
+  const a = -Math.PI/2 + i*2*Math.PI/7;
+  return {r, x:CENTRO.x + ANILLO.rx*Math.cos(a), y:CENTRO.y + ANILLO.ry*Math.sin(a), rad:118};
+});
+// partículas de cada cúmulo y algunas aristas cortas
+CUMULOS.forEach((c,i) => {
+  const rnd = mulberry(1000+i*77);
+  c.pts = [];
+  for (let k=0;k<340;k++){
+    const rr = Math.min(1.25, Math.abs(gauss(rnd))*0.48);
+    const ang = rnd()*Math.PI*2;
+    c.pts.push({x:c.x+Math.cos(ang)*rr*c.rad*1.15, y:c.y+Math.sin(ang)*rr*c.rad*0.95, s:rnd(), f:rnd()*6.28});
+  }
+  c.ar = [];
+  for (let k=0;k<c.pts.length;k+=2){
+    const p = c.pts[k]; let best=-1, bd=1e9;
+    for (let j=0;j<c.pts.length;j+=3){ if (j===k) continue; const q=c.pts[j]; const dd=(p.x-q.x)**2+(p.y-q.y)**2; if (dd<bd && dd>16){bd=dd;best=j;} }
+    if (best>=0 && bd<900) c.ar.push([k,best]);
+  }
+});
+// polvo de fondo
+const POLVO = (() => { const rnd=mulberry(7); const a=[]; for(let i=0;i<900;i++) a.push({x:rnd()*W, y:AREA.y+rnd()*AREA.h, s:rnd(), f:rnd()*6.28}); return a; })();
+// nodos del cerebro en el centro
+const NODOS = D.fuentes.map((f,i,arr) => {
+  const n = arr.length, a = -Math.PI/2 + i*2*Math.PI/Math.max(n,1);
+  const rx = n>1 ? 96 : 0, ry = n>1 ? 70 : 0;
+  return {f, x:CENTRO.x + rx*Math.cos(a), y:CENTRO.y + 8 + ry*Math.sin(a)};
+});
+const nodoDe = f => NODOS.find(n => n.f === archivoDe(f)) || NODOS[0] || {x:CENTRO.x, y:CENTRO.y};
+
+/* ---------- línea de tiempo ---------- */
+const INTRO = 1.4, OUTRO = 4.2;
+const EV = [];          // eventos: {t, tipo:'leer'|'enlazar'|'marcar'|'aporte', ...}
+const ETIQ = [];        // etiquetas de fragmentos no neutros
+const TRAMOS = [];      // por sección: {t0, t1}
+let T = INTRO, totalPal = 0;
+D.secciones.forEach((s,si) => {
+  const c = CUMULOS[si];
+  const pal = s.fragmentos.reduce((n,f) => n + palabrasDe(f.t).length, 0);
+  const vagos = s.fragmentos.filter(f => f.k==="vago").length;
+  const dur = Math.min(5.2, Math.max(1.5, 0.7 + pal*0.11 + vagos*0.45 + s.aportes.length*0.5));
+  const t0 = T, viaje = 0.55, lect = dur - viaje - 0.25 - s.aportes.length*0.42;
+  TRAMOS.push({t0, t1:t0+dur});
+  let tt = t0 + viaje;
+  const paso = pal ? Math.max(0.05, lect/pal) : 0;
+  const rnd = mulberry(500+si*31);
+  s.fragmentos.forEach((f,fi) => {
+    const ws = palabrasDe(f.t);
+    ws.forEach((w,wi) => { EV.push({t:tt, tipo:"leer", w, si, k:f.k}); tt += paso; totalPal++; });
+    if (f.k !== "neutro"){
+      // lugar de la etiqueta: el candidato más lejos de las demás de este cúmulo, del lado de afuera del anillo
+      let mejor=null, md=-1;
+      const out = Math.atan2(c.y-CENTRO.y, c.x-CENTRO.x);
+      for (let k=0;k<14;k++){
+        const a = out + (rnd()-0.5)*Math.PI*1.5, d = 40 + rnd()*95;
+        const x = c.x + Math.cos(a)*d*1.25, y = c.y + Math.sin(a)*d*0.95;
+        let m = ETIQ.filter(e=>e.si===si).reduce((mm,e)=>Math.min(mm, Math.hypot((e.x-x)*0.55, (e.y-y)*1.6)), 1e9);
+        if (CUMULOS.some(cc => Math.abs(cc.x-x) < 150 && (cc.y-cc.rad*0.95-6) - y < 34 && y - (cc.y-cc.rad*0.95-6) < 36 + (D.secciones[CUMULOS.indexOf(cc)].aportes.length*22))) m -= 1000;
+        if (m>md){md=m; mejor={x,y};}
+      }
+      const et = {si, f, x:Math.max(70,Math.min(W-70,mejor.x)), y:Math.max(AREA.y+40,Math.min(AREA.y+AREA.h-14,mejor.y)), t:tt};
+      ETIQ.push(et);
+      if (f.k==="vago" && f.fuente){ EV.push({t:tt+0.22, tipo:"enlazar", si, f, et}); et.tl = tt+0.22; }
+      else if (f.pregunta){ EV.push({t:tt+0.22, tipo:"marcar", si, f, et}); et.tf = tt+0.22; }
+      else if (f.fuente){ et.tl = tt+0.22; EV.push({t:tt+0.22, tipo:"enlazar", si, f, et}); }
+      tt += 0.12;
+    }
+  });
+  s.aportes.forEach((a,ai) => { tt += 0.42; a._i = ai; EV.push({t:tt, tipo:"aporte", si, a}); });
+  T = t0 + dur;
+});
+const T_LISTO = T, DURACION = T + OUTRO;
+const PREGUNTAS = EV.filter(e => e.tipo==="marcar");
+const TOT = {
+  pal: totalPal,
+  enl: EV.filter(e => e.tipo==="enlazar" || e.tipo==="aporte").length,
+  preg: PREGUNTAS.length
+};
+EV.sort((a,b) => a.t-b.t);
+
+/* ---------- utilidades de dibujo ---------- */
+const lz = document.getElementById("lienzo");
+let ESC = 1;
+const ctx = lz.getContext("2d");
+function prepararLienzo(){
+  const q = new URLSearchParams(location.search);
+  ESC = parseFloat(q.get("escala")) || Math.min(2, window.devicePixelRatio || 1);
+  lz.width = W*ESC; lz.height = H*ESC;
+  ctx.setTransform(ESC,0,0,ESC,0,0);
+}
+const ease = x => x<0?0:x>1?1:x<.5?2*x*x:1-Math.pow(-2*x+2,2)/2;
+const clamp01 = x => x<0?0:x>1?1:x;
+function alfa(hex, a){ const n=parseInt(hex.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; }
+function texto(s, x, y, {tam=12, peso=400, color=TINTA, al="left", base="alphabetic", esp=0}={}){
+  ctx.font = `${peso} ${tam}px ${F}`; ctx.fillStyle = color; ctx.textAlign = al; ctx.textBaseline = base;
+  if (esp && ctx.letterSpacing !== undefined) ctx.letterSpacing = esp+"px";
+  ctx.fillText(s, x, y);
+  if (ctx.letterSpacing !== undefined) ctx.letterSpacing = "0px";
+}
+function corta(s, n){ return s.length>n ? s.slice(0,n-1)+"…" : s; }
+function caja(x,y,w,h,{fondo="rgba(10,12,16,.92)", borde="#333", gros=1}={}){
+  ctx.fillStyle=fondo; ctx.fillRect(x,y,w,h); ctx.strokeStyle=borde; ctx.lineWidth=gros; ctx.strokeRect(x+.5,y+.5,w-1,h-1);
+}
+
+/* ---------- estado en el instante t ---------- */
+function estado(t){
+  let si = -1;
+  for (let i=0;i<TRAMOS.length;i++) if (t>=TRAMOS[i].t0) si=i;
+  const listo = t >= T_LISTO;
+  const hechos = EV.filter(e => e.t <= t);
+  const leidas = hechos.filter(e => e.tipo==="leer").length;
+  const enl = hechos.filter(e => e.tipo==="enlazar" || e.tipo==="aporte").length;
+  const preg = hechos.filter(e => e.tipo==="marcar").length;
+  const pi = D.puntaje.inicial, pf = D.puntaje.final;
+  const subida = TOT.enl ? enl/TOT.enl : (listo?1:0);
+  const arranqueP = clamp01((t-0.2)/INTRO);
+  const puntaje = Math.round(pi*arranqueP + (pf-pi)*subida*(listo?1:1));
+  const porSec = D.secciones.map((s,i) => {
+    const tot = s.fragmentos.reduce((n,f)=>n+palabrasDe(f.t).length,0);
+    const lei = hechos.filter(e=>e.tipo==="leer" && e.si===i).length;
+    return {tot, lei};
+  });
+  return {t, si, listo, hechos, leidas, enl, preg, puntaje, porSec};
+}
+
+function posArana(t, E){
+  if (E.listo){ const k = ease(clamp01((t-T_LISTO)/1.1)); const c=CUMULOS[6]; return {x:c.x+(CENTRO.x-c.x)*k, y:c.y+(CENTRO.y-c.y)*k}; }
+  if (E.si < 0){ return {x:CENTRO.x, y:CENTRO.y}; }
+  const tr = TRAMOS[E.si], c = CUMULOS[E.si];
+  const desde = E.si===0 ? CENTRO : CUMULOS[E.si-1];
+  const k = ease(clamp01((t-tr.t0)/0.55));
+  const bob = Math.sin(t*3.1)*4;
+  return {x:desde.x+(c.x-desde.x)*k + Math.cos(t*1.7)*5, y:desde.y+(c.y-desde.y)*k + bob};
+}
+
+/* ---------- dibujo ---------- */
+function dibujar(t){
+  const E = estado(t);
+  ctx.fillStyle = FONDO; ctx.fillRect(0,0,W,H);
+  dibujarPolvo(t);
+  dibujarCumulos(t,E);
+  dibujarCerebro(t,E);
+  dibujarEnlaces(t,E);
+  dibujarEtiquetas(t,E);
+  dibujarArana(t,E);
+  dibujarCabecera(t,E);
+  dibujarPaneles(t,E);
+}
+
+function dibujarPolvo(t){
+  for (const p of POLVO){ const a = 0.05 + 0.08*(0.5+0.5*Math.sin(t*1.3+p.f)); ctx.fillStyle=`rgba(200,205,220,${a*p.s})`; ctx.fillRect(p.x,p.y,1.2,1.2); }
+}
+
+function dibujarCumulos(t,E){
+  CUMULOS.forEach((c,i) => {
+    const info = R_INFO[c.r], s = D.secciones[i], ps = E.porSec[i];
+    const activa = E.si===i && !E.listo;
+    const leida = E.listo || E.si>i || (E.si===i && ps.lei>=ps.tot && ps.tot>0);
+    const vacia = s.fragmentos.length===0 && s.aportes.length===0;
+    const prog = ps.tot ? ps.lei/ps.tot : (E.si>=i ? 1 : 0);
+    const col = info.color;
+    const base = vacia ? 0.10 : activa ? 0.55 : leida ? 0.34 : 0.12;
+    // aristas
+    ctx.lineWidth = 0.6;
+    ctx.strokeStyle = alfa(vacia ? GRIS : (activa||leida ? col : GRIS), activa ? 0.22 : leida ? 0.12 : 0.05);
+    ctx.beginPath();
+    for (const [a,b] of c.ar){ const p=c.pts[a], q=c.pts[b]; ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); }
+    ctx.stroke();
+    // puntos
+    for (let k=0;k<c.pts.length;k++){
+      const p = c.pts[k];
+      const encendido = (activa||leida) && !vacia && (k/c.pts.length) <= Math.max(prog, leida?1:0);
+      const tw = 0.6 + 0.4*Math.sin(t*2.2 + p.f);
+      const a = (encendido ? base+0.35*p.s : 0.10+0.12*p.s) * tw;
+      ctx.fillStyle = encendido ? alfa(col, a) : `rgba(170,175,190,${a*0.7})`;
+      const sz = encendido ? 1.6+p.s*1.3 : 1.1+p.s;
+      ctx.fillRect(p.x-sz/2, p.y-sz/2, sz, sz);
+    }
+    // rótulo del cúmulo
+    const estadoTxt = vacia ? "vacía" : activa ? "leyendo" : leida ? "leída" : "en cola";
+    const ty = c.y - c.rad*0.95 - 6;
+    texto(R_INFO[c.r].nombre.toLowerCase(), c.x, ty, {tam: activa?22:17, peso: activa?700:500, color: activa||leida ? (vacia?GRIS:col) : "#8a8fa0", al:"center"});
+    texto(`${ps.lei}/${ps.tot} palabras · ${estadoTxt}${s.aportes.length && (leida||activa) ? " · +"+s.aportes.length+" del cerebro" : ""}`,
+          c.x, ty+16, {tam:11, color:"#6f7485", al:"center"});
+  });
+}
+
+function dibujarCerebro(t,E){
+  const k = clamp01((t-0.1)/0.9);
+  // halo
+  const g = ctx.createRadialGradient(CENTRO.x,CENTRO.y,10,CENTRO.x,CENTRO.y,150);
+  g.addColorStop(0, `rgba(91,227,161,${0.10*k})`); g.addColorStop(1, "rgba(91,227,161,0)");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CENTRO.x,CENTRO.y,150,0,Math.PI*2); ctx.fill();
+  texto("CEREBRO", CENTRO.x, CENTRO.y-98, {tam:11, peso:700, color:alfa(VERDE,0.75*k), al:"center", esp:3});
+  ctx.strokeStyle = alfa(VERDE, 0.18*k); ctx.lineWidth=1;
+  NODOS.forEach((n,i) => { NODOS.forEach((m,j)=>{ if (j>i && (j-i===1 || (i===0&&j===NODOS.length-1))){ ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(m.x,m.y); ctx.stroke(); } }); });
+  NODOS.forEach(n => {
+    const usos = E.hechos.filter(e => (e.tipo==="enlazar" && archivoDe(e.f.fuente)===n.f) || (e.tipo==="aporte" && archivoDe(e.a.fuente)===n.f)).length;
+    const pulso = usos ? 0.5+0.5*Math.sin(t*4) : 0;
+    ctx.fillStyle = usos ? alfa(VERDE, 0.85) : alfa("#9aa0b0", 0.5*k);
+    ctx.beginPath(); ctx.arc(n.x, n.y, 3.2 + pulso*1.2 + Math.min(usos,6)*0.5, 0, Math.PI*2); ctx.fill();
+    const nombre = corta(n.f.split("/").pop(), 18);
+    texto(nombre + (usos ? " ·"+usos : ""), n.x, n.y+15, {tam:10, color: usos ? alfa(VERDE,0.95) : alfa("#9aa0b0",0.7*k), al:"center"});
+  });
+}
+
+function dibujarEnlaces(t,E){
+  for (const e of E.hechos){
+    if (e.tipo!=="enlazar" && e.tipo!=="aporte") continue;
+    const n = nodoDe(e.tipo==="enlazar" ? e.f.fuente : e.a.fuente);
+    const cc = CUMULOS[e.si];
+    const desde = e.tipo==="enlazar" ? {x:e.et.x, y:e.et.y} : {x:cc.x, y:cc.y - cc.rad*0.95 + 34 + (e.a._i||0)*22};
+    const k = ease(clamp01((t-e.t)/0.45));
+    const x = n.x + (desde.x-n.x)*k, y = n.y + (desde.y-n.y)*k;
+    const fresco = t-e.t < 1.2;
+    ctx.setLineDash([3,4]); ctx.lineDashOffset = -t*30;
+    ctx.strokeStyle = alfa(e.tipo==="aporte" ? R_INFO[R_ORDEN[e.si]].color : VERDE, fresco ? 0.85 : 0.28);
+    ctx.lineWidth = fresco ? 1.4 : 0.9;
+    ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(x,y); ctx.stroke(); ctx.setLineDash([]);
+    if (e.tipo==="aporte" && k>=1){
+      const c = CUMULOS[e.si];
+      const ax = c.x, ay = c.y - c.rad*0.95 + 34 + (e.a._i||0)*22;
+      const txt = "+ " + corta(e.a.dice||"aporte", 30);
+      ctx.font = `400 10px ${F}`; const w = ctx.measureText(txt).width + 12;
+      caja(ax-w/2, ay-9, w, 18, {borde: alfa(R_INFO[R_ORDEN[e.si]].color, fresco?0.9:0.35)});
+      texto(txt, ax, ay+4, {tam:10, color: fresco ? TINTA : "#8a8fa0", al:"center"});
+    }
+  }
+}
+
+function dibujarEtiquetas(t,E){
+  for (const et of ETIQ){
+    if (t < et.t) continue;
+    const info = R_INFO[R_ORDEN[et.si]], f = et.f;
+    const fresco = t - et.t < 1.6 && !E.listo;
+    const enl = et.tl!==undefined && t>=et.tl;
+    const flag = et.tf!==undefined && t>=et.tf;
+    let txt = corta(f.t, 24) + " · " + (TIPO[f.k]||f.k);
+    let borde = alfa(info.color, fresco?0.95:0.45), fondo = "rgba(8,10,14,.9)", col = fresco ? TINTA : "#9aa0b0";
+    if (enl && f.fuente){ txt = corta(f.t, 20) + " → " + corta(f.fuente.split("/").pop(), 26); borde = alfa(VERDE, fresco?1:0.55); col = fresco ? "#d9ffe9" : "#8fcfae"; }
+    if (flag){ txt = "⚑ " + corta(f.t, 22) + " · preguntar"; fondo = alfa(ROSA, fresco?0.85:0.42); borde = alfa(ROSA, 1); col = "#fff"; }
+    const ap = clamp01((t-et.t)/0.18);
+    ctx.globalAlpha = ap;
+    ctx.font = `500 11px ${F}`; const w = ctx.measureText(txt).width + 12;
+    let x = Math.max(6, Math.min(W-6-w, et.x - w/2));
+    caja(x, et.y-10, w, 20, {fondo, borde});
+    texto(txt, x+6, et.y+4, {tam:11, peso:500, color:col});
+    ctx.globalAlpha = 1;
+  }
+}
+
+function dibujarArana(t,E){
+  const p = posArana(t,E);
+  const activa = E.si>=0 && !E.listo ? CUMULOS[E.si] : null;
+  // tentáculos: hacia las últimas etiquetas de la sección activa
+  if (activa){
+    const ult = ETIQ.filter(e => e.si===E.si && t>=e.t).slice(-5);
+    ult.forEach((e,i) => {
+      ctx.setLineDash([2,4]); ctx.lineDashOffset = -t*24;
+      ctx.strokeStyle = `rgba(232,234,240,${0.55 - i*0.06})`; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.quadraticCurveTo((p.x+e.x)/2, (p.y+e.y)/2-30, e.x, e.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(e.x,e.y,2,0,Math.PI*2); ctx.fill();
+    });
+  }
+  // patas: 8, con rodilla, apoyadas en puntos del cúmulo cercano
+  const c = activa || CUMULOS.reduce((m,cc)=> Math.hypot(cc.x-p.x,cc.y-p.y) < Math.hypot(m.x-p.x,m.y-p.y) ? cc : m, CUMULOS[0]);
+  const ciclo = Math.floor(t*2.2);
+  ctx.strokeStyle = "rgba(120,240,215,.85)"; ctx.lineWidth = 1.3;
+  for (let i=0;i<8;i++){
+    const a = (i/8)*Math.PI*2 + 0.2;
+    const largo = E.listo || E.si<0 ? 70 : 92;
+    const rnd = mulberry(ciclo*13 + i*7 + (E.si+1)*101);
+    const fx = p.x + Math.cos(a)*largo*(0.8+rnd()*0.45), fy = p.y + Math.sin(a)*largo*(0.75+rnd()*0.4);
+    const kx = p.x + Math.cos(a)*largo*0.45 + Math.cos(a+1.2)*14, ky = p.y + Math.sin(a)*largo*0.45 - 16;
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(kx,ky); ctx.lineTo(fx,fy); ctx.stroke();
+    ctx.fillStyle = "#bff7ea"; ctx.fillRect(fx-1.5, fy-1.5, 3, 3);
+  }
+  // cuerpo con malla
+  const rx = 30, ry = 23;
+  ctx.fillStyle = "rgba(8,30,30,.85)"; ctx.beginPath(); ctx.ellipse(p.x,p.y,rx,ry,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = "rgba(90,230,205,.9)"; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.lineWidth = 0.6; ctx.strokeStyle = "rgba(90,230,205,.45)";
+  for (let k=1;k<5;k++){ ctx.beginPath(); ctx.ellipse(p.x,p.y,rx*k/5,ry,0,0,Math.PI*2); ctx.stroke(); }
+  for (let k=1;k<4;k++){ ctx.beginPath(); ctx.ellipse(p.x,p.y,rx,ry*k/4,0,0,Math.PI*2); ctx.stroke(); }
+  const lat = Math.sin(t*6)*0.5+0.5;
+  ctx.fillStyle = ROSA; ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.PI/4); ctx.fillRect(-5-lat,-5-lat,10+2*lat,10+2*lat); ctx.restore();
+}
+
+function dibujarCabecera(t,E){
+  // barra superior
+  ctx.fillStyle = "rgba(5,6,8,.9)"; ctx.fillRect(0,0,W,30);
+  texto("LA ARAÑA", 12, 20, {tam:12, peso:800, color:"#fff", esp:1});
+  const st = [["PATAS","8"],["PALABRAS",`${E.leidas}/${TOT.pal}`],["ENLACES",String(E.enl)],["PREGUNTAS",String(E.preg)],["ADIVINADAS","0"],["T",t.toFixed(2)]];
+  let x = 110;
+  st.forEach(([k,v],i) => {
+    texto(k, x, 20, {tam:10, color:"#6f7485"}); ctx.font=`400 10px ${F}`; x += ctx.measureText(k).width + 6;
+    const col = k==="ENLACES" ? VERDE : k==="PREGUNTAS" ? ROSA : k==="ADIVINADAS" ? VERDE : "#fff";
+    texto(v, x, 20, {tam:11, peso:700, color:col}); ctx.font=`700 11px ${F}`; x += ctx.measureText(v).width + 18;
+  });
+  texto(corta(D.proyecto||"", 26), W-12, 20, {tam:11, peso:500, color:ROSA, al:"right"});
+  // pestañas
+  const tabs = [...R_ORDEN, "listo"], tw = (W-24-7*6)/8;
+  tabs.forEach((r,i) => {
+    const x0 = 12 + i*(tw+6), act = E.listo ? r==="listo" : E.si===i;
+    const col = r==="listo" ? "#ffffff" : R_INFO[r].color;
+    ctx.fillStyle = act ? col : "rgba(255,255,255,.04)"; ctx.fillRect(x0, 38, tw, 20);
+    texto(r==="listo" ? "listo" : R_INFO[r].nombre.toLowerCase(), x0+tw/2, 52, {tam:10.5, peso: act?700:400, color: act ? "#07080b" : "#6f7485", al:"center"});
+  });
+  // título de sección
+  let num, nom, sub, col;
+  if (E.listo){ num="08"; nom="LISTO"; col="#ffffff"; sub=`${TOT.pal} palabras leídas · ${TOT.enl} enlazadas · ${TOT.preg} para preguntar · 0 adivinadas`; }
+  else if (E.si<0){ num="00"; nom="LEYENDO COMO UN EXTRAÑO"; col="#ffffff"; sub = D.titulo ? `«${corta(D.titulo,60)}»` : "el prompt, sin contexto"; }
+  else { const r=R_ORDEN[E.si]; num=String(E.si+1).padStart(2,"0"); nom=R_INFO[r].nombre; col=R_INFO[r].color; sub=R_INFO[r].sub; }
+  ctx.fillStyle = col; ctx.fillRect(12, 72, 4, 52);
+  texto(`${num} ${nom}`, 26, 100, {tam:30, peso:800, color:"#fff"});
+  texto(sub, 27, 120, {tam:13, color: col});
+}
+
+function panel(x,y,w,h,titulo,der,colDer){
+  caja(x,y,w,h,{fondo:"rgba(10,11,15,.96)", borde:"#22252d"});
+  texto(titulo, x+10, y+20, {tam:11, peso:700, color:"#fff", esp:.5});
+  if (der) texto(der, x+w-10, y+20, {tam:11, peso:500, color:colDer||VERDE, al:"right"});
+}
+
+function dibujarPaneles(t,E){
+  const y0 = 1040, h = 300, gap = 8, pw = (W-24-gap*5)/6;
+  const X = i => 12 + i*(pw+gap);
+  ctx.fillStyle = FONDO; ctx.fillRect(0, y0-8, W, H-y0+8);
+
+  // 1 · registro
+  const pps = (() => { const v = E.hechos.filter(e => e.tipo==="leer" && e.t > t-2).length; return Math.round(v/2*60); })();
+  panel(X(0), y0, pw, h, "REGISTRO", `${pps} p/min`);
+  const ult = E.hechos.slice(-15);
+  ult.forEach((e,i) => {
+    const yy = y0+42+i*16.5;
+    const m = Math.floor(e.t/60), s = (e.t%60).toFixed(1).padStart(4,"0");
+    texto(`${String(m).padStart(2,"0")}:${s}`, X(0)+10, yy, {tam:9.5, color:"#4b505e"});
+    const [verbo, col, obj] = e.tipo==="leer" ? ["leer", "#8a8fa0", e.w]
+      : e.tipo==="enlazar" ? ["enlazar", VERDE, e.f.t]
+      : e.tipo==="marcar" ? ["marcar", ROSA, e.f.t]
+      : ["aporte", R_INFO[R_ORDEN[e.si]].color, archivoDe(e.a.fuente).split("/").pop()];
+    texto(verbo, X(0)+58, yy, {tam:10, peso:500, color:col});
+    texto(corta(obj, 9), X(0)+108, yy, {tam:10, color:"#c9ccd6"});
+  });
+
+  // 2 · secciones
+  panel(X(1), y0, pw, h, "SECCIONES", "7", "#fff");
+  D.secciones.forEach((s,i) => {
+    const yy = y0+44+i*35, ps = E.porSec[i], col = R_INFO[s.r].color;
+    const act = E.si===i && !E.listo;
+    texto(R_INFO[s.r].nombre.toLowerCase(), X(1)+10, yy, {tam:10.5, peso:act?700:400, color: act ? col : "#c9ccd6"});
+    texto(`${ps.lei}/${ps.tot}`, X(1)+pw-10, yy, {tam:10, color:"#8a8fa0", al:"right"});
+    ctx.fillStyle = "#1b1e25"; ctx.fillRect(X(1)+10, yy+7, pw-20, 4);
+    const pr = ps.tot ? ps.lei/ps.tot : (E.si>i||E.listo ? 1 : 0);
+    ctx.fillStyle = (s.fragmentos.length||s.aportes.length) ? col : GRIS; ctx.fillRect(X(1)+10, yy+7, (pw-20)*pr, 4);
+  });
+
+  // 3 · cobertura (radar)
+  panel(X(2), y0, pw, h, "COBERTURA", "en vivo");
+  const cx = X(2)+pw/2, cy = y0+128, rr = 58;
+  ctx.strokeStyle = "#262a33"; ctx.lineWidth = 1;
+  for (let k=1;k<=3;k++){ ctx.beginPath(); R_ORDEN.forEach((r,i)=>{ const a=-Math.PI/2+i*2*Math.PI/7; const px=cx+Math.cos(a)*rr*k/3, py=cy+Math.sin(a)*rr*k/3; i?ctx.lineTo(px,py):ctx.moveTo(px,py); }); ctx.closePath(); ctx.stroke(); }
+  ctx.beginPath();
+  R_ORDEN.forEach((r,i) => {
+    const s = D.secciones[i], ps = E.porSec[i];
+    const cubierta = s.fragmentos.some(f=>f.k!=="neutro") || s.aportes.length;
+    const pr = ps.tot ? ps.lei/ps.tot : (E.si>i||E.listo?1:0);
+    const apo = E.hechos.filter(e=>e.tipo==="aporte" && e.si===i).length;
+    const v = cubierta ? Math.max(0.08, Math.min(1, pr*(s.fragmentos.some(f=>f.k!=="neutro")?1:0) + (apo?1:0))) : 0.06;
+    const a=-Math.PI/2+i*2*Math.PI/7, px=cx+Math.cos(a)*rr*v, py=cy+Math.sin(a)*rr*v;
+    i?ctx.lineTo(px,py):ctx.moveTo(px,py);
+  });
+  ctx.closePath(); ctx.fillStyle = "rgba(91,227,161,.28)"; ctx.fill(); ctx.strokeStyle = VERDE; ctx.stroke();
+  R_ORDEN.forEach((r,i) => { const a=-Math.PI/2+i*2*Math.PI/7; texto(R_INFO[r].ab, cx+Math.cos(a)*(rr+14), cy+Math.sin(a)*(rr+14)+3, {tam:9, color:"#6f7485", al:"center"}); });
+  const cuentas = [["enlaces", E.enl, VERDE], ["preguntas", E.preg, ROSA], ["adivinadas", 0, VERDE]];
+  cuentas.forEach(([k,v,c],i) => {
+    const yy = y0+226+i*20;
+    texto(k, X(2)+10, yy, {tam:10, color:"#c9ccd6"});
+    ctx.fillStyle = alfa(c, .85); ctx.fillRect(X(2)+86, yy-7, Math.min(pw-120, v*8), 6);
+    texto(String(v), X(2)+pw-10, yy, {tam:10, peso:700, color:c, al:"right"});
+  });
+
+  // 4 · mapa de palabras
+  panel(X(3), y0, pw, h, "MAPA", String(TOT.pal), "#fff");
+  D.secciones.forEach((s,i) => {
+    const yy = y0+40+i*19;
+    texto(R_INFO[s.r].ab, X(3)+10, yy+8, {tam:9, color:"#6f7485"});
+    const pals = []; s.fragmentos.forEach(f => palabrasDe(f.t).forEach(() => pals.push(f)));
+    const n = Math.max(pals.length, 1), cw = Math.min(10, (pw-50)/n - 1.5);
+    pals.forEach((f,j) => {
+      const leida = j < E.porSec[i].lei;
+      let col = "#1b1e25";
+      if (leida){ col = f.k==="neutro" ? "#3a3e48" : f.k==="vago" ? (f.fuente ? VERDE : ROSA) : R_INFO[s.r].color; }
+      ctx.fillStyle = col; ctx.fillRect(X(3)+40 + j*(cw+1.5), yy, Math.max(1.5,cw), 10);
+    });
+  });
+  texto("leídas", X(3)+10, y0+190, {tam:10, color:"#6f7485"});
+  texto(`${E.leidas}`, X(3)+10, y0+222, {tam:30, peso:800, color:"#fff"});
+  texto(`de ${TOT.pal}`, X(3)+10, y0+242, {tam:10, color:"#6f7485"});
+  [["vago resuelto",VERDE],["para preguntar",ROSA],["neutro","#3a3e48"]].forEach(([k,c],i) => {
+    ctx.fillStyle=c; ctx.fillRect(X(3)+10, y0+258+i*13-7, 8, 8); texto(k, X(3)+24, y0+258+i*13, {tam:9, color:"#8a8fa0"});
+  });
+
+  // 5 · puntaje
+  panel(X(4), y0, pw, h, "PUNTAJE", "en vivo");
+  // línea de puntaje en el tiempo
+  ctx.strokeStyle = "#E6B36A"; ctx.lineWidth = 1.4; ctx.beginPath();
+  const pasos = 40;
+  for (let k=0;k<=pasos;k++){
+    const tk = t*k/pasos, v = estadoPuntaje(tk);
+    const px = X(4)+12 + (pw-24)*k/pasos, py = y0+90 - v*0.5;
+    k?ctx.lineTo(px,py):ctx.moveTo(px,py);
+  }
+  ctx.stroke();
+  const gx = X(4)+pw/2, gy = y0+190, gr = 54;
+  ctx.lineWidth = 9; ctx.strokeStyle = "#1d2027"; ctx.beginPath(); ctx.arc(gx,gy,gr,Math.PI*0.75,Math.PI*2.25); ctx.stroke();
+  const colP = E.puntaje>=75 ? VERDE : E.puntaje>=50 ? "#F4B740" : ROSA;
+  ctx.strokeStyle = colP; ctx.beginPath(); ctx.arc(gx,gy,gr,Math.PI*0.75, Math.PI*0.75 + Math.PI*1.5*E.puntaje/100); ctx.stroke();
+  texto(String(E.puntaje), gx, gy+10, {tam:34, peso:800, color:"#fff", al:"center"});
+  texto("de 100", gx, gy+28, {tam:10, color:"#6f7485", al:"center"});
+  texto(`inicial ${D.puntaje.inicial}`, X(4)+10, y0+282, {tam:10, color:ROSA});
+  texto(`final ${D.puntaje.final}`, X(4)+pw-10, y0+282, {tam:10, color:VERDE, al:"right"});
+
+  // 6 · preguntas
+  panel(X(5), y0, pw, h, "PREGUNTAS", String(E.preg), ROSA);
+  const ps = E.hechos.filter(e=>e.tipo==="marcar");
+  let yy = y0+44;
+  ps.slice(0,7).forEach(e => {
+    const lineas = partir(e.f.pregunta || e.f.t, 22).slice(0, ps.length<=2 ? 7 : ps.length<=4 ? 3 : 2);
+    texto("⚑", X(5)+10, yy, {tam:10, color:ROSA});
+    lineas.forEach((l,i) => texto(l, X(5)+24, yy+i*13, {tam:9.5, color:"#d6d9e2"}));
+    yy += lineas.length*13 + 9;
+  });
+  if (ps.length>7) texto(`+${ps.length-7} más`, X(5)+10, yy, {tam:10, color:"#8a8fa0"});
+  texto("preguntar,", X(5)+10, y0+268, {tam:10, color:"#8a8fa0"});
+  texto("no adivinar", X(5)+10, y0+282, {tam:10, peso:700, color:"#fff"});
+}
+function estadoPuntaje(t){
+  const pi = D.puntaje.inicial, pf = D.puntaje.final;
+  const enl = EV.filter(e => e.t<=t && (e.tipo==="enlazar"||e.tipo==="aporte")).length;
+  return Math.round(pi*clamp01((t-0.2)/INTRO) + (pf-pi)*(TOT.enl ? enl/TOT.enl : (t>=T_LISTO?1:0)));
+}
+function partir(s, n){ const out=[]; let l=""; s.split(/\s+/).forEach(w => { if ((l+" "+w).trim().length>n){ if(l) out.push(l); l=w; } else l=(l+" "+w).trim(); }); if(l) out.push(l); return out; }
+
+/* ---------- reproducción ---------- */
+let t0 = null, pausa = false, tPausa = 0;
+function ajustar(){
+  const e = document.getElementById("escenario");
+  const k = Math.min(innerWidth/W, innerHeight/H);
+  e.style.transform = `translate(${-W*k/2}px, ${-H*k/2}px) scale(${k})`;
+}
+function bucle(ahora){
+  if (t0===null) t0 = ahora;
+  const t = pausa ? tPausa : Math.min(DURACION, (ahora - t0)/1000);
+  dibujar(t);
+  if (!pausa && t < DURACION) requestAnimationFrame(bucle); else if (!pausa) { tPausa = DURACION; }
+}
+addEventListener("resize", ajustar);
+addEventListener("keydown", e => {
+  if (e.code==="Space"){ e.preventDefault(); if (pausa){ pausa=false; t0 = performance.now() - tPausa*1000; requestAnimationFrame(bucle); } else { pausa=true; tPausa=(performance.now()-t0)/1000; } }
+  if (e.key==="r"||e.key==="R"){ pausa=false; t0=null; requestAnimationFrame(bucle); }
+  if (e.key==="f"||e.key==="F"){ pausa=true; tPausa=DURACION; dibujar(DURACION); }
+});
+// para grabar cuadro por cuadro desde afuera
+window.renderAt = t => dibujar(t);
+window.__DURACION = DURACION;
+
+(async () => {
+  prepararLienzo(); ajustar();
+  try { await document.fonts.load(`500 12px "JetBrains Mono"`); await document.fonts.load(`800 30px "JetBrains Mono"`); } catch(e){}
+  const q = new URLSearchParams(location.search);
+  if (q.has("captura")){ document.body.classList.add("captura"); dibujar(0); window.__listo = true; return; }
+  if (q.has("fin")){ dibujar(DURACION); window.__listo = true; return; }
+  setTimeout(() => requestAnimationFrame(bucle), 600);
+  window.__listo = true;
+})();
+</script>
+</body>
+</html>
