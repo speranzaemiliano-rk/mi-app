@@ -456,8 +456,36 @@
        Se usa una página con nombre porque @page no entiende de clases. */
     @page apaisada{size:A4 landscape;margin:10mm}
     body.apaisado > #reporte{page:apaisada}
+    /* «Tareas con fotos»: el número de hoja va arriba a la derecha, como en la
+       planilla que se mandaba antes. Si el navegador no entiende las cajas de
+       margen (Firefox), esa línea se ignora y la hoja sale igual, sin número. */
+    @page tareas{size:A4;margin:16mm 16mm 14mm;
+      @top-right{content:counter(page);font:10px Calibri,Carlito,Arial,sans-serif;color:#111}}
+    body.tareas > #reporte{page:tareas}
   }
   #reporte{font-size:11px;color:#111}
+
+  /* ── «Tareas con fotos»: una hoja por lugar ─────────────────────
+     Título, el nombre del lugar, las tareas que faltan numeradas y, abajo,
+     las fotos de esas tareas en filas que llenan el ancho de la hoja. */
+  .tf-pag{break-after:page;page-break-after:always;color:#111;
+    font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif}
+  .tf-pag:last-child{break-after:auto;page-break-after:auto}
+  .tf-pag h1{font-size:14px;font-style:italic;font-weight:700;margin:0 0 5mm}
+  .tf-ent{font-size:11px;margin:0 0 3mm}
+  .tf-lista{margin:0 0 6mm;padding-left:9mm;font-size:10px;line-height:1.6}
+  .tf-lista li{padding-left:1.5mm}
+  .tf-lista li.ok{color:#666;text-decoration:line-through}
+  /* Filas justificadas sin calcular nada en JS: cada foto crece en proporción a
+     su forma (flex-grow = ancho/alto), así todas las de una fila quedan de la
+     misma altura y la fila llena el ancho. El ::after absorbe lo que sobra para
+     que la última fila, que casi nunca está llena, no se estire de más. */
+  .tf-fotos{display:flex;flex-wrap:wrap;gap:1.2mm}
+  .tf-fotos::after{content:"";flex-grow:1000000}
+  .tf-ft{position:relative;margin:0;line-height:0;break-inside:avoid;page-break-inside:avoid}
+  .tf-ft img{width:100%;height:auto;display:block}
+  .tf-ft .n{position:absolute;left:1mm;top:1mm;min-width:4.5mm;padding:0 1.2mm;background:#111;color:#fff;
+    font:700 8px/4.5mm Arial,sans-serif;text-align:center;border-radius:2.3mm}
   .rep-head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #111;padding-bottom:9px;margin-bottom:14px}
   .rep-logo{width:44px;height:44px}
   .rep-t h1{font-size:17px;font-weight:800;letter-spacing:-.01em}
@@ -1952,14 +1980,14 @@
      No usa librerías: arma el HTML y llama a window.print().
      Desde ahí el celular ofrece "Guardar como PDF".
   ========================================================= */
-  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false };
+  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false, numFotos:false };
 
   function modalInforme(){
     var rs = rubrosOrdenados().filter(function(r){ return (idx.porRubro[r] || []).length; });
     abrirModal('<h2>Informe de final de obra</h2>' +
       '<h3>Cómo se ve</h3>' +
       '<div class="rejilla" id="iFormato">' +
-        ['cuadro|Cuadro resumen','matriz|Doble entrada','detalle|Con el detalle'].map(function(o){
+        ['cuadro|Cuadro resumen','matriz|Doble entrada','detalle|Con el detalle','tareas|Tareas con fotos'].map(function(o){
           var q = o.split("|");
           return '<button data-f="' + q[0] + '"' + (infCfg.formato === q[0] ? ' class="act"' : "") + '>' + q[1] + '</button>';
         }).join("") + '</div>' +
@@ -1978,12 +2006,23 @@
         '> Escribir las tareas en vez del número</label>' +
       '<label class="chk"><input type="checkbox" id="iPend"' + (infCfg.soloPendientes ? " checked" : "") +
         '> Sólo lo que falta</label>' +
-      '<label class="chk"><input type="checkbox" id="iFirmas"' + (infCfg.firmas ? " checked" : "") +
+      '<label class="chk" id="iNumFotosLbl"><input type="checkbox" id="iNumFotos"' + (infCfg.numFotos ? " checked" : "") +
+        '> Numerar cada foto con su tarea</label>' +
+      '<label class="chk" id="iFirmasLbl"><input type="checkbox" id="iFirmas"' + (infCfg.firmas ? " checked" : "") +
         '> Dejar espacio para firmas</label>' +
       '<div class="ayuda" id="iCuenta" style="margin-top:10px"></div>' +
       '<button class="bfull" id="iHacer">Imprimir / Guardar PDF</button>');
 
     function repintarCuenta(){
+      if (infCfg.formato === "tareas") {
+        var tt = datosTareas(), nl = tt.lugares.length;
+        $("iCuenta").textContent = nl
+          ? "Una hoja por lugar: " + nl + (nl === 1 ? " lugar, " : " lugares, ") +
+            tt.tareas + (tt.tareas === 1 ? " tarea y " : " tareas y ") +
+            tt.fotos + (tt.fotos === 1 ? " foto." : " fotos.")
+          : "Con ese filtro no queda ninguna tarea.";
+        return;
+      }
       if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
         var n = lugaresEnAlcance();
         if (!n) { $("iCuenta").textContent = "Con ese filtro no queda ningún lugar."; return; }
@@ -2010,19 +2049,23 @@
           (d.total === 1 ? " ítem." : " ítems.")
         : "Con ese filtro no queda nada para imprimir.";
     }
-    // La casilla sólo tiene sentido en la doble entrada: en los otros dos
-    // formatos las tareas ya salen (o ya se decidió que no).
-    function ajustarTareas(){
-      var l = $("iTareasLbl");
-      if (l) l.style.display = (infCfg.formato === "matriz") ? "" : "none";
+    // Cada casilla sólo vale en algún formato: «escribir las tareas» en la doble
+    // entrada (en los otros las tareas ya salen), «numerar las fotos» en el de
+    // tareas con fotos, y las firmas no van ahí: la hoja es para las fotos.
+    function ajustarOpciones(){
+      var f = infCfg.formato, l = $("iTareasLbl"), nf = $("iNumFotosLbl"), fl = $("iFirmasLbl");
+      if (l)  l.style.display  = (f === "matriz") ? "" : "none";
+      if (nf) nf.style.display = (f === "tareas") ? "" : "none";
+      if (fl) fl.style.display = (f === "tareas") ? "none" : "";
     }
-    ajustarTareas();
+    ajustarOpciones();
+    $("iNumFotos").addEventListener("change", function(){ infCfg.numFotos = this.checked; });
     $("iTareas").addEventListener("change", function(){ infCfg.tareas = this.checked; repintarCuenta(); });
     $("iFormato").addEventListener("click", function(e){
       var b = e.target.closest("button[data-f]"); if (!b) return;
       infCfg.formato = b.getAttribute("data-f");
       Array.prototype.forEach.call(this.children, function(x){ x.classList.remove("act"); });
-      b.classList.add("act"); ajustarTareas(); repintarCuenta();
+      b.classList.add("act"); ajustarOpciones(); repintarCuenta();
     });
     $("iAlcance").addEventListener("click", function(e){
       var b = e.target.closest("button[data-v]"); if (!b) return;
@@ -2289,7 +2332,167 @@
     return L.join("");
   }
 
+  /* =========================================================
+     Informe «Tareas con fotos»
+     Una hoja por lugar: título, el nombre, las tareas que faltan en una lista
+     numerada y, abajo, las fotos de esas tareas. Es el estilo de la planilla
+     que se armaba a mano para mandarle a cada contratista lo suyo.
+
+     A diferencia de los otros tres formatos, este necesita los BYTES de las
+     fotos, que no viajan con el tablero (ver traerFoto): hay que bajarlas antes
+     de imprimir, y por eso imprimirTareas() es asíncrono.
+  ========================================================= */
+  function ddmmaa(d){
+    d = d || new Date();
+    function z(n){ return (n < 10 ? "0" : "") + n; }
+    return z(d.getDate()) + "/" + z(d.getMonth() + 1) + "/" + String(d.getFullYear()).slice(-2);
+  }
+
+  // Los lugares con sus tareas EN EL ORDEN en que se cargaron (no agrupadas por
+  // rubro: en la hoja es una sola lista corrida) y las fotos de esas tareas.
+  // Las fotos sueltas del lugar, sin tarea, no entran: la hoja ilustra tareas.
+  function datosTareas(){
+    var tipos = infCfg.alcance === "ambos" ? ["unidad","comun"] : [infCfg.alcance];
+    var lugares = [], nTar = 0, nFot = 0;
+    tipos.forEach(function(t){
+      entidadesDe(t).forEach(function(eid){
+        var ids = itemsDe(eid).filter(function(i){
+          var it = datos.items[i];
+          if (infCfg.soloPendientes && it.ok) return false;
+          if (infCfg.rubros.length && infCfg.rubros.indexOf(it.rubro) === -1) return false;
+          return true;
+        });
+        if (!ids.length) return;
+        var fotos = [];
+        ids.forEach(function(i, n){
+          (idx.porItem[i] || []).slice().sort(function(a, b){
+            var d = (datos.fotos[a].m || 0) - (datos.fotos[b].m || 0);
+            return d !== 0 ? d : a.localeCompare(b);
+          }).forEach(function(fid){ fotos.push({ fid: fid, n: n + 1 }); });
+        });
+        nTar += ids.length; nFot += fotos.length;
+        lugares.push({ id: eid, tipo: t, items: ids, fotos: fotos });
+      });
+    });
+    return { lugares: lugares, tareas: nTar, fotos: nFot };
+  }
+
+  // La foto guardada mide hasta 1280 px, de sobra para la pantalla pero pesada
+  // para una hoja: 300 fotos de ésas son 40 MB dentro del PDF. Se reducen a 800
+  // —alcanza para 6 cm de ancho a 300 ppp— y de paso se mide la forma de cada
+  // una, que es lo que necesita el collage para armar las filas.
+  var fotosInf = {};   // fid → { src, w, h } ya reducida, para no rehacerla al reimprimir
+  var INF_LADO = 800, INF_CALIDAD = 0.78;
+  function fotoParaInforme(fid, cb){
+    if (fotosInf[fid]) return cb(fotosInf[fid]);
+    traerFoto(fid, function(d){
+      if (!d) return cb(null);
+      var img = new Image();
+      img.onerror = function(){ cb(null); };
+      img.onload = function(){
+        var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        if (!w || !h) return cb(null);
+        var r = Math.min(1, INF_LADO / Math.max(w, h)), src = d, nw = w, nh = h;
+        if (r < 1) {
+          try {
+            var c = document.createElement("canvas");
+            nw = Math.round(w * r); nh = Math.round(h * r);
+            c.width = nw; c.height = nh;
+            c.getContext("2d").drawImage(img, 0, 0, nw, nh);
+            src = c.toDataURL("image/jpeg", INF_CALIDAD);
+          } catch(e){ src = d; nw = w; nh = h; }
+        }
+        fotosInf[fid] = { src: src, w: nw, h: nh };
+        cb(fotosInf[fid]);
+      };
+      img.src = d;
+    });
+  }
+
+  // De a pocas a la vez: bajarlas todas juntas ahoga la conexión desde la obra.
+  function prepararFotos(fids, progreso, fin){
+    var cola = fids.slice(), hechas = 0, fallaron = 0, activos = 0, TOPE = 4;
+    if (!cola.length) return fin(0);
+    function siguiente(){
+      while (activos < TOPE && cola.length) {
+        activos++;
+        fotoParaInforme(cola.shift(), function(r){
+          activos--; hechas++; if (!r) fallaron++;
+          progreso(hechas, fids.length);
+          if (hechas === fids.length) fin(fallaron); else siguiente();
+        });
+      }
+    }
+    siguiente();
+  }
+
+  function armarTareas(d){
+    var fecha = ddmmaa();
+    return d.lugares.map(function(L){
+      var e = datos.entidades[L.id];
+      var que = L.tipo === "unidad" ? "departamentos" : "espacios comunes";
+      var tit = (infCfg.soloPendientes ? "Tareas faltantes " : "Tareas ") + que + " \u2013 " + fecha;
+      // Una foto que no se pudo traer se saltea acá; imprimirTareas() ya avisó.
+      var fotos = L.fotos.map(function(f){
+        var r = fotosInf[f.fid];
+        return r ? { r: r, n: f.n } : null;
+      }).filter(Boolean);
+      return '<section class="tf-pag"><h1>' + esc(tit) + '</h1>' +
+        '<div class="tf-ent">' + esc(e.nombre) + '</div>' +
+        '<ol class="tf-lista">' + L.items.map(function(i){
+          var it = datos.items[i];
+          return '<li' + (it.ok ? ' class="ok"' : "") + '>' + esc(it.texto) + '</li>';
+        }).join("") + '</ol>' +
+        (fotos.length ? '<div class="tf-fotos">' + fotos.map(function(f){
+          // grow = forma (ancho/alto) y basis = esa forma a 40 mm de alto: cada
+          // fila se reparte el ancho en proporción y sale pareja de alto.
+          var ar = f.r.w / f.r.h;
+          return '<figure class="tf-ft" style="flex:' + (ar * 100).toFixed(2) + ' 1 ' + (ar * 40).toFixed(2) + 'mm">' +
+            '<img src="' + f.r.src + '" alt="">' +
+            (infCfg.numFotos ? '<span class="n">' + f.n + '</span>' : "") + '</figure>';
+        }).join("") + '</div>' : "") +
+        '</section>';
+    }).join("");
+  }
+
+  var infTok = 0;
+  function imprimirTareas(){
+    var d = datosTareas();
+    if (!d.lugares.length) { toast("Con ese filtro no hay nada para imprimir"); return; }
+    var tok = ++infTok, btn = $("iHacer"), textoBtn = btn ? btn.textContent : "";
+    var fids = [];
+    d.lugares.forEach(function(L){ L.fotos.forEach(function(f){ fids.push(f.fid); }); });
+    // Si cerraron el cuadro mientras se bajaban las fotos, no hay nada que imprimir.
+    function vivo(){ return tok === infTok && btn && document.body.contains(btn); }
+    function restaurar(){ if (btn) { btn.disabled = false; btn.textContent = textoBtn; } }
+    if (btn) btn.disabled = true;
+
+    function imprimir(){
+      $("reporte").innerHTML = armarTareas(d);
+      cerrarModal();
+      document.body.classList.add("imprimiendo");
+      document.body.classList.add("tareas");
+      setTimeout(function(){
+        try { window.print(); } catch(e){}
+        setTimeout(function(){
+          document.body.classList.remove("imprimiendo");
+          document.body.classList.remove("tareas");
+        }, 600);
+      }, 220);
+    }
+
+    prepararFotos(fids, function(hechas, total){
+      if (vivo()) btn.textContent = "Preparando fotos " + hechas + "/" + total + "\u2026";
+    }, function(fallaron){
+      if (!vivo()) return;
+      if (fallaron && !confirm("No se pudieron traer " + fallaron + " de " + fids.length +
+          " fotos (puede ser falta de señal).\n\n\u00bfImprimir igual, sin ellas?")) { restaurar(); return; }
+      imprimir();
+    });
+  }
+
   function imprimirInforme(){
+    if (infCfg.formato === "tareas") return imprimirTareas();
     var d = datosInforme();
     // El cuadro también vale cuando no queda nada pendiente: ese informe es
     // justamente el que dice que está todo cerrado.
