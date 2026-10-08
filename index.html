@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v538</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v539</div>
         </div>
     </nav>
 
@@ -16368,7 +16368,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v538';
+    var APP_VER = 'v539';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -33750,8 +33750,9 @@
         var activo = !!(a && a.ivaActivo);
         wrap.style.display = activo ? '' : 'none';
         document.getElementById('cobroAlqDesglose').checked = activo;   // por defecto desglosa si el contrato tiene IVA
-        document.getElementById('cobroAlqFacturaArchivo').value = '';
-        document.getElementById('cobroAlqFacturaNro').value = '';
+        ['cobroAlqFacturaArchivo','cobroAlqTransfArchivo','cobroAlqFacturaNro'].forEach(function(id){
+            var el = document.getElementById(id); if (el) el.value = '';
+        });
         if (activo) {
             var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
             var brk = _alqCalcIVA(a, canon);
@@ -33783,6 +33784,21 @@
         }
         _cobroAlqPreview();
     }
+    // El bloque de papeles del banco aparece si ALGO va por banco. Y con el desglose
+    // prendido el selector de arriba sobra: cada parte ya elige su destino, tenerlo dos
+    // veces es justo lo que confundía (y es una sola cosa, porque el destino define
+    // también la letra del recibo).
+    window._cobroAlqAdjuntosToggle = function() {
+        var des = _cobroAlqDesgloseActivo();
+        var wrapMod = document.getElementById('cobroAlqModalidadWrap');
+        if (wrapMod) wrapMod.style.display = des ? 'none' : '';
+        var hayBanco = des
+            ? (_cobroAlqMedioParte('A') === 'A' || _cobroAlqMedioParte('B') === 'A')
+            : (((document.getElementById('cobroAlqModalidad') || {}).value) === 'A');
+        var box = document.getElementById('cobroAlqBancoWrap');
+        if (box) box.style.display = hayBanco ? '' : 'none';
+    };
+
     function _cobroAlqDesgloseActivo() {
         return document.getElementById('cobroAlqDesglose').checked
             && document.getElementById('cobroAlqIvaWrap').style.display !== 'none';
@@ -33804,9 +33820,10 @@
             });
             _cobroAlqPreview();
         }
+        _cobroAlqAdjuntosToggle();
     }
     // Destino (y letra) de cada parte del desglose. Fuera del desglose manda el
-    // «Comprobante» de arriba, que es el único que hay.
+    // selector «¿Dónde entra la plata?» de arriba, que es el único que hay.
     window._cobroAlqCorregirIva = function() {
         var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
         document.getElementById('cobroAlqIvaMonto').value = _r2(g * _cobroAlqAlicuota() / 100);
@@ -33846,6 +33863,23 @@
             + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>' + _aviso;
         var montoInput = document.getElementById('cobroAlqMonto');
         if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
+        _cobroAlqAdjuntosToggle();   // cambiar el destino de una parte prende/apaga los papeles
+    }
+
+    // Sube un adjunto del cobro a REF_DOCS y devuelve sus metadatos, o null si no se eligió
+    // archivo. Lo usan la factura emitida y el comprobante de la transferencia: mismo
+    // mecanismo, distinto papel.
+    async function _cobroAlqSubirAdj(inputId, prefijo, etiqueta) {
+        var el = document.getElementById(inputId);
+        var file = (el && el.files) ? el.files[0] : null;
+        if (!file) return null;
+        if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) {
+            throw new Error(etiqueta + ' supera los ' + MAX_DOC_MB + ' MB.');
+        }
+        var b64 = await leerArchivoBase64(file, function(){});
+        var id = prefijo + '-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+        await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: b64 });
+        return { id: id, nombre: file.name, tipo: file.type };
     }
 
     // Registrar el cobro es una operación LARGA (sube la factura, pide el número de recibo
@@ -33893,41 +33927,51 @@
             return reg;
         };
 
+        // ── Papeles del cobro por banco (factura emitida + comprobante de transferencia) ──
+        // Se suben UNA vez acá, antes de bifurcar: los necesitan los dos caminos y no tiene
+        // sentido subir el mismo archivo dos veces si el cobro se parte en dos recibos.
+        var _des = _cobroAlqDesgloseActivo();
+        var _medioA = _cobroAlqMedioParte('A'), _medioB = _cobroAlqMedioParte('B');
+        var _hayBanco = _des ? (_medioA === 'A' || _medioB === 'A') : (tipoAB === 'A');
+        var facturaMeta = null, transfMeta = null, facturaNro = '';
+        if (_hayBanco) {
+            facturaNro = ((document.getElementById('cobroAlqFacturaNro') || {}).value || '').trim();
+            try {
+                facturaMeta = await _cobroAlqSubirAdj('cobroAlqFacturaArchivo', 'ALQFAC', 'La factura emitida');
+                transfMeta  = await _cobroAlqSubirAdj('cobroAlqTransfArchivo', 'ALQTRF', 'El comprobante de la transferencia');
+            } catch (err) { alert('No se pudo subir el adjunto: ' + (err.message || err)); return; }
+        }
+        // El comprobante de transferencia va en CADA recibo que entre por banco; la factura
+        // y su número van con la parte gravada, que es la que la factura documenta.
+        var _ponerTransf = function(reg, medio) {
+            if (medio === 'A' && transfMeta) { reg.transfId = transfMeta.id; reg.transfNombre = transfMeta.nombre; reg.transfTipo = transfMeta.tipo; }
+            return reg;
+        };
+
         // ── Desglose IVA: dos recibos separados (Parte A gravada + Parte B no gravada) ──
-        if (_cobroAlqDesgloseActivo()) {
+        if (_des) {
             var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
             var iva  = parseFloat(document.getElementById('cobroAlqIvaMonto').value) || 0;
             var nog  = parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0;
             var totalA = grav + iva;
             if (totalA <= 0 && nog <= 0) { alert('Cargá al menos un monto en la Parte A o en la Parte B.'); return; }
-            // Subir la factura emitida (parte A), si se adjuntó.
-            var facturaMeta = null;
-            var fFile = document.getElementById('cobroAlqFacturaArchivo').files[0];
-            if (fFile) {
-                if (!_archivoComprimible(fFile) && fFile.size > MAX_DOC_MB * 1024 * 1024) { alert('La factura supera los ' + MAX_DOC_MB + ' MB.'); return; }
-                try {
-                    var b64 = await leerArchivoBase64(fFile, function(){});
-                    var facId = 'ALQFAC-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
-                    await REF_DOCS.child(facId).set({ nombre: fFile.name, tipo: fFile.type, contenido: b64 });
-                    facturaMeta = { facturaId: facId, facturaNombre: fFile.name, facturaTipo: fFile.type };
-                } catch (err) { alert('No se pudo subir la factura: ' + (err.message || err)); return; }
-            }
-            var facturaNro = document.getElementById('cobroAlqFacturaNro').value.trim();
             var recibos = [];
             // Cada parte puede entrar por un lado distinto: lo habitual es la gravada
             // por banco (va con factura) y la no gravada en mano. `tipoAB` es el que
             // decide dónde suma en Caja y Bancos, y además la serie del comprobante.
-            var medioA = _cobroAlqMedioParte('A'), medioB = _cobroAlqMedioParte('B');
+            var medioA = _medioA, medioB = _medioB;
             if (totalA > 0) {
                 var nroA = await obtenerProximoComprobante(medioA);
                 var regA = _conMoneda({ fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: medioA,
                              parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro });
-                if (facturaMeta) { regA.facturaId = facturaMeta.facturaId; regA.facturaNombre = facturaMeta.facturaNombre; regA.facturaTipo = facturaMeta.facturaTipo; }
+                if (facturaMeta) { regA.facturaId = facturaMeta.id; regA.facturaNombre = facturaMeta.nombre; regA.facturaTipo = facturaMeta.tipo; }
+                _ponerTransf(regA, medioA);
                 a.cobrosHistorial.push(regA); recibos.push(regA);
             }
             if (nog > 0) {
                 var nroB = await obtenerProximoComprobante(medioB);
                 var regB = _conMoneda({ fecha: fechaC, periodo: periodo, monto: nog, concepto: concepto, ref: refC, nroRecibo: nroB, tipoAB: medioB, parteIva: 'nograv' });
+                _ponerTransf(regB, medioB);
                 a.cobrosHistorial.push(regB); recibos.push(regB);
             }
             cerrarModalCobroAlquiler();
@@ -33943,6 +33987,11 @@
         if (!montoC || montoC <= 0) { alert('Ingresá un monto válido.'); return; }
         var nroReciboAlq = await obtenerProximoComprobante(tipoAB);
         var regCobro = _conMoneda({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
+        if (tipoAB === 'A') {
+            if (facturaNro) regCobro.facturaNro = facturaNro;
+            if (facturaMeta) { regCobro.facturaId = facturaMeta.id; regCobro.facturaNombre = facturaMeta.nombre; regCobro.facturaTipo = facturaMeta.tipo; }
+            _ponerTransf(regCobro, 'A');
+        }
         a.cobrosHistorial.push(regCobro);
         var alqSnap = a;
         cerrarModalCobroAlquiler();
@@ -33961,7 +34010,10 @@
     function eliminarAlquiler(idx) {
         if (confirm('¿Eliminar este contrato de alquiler?')) {
             _alqAdjuntos(alquileres[idx]).forEach(function(ad){ if (ad.id) REF_DOCS.child(ad.id).remove(); });
-            (alquileres[idx].cobrosHistorial||[]).forEach(function(c){ if (c.facturaId) REF_DOCS.child(c.facturaId).remove(); });
+            (alquileres[idx].cobrosHistorial||[]).forEach(function(c){
+                if (c.facturaId) REF_DOCS.child(c.facturaId).remove();
+                if (c.transfId)  REF_DOCS.child(c.transfId).remove();
+            });
             alquileres.splice(idx, 1); persistirAlquileres();
         }
     }
@@ -34009,6 +34061,7 @@
         if (!confirm('¿Eliminar este cobro de $' + Number(c.monto||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '?' + (c.nroRecibo ? '\n\nSe libera el número de recibo ' + c.nroRecibo + ' para reutilizarlo.' : ''))) return;
         if (c.nroRecibo) _liberarNroComprobante(c.nroRecibo, c.tipoAB);   // libera el correlativo del recibo emitido
         if (c.facturaId) REF_DOCS.child(c.facturaId).remove();   // borra la factura emitida adjunta, si tenía
+        if (c.transfId)  REF_DOCS.child(c.transfId).remove();    // y el comprobante de la transferencia
         a.cobrosHistorial.splice(cIdx, 1);
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
@@ -34031,6 +34084,7 @@
         delc.forEach(function(c){
             if (c.nroRecibo) _liberarNroComprobante(c.nroRecibo, c.tipoAB);
             if (c.facturaId) REF_DOCS.child(c.facturaId).remove();
+            if (c.transfId)  REF_DOCS.child(c.transfId).remove();
         });
         a.cobrosHistorial = a.cobrosHistorial.filter(function(c){ return !_esDelMes(c); });
         persistirAlquileres();
@@ -35802,7 +35856,7 @@
                     '<td style="padding:7px 12px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;">'+fmtF(c.fecha)+'</td>'+
                     '<td style="padding:7px 12px;font-size:12px;">'+compLabel+nroCuotaLabel+'</td>'+
                     '<td style="padding:7px 12px;text-align:right;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:600;color:var(--success);">'+monSym+Number(c.monto||0).toLocaleString('es-AR',{maximumFractionDigits:2})+'</td>'+
-                    '<td style="padding:7px 12px;font-size:11px;color:var(--text-3);">'+(c.ref||'—')+(c.facturaNro?'<br><span style="color:var(--text-2);">🧾 '+escHtml(c.facturaNro)+'</span>':'')+(c.facturaId?' <a href="#" onclick="descargarDoc(\''+c.facturaId+'\',\''+escHtml(c.facturaNombre||'factura').replace(/\x27/g,"\\\x27")+'\');return false;" title="Ver factura emitida">📄</a>':'')+'</td>'+
+                    '<td style="padding:7px 12px;font-size:11px;color:var(--text-3);">'+(c.ref||'—')+(c.facturaNro?'<br><span style="color:var(--text-2);">🧾 '+escHtml(c.facturaNro)+'</span>':'')+(c.facturaId?' <a href="#" onclick="descargarDoc(\''+c.facturaId+'\',\''+escHtml(c.facturaNombre||'factura').replace(/\x27/g,"\\\x27")+'\');return false;" title="Ver factura emitida">📄</a>':'')+(c.transfId?' <a href="#" onclick="descargarDoc(\''+c.transfId+'\',\''+escHtml(c.transfNombre||'transferencia').replace(/\x27/g,"\\\x27")+'\');return false;" title="Ver comprobante de la transferencia">🏦</a>':'')+'</td>'+
                     '<td style="padding:7px 12px;font-family:SF Mono,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:var(--text-3);">'+(c.nroRecibo||'—')+'</td>';
                 histBody.appendChild(tr);
             });
@@ -36041,6 +36095,7 @@
             btnImp.onclick = function(){ overlay.remove(); imprimirComprobanteAlquiler(a, c.monto, c.fecha, c.periodo, c.concepto, c.ref, c.nroRecibo, c); };
             btns.appendChild(btnImp);
             if (c.facturaId) { var btnFac = document.createElement('button'); btnFac.className = 'btn btn-outline btn-sm'; btnFac.title = 'Ver factura emitida'; btnFac.textContent = '📄'; btnFac.onclick = function(){ descargarDoc(c.facturaId, c.facturaNombre||'factura'); }; btns.appendChild(btnFac); }
+            if (c.transfId) { var btnTrf = document.createElement('button'); btnTrf.className = 'btn btn-outline btn-sm'; btnTrf.title = 'Ver comprobante de la transferencia'; btnTrf.textContent = '🏦'; btnTrf.onclick = function(){ descargarDoc(c.transfId, c.transfNombre||'transferencia'); }; btns.appendChild(btnTrf); }
             var btnEd = document.createElement('button'); btnEd.className = 'btn btn-outline btn-sm'; btnEd.title = 'Editar'; btnEd.textContent = '✏️';
             btnEd.onclick = function(){ overlay.remove(); abrirEditarCobroAlquiler(idx, i); };
             var btnDel = document.createElement('button'); btnDel.className = 'btn btn-danger-sm'; btnDel.title = 'Desaplicar / eliminar este cobro (libera el número de recibo)'; btnDel.textContent = '✕';
@@ -44143,12 +44198,13 @@
             <option value="otro">Otro</option>
           </select>
         </div>
-        <div class="form-group">
-          <label>Comprobante *</label>
-          <select id="cobroAlqModalidad">
-            <option value="B">B — Efectivo</option>
-            <option value="A">A — Banco</option>
+        <div class="form-group" id="cobroAlqModalidadWrap">
+          <label>¿Dónde entra la plata? *</label>
+          <select id="cobroAlqModalidad" onchange="_cobroAlqAdjuntosToggle()">
+            <option value="B">💵 Efectivo</option>
+            <option value="A">🏦 Banco</option>
           </select>
+          <div class="form-hint" style="margin-top:4px;">El recibo sale con la letra que corresponde: banco = A, efectivo = B.</div>
         </div>
       </div>
       <div id="cobroAlqIvaWrap" style="display:none;">
@@ -44167,10 +44223,6 @@
               </select>
             </div>
           </div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px;">
-            <div class="form-group" style="margin:0;"><label>Nº factura emitida (opcional)</label><input type="text" id="cobroAlqFacturaNro" placeholder="Ej: A 0001-00000123" autocomplete="off"></div>
-            <div class="form-group" style="margin:0;"><label>Factura emitida (archivo)</label><input type="file" id="cobroAlqFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px;padding:4px;"></div>
-          </div>
           <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — no gravada (sin IVA)</div>
           <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
             <div class="form-group" style="margin:0;"><label>Monto no gravado</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
@@ -44183,6 +44235,19 @@
           </div>
           <div class="form-hint" id="cobroAlqDesglosePreview" style="margin-top:8px;"></div>
         </div>
+      </div>
+      <!-- Papeles del cobro por banco. Aparece sólo si ALGO va por banco: en un cobro en
+           mano no hay transferencia que adjuntar. Vive fuera del desglose de IVA a propósito
+           — antes estaba adentro, y por eso un cobro simple por banco no tenía dónde
+           adjuntar la factura emitida. -->
+      <div id="cobroAlqBancoWrap" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:10px;">
+        <div style="font-weight:600; font-size:12px; margin-bottom:8px;">🏦 Papeles del cobro por banco</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group" style="margin:0;"><label>Nº factura emitida</label><input type="text" id="cobroAlqFacturaNro" placeholder="Ej: A 0001-00000123" autocomplete="off"></div>
+          <div class="form-group" style="margin:0;"><label>🧾 Factura emitida (archivo)</label><input type="file" id="cobroAlqFacturaArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px; padding:4px;"></div>
+        </div>
+        <div class="form-group" style="margin:8px 0 0;"><label>💸 Comprobante de la transferencia</label><input type="file" id="cobroAlqTransfArchivo" accept=".pdf,.jpg,.jpeg,.png" style="font-size:12px; padding:4px;"></div>
+        <div class="form-hint" style="margin-top:6px;">Los dos son opcionales y quedan guardados con el recibo: se abren después desde el plan de pagos y desde el historial de cobros.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="cerrarModalCobroAlquiler()">Cancelar</button>
