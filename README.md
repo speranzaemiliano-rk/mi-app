@@ -71,6 +71,9 @@ mi-app/
 │   ├── config.js       # Proyecto de Firebase de la obra (aparte del sistema).
 │   ├── manifest.json   # Manifiesto PWA propio (instalable en el celular).
 │   └── sw.js           # Service Worker propio, alcance sólo /obra/.
+├── caja/               # Caja diaria (app.html + portada) y su wrapper nativo Capacitor (android/, ios/).
+│   │                   # Comparte cuentas y base (modo-prueba-bb8c2) con el sistema; sw.js propio, alcance /caja/.
+│   └── CLAUDE.md       # Memoria técnica propia de la Caja (se carga al trabajar dentro de la carpeta).
 ├── final-obra/         # Tablero de pendientes de final de obra (independiente).
 │   ├── index.html      # Todo el tablero (HTML+CSS+JS).
 │   ├── datos-iniciales.js # Carga de arranque: unidades, espacios y pendientes.
@@ -343,8 +346,8 @@ Nació de una planilla estática (39 unidades, 13 espacios comunes, 820 pendient
 - **Avisar por mail (✉️)**: le manda a cada responsable la lista de lo que tiene a su nombre y todavía no está hecho.
 - **Informe imprimible**: se elige alcance (unidades, comunes o todo), rubros, si entra sólo lo pendiente y si van líneas de firma. Sale por la impresión del navegador («Guardar como PDF»), sin librerías, con encabezado de marca, un **resumen de cuánto falta por rubro** y el detalle lugar por lugar.
 - **Sincronizar entre equipos, con login.** Botón ☁ del encabezado. Usa un proyecto de Firebase **propio del tablero**, configurado en `final-obra/config.js`; los datos van a `finalObra/<obraId>`. Tener cuenta no alcanza: el mail tiene que estar en la lista de las reglas.
-  - **Por qué una base propia**: cada app tiene la suya (el sistema, la caja, el parte de personal), y ésta no es la excepción. Son grupos de gente distintos: el parte de personal guarda la nómina con nombre y CUIL, y el final de obra lo recorren la dirección de obra y los contratistas. Con base aparte, un error de reglas acá no puede llegar a nada de eso.
-  - ⚠️ Ojo con los nombres: el proyecto `control-caja-965ad` se llama **«Control Personal Obra»** y es el del **parte de personal**; la caja diaria tiene el suyo (`rk-cajadiaria-5-6`). El id engaña.
+  - **Por qué una base propia**: cada app aparte tiene la suya (el parte de personal y éste; la caja y la documentación comparten la del sistema a propósito), y ésta no es la excepción. Son grupos de gente distintos: el parte de personal guarda la nómina con nombre y CUIL, y el final de obra lo recorren la dirección de obra y los contratistas. Con base aparte, un error de reglas acá no puede llegar a nada de eso.
+  - ⚠️ Ojo con los nombres: el proyecto `control-caja-965ad` se llama **«Control Personal Obra»** y es el del **parte de personal**; la caja diaria (`caja/`) **no** tiene base propia: usa la del sistema (`modo-prueba-bb8c2`). El id engaña.
   - ⚠️ **Hay que crear ese proyecto y publicar las reglas a mano** (una vez): Realtime Database, Authentication con mail y contraseña, los cuatro valores en `config.js` y las reglas. El botón ☁ va guiando: sin configurar da la lista de pasos, y si la cuenta entra pero las reglas no la habilitan, **muestra el texto exacto con tu mail ya puesto y un botón para copiarlo**. Nunca falla en silencio.
   - Mientras tanto el tablero funciona igual, guardando en cada equipo.
   - **Escribe de a un registro, no el tablero entero.** Es la diferencia importante con el parte de personal: ahí sube todo junto porque lo carga una sola persona. Acá pueden estar dos o tres recorriendo unidades distintas al mismo tiempo, y subir todo junto haría que el último en guardar borre lo que el otro acaba de tildar. Por eso los datos son tres colecciones planas indexadas por id (`rubros`, `entidades`, `items`) y cada cambio escribe sólo su ruta.
