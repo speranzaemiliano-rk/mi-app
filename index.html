@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v540</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v541</div>
         </div>
     </nav>
 
@@ -7725,6 +7725,11 @@
                             </div>
                         </div>
                         <div class="form-group" style="margin-bottom:10px;">
+                            <label>📎 Comprobante del pago <span style="font-weight:400;color:var(--text-3);font-size:11px;">(opcional)</span></label>
+                            <input type="file" id="factPagoComprobante" accept=".pdf,image/*" style="font-size:13px;">
+                            <div class="form-hint" id="factPagoComprobanteEstado">Subí el PDF o imagen de la transferencia o del recibo. Si es pesado se comprime solo. También podés adjuntarlo después desde Pagos (📎+).</div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:10px;">
                             <label>Fecha del pago</label>
                             <input type="date" id="factFechaPago">
                         </div>
@@ -9769,15 +9774,24 @@
 
     // Sube (si hay uno elegido) el comprobante de transferencia/pago de un input file y lo
     // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
-    async function _subirComprobantePago(fileInputId) {
+    // `estadoElId` (opcional): id de un elemento de texto donde mostrar «Subiendo…» y el progreso
+    // de la compresión. Sin eso un PDF pesado dejaba el botón de guardar sin ninguna señal.
+    async function _subirComprobantePago(fileInputId, estadoElId) {
         var fi = document.getElementById(fileInputId);
         var file = fi && fi.files && fi.files[0];
         if (!file) return null;
         if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
-        var base64 = await leerArchivoBase64(file);
-        var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-        await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
-        return { comprobanteId: id, comprobanteNombre: file.name, comprobanteTipo: file.type };
+        var est = estadoElId ? document.getElementById(estadoElId) : null;
+        var textoPrevio = est ? est.textContent : '';
+        if (est) est.textContent = 'Subiendo comprobante…';
+        try {
+            var base64 = await leerArchivoBase64(file, est ? _progresoEnElemento(estadoElId) : undefined);
+            var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
+            return { comprobanteId: id, comprobanteNombre: file.name, comprobanteTipo: file.type };
+        } finally {
+            if (est) est.textContent = textoPrevio;
+        }
     }
     // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
     // ═══════════ Unificar proveedores duplicados ═══════════
@@ -16368,7 +16382,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v540';
+    var APP_VER = 'v541';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19648,6 +19662,8 @@
         lfSelMod('A');
         var hoy = new Date().toISOString().substring(0,10);
         document.getElementById('lfFechaPago').value = hoy;
+        // Un comprobante elegido en la factura anterior de la tanda no debe colarse en ésta.
+        var _lfc = document.getElementById('lfPagoComprobante'); if (_lfc) _lfc.value = '';
         // Auto-completar base imponible con neto gravado de Gemini o importe/1.21
         var _lfImp = parseFloat(document.getElementById('leerFactImporte').value) || 0;
         var _lfNeto = window._lfNetoGravado || (_lfImp > 0 ? Math.round(_lfImp / 1.21 * 100) / 100 : 0);
@@ -20123,6 +20139,18 @@
         var factId = 'fact_' + Date.now();
 
         async function guardarConPDF() {
+            // Comprobante del pago (opcional): primero, para que si falla no quede subido el PDF de la factura.
+            var _compPagoLF = null;
+            if (tipoCarga === 'directo' && document.getElementById('lfPagarAhora').value === 'true') {
+                var _btnLF = document.getElementById('lfGuardarBtn');
+                if (_btnLF) _btnLF.disabled = true;
+                try { _compPagoLF = await _subirComprobantePago('lfPagoComprobante', 'lfPagoComprobanteEstado'); }
+                catch (err) {
+                    if (!(err && err.message === 'comprobante-grande')) alert('No se pudo subir el comprobante del pago: ' + ((err && err.message) || err));
+                    return;
+                }
+                finally { if (_btnLF) _btnLF.disabled = false; }
+            }
             if (_leerFactArchivoDB64) {
                 var docId = 'FACT-PDF-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 var esImgTipo = (_leerFactArchivoTipo||'').startsWith('image/');
@@ -20168,6 +20196,11 @@
                     cuentaId: cuentaId, medioBancario: medioBancario, nroComprobante: nroComprobante,
                     nroCorrelativo: nroCorr, tipoAB: mod
                 };
+                if (_compPagoLF) {
+                    nuevoPago.comprobanteId = _compPagoLF.comprobanteId;
+                    nuevoPago.comprobanteNombre = _compPagoLF.comprobanteNombre;
+                    nuevoPago.comprobanteTipo = _compPagoLF.comprobanteTipo;
+                }
                 nueva.pagosHistorial = [nuevoPago];
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
                 cerrarLeerFactPDF();
@@ -20294,6 +20327,7 @@
         document.getElementById('factFondoReparoPct').value = f.fondoReparoPct || '';
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
+        var _fpc = document.getElementById('factPagoComprobante'); if (_fpc) _fpc.value = '';
         _factRevisarDuplicado();   // excluye este mismo registro; avisa si hay OTRO parecido
         _factChequearProvNuevo();
         var _fae = document.getElementById('factArchivoEstado');
@@ -21249,6 +21283,21 @@
             return;
         }
 
+        // Comprobante del pago (opcional). Se sube ANTES de tocar nada: si es muy pesado o falla,
+        // se corta acá y no queda la factura a medio guardar ni un número de OP gastado.
+        let _compPagoFact = null;
+        if (document.getElementById('factPagarAhora').value === 'true') {
+            // Mientras sube (un PDF pesado tarda) se traba el botón: un segundo clic cargaba la factura dos veces.
+            const _btnSub = document.getElementById('factSubmitBtn');
+            if (_btnSub) _btnSub.disabled = true;
+            try { _compPagoFact = await _subirComprobantePago('factPagoComprobante', 'factPagoComprobanteEstado'); }
+            catch (err) {
+                if (!(err && err.message === 'comprobante-grande')) alert('No se pudo subir el comprobante del pago: ' + ((err && err.message) || err));
+                return;
+            }
+            finally { if (_btnSub) _btnSub.disabled = false; }
+        }
+
         // Vincular a presupuesto si corresponde
         const _prevPresupIdx = editandoFactIndex >= 0 ? facturas[editandoFactIndex].presupuestoIdx : undefined;
         if (nuevo.tipo === 'presup') {
@@ -21334,6 +21383,11 @@
                 cuentaId, medioBancario, nroComprobante,
                 nroCorrelativo: nroCorr, tipoAB: mod
             };
+            if (_compPagoFact) {
+                nuevoPago.comprobanteId = _compPagoFact.comprobanteId;
+                nuevoPago.comprobanteNombre = _compPagoFact.comprobanteNombre;
+                nuevoPago.comprobanteTipo = _compPagoFact.comprobanteTipo;
+            }
             nuevo.pagosHistorial.push(nuevoPago);
             nuevo.estado = _estadoFactDoc(nuevo);
             alert(`Pago registrado (${nroCorr}): $${(montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}${totalRet > 0 ? `\nRetenciones: $${(totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}\nNeto al proveedor: $${(montoPago-totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}.\n\nSe imprime la factura + la Orden de Pago.`);
@@ -45693,6 +45747,11 @@
                 <label id="lfNroComprobanteLbl">Nº de transferencia</label>
                 <input type="text" id="lfNroComprobante" placeholder="Ej: 000123456789" style="width:100%;">
               </div>
+            </div>
+            <div class="form-group" style="margin-bottom:10px;">
+              <label>📎 Comprobante del pago <span style="font-weight:400;color:var(--text-3);font-size:11px;">(opcional)</span></label>
+              <input type="file" id="lfPagoComprobante" accept=".pdf,image/*" style="font-size:13px;">
+              <div class="form-hint" id="lfPagoComprobanteEstado">Subí el PDF o imagen de la transferencia o del recibo. Si es pesado se comprime solo. También podés adjuntarlo después desde Pagos (📎+).</div>
             </div>
             <div class="form-group" style="margin-bottom:10px;">
               <label>Fecha del pago</label>
