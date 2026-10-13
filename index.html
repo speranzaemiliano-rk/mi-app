@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v541</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v542</div>
         </div>
     </nav>
 
@@ -11805,7 +11805,7 @@
         var sel=document.getElementById('pagoFDItem'),info=document.getElementById('pagoFDInfo');
         var val=sel?sel.value:'';
         _pagoFDMostrarBanco();
-        if(!val){if(info)info.style.display='none';return;}
+        if(!val){ if(info)info.style.display='none'; _pagoFDRegAvisoPintar(null); return; }
         var imp=0,pag=0,_itFD=null;
         if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(!f){info.style.display='none';return;}_itFD=f;imp=f.importe||0;pag=f.pagado||0;}
         else{var d=documentos.find(function(x){return x.id===val;});if(!d){info.style.display='none';return;}_itFD=d;imp=d.importe||0;pag=d.pagado||0;}
@@ -12104,10 +12104,14 @@
         var synth = {}; synth[reg.key] = true;
         // Pago de varias facturas con régimen elegido: la base de ESTE régimen es la de las facturas que le suman.
         var _codReg = (_RET_CODIGOS.filter(function(x){ return x.key === reg.key; })[0] || {}).codigo;
-        var _cx = _pagoFDRegCtx(buscarProveedorPorNombre(provNombre), base);
-        if (_cx.bases) {
+        var _provM = buscarProveedorPorNombre(provNombre);
+        var _cx = _pagoFDRegCtx(_provM, base);
+        // Sólo se acota a las facturas que le suman si el proveedor TIENE ese régimen configurado; un régimen
+        // «de afuera» (retención puntual) se calcula sobre la base total y se reparte entre todas, como siempre.
+        var _usaCod = false;
+        if (_cx.bases && _regimenesDeProv(_provM).some(function(x){ return x.codigo === _codReg; })) {
             if (_cx.bases[_codReg] == null) { alert('Ninguna de las facturas elegidas suma a ese régimen.\n\nTildalo en alguna de ellas (✏ Editar factura) o cargá la retención a mano con «Otra retención».'); return; }
-            base = _cx.bases[_codReg];
+            base = _cx.bases[_codReg]; _usaCod = true;
         }
         var calc = calcularRetenciones(base, synth, provNombre, mesAno);
         var montoCalc = (calc && calc[0]) ? Math.round(calc[0].monto) : 0;
@@ -12115,7 +12119,7 @@
         if (mStr == null) return;
         var monto = parseFloat(String(mStr).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,'')) || 0;
         if (monto <= 0) { alert('Ingresá un monto válido mayor a cero.'); return; }
-        _pagoFDRetsManuales.push({ codigo:reg.label.split(' — ')[0], desc:reg.label, monto:monto, activa:true, manual:true, regKey:reg.key, codReg:_codReg });
+        _pagoFDRetsManuales.push({ codigo:reg.label.split(' — ')[0], desc:reg.label, monto:monto, activa:true, manual:true, regKey:reg.key, codReg:(_usaCod ? _codReg : undefined) });
         pagoFDRecalcRet();
     };
     window.pagoFDQuitarRetManual = function(i) { _pagoFDRetsManuales.splice(i,1); pagoFDRecalcRet(); };
@@ -12240,7 +12244,8 @@
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
         if (montoTotal <= 0) { alert('El total a pagar debe ser mayor a cero.'); return; }
         var baseTotal = 0, rets = [], totalRet = 0, _ctxMulti = null;
-        var _provMulti = buscarProveedorPorNombre(_pagoFDMulti.prov);
+        var provNombre = _pagoFDMulti.prov;   // foto: más abajo hay await y la pantalla puede cambiar de proveedor
+        var _provMulti = buscarProveedorPorNombre(provNombre);
         if (mod === 'A') {
             baseTotal = parseFloat(document.getElementById('pagoFDBase').value) || sel.reduce(function(s,x){ return s + x.neto; }, 0);
             rets = _pagoFDRetsCalculadas.filter(function(r){ return r.activa; }).concat(_pagoFDRetsManuales.filter(function(r){ return r.activa; }));
@@ -12248,13 +12253,20 @@
             // Foto del reparto por régimen AHORA, junto con `sel` y `rets`: más abajo hay await (el comprobante, el
             // N° de OP) y, mientras tanto, la pantalla sigue viva — leerla después podría dar otro reparto.
             _ctxMulti = _pagoFDRegCtx(_provMulti, baseTotal);
+            // Una retención manual de un régimen concreto cuyas facturas se destildaron después quedaría impresa en la
+            // Orden de Pago pero sin guardarse en ningún pago: se frena acá, antes de grabar nada.
+            var _huerf = rets.filter(function(r){ return r.manual && r.codReg && !sel.some(function(y){ return _facturaAplicaRegimen(y.f, r.codReg, _provMulti); }); });
+            if (_huerf.length) {
+                alert('La retención manual «' + _huerf.map(function(r){ return r.desc; }).join('», «') + '» es de un régimen al que no suma ninguna de las facturas que quedaron tildadas.\n\nQuitala de la lista (✕) o volvé a tildar la factura que le suma.');
+                return;
+            }
         }
         var nroCbteFD = (document.getElementById('pagoFDNroComprobante')||{}).value || '';
         var _comp = null;
         try { _comp = await _subirComprobantePago('pagoFDComprobante'); } catch(e){ return; }
         var nroCorr = await obtenerProximoComprobante(mod, 'OP');   // un solo correlativo (serie OP) para todo el pago
         var grupoId = 'GP-' + Date.now();
-        var provNombre = _pagoFDMulti.prov, facturasPagadas = [], acumRet = 0, tsBase = Date.now();
+        var facturasPagadas = [], acumRet = 0, tsBase = Date.now();
         var acumPorReg = [];   // lo ya repartido de cada régimen, para que el último cierre
         // Si alguna factura eligió regímenes, cada régimen se reparte SÓLO entre las facturas que le suman
         // (y cada pago guarda la base con la que entró en cada uno). Sin eso: todas reparten todo, como siempre.
@@ -12812,7 +12824,7 @@
     }
     // Texto corto de los regímenes de una factura para listados («Reg.94 · SUSS-Const»), o ''.
     function _regimenesFacturaCorto(f) {
-        var l = _regimenesDeFactura(f);
+        var l = _regimenesDeFactura(f, buscarProveedorPorNombre(f && f.proveedor));
         if (!l) return '';
         return l.map(function(c){ return /^SUSS/.test(c) ? c : 'Reg.' + c; }).join(' · ');
     }
@@ -16548,7 +16560,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v541';
+    var APP_VER = 'v542';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19762,7 +19774,10 @@
         var gb = document.getElementById('lfGuardarBtn'); if (gb) gb.textContent = on ? '💾 Guardar Nota de Crédito' : '💾 Guardar Factura';
         _regimenesFactRender('lf', (document.getElementById('leerFactProv') || {}).value);   // oculto en NC, vuelve al destildar
         if (on) { _lfPoblarNCFacturas(); }
-        else if (typeof lfSelTipo === 'function') { lfSelTipo(document.getElementById('lfTipo').value || 'presup'); }
+        else {
+            if (typeof lfSelTipo === 'function') lfSelTipo(document.getElementById('lfTipo').value || 'presup');
+            lfRecalcRet();   // con el selector otra vez a la vista: mientras era NC el cálculo se hizo sin él
+        }
     }
     function _lfPoblarNCFacturas() {
         var sel = document.getElementById('leerFactNCFactura'); if (!sel) return;
@@ -21374,7 +21389,7 @@
         var sel = (seleccion || []).filter(function(c){ return regs.some(function(r){ return r.codigo === c; }); });
         lista.innerHTML = regs.map(function(r){
             var on = !sel.length || sel.indexOf(r.codigo) !== -1;
-            return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">'
+            return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text-1);">'
                 + '<input type="checkbox" data-cod="' + escHtml(r.codigo) + '"' + (on ? ' checked' : '') + ' onchange="_regimenesFactCambio(\'' + prefix + '\')" style="cursor:pointer;">'
                 + '<span>' + escHtml(r.label) + '</span></label>';
         }).join('');
@@ -21594,6 +21609,11 @@
             var _if = _resolverEdicion(facturas, _edicionEnCurso.factura && _edicionEnCurso.factura.id, _edicionEnCurso.factura && _edicionEnCurso.factura.snap, 'factura');
             if (_if < 0) return;
             nuevo.id = facturas[_if].id || ('F-' + Date.now());
+            // `pagado`/`estado` se leyeron al armar `nuevo`, ANTES de los await (subir el archivo, numerar…): si otra
+            // persona pagó mientras tanto, el historial que se conserva más abajo ya trae ese pago y el total no.
+            // Se toman de la factura actual para que el total y los pagos digan lo mismo.
+            nuevo.pagado = facturas[_if].pagado || 0;
+            nuevo.estado = facturas[_if].estado || 'pendiente';
             // `nuevo` se arma desde el formulario, que sólo maneja una parte de los campos. Armarlo de cero
             // y reemplazar el nodo borraba todo lo demás: sobre todo `pagosHistorial` (los pagos con sus
             // retenciones y la base acumulada del mes) y lo que trajo la IA (CUIT, CAE, dirección…), dejando
@@ -21670,7 +21690,9 @@
             _reconciliarFacturaEnPresupuesto(nuevo.presupuestoIdx, nuevo);
         }
         // Compartir con proyectos seleccionados
-        const selFact = leerSeleccionCompartir('checkboxesCompartirFact');
+        // El panel de compartir sólo se ofrece al cargar: al editar queda oculto, pero sus casillas pueden seguir
+        // tildadas de una carga anterior y la copia viajaría con todo el historial de pagos.
+        const selFact = editandoFactIndex >= 0 ? [] : leerSeleccionCompartir('checkboxesCompartirFact');
         if (selFact.length > 0) {
             const factCopia = editandoFactIndex >= 0 ? facturas[editandoFactIndex] : facturas[facturas.length - 1];
             compartirEnProyectos(factCopia, 'facturas', selFact);
