@@ -3568,7 +3568,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v542</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v543</div>
         </div>
     </nav>
 
@@ -11879,7 +11879,7 @@
     //    facturas que suman a ese régimen (si se escribió la base a mano, se reparte en proporción);
     //  · cualquier otro caso → como siempre (opts undefined: todos los regímenes, una sola base).
     function _pagoFDRegCtx(prov, base) {
-        var vacio = { opts: undefined, bases: null, regimenes: null, factor: 1 };
+        var vacio = { opts: undefined, bases: null, regimenes: null, factor: 1, sinElegir: null };
         if (!prov || _pagoFDTab !== 'fact') return vacio;
         if (_pagoFDModo === 'varias') {
             var sel = (_pagoFDMulti.items || []).filter(function(x){ return x.checked; });
@@ -11897,7 +11897,13 @@
         var selI = document.getElementById('pagoFDItem'), val = selI ? selI.value : '';
         var f = val ? facturas[parseInt(val)] : null;
         var lista = _regimenesDeFactura(f, prov);
-        if (!lista) return vacio;
+        if (!lista) {
+            // Sin régimen elegido y con 2 o más regímenes: se calcula con todos (como siempre), pero se avisa y se ofrece elegir.
+            if (f && (typeof puedeEditar !== 'undefined' && puedeEditar) && _regimenesDeProv(prov).length >= 2) {
+                var _v = Object.assign({}, vacio); _v.sinElegir = parseInt(val); return _v;
+            }
+            return vacio;
+        }
         return { opts: { regimenes: lista }, bases: null, regimenes: lista, factor: 1 };
     }
     // Línea informativa arriba de las retenciones: deja a la vista qué se está acumulando en cada régimen.
@@ -11915,8 +11921,13 @@
                 + ctx.regimenes.map(nomReg).join(' · ')
                 + '</strong> (elegido al cargarla; si querés cambiarlo, editá la factura con ✏). Los demás regímenes del proveedor no se calculan acá.';
             el.style.display = '';
+        } else if (ctx && ctx.sinElegir != null && isFinite(ctx.sinElegir)) {
+            el.innerHTML = '🏛️ Este proveedor se retiene por <strong>más de un régimen</strong> y esta factura suma a <strong>todos</strong>. '
+                + 'Si corresponde a uno solo, <a href="#" onclick="pagoFDElegirRegimen(' + ctx.sinElegir + ');return false;"><strong>elegí a cuál suma</strong></a> (se abre la factura).';
+            el.style.display = '';
         } else { el.style.display = 'none'; el.innerHTML = ''; }
     }
+    window.pagoFDElegirRegimen = function(idx) { cerrarPagoFD(); editarRegimenesFactura(idx); };
     var _pagoFDRetsCalculadas = [];
     function pagoFDRecalcRet(soloTotales) {
         var mod=document.getElementById('pagoFDMod').value;
@@ -12821,6 +12832,41 @@
             return b ? (b.base || 0) : 0;
         }
         return (p && p.baseImponible) || 0;
+    }
+    // Abre la factura para editar y lleva a la vista el selector de regímenes: en el formulario queda al fondo
+    // (debajo de Importe, Moneda y Fondo de reparo) y quien edita una factura ya cargada no lo veía.
+    function _regimenesIrAlSelector() {
+        setTimeout(function() {
+            var g = document.getElementById('factRegimenesGrupo');
+            if (!g || g.style.display === 'none') return;
+            try { g.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { g.scrollIntoView(); }
+            g.style.outline = '2px solid var(--gold, #C9A24B)'; g.style.outlineOffset = '6px'; g.style.borderRadius = '8px';
+            setTimeout(function(){ g.style.outline = ''; g.style.outlineOffset = ''; }, 2800);
+        }, 200);
+    }
+    function editarRegimenesFactura(idx) { editarFactura(idx); _regimenesIrAlSelector(); }
+    // Desde la ficha del proveedor (extracto y listado de comprobantes) el modal de edición tiene que subirse por
+    // encima de la ficha: el mismo camino que usa el ✏ de esas pantallas.
+    window._fichaEditarRegimenes = function(ref) { _fichaEditarComprob('factura', ref); _regimenesIrAlSelector(); };
+    // Marca de régimen de la fila de una factura (lista de Facturas). Con régimen elegido: «🏛️ Reg.94». Sin elegir,
+    // en una factura todavía sin pagar de un proveedor con 2 o más regímenes: «🏛️ elegir régimen». Los dos abren
+    // la factura en el selector.
+    function _regimenesPillFila(f, idx) {
+        if (!f || f.esNotaCredito) return '';
+        var corto = _regimenesFacturaCorto(f);
+        var ed = (typeof puedeEditar !== 'undefined' && puedeEditar);
+        // Es un <button> y no un <span>: las tablas «densas» (registrarDensa) interceptan en captura todo clic que no sea
+        // sobre button/a/input/select/textarea/label, para seleccionar la fila, y un span clickeable nunca se enteraba.
+        var abre = ed ? 'button type="button"' : 'span', cierra = ed ? 'button' : 'span';
+        var base = 'font:inherit;font-size:inherit;line-height:inherit;' + (ed ? 'cursor:pointer;' : '');
+        var clic = ed ? ' onclick="editarRegimenesFactura(' + idx + ')"' : '';
+        if (corto) {
+            return ' <' + abre + ' class="pill"' + clic + ' style="' + base + 'background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Esta factura suma a la base de retención de: ' + escHtml(corto) + (ed ? ' (tocá para cambiarlo)' : '') + '">🏛️ ' + escHtml(corto) + '</' + cierra + '>';
+        }
+        if (ed && (f.estado || 'pendiente') !== 'pagada' && _regimenesDeProv(buscarProveedorPorNombre(f.proveedor)).length >= 2) {
+            return ' <' + abre + ' class="pill"' + clic + ' style="' + base + 'background:#F5F5F7;color:#6B6B76;border:1px dashed #B8B8C2;" title="Este proveedor se retiene por más de un régimen y esta factura suma a todos. Tocá para elegir a cuál suma.">🏛️ elegir régimen</' + cierra + '>';
+        }
+        return '';
     }
     // Texto corto de los regímenes de una factura para listados («Reg.94 · SUSS-Const»), o ''.
     function _regimenesFacturaCorto(f) {
@@ -16560,7 +16606,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v542';
+    var APP_VER = 'v543';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -22068,7 +22114,7 @@
                 _filaMovClickeable(tr, 'factura', idx);
                 tr.innerHTML = `
                     <td>${f.fecha ? formatearFecha(f.fecha) : '—'}</td>
-                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${_regimenesFacturaCorto(f) ? ` <span class="pill" style="background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Esta factura suma a la base de retención de: ${escHtml(_regimenesFacturaCorto(f))}">🏛️ ${escHtml(_regimenesFacturaCorto(f))}</span>` : ''}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${f.esVEP ? ' <span class="pill" style="background:#e8f0fe;color:#1a56c4;" title="Volante Electrónico de Pago: comprobante del pago de un impuesto o aporte. No da crédito fiscal de IVA.">🏛️ VEP</span>' : (_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>')}</td>
+                    <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${_regimenesPillFila(f, idx)}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${f.esVEP ? ' <span class="pill" style="background:#e8f0fe;color:#1a56c4;" title="Volante Electrónico de Pago: comprobante del pago de un impuesto o aporte. No da crédito fiscal de IVA.">🏛️ VEP</span>' : (_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>')}</td>
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></td>
@@ -38077,6 +38123,8 @@
                     + '<td style="text-align:right;font-weight:600;' + (c.saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(c.saldo) + '</td>'
                     + '<td><span class="pill ' + badge[c.est] + '">' + lbl[c.est] + '</span></td>'
                     + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + desap + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNroComprobante(\'' + c.o + '\',' + refA + ')" title="Cambiar sólo el N° del comprobante">N°</button>'
+                                                  + (c.o === 'fact' && c.saldo > 0.5 && _regimenesDeProv(buscarProveedorPorNombre(nombre)).length >= 2
+                                                      ? '<button class="btn btn-outline btn-sm" style="color:#C0392B;" onclick="_fichaEditarRegimenes(' + c.ref + ')" title="Elegir a qué base de retención suma esta factura' + (_regimenesFacturaCorto(facturas[c.ref]) ? ' (hoy: ' + escHtml(_regimenesFacturaCorto(facturas[c.ref])) + ')' : ' (hoy: todos los regímenes)') + '">🏛️</button>' : '')
                                                   + '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + borrar + '</div></td>'
                     + '</tr>';
             });
@@ -38425,7 +38473,12 @@
                 if (m.ref) {
                     var r = (m.ref.t === 'documento') ? ("'" + String(m.ref.id).replace(/'/g,"\\'") + "'") : m.ref.id;
                     if (puedeEd) {
+                        // Factura sin pagar de un proveedor con 2 o más regímenes: botón para elegir a cuál suma su base.
+                        var _fReg = (m.ref.t === 'factura') ? facturas[m.ref.id] : null;
+                        var _btnReg = (_fReg && !_fReg.esNotaCredito && (_fReg.estado || 'pendiente') !== 'pagada' && _regimenesDeProv(buscarProveedorPorNombre(nombre)).length >= 2)
+                            ? ' <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:#C0392B;" onclick="_fichaEditarRegimenes(' + r + ')" title="Elegir a qué base de retención suma esta factura (hoy: ' + escHtml(_regimenesFacturaCorto(_fReg) || 'todos los regímenes') + ')">🏛️' + (_regimenesFacturaCorto(_fReg) ? ' ' + escHtml(_regimenesFacturaCorto(_fReg)) : '') + '</button>' : '';
                         acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="editarNroComprobante(\'' + (m.ref.t === 'factura' ? 'fact' : 'doc') + '\',' + r + ')" title="Cambiar sólo el N° del comprobante">N°</button>'
+                            + _btnReg
                             + ' <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>'
                             + ' <button class="btn btn-danger-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEliminarComprob(\'' + m.ref.t + '\',' + r + ')" title="Eliminar">✕</button>';
                     }
