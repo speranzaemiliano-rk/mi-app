@@ -7670,6 +7670,7 @@
                     <label>🏛️ ¿Para qué base de retención suma esta factura?</label>
                     <div id="factRegimenesLista" style="display:flex;flex-direction:column;gap:7px;margin-top:6px;"></div>
                     <div class="form-hint">Este proveedor se retiene por más de un régimen y <strong>cada uno acumula su propia base en el mes</strong>. Tildá los regímenes a los que suma esta factura: al pagarla, cada retención se calcula sólo con las facturas que la incluyen. Si vale para todos, dejalos tildados.</div>
+                    <div class="form-hint" id="factRegimenesAvisoPagos" style="display:none;color:var(--warn);">⚠️ Esta factura ya tiene pagos: lo que cambies acá rige para los pagos que hagas de ahora en más. Los que ya están hechos conservan la base con la que entraron.</div>
                 </div>
                 <div class="form-group" id="factComputaGrupo">
                     <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(factura a nombre de la empresa — Factura A o B)</span></label>
@@ -11301,6 +11302,12 @@
                 } else {
                     g.capital += r.capital; g.total += r.total; g.ret += r.ret; g.neto += r.neto;
                     g._facturas.push(r.concepto.replace(/^Fact\./,'')); g._nGrupo++;
+                    // Cada factura del grupo puede llevar regímenes distintos: el botón del certificado (🏛️G / 🏛️S)
+                    // se arma con la unión de todos, no sólo con los de la primera factura.
+                    g.retenciones = (g.retenciones || []).slice();
+                    (r.retenciones || []).forEach(function(x){
+                        if (!g.retenciones.some(function(y){ return y.codigo === x.codigo; })) g.retenciones.push(x);
+                    });
                 }
             } else { rowsAgr.push(r); }
         });
@@ -11876,20 +11883,20 @@
         if (!prov || _pagoFDTab !== 'fact') return vacio;
         if (_pagoFDModo === 'varias') {
             var sel = (_pagoFDMulti.items || []).filter(function(x){ return x.checked; });
-            if (!sel.some(function(x){ return _regimenesDeFactura(x.f); })) return vacio;
+            if (!sel.some(function(x){ return _regimenesDeFactura(x.f, prov); })) return vacio;
             var totalNeto = sel.reduce(function(s,x){ return s + x.neto; }, 0);
             var bi = document.getElementById('pagoFDBase');
             var factor = (bi && bi.dataset.manual === '1' && totalNeto > 0 && base > 0) ? base / totalNeto : 1;
             var bases = {};
             _regimenesDeProv(prov).forEach(function(r){
-                var aplican = sel.filter(function(x){ return _facturaAplicaRegimen(x.f, r.codigo); });
+                var aplican = sel.filter(function(x){ return _facturaAplicaRegimen(x.f, r.codigo, prov); });
                 if (aplican.length) bases[r.codigo] = Math.round(aplican.reduce(function(s,x){ return s + x.neto; }, 0) * factor * 100) / 100;
             });
             return { opts: { bases: bases }, bases: bases, regimenes: null, factor: factor };
         }
         var selI = document.getElementById('pagoFDItem'), val = selI ? selI.value : '';
         var f = val ? facturas[parseInt(val)] : null;
-        var lista = _regimenesDeFactura(f);
+        var lista = _regimenesDeFactura(f, prov);
         if (!lista) return vacio;
         return { opts: { regimenes: lista }, bases: null, regimenes: lista, factor: 1 };
     }
@@ -11897,14 +11904,16 @@
     function _pagoFDRegAvisoPintar(ctx) {
         var el = document.getElementById('pagoFDRegAviso'); if (!el) return;
         var fm = function(n){ return '$' + n.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        // Los códigos vienen de la base de datos: se escapan antes de armar el HTML.
+        var nomReg = function(c){ return escHtml(/^SUSS/.test(c) ? c : 'Reg.' + c); };
         if (ctx && ctx.bases) {
-            el.innerHTML = '🏛️ <strong>Base por régimen</strong> (cada factura suma sólo a los regímenes que eligió al cargarla): '
-                + Object.keys(ctx.bases).map(function(c){ return (/^SUSS/.test(c) ? c : 'Reg.' + c) + ' <strong>' + fm(ctx.bases[c]) + '</strong>'; }).join(' · ');
+            el.innerHTML = '🏛️ <strong>Base por régimen</strong> — las facturas con régimen elegido suman sólo a ése; las demás, a todos: '
+                + Object.keys(ctx.bases).map(function(c){ return nomReg(c) + ' <strong>' + fm(ctx.bases[c]) + '</strong>'; }).join(' · ');
             el.style.display = '';
         } else if (ctx && ctx.regimenes) {
             el.innerHTML = '🏛️ Esta factura suma <strong>sólo</strong> a la base de: <strong>'
-                + ctx.regimenes.map(function(c){ return /^SUSS/.test(c) ? c : 'Reg.' + c; }).join(' · ')
-                + '</strong> (elegido al cargarla). Los demás regímenes del proveedor no se calculan acá.';
+                + ctx.regimenes.map(nomReg).join(' · ')
+                + '</strong> (elegido al cargarla; si querés cambiarlo, editá la factura con ✏). Los demás regímenes del proveedor no se calculan acá.';
             el.style.display = '';
         } else { el.style.display = 'none'; el.innerHTML = ''; }
     }
@@ -12093,13 +12102,20 @@
         if (!reg) { alert('Opción inválida.'); return; }
         // Calcular el monto del régimen elegido sobre la base (respetando acumulado mensual del proveedor).
         var synth = {}; synth[reg.key] = true;
+        // Pago de varias facturas con régimen elegido: la base de ESTE régimen es la de las facturas que le suman.
+        var _codReg = (_RET_CODIGOS.filter(function(x){ return x.key === reg.key; })[0] || {}).codigo;
+        var _cx = _pagoFDRegCtx(buscarProveedorPorNombre(provNombre), base);
+        if (_cx.bases) {
+            if (_cx.bases[_codReg] == null) { alert('Ninguna de las facturas elegidas suma a ese régimen.\n\nTildalo en alguna de ellas (✏ Editar factura) o cargá la retención a mano con «Otra retención».'); return; }
+            base = _cx.bases[_codReg];
+        }
         var calc = calcularRetenciones(base, synth, provNombre, mesAno);
         var montoCalc = (calc && calc[0]) ? Math.round(calc[0].monto) : 0;
         var mStr = window.prompt(reg.label + '\n\nBase: $' + (base).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '\nMonto calculado (podés ajustarlo):', String(montoCalc));
         if (mStr == null) return;
         var monto = parseFloat(String(mStr).replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,'')) || 0;
         if (monto <= 0) { alert('Ingresá un monto válido mayor a cero.'); return; }
-        _pagoFDRetsManuales.push({ codigo:reg.label.split(' — ')[0], desc:reg.label, monto:monto, activa:true, manual:true, regKey:reg.key });
+        _pagoFDRetsManuales.push({ codigo:reg.label.split(' — ')[0], desc:reg.label, monto:monto, activa:true, manual:true, regKey:reg.key, codReg:_codReg });
         pagoFDRecalcRet();
     };
     window.pagoFDQuitarRetManual = function(i) { _pagoFDRetsManuales.splice(i,1); pagoFDRecalcRet(); };
@@ -12155,7 +12171,9 @@
             _pagoFDMulti.items.push({ idx:i, f:f, pend:pend, neto:neto, checked:true });
             rows += '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft);cursor:pointer;font-size:13px;">'
                 + '<input type="checkbox" checked onchange="pagoFDMultiToggle('+i+',this.checked)" style="cursor:pointer;">'
-                + '<span style="flex:1;">'+(f.numero?'N°'+escHtml(f.numero)+' — ':'')+escHtml(f.descripcion||'—')+'</span>'
+                + '<span style="flex:1;">'+(f.numero?'N°'+escHtml(f.numero)+' — ':'')+escHtml(f.descripcion||'—')
+                + (_regimenesFacturaCorto(f) ? ' <span class="pill" style="font-size:10px;background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Suma a la base de retención de: '+escHtml(_regimenesFacturaCorto(f))+'">🏛️ '+escHtml(_regimenesFacturaCorto(f))+'</span>' : '')
+                + '</span>'
                 + '<strong style="white-space:nowrap;">$'+(pend).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong>'
                 + '</label>';
         });
@@ -12221,11 +12239,15 @@
         if (!fecha) { alert('Ingresá la fecha del pago.'); return; }
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
         if (montoTotal <= 0) { alert('El total a pagar debe ser mayor a cero.'); return; }
-        var baseTotal = 0, rets = [], totalRet = 0;
+        var baseTotal = 0, rets = [], totalRet = 0, _ctxMulti = null;
+        var _provMulti = buscarProveedorPorNombre(_pagoFDMulti.prov);
         if (mod === 'A') {
             baseTotal = parseFloat(document.getElementById('pagoFDBase').value) || sel.reduce(function(s,x){ return s + x.neto; }, 0);
             rets = _pagoFDRetsCalculadas.filter(function(r){ return r.activa; }).concat(_pagoFDRetsManuales.filter(function(r){ return r.activa; }));
             totalRet = rets.reduce(function(s,r){ return s + r.monto; }, 0);
+            // Foto del reparto por régimen AHORA, junto con `sel` y `rets`: más abajo hay await (el comprobante, el
+            // N° de OP) y, mientras tanto, la pantalla sigue viva — leerla después podría dar otro reparto.
+            _ctxMulti = _pagoFDRegCtx(_provMulti, baseTotal);
         }
         var nroCbteFD = (document.getElementById('pagoFDNroComprobante')||{}).value || '';
         var _comp = null;
@@ -12236,9 +12258,11 @@
         var acumPorReg = [];   // lo ya repartido de cada régimen, para que el último cierre
         // Si alguna factura eligió regímenes, cada régimen se reparte SÓLO entre las facturas que le suman
         // (y cada pago guarda la base con la que entró en cada uno). Sin eso: todas reparten todo, como siempre.
-        var _provMulti = buscarProveedorPorNombre(provNombre);
-        var _ctxMulti = (mod === 'A') ? _pagoFDRegCtx(_provMulti, baseTotal) : null;
-        var _aplicaRet = function(y, r){ return r.manual || _facturaAplicaRegimen(y.f, r.codigo); };
+        // Una retención manual de un régimen concreto («elegir régimen») también se reparte sólo entre las que le suman.
+        var _aplicaRet = function(y, r){
+            if (r.manual) return r.codReg ? _facturaAplicaRegimen(y.f, r.codReg, _provMulti) : true;
+            return _facturaAplicaRegimen(y.f, r.codigo, _provMulti);
+        };
         sel.forEach(function(x, k){
             var f = x.f;
             // Retención total repartida en proporción al monto de cada factura (la última ajusta el redondeo)
@@ -12276,7 +12300,7 @@
             if (mod === 'A' && nroCbteFD.trim()) entry.nroComprobante = nroCbteFD.trim();
             if (_comp) { entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo; }
             if (_ctxMulti && _ctxMulti.bases) {
-                var _bRM = _regimenesDeProv(_provMulti).filter(function(r){ return _facturaAplicaRegimen(f, r.codigo); })
+                var _bRM = _regimenesDeProv(_provMulti).filter(function(r){ return _facturaAplicaRegimen(f, r.codigo, _provMulti); })
                     .map(function(r){ return { codigo: r.codigo, base: Math.round(x.neto * _ctxMulti.factor * 100) / 100 }; });
                 if (_bRM.length) entry.basesReg = _bRM;
             }
@@ -12352,7 +12376,8 @@
         // Si la factura eligió a qué regímenes suma, el pago guarda la base con la que entró en cada uno.
         if(mod==='A'&&_pagoFDTab==='fact'){
             var _fRg=facturas[parseInt(val)];
-            var _bRg=_basesRegDePago(buscarProveedorPorNombre(_fRg&&_fRg.proveedor),_regimenesDeFactura(_fRg),baseEste);
+            var _provRg=buscarProveedorPorNombre(_fRg&&_fRg.proveedor);
+            var _bRg=_basesRegDePago(_provRg,_regimenesDeFactura(_fRg,_provRg),baseEste);
             if(_bRg) entry.basesReg=_bRg;
         }
         var nroCbteFD=(document.getElementById('pagoFDNroComprobante')||{}).value||'';
@@ -12759,12 +12784,21 @@
         return _RET_CODIGOS.filter(function(r){ return !!prov[r.key]; });
     }
     // Lista de códigos que eligió la factura, o null = «todos» (como siempre).
-    function _regimenesDeFactura(f) {
+    // Con `prov` se queda sólo con los regímenes que el proveedor TODAVÍA tiene: si después de cargar la
+    // factura se le cambió la configuración y ya no coincide ninguno, la selección guardada no sirve y
+    // vale «todos» (igual que al abrir la factura para editarla). Sin `prov` devuelve lo guardado tal cual.
+    function _regimenesDeFactura(f, prov) {
         var l = f && f.regimenesBase;
-        return (Array.isArray(l) && l.length) ? l : null;
+        if (!Array.isArray(l) || !l.length) return null;
+        if (prov !== undefined) {
+            var vig = _regimenesDeProv(prov).map(function(r){ return r.codigo; });
+            l = l.filter(function(c){ return vig.indexOf(c) !== -1; });
+            if (!l.length) return null;
+        }
+        return l;
     }
-    function _facturaAplicaRegimen(f, codigo) {
-        var l = _regimenesDeFactura(f);
+    function _facturaAplicaRegimen(f, codigo, prov) {
+        var l = _regimenesDeFactura(f, prov);
         return !l || l.indexOf(codigo) !== -1;
     }
     // Base con la que un pago entró en un régimen. Los pagos nuevos de facturas que eligieron
@@ -12826,7 +12860,7 @@
     // prov: objeto proveedor
     // nombreProv, mesAno: para consultar acumulado previo en el mismo mes
     // opts (opcional) — cuando la factura suma sólo a algunos regímenes:
-    //   opts.regimenes: lista de códigos; los demás regímenes del proveedor NO se calculan.
+    //   opts.regimenes: lista de códigos; los demás regímenes del proveedor NO se calculan (lista vacía = ninguno).
     //   opts.bases:     {codigo: base} con una base distinta por régimen (pago de varias facturas);
     //                   un régimen que no figura en el mapa no se calcula.
     // Cada retención devuelta lleva `baseReg`: la base con la que se calculó.
@@ -12835,7 +12869,7 @@
         if (prov.exentoRetenciones) return [];
         const rets = [];
         opts = opts || {};
-        const _filtroReg = (Array.isArray(opts.regimenes) && opts.regimenes.length) ? opts.regimenes : null;
+        const _filtroReg = Array.isArray(opts.regimenes) ? opts.regimenes : null;   // [] = ninguno
         const _basesReg  = opts.bases || null;
         const _aplica  = function(codigo) { return _basesReg ? (_basesReg[codigo] != null) : (!_filtroReg || _filtroReg.indexOf(codigo) !== -1); };
         const _baseDe  = function(codigo) { return (_basesReg && _basesReg[codigo] != null) ? _basesReg[codigo] : baseEste; };
@@ -19528,6 +19562,7 @@
 
     function cerrarLeerFactPDF() {
         document.getElementById('modalLeerFactPDF').classList.remove('active');
+        _regimenesFactReset('lf');   // la próxima factura arranca con todos los regímenes tildados
     }
 
     function leerFactVolver() {
@@ -19626,7 +19661,8 @@
         if (!desgEl) return;
         if (rets.length === 0) {
             _lfRetsCalculadas = [];
-            desgEl.innerHTML = '<div class="ret-row" style="color:var(--text-3);font-size:12px;">Sin regímenes configurados para este proveedor.</div>';
+            var _selRL = _regimenesFactLeer('lf');
+            desgEl.innerHTML = '<div class="ret-row" style="color:var(--text-3);font-size:12px;">' + ((_selRL && !_selRL.length) ? 'Tildá al menos un régimen arriba para calcular la retención.' : 'Sin regímenes configurados para este proveedor.') + '</div>';
             var te = document.getElementById('lfRetTotal'); if (te) te.textContent = '$0';
             var ne = document.getElementById('lfRetNeto');  if (ne) ne.textContent = '$' + (montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
             return;
@@ -19724,6 +19760,7 @@
         show('lfPresupGrupo', on ? 'none' : '');
         if (on) show('lfPagoPanel', 'none');
         var gb = document.getElementById('lfGuardarBtn'); if (gb) gb.textContent = on ? '💾 Guardar Nota de Crédito' : '💾 Guardar Factura';
+        _regimenesFactRender('lf', (document.getElementById('leerFactProv') || {}).value);   // oculto en NC, vuelve al destildar
         if (on) { _lfPoblarNCFacturas(); }
         else if (typeof lfSelTipo === 'function') { lfSelTipo(document.getElementById('lfTipo').value || 'presup'); }
     }
@@ -20270,7 +20307,7 @@
         }
         // Regímenes de retención a los que suma esta factura (sólo si el proveedor tiene 2 o más).
         var _regSelLF = _regimenesFactLeer('lf');
-        if (_regSelLF && !_regSelLF.length) { alert('Tildá al menos un régimen de retención: es a cuya base suma esta factura.\n\nSi vale para todos, dejalos todos tildados.'); return; }
+        if (_regSelLF && !_regSelLF.length) { alert('Tildá al menos un régimen de retención: la base de esta factura tiene que sumar a alguno.\n\nSi vale para todos, dejalos todos tildados.'); return; }
         if (_regSelLF) nueva.regimenesBase = _regSelLF;
 
         // ── Adjuntar PDF en REF_DOCS ─────────────────────────────────
@@ -20387,6 +20424,7 @@
             var _fpn = document.getElementById('factProvNuevoAviso'); if (_fpn) _fpn.style.display = 'none';
             poblarSelectProveedoresFact();
             _regimenesFactReset('fact');
+            var _avP0 = document.getElementById('factRegimenesAvisoPagos'); if (_avP0) _avP0.style.display = 'none';
             selFactTipo('presup');
             selFactPagoInmediato(true);
             selFactModalidad('A');
@@ -20459,6 +20497,7 @@
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
         _regimenesFactRender('fact', f.proveedor, f.regimenesBase, true);   // con lo que se eligió al cargarla
+        var _avP = document.getElementById('factRegimenesAvisoPagos'); if (_avP) _avP.style.display = (f.pagosHistorial && f.pagosHistorial.length) ? '' : 'none';
         document.getElementById('factNumero').value       = f.numero || '';
         document.getElementById('factFecha').value        = f.fecha || '';
         document.getElementById('factVencimiento').value  = f.vencimiento || '';
@@ -20936,6 +20975,7 @@
         show('factPresupGrupo', on ? 'none' : '');
         show('factComputaGrupo', on ? 'none' : '');
         show('factPagoInmediatoPanel', on ? 'none' : '');
+        _regimenesFactRender('fact', (document.getElementById('factProveedor') || {}).value);   // oculto en NC, vuelve al destildar
         if (on) _factPoblarNCFacturas();
         else if (typeof selFactTipo === 'function') selFactTipo((document.getElementById('factTipo') || {}).value || 'presup');
     }
@@ -21317,6 +21357,9 @@
         var grupo = document.getElementById(prefix + 'RegimenesGrupo');
         var lista = document.getElementById(prefix + 'RegimenesLista');
         if (!grupo || !lista) return;
+        // Una nota de crédito no paga ni retiene: no tiene a qué base sumar.
+        var _nc = document.getElementById(prefix === 'lf' ? 'leerFactEsNC' : 'factEsNC');
+        if (_nc && _nc.checked) { grupo.style.display = 'none'; return; }
         var prov = provNombre ? buscarProveedorPorNombre(provNombre) : null;
         var regs = _regimenesDeProv(prov);
         if (regs.length < 2) {
@@ -21391,7 +21434,8 @@
         if (!desglose) return;
         if (rets.length === 0) {
             _factRetsCalculadas = [];
-            desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? 'Sin regímenes configurados.' : 'Seleccioná un proveedor.'}</div>`;
+            const _selR = _regimenesFactLeer('fact');
+            desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? ((_selR && !_selR.length) ? 'Tildá al menos un régimen arriba para calcular la retención.' : 'Sin regímenes configurados.') : 'Seleccioná un proveedor.'}</div>`;
             if (totalEl) totalEl.textContent = '$0';
             if (netoEl) netoEl.textContent = '$' + (montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
             return;
@@ -21477,7 +21521,7 @@
         // Regímenes de retención a los que suma esta factura (el selector sólo aparece si el
         // proveedor tiene 2 o más). Sin tildar ninguno no hay a dónde sumar la base.
         const _regSel = _regimenesFactLeer('fact');
-        if (_regSel && !_regSel.length) { alert('Tildá al menos un régimen de retención: es a cuya base suma esta factura.\n\nSi vale para todos, dejalos todos tildados.'); return; }
+        if (_regSel && !_regSel.length) { alert('Tildá al menos un régimen de retención: la base de esta factura tiene que sumar a alguno.\n\nSi vale para todos, dejalos todos tildados.'); return; }
         if (_regSel) nuevo.regimenesBase = _regSel;
         // Aviso de posible comprobante DUPLICADO. Antes el chequeo vivía acá suelto y
         // sólo miraba 'facturas' con el número tal cual: ahora usa el control común, que
@@ -21550,6 +21594,15 @@
             var _if = _resolverEdicion(facturas, _edicionEnCurso.factura && _edicionEnCurso.factura.id, _edicionEnCurso.factura && _edicionEnCurso.factura.snap, 'factura');
             if (_if < 0) return;
             nuevo.id = facturas[_if].id || ('F-' + Date.now());
+            // `nuevo` se arma desde el formulario, que sólo maneja una parte de los campos. Armarlo de cero
+            // y reemplazar el nodo borraba todo lo demás: sobre todo `pagosHistorial` (los pagos con sus
+            // retenciones y la base acumulada del mes) y lo que trajo la IA (CUIT, CAE, dirección…), dejando
+            // `pagado`/`estado` sin ningún pago que los respalde. Se conserva lo que el formulario no toca.
+            // Los campos que el formulario SÍ decide —y que pueden quedar vacíos a propósito— no se restauran.
+            var _delForm = { presupuestoIdx:1, presupuestoPorcentaje:1, presupuestoComentario:1, regimenesBase:1, docId:1, docNombre:1, docTipo:1 };
+            Object.keys(facturas[_if]).forEach(function(k) {
+                if (!(k in nuevo) && !_delForm[k]) nuevo[k] = facturas[_if][k];
+            });
             facturas[_if] = nuevo;
         } else {
             nuevo.id = 'F-' + Date.now();
@@ -22517,6 +22570,7 @@
                     var o = document.createElement('option'); o.value = n; _dlLF.appendChild(o);
                 });
             }
+            _regimenesFactReset('lf');   // importar de Gmail es otra factura: no hereda lo tildado en la anterior
             lfChequearProvNuevo();
         } catch(e) {
             var _msgE = e.message || String(e);
