@@ -2455,6 +2455,50 @@
     }).join("");
   }
 
+  /* El informe sólo es «lo que se imprime» mientras el body tenga la clase
+     `imprimiendo` (ver @media print). Y quien arma la vista previa NO siempre lo
+     hace dentro de window.print(): en el celular (Android, iOS) y en las ventanas
+     instaladas, print() vuelve enseguida y la vista previa se genera DESPUÉS, a
+     pedido del sistema de impresión —y de nuevo cada vez que se cambia el papel,
+     los márgenes o la orientación—. Antes la clase se quitaba a los 600 ms: si la
+     vista previa tardaba más, se armaba con el tablero en vez del informe, y lo
+     que salía era la pantalla. Ahora queda puesta hasta que termine la impresión
+     (`afterprint`) o, si ese evento no llega, hasta el primer toque del usuario
+     sobre la página (los toques del diálogo de impresión no le llegan), y como
+     tope a los 5 minutos. En pantalla la clase no cambia nada: sólo vale al imprimir. */
+  var CLASES_IMPRESION = ["imprimiendo", "apaisado", "tareas"];
+  var soltarImpresion = null;
+  function imprimirReporte(clases){
+    if (soltarImpresion) soltarImpresion();          // una impresión anterior que haya quedado colgada
+    var b = document.body, listo = false, tPrint = 0, tope;
+    CLASES_IMPRESION.forEach(function(c){ b.classList.remove(c); });
+    b.classList.add("imprimiendo");
+    (clases || []).forEach(function(c){ b.classList.add(c); });
+    function soltar(){
+      if (listo) return; listo = true;
+      CLASES_IMPRESION.forEach(function(c){ b.classList.remove(c); });
+      window.removeEventListener("afterprint", soltar);
+      document.removeEventListener("pointerdown", alTocar, true);
+      document.removeEventListener("keydown", alTocar, true);
+      clearTimeout(tope);
+      if (soltarImpresion === soltar) soltarImpresion = null;
+    }
+    // Tocó la página después de imprimir: ya volvió del diálogo. Un margen evita
+    // que un toque suelto de justo antes de abrirse el diálogo lo cierre de más.
+    function alTocar(){ if (tPrint && Date.now() - tPrint > 1500) soltar(); }
+    soltarImpresion = soltar;
+    window.addEventListener("afterprint", soltar);
+    tope = setTimeout(soltar, 5 * 60 * 1000);
+    // El navegador necesita un respiro para pintar el informe antes de imprimir.
+    setTimeout(function(){
+      if (listo) return;
+      tPrint = Date.now();
+      document.addEventListener("pointerdown", alTocar, true);
+      document.addEventListener("keydown", alTocar, true);
+      try { window.print(); } catch(e){ soltar(); }
+    }, 220);
+  }
+
   var infTok = 0;
   function imprimirTareas(){
     var d = datosTareas();
@@ -2470,15 +2514,7 @@
     function imprimir(){
       $("reporte").innerHTML = armarTareas(d);
       cerrarModal();
-      document.body.classList.add("imprimiendo");
-      document.body.classList.add("tareas");
-      setTimeout(function(){
-        try { window.print(); } catch(e){}
-        setTimeout(function(){
-          document.body.classList.remove("imprimiendo");
-          document.body.classList.remove("tareas");
-        }, 600);
-      }, 220);
+      imprimirReporte(["tareas"]);
     }
 
     prepararFotos(fids, function(hechas, total){
@@ -2501,18 +2537,9 @@
     }
     $("reporte").innerHTML = armarInforme();
     cerrarModal();
-    document.body.classList.add("imprimiendo");
     // La doble entrada CON las tareas escritas es la única que necesita la
     // hoja apaisada; el resto se lee mejor en vertical.
-    document.body.classList.toggle("apaisado", infCfg.formato === "matriz" && !!infCfg.tareas);
-    // El navegador necesita un respiro para pintar el informe antes de imprimir.
-    setTimeout(function(){
-      try { window.print(); } catch(e){}
-      setTimeout(function(){
-        document.body.classList.remove("imprimiendo");
-        document.body.classList.remove("apaisado");
-      }, 600);
-    }, 220);
+    imprimirReporte(infCfg.formato === "matriz" && infCfg.tareas ? ["apaisado"] : []);
   }
 
   /* =========================================================
@@ -2905,9 +2932,41 @@
   //   compartida      → sólo el nodo finalObra, para INSERTAR. Si mandáramos
   //                     el archivo entero y alguien lo pegara reemplazando,
   //                     se llevaría puestas las reglas de la otra app.
+  // Otras personas que tienen que entrar además de quien está pegando las
+  // reglas. Las reglas se publican REEMPLAZANDO todo, así que el bloque tiene
+  // que llevar a todos los habilitados juntos: si sólo llevara el mail propio,
+  // pegarlo dejaría afuera a cualquiera que ya estuviera autorizado. Se
+  // recuerda en este equipo (no es un dato de la obra, no viaja a la nube).
+  var CLAVE_HAB = CLAVE + "_mailsHab";
+  var mailsHab = [];
+  leer(CLAVE_HAB).then(function(v){
+    try { var a = JSON.parse(v || "[]"); if (Array.isArray(a)) mailsHab = limpiarMails(a); } catch(e){}
+  });
+
+  // Un mail va DENTRO de un texto entre comillas simples de las reglas: sin
+  // comillas, barras ni espacios, o un mail mal tipeado rompe la regla entera.
+  // Firebase guarda los mails en minúscula, así que se compara en minúscula.
+  function limpiarMails(lista){
+    var vistos = {}, sal = [];
+    (lista || []).forEach(function(m){
+      m = String(m || "").trim().toLowerCase();
+      if (!/^[^\s'"\\<>,;@]+@[^\s'"\\<>,;@]+\.[^\s'"\\<>,;@]+$/.test(m) || vistos[m]) return;
+      vistos[m] = 1; sal.push(m);
+    });
+    return sal;
+  }
+  function guardarMailsHab(texto){
+    mailsHab = limpiarMails(String(texto || "").split(/[\s,;]+/));
+    escribir(CLAVE_HAB, JSON.stringify(mailsHab));
+  }
+
   function bloqueReglas(){
-    var mail = nube.usuario || "tu-mail@ejemplo.com";
-    var cond = "auth != null && auth.token.email === '" + mail + "'";
+    var propio = String(nube.usuario || "tu-mail@ejemplo.com").trim().toLowerCase();
+    var mails = limpiarMails([propio].concat(mailsHab));
+    if (!mails.length) mails = ["tu-mail@ejemplo.com"];
+    var cond = mails.length === 1
+      ? "auth != null && auth.token.email === '" + mails[0] + "'"
+      : "auth != null && (" + mails.map(function(m){ return "auth.token.email === '" + m + "'"; }).join(" || ") + ")";
     var secciones = "$seccion === 'rubros' || $seccion === 'entidades' || " +
                     "$seccion === 'items' || $seccion === 'obra' || " +
                     "$seccion === 'personas' || $seccion === 'fotos' || $seccion === 'fotosData'";
@@ -2937,6 +2996,16 @@
            '    }\n' +
            '  }\n' +
            '},';
+  }
+
+  // Lleva directo a la pestaña Reglas de la base (la consola abre en el proyecto
+  // y la base correctos). El nombre de la base es lo primero de la URL de datos.
+  function urlReglas(){
+    var pid = FB.projectId || "";
+    var m = /^https?:\/\/([^.\/]+)\./.exec(FB.databaseURL || "");
+    if (!pid) return "https://console.firebase.google.com/";
+    return "https://console.firebase.google.com/project/" + encodeURIComponent(pid) +
+           "/database/" + encodeURIComponent(m ? m[1] : pid + "-default-rtdb") + "/rules";
   }
 
   function copiarTexto(txt){
@@ -3292,23 +3361,35 @@
               'autorizar esa cuenta en las reglas de la base. Es una sola vez, y lo hace quien tenga ' +
               'acceso a la consola de Firebase:</div>' +
             '<ol class="pasos">' +
-              '<li>Firebase Console → proyecto <b>' + esc(FB.projectId || "de la obra") + '</b>.</li>' +
-              '<li>Realtime Database → pestaña <b>Reglas</b>.</li>' +
+              '<li>Abrí <a href="' + esc(urlReglas()) + '" target="_blank" rel="noopener"><b>la pestaña Reglas de Firebase</b></a> ' +
+                '(proyecto <b>' + esc(FB.projectId || "de la obra") + '</b> → Realtime Database → Reglas). ' +
+                'Hay que iniciar sesión con la cuenta de Google dueña del proyecto.</li>' +
               (CFG.proyectoPropio
-                ? '<li>Pegar esto en <b>Reglas</b>, <b>reemplazando todo</b> lo que haya, y publicar. ' +
-                    'Esta base es sólo del tablero, así que no hay nada más que conservar:</li>'
+                ? '<li>Seleccioná <b>todo</b> lo que haya ahí, pegá el texto de abajo <b>reemplazándolo</b> y tocá <b>Publicar</b>. ' +
+                    'Esta base es sólo del tablero, así que no hay nada más que conservar.</li>'
                 : '<li>Pegar esto <b>justo después</b> de la línea <code>"rules": {</code>, sin borrar ' +
-                    'nada de lo que ya está:</li>') +
+                    'nada de lo que ya está.</li>') +
+              '<li>Volvé acá y tocá <b>Ya está publicado — reintentar</b>.</li>' +
             '</ol>' +
+            '<div class="ayuda"><b>Otras personas que tienen que entrar</b> (un mail por renglón). Como el texto ' +
+              'reemplaza todo, tiene que llevar a <b>todos</b> los habilitados: si alguien ya tenía acceso y no está ' +
+              'acá, deja de entrar.</div>' +
+            '<textarea class="campo" id="nOtros" rows="3" inputmode="email" autocapitalize="off" autocomplete="off" ' +
+              'spellcheck="false" placeholder="otra.persona@gmail.com">' + esc(mailsHab.join("\n")) + '</textarea>' +
             '<div class="codigo" id="nReglas">' + esc(bloqueReglas()) + '</div>' +
             '<button class="bfull sec" id="nCopiar">Copiar el texto</button>' +
-            '<div class="ayuda" style="margin-top:11px">Para sumar a otra persona después, se encadena ' +
-              'con <code>||</code>: <code>auth.token.email === \'uno@x.com\' || auth.token.email === \'otro@x.com\'</code>.</div>'
+            '<div class="ayuda" style="margin-top:11px">Ojo con el mail: tiene que ser <b>exactamente</b> con el que ' +
+              'entraste (arriba figura cuál es), con o sin puntos. <code>nombre.apellido@gmail.com</code> y ' +
+              '<code>nombreapellido@gmail.com</code> son cuentas distintas para Firebase.</div>'
           : '<div class="ayuda">Mientras tanto el tablero anda igual: todo lo que cargues queda guardado ' +
               'en este equipo.</div>') +
         '<button class="bfull" id="nReintentar" style="margin-top:6px">Ya está publicado — reintentar</button>' +
         '<button class="bfull sec" id="nSalir2" style="margin-top:8px">Entrar con otra cuenta</button>');
       if ($("nCopiar")) $("nCopiar").addEventListener("click", function(){ copiarTexto(bloqueReglas()); });
+      if ($("nOtros")) $("nOtros").addEventListener("input", function(){
+        guardarMailsHab($("nOtros").value);
+        $("nReglas").textContent = bloqueReglas();   // el bloque sigue lo que se tipea, sin repintar el cuadro
+      });
       $("nReintentar").addEventListener("click", function(){
         cerrarModal(); toast("Probando de nuevo…");
         soltarDatos(); nube.estado = "yendo"; nube.error = ""; pintarNube();
