@@ -10493,6 +10493,14 @@
     // ── Movimiento bancario manual ─────────────────────────────────
     var _movBancoTipo = 'entrada';
     var _movBancoEditIdx = null;
+    // «Tarjeta corporativa» sólo tiene sentido como salida: en una entrada manual al banco se deshabilita
+    // (disabled y no hidden, que no lo respetan todos los navegadores del celular).
+    function _movBancoMedioOpciones(tipo) {
+        var sel = document.getElementById('movBancoMedio'); if (!sel) return;
+        for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === MEDIO_TARJETA_CORP) sel.options[i].disabled = (tipo === 'entrada');
+        }
+    }
     function abrirMovBanco(tipo) {
         _movBancoTipo = tipo;
         _movBancoEditIdx = null;
@@ -10503,6 +10511,7 @@
         document.getElementById('movBancoFecha').value = new Date().toISOString().substring(0,10);
         ['movBancoDesc','movBancoMonto','movBancoOrigen','movBancoRef'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
         var _mbm = document.getElementById('movBancoMedio'); if (_mbm) _mbm.value = 'Transferencia';
+        _movBancoMedioOpciones(tipo);
         var sel = document.getElementById('movBancoCuenta');
         sel.innerHTML = '<option value="">— Seleccionar cuenta —</option>';
         cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o); });
@@ -10522,6 +10531,7 @@
         var orEl=document.getElementById('movBancoOrigen'); if(orEl) orEl.value=m.origenDest||'';
         var refEl=document.getElementById('movBancoRef'); if(refEl) refEl.value=m.referencia||'';
         var medioEl=document.getElementById('movBancoMedio'); if(medioEl) medioEl.value=m.medio||'Transferencia';
+        _movBancoMedioOpciones(_movBancoTipo);
         var sel=document.getElementById('movBancoCuenta');
         sel.innerHTML='<option value="">— Seleccionar cuenta —</option>';
         cuentasBancarias.forEach(function(cu){ var o=document.createElement('option'); o.value=cu.id||cu.banco; o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')'; sel.appendChild(o); });
@@ -11332,7 +11342,7 @@
         if(!rows.length){tbody.innerHTML='<tr><td colspan="11" class="empty-msg">No hay pagos registrados.</td></tr>';_pagosSel=-1;_pagosPintarPanel();return;}
         rows.forEach(function(r){
             var modB=r.mod==='A'?'<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>':'<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
-            if(r.mod==='A'&&r.medio===MEDIO_TARJETA_CORP) modB+=' <span class="pill" title="Tarjeta de crédito corporativa" style="font-size:10px;color:var(--gold);border-color:var(--gold);">💳 Tarjeta</span>';
+            if(r.mod==='A'&&r.medio===MEDIO_TARJETA_CORP) modB='<span style="display:inline-flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;">'+modB+'<span class="pill" title="Tarjeta de crédito corporativa" style="font-size:10px;color:var(--gold);border-color:var(--gold);">💳 Tarjeta</span></span>';
             var tipB=r.esEmit?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Comprob. emitido</span>':r.esDoc?'<span class="pill" style="font-size:10px;background:#EDF0F7;">Documento</span>':r.esFact?'<span class="pill" style="font-size:10px;">Factura</span>':'<span class="pill" style="font-size:10px;background:#EDF0F7;">Presup.</span>';
             var btnI='', btnR='', btnE='';
             if (r.esEmit) {
@@ -12034,7 +12044,7 @@
         var av = document.getElementById('pagoFDFrAviso');
         if (av) {
             av.textContent = (neto < 0)
-                ? 'El fondo de reparo más las retenciones superan el monto del pago: no quedaría nada para transferirle al proveedor.'
+                ? 'El fondo de reparo más las retenciones superan el monto del pago: no quedaría nada para pagarle al proveedor.'
                 : '';
             av.style.display = av.textContent ? '' : 'none';
         }
@@ -12399,7 +12409,7 @@
         var _fr = parseFloat((document.getElementById('pagoFDFr')||{}).value) || 0;
         if (_fr < 0) _fr = 0;
         if (_fr > 0 && (monto - totalRet - _fr) < -0.005) {
-            alert('El fondo de reparo ($' + _fr.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ') más las retenciones superan el monto del pago.\n\nNo quedaría nada para transferirle al proveedor: revisá el monto o el porcentaje.');
+            alert('El fondo de reparo ($' + _fr.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ') más las retenciones superan el monto del pago.\n\nNo quedaría nada para pagarle al proveedor: revisá el monto o el porcentaje.');
             return;
         }
         var entry={pagoId:'FD-'+Date.now(),fecha:fecha,modalidad:mod,monto:monto,baseImponible:baseEste,
@@ -19944,6 +19954,10 @@
         document.getElementById('lfFechaPago').value = hoy;
         // Un comprobante elegido en la factura anterior de la tanda no debe colarse en ésta.
         var _lfc = document.getElementById('lfPagoComprobante'); if (_lfc) _lfc.value = '';
+        // El medio y el N° de cupón/transferencia de la factura anterior tampoco: cada compra tiene el suyo,
+        // y una tarjeta que se arrastra registraría mal el pago sin que nadie lo note.
+        var _lfn = document.getElementById('lfNroComprobante'); if (_lfn) _lfn.value = '';
+        _medioPagoReset('lfNroComprobante', 'lfMedioPago');
         // Auto-completar base imponible con neto gravado de Gemini o importe/1.21
         var _lfImp = parseFloat(document.getElementById('leerFactImporte').value) || 0;
         var _lfNeto = window._lfNetoGravado || (_lfImp > 0 ? Math.round(_lfImp / 1.21 * 100) / 100 : 0);
