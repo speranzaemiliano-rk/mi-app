@@ -20,5 +20,5 @@ window.UNID_CONFIG = {
   },
   // Valores iniciales de un edificio nuevo (después se editan en pantalla).
   inicial: { usd: 1000, tc: 215, tc2: 0 },
-  brand: { nombre: 'Unidades', tagline: 'Valuación y conceptos por unidad', logo: '../assets/mess-logo.svg' }
+  brand: { nombre: 'Planilla posesiones', tagline: 'Valuación y conceptos por unidad', logo: '../assets/mess-logo.svg' }
 };
