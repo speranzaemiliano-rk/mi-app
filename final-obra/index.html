@@ -456,36 +456,9 @@
        Se usa una página con nombre porque @page no entiende de clases. */
     @page apaisada{size:A4 landscape;margin:10mm}
     body.apaisado > #reporte{page:apaisada}
-    /* «Tareas con fotos»: el número de hoja va arriba a la derecha, como en la
-       planilla que se mandaba antes. Si el navegador no entiende las cajas de
-       margen (Firefox), esa línea se ignora y la hoja sale igual, sin número. */
-    @page tareas{size:A4;margin:16mm 16mm 14mm;
-      @top-right{content:counter(page);font:10px Calibri,Carlito,Arial,sans-serif;color:#111}}
-    body.tareas > #reporte{page:tareas}
   }
   #reporte{font-size:11px;color:#111}
 
-  /* ── «Tareas con fotos»: una hoja por lugar ─────────────────────
-     Título, el nombre del lugar, las tareas que faltan numeradas y, abajo,
-     las fotos de esas tareas en filas que llenan el ancho de la hoja. */
-  .tf-pag{break-after:page;page-break-after:always;color:#111;
-    font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif}
-  .tf-pag:last-child{break-after:auto;page-break-after:auto}
-  .tf-pag h1{font-size:14px;font-style:italic;font-weight:700;margin:0 0 5mm}
-  .tf-ent{font-size:11px;margin:0 0 3mm}
-  .tf-lista{margin:0 0 6mm;padding-left:9mm;font-size:10px;line-height:1.6}
-  .tf-lista li{padding-left:1.5mm}
-  .tf-lista li.ok{color:#666;text-decoration:line-through}
-  /* Filas justificadas sin calcular nada en JS: cada foto crece en proporción a
-     su forma (flex-grow = ancho/alto), así todas las de una fila quedan de la
-     misma altura y la fila llena el ancho. El ::after absorbe lo que sobra para
-     que la última fila, que casi nunca está llena, no se estire de más. */
-  .tf-fotos{display:flex;flex-wrap:wrap;gap:1.2mm}
-  .tf-fotos::after{content:"";flex-grow:1000000}
-  .tf-ft{position:relative;margin:0;line-height:0;break-inside:avoid;page-break-inside:avoid}
-  .tf-ft img{width:100%;height:auto;display:block}
-  .tf-ft .n{position:absolute;left:1mm;top:1mm;min-width:4.5mm;padding:0 1.2mm;background:#111;color:#fff;
-    font:700 8px/4.5mm Arial,sans-serif;text-align:center;border-radius:2.3mm}
   .rep-head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #111;padding-bottom:9px;margin-bottom:14px}
   .rep-logo{width:44px;height:44px}
   .rep-t h1{font-size:17px;font-weight:800;letter-spacing:-.01em}
@@ -586,6 +559,20 @@
   .rep-it .rep-quien{margin-left:auto;padding-left:10px;font-size:9px;color:#666;white-space:nowrap;text-decoration:none}
   .rep-it.ok .cj{background:#444}
   .rep-it.ok span{text-decoration:line-through;color:#777}
+  /* «Detalle con fotos»: es el mismo detalle, y debajo de cada tarea van SUS fotos. El lugar
+     deja de ser un bloque indivisible (con fotos puede ocupar varias hojas), pero cada tarea
+     queda pegada a sus fotos y el título del lugar no se queda solo al pie de una hoja. */
+  .rep-ent.cf{page-break-inside:auto;break-inside:auto}
+  .rep-ent.cf h2,.rep-ent.cf .rep-ru{page-break-after:avoid;break-after:avoid}
+  .rep-itf{page-break-inside:avoid;break-inside:avoid}
+  /* Filas justificadas sin calcular nada en JS: cada foto crece en proporción a su forma
+     (flex-grow = ancho/alto), así todas las de una fila quedan de la misma altura y la fila
+     llena el ancho. El ::after absorbe lo que sobra para que la última fila —la única de una
+     tarea con una o dos fotos— no se estire de más. */
+  .rep-fotos{display:flex;flex-wrap:wrap;gap:1.2mm;margin:1mm 0 2.5mm 19px}
+  .rep-fotos::after{content:"";flex-grow:1000000}
+  .rep-ft{margin:0;line-height:0;page-break-inside:avoid;break-inside:avoid}
+  .rep-ft img{width:100%;height:auto;display:block}
   .rep-firmas{display:flex;gap:26px;margin-top:24px;font-size:9.5px;text-align:center;color:#555;page-break-inside:avoid}
   .rep-firmas>div{flex:1}
   .rep-firmas .linea{border-top:1px solid #111;margin-bottom:3px;height:26px}
@@ -1536,8 +1523,13 @@
      7) MODALES Y AVISOS
   ========================================================= */
   var modal = $("modal"), modalContenido = $("modalContenido");
-  function abrirModal(html){ modalContenido.innerHTML = html; modal.classList.add("open"); }
-  function cerrarModal(){ modal.classList.remove("open"); modalContenido.innerHTML = ""; }
+  // alCerrarModal: quien necesite saber que el cuadro se cerró (lo cierre el botón ✕, un toque
+  // afuera o lo reemplace otro cuadro) lo anota acá; se avisa una sola vez. Lo usa el panel de
+  // impresión de iPhone, que tiene que soltar las clases de impresión al cerrarse.
+  var alCerrarModal = null;
+  function avisarCierreModal(){ if (alCerrarModal) { var f = alCerrarModal; alCerrarModal = null; f(); } }
+  function abrirModal(html){ avisarCierreModal(); modalContenido.innerHTML = html; modal.classList.add("open"); }
+  function cerrarModal(){ modal.classList.remove("open"); modalContenido.innerHTML = ""; avisarCierreModal(); }
   $("btnCerrar").addEventListener("click", cerrarModal);
   modal.addEventListener("click", function(e){ if (e.target === modal) cerrarModal(); });
 
@@ -1980,14 +1972,14 @@
      No usa librerías: arma el HTML y llama a window.print().
      Desde ahí el celular ofrece "Guardar como PDF".
   ========================================================= */
-  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false, numFotos:false };
+  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false };
 
   function modalInforme(){
     var rs = rubrosOrdenados().filter(function(r){ return (idx.porRubro[r] || []).length; });
     abrirModal('<h2>Informe de final de obra</h2>' +
       '<h3>Cómo se ve</h3>' +
       '<div class="rejilla" id="iFormato">' +
-        ['cuadro|Cuadro resumen','matriz|Doble entrada','detalle|Con el detalle','tareas|Tareas con fotos'].map(function(o){
+        ['cuadro|Cuadro resumen','matriz|Doble entrada','detalle|Con el detalle','fotos|Detalle con fotos'].map(function(o){
           var q = o.split("|");
           return '<button data-f="' + q[0] + '"' + (infCfg.formato === q[0] ? ' class="act"' : "") + '>' + q[1] + '</button>';
         }).join("") + '</div>' +
@@ -2006,23 +1998,12 @@
         '> Escribir las tareas en vez del número</label>' +
       '<label class="chk"><input type="checkbox" id="iPend"' + (infCfg.soloPendientes ? " checked" : "") +
         '> Sólo lo que falta</label>' +
-      '<label class="chk" id="iNumFotosLbl"><input type="checkbox" id="iNumFotos"' + (infCfg.numFotos ? " checked" : "") +
-        '> Numerar cada foto con su tarea</label>' +
       '<label class="chk" id="iFirmasLbl"><input type="checkbox" id="iFirmas"' + (infCfg.firmas ? " checked" : "") +
         '> Dejar espacio para firmas</label>' +
       '<div class="ayuda" id="iCuenta" style="margin-top:10px"></div>' +
-      '<button class="bfull" id="iHacer">Imprimir / Guardar PDF</button>');
+      '<button class="bfull" id="iHacer">' + (esIOS() ? "Preparar informe" : "Imprimir / Guardar PDF") + '</button>');
 
     function repintarCuenta(){
-      if (infCfg.formato === "tareas") {
-        var tt = datosTareas(), nl = tt.lugares.length;
-        $("iCuenta").textContent = nl
-          ? "Una hoja por lugar: " + nl + (nl === 1 ? " lugar, " : " lugares, ") +
-            tt.tareas + (tt.tareas === 1 ? " tarea y " : " tareas y ") +
-            tt.fotos + (tt.fotos === 1 ? " foto." : " fotos.")
-          : "Con ese filtro no queda ninguna tarea.";
-        return;
-      }
       if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
         var n = lugaresEnAlcance();
         if (!n) { $("iCuenta").textContent = "Con ese filtro no queda ningún lugar."; return; }
@@ -2044,22 +2025,19 @@
         return;
       }
       var d = datosInforme();
+      var conFotos = infCfg.formato === "fotos", nf = conFotos ? fidsDeInforme(d).length : 0;
       $("iCuenta").textContent = d.total
-        ? "Van a salir " + d.ents.length + (d.ents.length === 1 ? " lugar" : " lugares") + " y " + d.total +
-          (d.total === 1 ? " ítem." : " ítems.")
+        ? "Van a salir " + d.ents.length + (d.ents.length === 1 ? " lugar" : " lugares") +
+          (conFotos ? ", " : " y ") + d.total + (d.total === 1 ? " ítem" : " ítems") +
+          (conFotos ? " y " + nf + (nf === 1 ? " foto." : " fotos.") : ".")
         : "Con ese filtro no queda nada para imprimir.";
     }
-    // Cada casilla sólo vale en algún formato: «escribir las tareas» en la doble
-    // entrada (en los otros las tareas ya salen), «numerar las fotos» en el de
-    // tareas con fotos, y las firmas no van ahí: la hoja es para las fotos.
+    // «Escribir las tareas» sólo vale en la doble entrada: en los otros formatos las tareas ya salen.
     function ajustarOpciones(){
-      var f = infCfg.formato, l = $("iTareasLbl"), nf = $("iNumFotosLbl"), fl = $("iFirmasLbl");
-      if (l)  l.style.display  = (f === "matriz") ? "" : "none";
-      if (nf) nf.style.display = (f === "tareas") ? "" : "none";
-      if (fl) fl.style.display = (f === "tareas") ? "none" : "";
+      var l = $("iTareasLbl");
+      if (l) l.style.display = (infCfg.formato === "matriz") ? "" : "none";
     }
     ajustarOpciones();
-    $("iNumFotos").addEventListener("change", function(){ infCfg.numFotos = this.checked; });
     $("iTareas").addEventListener("change", function(){ infCfg.tareas = this.checked; repintarCuenta(); });
     $("iFormato").addEventListener("click", function(e){
       var b = e.target.closest("button[data-f]"); if (!b) return;
@@ -2269,6 +2247,7 @@
         '<div class="rep-meta"><span class="f">' + esc(fechaLarga()) + '</span>' +
           esc(d.ents.length + (d.ents.length === 1 ? " lugar" : " lugares")) + ' · ' +
           esc(d.total + (d.total === 1 ? " ítem" : " ítems")) + '</div></div>'];
+    var conFotos = infCfg.formato === "fotos";
 
     // Resumen por rubro. En el cuadro no va: se comía la primera hoja y el
     // total ya está arriba, en la línea de "N lugares · N ítems".
@@ -2305,7 +2284,12 @@
 
     d.ents.forEach(function(x){
       var e = datos.entidades[x.id], n = cuentaDe(itemsDe(x.id));
-      L.push('<div class="rep-ent"><h2>' +
+      // Un lugar con fotos puede ocupar varias hojas y por eso se deja partir; uno sin ninguna
+      // (o cuyas fotos no se pudieron traer) queda entero, igual que en «Con el detalle».
+      var conF = conFotos && x.bloques.some(function(b){
+        return b.items.some(function(i){ return fidsDeItem(i).some(function(f){ return fotosInf[f]; }); });
+      });
+      L.push('<div class="rep-ent' + (conF ? " cf" : "") + '"><h2>' +
         esc((e.icono ? e.icono + " " : "") + e.nombre + (e.piso ? " — Piso " + e.piso : "")) +
         '<span>' + n.pend + ' de ' + n.total + ' pendientes</span></h2>' +
         x.bloques.map(function(b){
@@ -2315,9 +2299,24 @@
               var quien = it.ok
                 ? "controló " + nombreDe(it.por) + (it.cuando ? " el " + fechaCorta(it.cuando) : "")
                 : (personaNom(it.resp) || "");
-              return '<div class="rep-it' + (it.ok ? " ok" : "") + '">' +
+              var fila = '<div class="rep-it' + (it.ok ? " ok" : "") + '">' +
                      '<span class="cj"></span><span>' + esc(it.texto) + '</span>' +
                      (quien ? '<span class="rep-quien">' + esc(quien) + '</span>' : "") + '</div>';
+              if (!conFotos) return fila;
+              // Una foto que no se pudo traer se saltea acá; imprimirConFotos() ya avisó.
+              var fotos = fidsDeItem(i).map(function(f){ return fotosInf[f]; }).filter(Boolean);
+              if (!fotos.length) return fila;
+              return '<div class="rep-itf">' + fila + '<div class="rep-fotos">' + fotos.map(function(r){
+                // grow = forma (ancho/alto) y basis = esa forma a 34 mm de alto: cada fila se
+                // reparte el ancho en proporción y sale pareja de alto. max-width = esa forma a
+                // 56 mm: sin tope, una foto que queda sola en una fila que no es la última (porque
+                // la siguiente, una panorámica, no entra al lado) se estira a todo el ancho y
+                // mide más que todas las demás juntas. Todas las de una fila llegan al tope a la vez.
+                var ar = r.w / r.h;
+                return '<figure class="rep-ft" style="flex:' + (ar * 100).toFixed(2) + ' 1 ' + (ar * 34).toFixed(2) +
+                  'mm;max-width:' + (ar * 56).toFixed(2) + 'mm">' +
+                  '<img src="' + r.src + '" alt=""></figure>';
+              }).join("") + '</div></div>';
             }).join("");
         }).join("") + '</div>');
     });
@@ -2333,54 +2332,38 @@
   }
 
   /* =========================================================
-     Informe «Tareas con fotos»
-     Una hoja por lugar: título, el nombre, las tareas que faltan en una lista
-     numerada y, abajo, las fotos de esas tareas. Es el estilo de la planilla
-     que se armaba a mano para mandarle a cada contratista lo suyo.
+     Informe «Detalle con fotos»
+     Es el informe con el detalle (armarInforme) y, debajo de cada tarea, sus
+     fotos. Antes era otra hoja —una por lugar, con una lista numerada y el
+     collage al pie, como la planilla que se mandaba a mano—, pero lo que se
+     espera de un informe con fotos es el mismo que el del detalle, con las
+     fotos puestas donde corresponden.
 
-     A diferencia de los otros tres formatos, este necesita los BYTES de las
-     fotos, que no viajan con el tablero (ver traerFoto): hay que bajarlas antes
-     de imprimir, y por eso imprimirTareas() es asíncrono.
+     A diferencia de los otros formatos, este necesita los BYTES de las fotos,
+     que no viajan con el tablero (ver traerFoto): hay que bajarlas antes de
+     armar el informe, y por eso imprimirConFotos() es asíncrono.
   ========================================================= */
-  function ddmmaa(d){
-    d = d || new Date();
-    function z(n){ return (n < 10 ? "0" : "") + n; }
-    return z(d.getDate()) + "/" + z(d.getMonth() + 1) + "/" + String(d.getFullYear()).slice(-2);
-  }
-
-  // Los lugares con sus tareas EN EL ORDEN en que se cargaron (no agrupadas por
-  // rubro: en la hoja es una sola lista corrida) y las fotos de esas tareas.
-  // Las fotos sueltas del lugar, sin tarea, no entran: la hoja ilustra tareas.
-  function datosTareas(){
-    var tipos = infCfg.alcance === "ambos" ? ["unidad","comun"] : [infCfg.alcance];
-    var lugares = [], nTar = 0, nFot = 0;
-    tipos.forEach(function(t){
-      entidadesDe(t).forEach(function(eid){
-        var ids = itemsDe(eid).filter(function(i){
-          var it = datos.items[i];
-          if (infCfg.soloPendientes && it.ok) return false;
-          if (infCfg.rubros.length && infCfg.rubros.indexOf(it.rubro) === -1) return false;
-          return true;
-        });
-        if (!ids.length) return;
-        var fotos = [];
-        ids.forEach(function(i, n){
-          (idx.porItem[i] || []).slice().sort(function(a, b){
-            var d = (datos.fotos[a].m || 0) - (datos.fotos[b].m || 0);
-            return d !== 0 ? d : a.localeCompare(b);
-          }).forEach(function(fid){ fotos.push({ fid: fid, n: n + 1 }); });
-        });
-        nTar += ids.length; nFot += fotos.length;
-        lugares.push({ id: eid, tipo: t, items: ids, fotos: fotos });
-      });
+  // Las fotos de un ítem, en el orden en que se sacaron.
+  function fidsDeItem(i){
+    return (idx.porItem[i] || []).slice().sort(function(a, b){
+      var d = (datos.fotos[a].m || 0) - (datos.fotos[b].m || 0);
+      return d !== 0 ? d : a.localeCompare(b);
     });
-    return { lugares: lugares, tareas: nTar, fotos: nFot };
+  }
+  // Las de todo lo que entra en el informe. Las fotos sueltas del lugar, sin
+  // tarea, no entran: se ilustran tareas.
+  function fidsDeInforme(d){
+    var fids = [];
+    d.ents.forEach(function(x){
+      x.bloques.forEach(function(b){ b.items.forEach(function(i){ fidsDeItem(i).forEach(function(f){ fids.push(f); }); }); });
+    });
+    return fids;
   }
 
   // La foto guardada mide hasta 1280 px, de sobra para la pantalla pero pesada
   // para una hoja: 300 fotos de ésas son 40 MB dentro del PDF. Se reducen a 800
-  // —alcanza para 6 cm de ancho a 300 ppp— y de paso se mide la forma de cada
-  // una, que es lo que necesita el collage para armar las filas.
+  // —alcanza para 6 cm de ancho a 300 ppp, y acá salen de unos 4 cm— y de paso
+  // se mide la forma de cada una, que es lo que necesita cada fila para repartirse el ancho.
   var fotosInf = {};   // fid → { src, w, h } ya reducida, para no rehacerla al reimprimir
   var INF_LADO = 800, INF_CALIDAD = 0.78;
   function fotoParaInforme(fid, cb){
@@ -2426,35 +2409,6 @@
     siguiente();
   }
 
-  function armarTareas(d){
-    var fecha = ddmmaa();
-    return d.lugares.map(function(L){
-      var e = datos.entidades[L.id];
-      var que = L.tipo === "unidad" ? "departamentos" : "espacios comunes";
-      var tit = (infCfg.soloPendientes ? "Tareas faltantes " : "Tareas ") + que + " \u2013 " + fecha;
-      // Una foto que no se pudo traer se saltea acá; imprimirTareas() ya avisó.
-      var fotos = L.fotos.map(function(f){
-        var r = fotosInf[f.fid];
-        return r ? { r: r, n: f.n } : null;
-      }).filter(Boolean);
-      return '<section class="tf-pag"><h1>' + esc(tit) + '</h1>' +
-        '<div class="tf-ent">' + esc(e.nombre) + '</div>' +
-        '<ol class="tf-lista">' + L.items.map(function(i){
-          var it = datos.items[i];
-          return '<li' + (it.ok ? ' class="ok"' : "") + '>' + esc(it.texto) + '</li>';
-        }).join("") + '</ol>' +
-        (fotos.length ? '<div class="tf-fotos">' + fotos.map(function(f){
-          // grow = forma (ancho/alto) y basis = esa forma a 40 mm de alto: cada
-          // fila se reparte el ancho en proporción y sale pareja de alto.
-          var ar = f.r.w / f.r.h;
-          return '<figure class="tf-ft" style="flex:' + (ar * 100).toFixed(2) + ' 1 ' + (ar * 40).toFixed(2) + 'mm">' +
-            '<img src="' + f.r.src + '" alt="">' +
-            (infCfg.numFotos ? '<span class="n">' + f.n + '</span>' : "") + '</figure>';
-        }).join("") + '</div>' : "") +
-        '</section>';
-    }).join("");
-  }
-
   /* El informe sólo es «lo que se imprime» mientras el body tenga la clase
      `imprimiendo` (ver @media print). Y quien arma la vista previa NO siempre lo
      hace dentro de window.print(): en el celular (Android, iOS) y en las ventanas
@@ -2466,8 +2420,43 @@
      (`afterprint`) o, si ese evento no llega, hasta el primer toque del usuario
      sobre la página (los toques del diálogo de impresión no le llegan), y como
      tope a los 5 minutos. En pantalla la clase no cambia nada: sólo vale al imprimir. */
-  var CLASES_IMPRESION = ["imprimiendo", "apaisado", "tareas"];
+  var CLASES_IMPRESION = ["imprimiendo", "apaisado"];
   var soltarImpresion = null;
+
+  /* iPhone y iPad (también Chrome/Brave/Firefox allá: todos usan el motor de Safari) no se
+     portan como el resto, por dos motivos que se vieron en la obra:
+       1) `afterprint` llega ANTES de que se cierre el diálogo (error conocido de WebKit,
+          bug 245171). Si se lo usa para soltar las clases, la vista previa —que iOS arma
+          después— se genera con el tablero puesto: «sale directamente en PDF la pantalla».
+       2) Safari bloquea las impresiones «automáticas» («This website was blocked for automatic
+          printing») y no está documentado qué cuenta como automática: no hay garantía de que
+          un print() lanzado desde un temporizador, o después de bajar las fotos, se ejecute.
+          Con el reporte «aprieto Informe y no me sale» pasó eso, o algo parecido.
+     Entonces: el informe se arma, las clases quedan puestas, y se muestra un panel con un
+     botón que llama a print() DENTRO del toque, nunca desde un temporizador. Las clases se sueltan sólo cuando se cierra
+     el panel; mientras tanto se puede imprimir, cambiar el papel o reintentar las veces que
+     haga falta. En pantalla las clases no cambian nada (sólo valen al imprimir). */
+  function esIOS(){
+    var ua = navigator.userAgent || "";
+    return /iPad|iPhone|iPod/.test(ua) ||
+           (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);   // iPad que se anuncia como Mac
+  }
+  function panelImpresionIOS(soltar){
+    abrirModal('<h2>Informe listo</h2>' +
+      '<div class="ayuda">Tocá <b>Imprimir</b> para abrir las opciones de impresión. Para guardarlo como <b>PDF</b>: ' +
+      'separá dos dedos sobre la miniatura de la página para verla en grande, tocá <b>Compartir</b> y elegí <b>Guardar en Archivos</b>.</div>' +
+      (window.navigator.standalone === true
+        ? '<div class="ayuda">Si al tocar Imprimir no se abre nada, probá abrir el tablero desde Safari en vez del ícono de la pantalla de inicio.</div>'
+        : "") +
+      '<button class="bfull" id="iosImprimir">\ud83d\udda8\ufe0f Imprimir / Guardar PDF</button>' +
+      '<button class="bfull sec" id="iosCerrar" style="margin-top:8px">Cerrar</button>');
+    alCerrarModal = soltar;      // después de abrirModal, que avisa del cuadro anterior
+    $("iosImprimir").addEventListener("click", function(){
+      try { window.print(); }
+      catch(e){ toast("No se pudo abrir la impresión en este equipo"); }
+    });
+    $("iosCerrar").addEventListener("click", cerrarModal);
+  }
   function imprimirReporte(clases){
     if (soltarImpresion) soltarImpresion();          // una impresión anterior que haya quedado colgada
     var b = document.body, listo = false, tPrint = 0, tope;
@@ -2487,6 +2476,8 @@
     // que un toque suelto de justo antes de abrirse el diálogo lo cierre de más.
     function alTocar(){ if (tPrint && Date.now() - tPrint > 1500) soltar(); }
     soltarImpresion = soltar;
+    // iPhone / iPad: otro camino (ver panelImpresionIOS). Ni `afterprint` ni el temporizador sirven.
+    if (esIOS()) { panelImpresionIOS(soltar); return; }
     window.addEventListener("afterprint", soltar);
     tope = setTimeout(soltar, 5 * 60 * 1000);
     // El navegador necesita un respiro para pintar el informe antes de imprimir.
@@ -2500,21 +2491,27 @@
   }
 
   var infTok = 0;
-  function imprimirTareas(){
-    var d = datosTareas();
-    if (!d.lugares.length) { toast("Con ese filtro no hay nada para imprimir"); return; }
+  function imprimirConFotos(){
+    var d = datosInforme();
+    if (!d.total) { toast("Con ese filtro no hay nada para imprimir"); return; }
     var tok = ++infTok, btn = $("iHacer"), textoBtn = btn ? btn.textContent : "";
-    var fids = [];
-    d.lugares.forEach(function(L){ L.fotos.forEach(function(f){ fids.push(f.fid); }); });
+    var fids = fidsDeInforme(d);
+    // El cuadro de opciones sigue abierto mientras se bajan las fotos (puede tardar con poca señal).
+    // Si tocan algo, el informe tiene que salir igual que el que se pidió, no otro: armarInforme()
+    // lee infCfg en vivo, así que se arma con una copia de lo que había al empezar.
+    var cfg = JSON.parse(JSON.stringify(infCfg));
     // Si cerraron el cuadro mientras se bajaban las fotos, no hay nada que imprimir.
     function vivo(){ return tok === infTok && btn && document.body.contains(btn); }
     function restaurar(){ if (btn) { btn.disabled = false; btn.textContent = textoBtn; } }
     if (btn) btn.disabled = true;
 
     function imprimir(){
-      $("reporte").innerHTML = armarTareas(d);
+      var vivoCfg = infCfg;
+      infCfg = cfg;
+      try { $("reporte").innerHTML = armarInforme(); }
+      finally { infCfg = vivoCfg; }
       cerrarModal();
-      imprimirReporte(["tareas"]);
+      imprimirReporte([]);
     }
 
     prepararFotos(fids, function(hechas, total){
@@ -2528,7 +2525,7 @@
   }
 
   function imprimirInforme(){
-    if (infCfg.formato === "tareas") return imprimirTareas();
+    if (infCfg.formato === "fotos") return imprimirConFotos();
     var d = datosInforme();
     // El cuadro también vale cuando no queda nada pendiente: ese informe es
     // justamente el que dice que está todo cerrado.
