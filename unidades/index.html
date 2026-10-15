@@ -119,6 +119,18 @@ tfoot td{position:sticky;bottom:0;background:var(--sidebar-bg);font-weight:700}
 .sm{color:var(--text-3);font-size:12px}
 td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 .nota{color:var(--text-3);font-size:12px;margin:10px 2px}
+/* Ventana de edición (unidad / edificio) */
+.modal-fondo{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal-caja{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-lg);width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:20px}
+:root:not([data-theme]) .modal-caja{background:#fff}
+.modal-caja h2{margin:0 0 14px;font-size:18px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.form-grid .full{grid-column:1/-1}
+.modal-pie{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-1)}
+.chk input{width:auto}
+.ico{padding:3px 8px;border-radius:8px;font-size:12px}
+@media(max-width:600px){.form-grid{grid-template-columns:1fr}}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--surface);border-radius:var(--radius-pill);padding:10px 18px;z-index:950;max-width:90vw;font-weight:500}
 .vista{display:none}.vista.on{display:block}
 @media(max-width:900px){
@@ -155,7 +167,9 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <button class="nav-item" data-v="valuacion"><span class="nav-icon">calculate</span>Valuación y conceptos</button>
       <button class="nav-item" data-v="posesion"><span class="nav-icon">event_available</span>Posesión y firma</button>
       <div class="nav-label">Datos</div>
+      <button class="nav-item" id="btnNuevoEd"><span class="nav-icon">add_business</span>Nuevo edificio</button>
       <button class="nav-item" id="btnImp"><span class="nav-icon">upload_file</span>Importar Excel</button>
+      <button class="nav-item" id="btnXls0"><span class="nav-icon">download</span>Bajar a Excel</button>
       <button class="nav-item" id="btnDel"><span class="nav-icon">delete</span>Eliminar edificio</button>
       <input type="file" id="fileImp" accept=".xlsx,.xls,.csv" class="hid">
     </div>
@@ -178,7 +192,10 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
     <div id="vacio" class="card hid" style="text-align:center;padding:40px 16px">
       <h2 style="margin-top:0">Todavía no hay edificios cargados</h2>
       <p class="sm">Importá la planilla de unidades (Excel) para crear el primero. Columnas esperadas: Unidad, Propietario, Teléfono, Mail, Inquilino/a, m² Superficie.</p>
-      <button class="btn pri" id="btnImp2">Importar Excel</button>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button class="btn pri" id="btnImp2">📥 Importar Excel</button>
+        <button class="btn" id="btnNuevoEd2">＋ Crear edificio vacío</button>
+      </div>
     </div>
 
     <div id="cuerpo">
@@ -192,7 +209,8 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
           <button class="btn" data-f="ter">Terceros</button>
           <button class="btn" id="pd">👁 Datos personales</button>
           <button class="btn" id="grp">Agrupar por propietario</button>
-          <button class="btn" id="csv">⬇ Exportar CSV</button>
+          <button class="btn" id="btnNuevaU">＋ Nueva unidad</button>
+          <button class="btn pri" id="xls">⬇ Bajar a Excel</button>
           <button class="btn" id="mails">✉ Copiar mails visibles</button>
         </div>
         <div class="tw"><table><thead id="th"></thead><tbody id="tb"></tbody><tfoot id="tf"></tfoot></table></div>
@@ -215,6 +233,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
           <button class="btn on" data-pf="todas">Todas</button>
           <button class="btn" data-pf="sin">Sin fecha</button>
           <button class="btn" data-pf="con">Con fecha</button>
+          <button class="btn pri" id="xls2">⬇ Bajar a Excel</button>
         </div>
         <div class="tw"><table><thead><tr><th class="l">Unidad</th><th class="l">Propietario</th><th class="l">Inquilino/a</th><th>m²</th><th class="l">Fecha de posesión</th><th class="l">Hora de firma</th><th class="l">Estado</th></tr></thead><tbody id="ptb"></tbody></table></div>
         <p class="nota">Cargá la fecha y la hora de cada unidad: se guardan solas. Usá los botones de arriba para ver solo las que todavía no tienen fecha.</p>
@@ -222,6 +241,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
     </div>
   </main>
 </div>
+<div id="modal" class="modal-fondo hid"><div class="modal-caja" id="modalCaja"></div></div>
 <div id="toast" class="hid"></div>
 
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -301,7 +321,7 @@ function normParams(p){
       }
       puedeEditar = ['superadmin','admin','editor'].indexOf(rol) >= 0;
       $('quienMail').textContent = mail; $('quienRol').textContent = rol;
-      $('btnImp').disabled = !puedeEditar; $('btnDel').disabled = !puedeEditar; $('btnImp2').disabled = !puedeEditar;
+      $('btnImp').disabled = !puedeEditar; $('btnDel').disabled = !puedeEditar; $('btnImp2').disabled = !puedeEditar; $('btnNuevoEd').disabled = !puedeEditar; $('btnNuevoEd2').disabled = !puedeEditar; $('btnNuevaU').disabled = !puedeEditar;
       escucharEdificios();
     }).catch(function(){
       bloquear('No se pudo leer tu permiso', 'Probá de nuevo en un rato.', '<a class="btn" href="../">← Volver</a>');
@@ -323,7 +343,7 @@ function escucharEdificios(){
     $('selEd').innerHTML = ids.map(function(i){
       return '<option value="' + esc(i) + '"' + (i === edId ? ' selected' : '') + '>' + esc(EDS[i].nombre || i) + '</option>'; }).join('');
     $('selEd').classList.toggle('hid', !ids.length);
-    $('btnDel').classList.toggle('hid', !ids.length);
+    $('btnDel').classList.toggle('hid', !ids.length); $('btnXls0').classList.toggle('hid', !ids.length);
     cargarEdificio();
   }, function(err){
     bloquear('No se pudo leer la base', 'Es probable que falte permiso en global/edificios: ' + (err && err.message || ''),
@@ -400,9 +420,9 @@ function render(){
   var a = filas();
   var cols = [['u','Unidad','l sticky'],['p','Propietario','l'],['i','Inquilino/a','l'],['s','m²',''],['pc','% unidad',''],['usd','Valor USD',''],
     ['ars','Valor $ TC',''],['alt','Valor $ TC alt.','']].concat(CONC.map(function(c){ return [c[0], c[1], '']; }))
-    .concat([['tot','Total conceptos',''],['fp','Fecha posesión','l'],['hf','Hora firma','l']]);
+    .concat([['tot','Total conceptos',''],['fp','Fecha posesión','l'],['hf','Hora firma','l'],['acc','','l']]);
   if (S.pd && !S.g) cols.splice(3, 0, ['t','Teléfono','l'], ['m','Mail','l']);
-  if (S.g) cols = cols.filter(function(c){ return ['i','t','m','fp','hf'].indexOf(c[0]) < 0; });
+  if (S.g) cols = cols.filter(function(c){ return ['i','t','m','fp','hf','acc'].indexOf(c[0]) < 0; });
   $('th').innerHTML = '<tr>' + cols.map(function(c){
     return '<th class="' + c[2] + '" data-k="' + c[0] + '">' + c[1] + (S.k === c[0] ? (S.d > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr>';
   var list = a;
@@ -432,13 +452,14 @@ function render(){
     CONC.forEach(function(k){ h += '<td>' + N(c[k[0]]) + '</td>'; });
     h += '<td><b>' + N(c.tot) + '</b></td>';
     if (!S.g) h += '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>' +
-      '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>';
+      '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>' +
+      '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button> <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') + '</td>';
     return h + '</tr>';
   }).join('');
   var span = S.g ? 2 : 3 + (S.pd ? 2 : 0);
   $('tf').innerHTML = '<tr><td class="l sticky" colspan="' + span + '">Total (' + list.length + ')</td><td>' + T.s.toFixed(2) + '</td><td></td><td>' + N(T.usd, 'USD') +
     '</td><td>' + N(T.ars) + '</td><td>' + (P.tc2 ? N(T.alt) : '—') + '</td>' + CONC.map(function(k){ return '<td>' + N(T[k[0]]) + '</td>'; }).join('') +
-    '<td>' + N(T.tot) + '</td>' + (S.g ? '' : '<td></td><td></td>') + '</tr>';
+    '<td>' + N(T.tot) + '</td>' + (S.g ? '' : '<td></td><td></td><td></td>') + '</tr>';
   var conF = U.filter(function(r){ return r.fp; }).length;
   var kpiHtml = [['Unidades', U.length + ' · ' + TOTS.toFixed(2) + ' m²'], ['Valor total USD', N(TOTS * P.usd, 'USD')],
     ['Valor total $ (TC ' + P.tc + ')', N(TOTS * P.usd * P.tc)], ['Con fecha de posesión', conF + ' de ' + U.length]]
@@ -505,7 +526,7 @@ $('params').addEventListener('change', function(e){
 $('th').addEventListener('click', function(e){
   var t = e.target.closest('th'); if (!t) return;
   var k = t.dataset.k; if (k === 'pc') k = 's';
-  if (['fp','hf','t','m','i'].indexOf(k) >= 0) return;
+  if (['fp','hf','t','m','i','acc'].indexOf(k) >= 0 || !k) return;
   S.d = S.k === k ? -S.d : 1; S.k = k; render();
 });
 function guardarCampo(e){
@@ -539,17 +560,101 @@ $('mails').onclick = function(e){
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function(){ toast('✔ ' + ls.length + ' mails copiados'); },
     function(){ window.prompt('Copiá los mails:', t); });
 };
-$('csv').onclick = function(){
+/* ── Bajar a Excel (.xlsx) ─────────────────────────────────────────── */
+// Arma un libro con tres hojas: la planilla (lo que se ve, con totales como fórmula),
+// los parámetros de valuación y los conceptos con su total del edificio.
+function bajarExcel(){
+  if (typeof XLSX === 'undefined') { toast('⚠️ No cargó la librería de Excel. Revisá la conexión.'); return; }
+  var e = EDS[edId]; if (!e || !P) return;
   var a = filas();
-  var h = ['Unidad','Propietario','Inquilino','m2','Valor USD','Valor $ TC','Valor $ TC alt'].concat(CONC.map(function(c){ return c[1]; }))
-    .concat(['Total conceptos','Fecha posesion','Hora firma']);
-  var l = [h].concat(a.map(function(r){ var c = r.c;
-    return [r.u, r.p, nombreInq(r.i), r.s, c.usd, c.ars, c.alt == null ? '' : c.alt].concat(CONC.map(function(k){ return c[k[0]]; }))
-      .concat([c.tot, r.fp, r.hf]); }));
-  var t = '﻿' + l.map(function(r){ return r.map(function(v){ return '"' + String(v).replace(/"/g, '""') + '"'; }).join(';'); }).join('\n');
-  var u = URL.createObjectURL(new Blob([t], {type:'text/csv'})), x = document.createElement('a');
-  x.href = u; x.download = (EDS[edId] && EDS[edId].nombre || 'unidades') + '.csv'; x.click();
-};
+  var H = ['Unidad','Propietario','Teléfono','Mail propietario','Inquilino/a','m²','% unidad','Valor USD','Valor $ TC','Valor $ TC alt.']
+    .concat(CONC.map(function(c){ return c[1]; })).concat(['Total conceptos','Fecha posesión','Hora firma']);
+  var rows = [H].concat(a.map(function(r){
+    var c = r.c;
+    return [r.u, r.p, r.t, r.m.join(' / '), r.i, r.s, TOTS ? r.s / TOTS : 0, c.usd, c.ars, c.alt == null ? '' : c.alt]
+      .concat(CONC.map(function(k){ return c[k[0]]; })).concat([c.tot, r.fp, r.hf]);
+  }));
+  var n = rows.length;                       // fila de totales = n + 1 (1-indexada)
+  var colL = function(i){ return XLSX.utils.encode_col(i); };
+  var tot = ['Total (' + a.length + ')', '', '', '', ''];
+  for (var i = 5; i < H.length - 2; i++) tot.push({f: 'SUM(' + colL(i) + '2:' + colL(i) + n + ')'});
+  tot.push('', '');
+  rows.push(tot);
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = H.map(function(h, i){ return {wch: i === 1 || i === 3 || i === 4 ? 30 : (i >= 5 ? 18 : 14)}; });
+  for (var r = 1; r <= n; r++) for (var c2 = 5; c2 < H.length - 2; c2++) {
+    var ref = XLSX.utils.encode_cell({r: r, c: c2}); if (!ws[ref]) continue;
+    ws[ref].z = c2 === 5 ? '0.00' : c2 === 6 ? '0.00%' : c2 === 7 ? '"USD" #,##0.00' : '"$" #,##0.00';
+  }
+  var P2 = [['Parámetro','Valor'],['Edificio', e.nombre || edId],['Valor m² (USD)', P.usd],['Tipo de cambio base', P.tc],['Tipo de cambio alternativo', P.tc2 || ''],['m² totales', TOTS],[],
+    ['Concepto','Se carga como','Valor cargado','Total del edificio ($)']]
+    .concat(CONC.map(function(c){ var k = c[0]; return [c[1], P.modo[k] === 'monto' ? '$ total' : '% del valor total', P.pct[k], totConcepto(k)]; }));
+  var ws2 = XLSX.utils.aoa_to_sheet(P2); ws2['!cols'] = [{wch:44},{wch:22},{wch:16},{wch:22}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Planilla');
+  XLSX.utils.book_append_sheet(wb, ws2, 'Valuación');
+  XLSX.writeFile(wb, String(e.nombre || 'unidades').replace(/[\\\/:*?"<>|]+/g, '-') + '.xlsx');
+  toast('✔ Excel generado (' + a.length + ' unidades)');
+}
+$('xls').onclick = bajarExcel; $('xls2').onclick = bajarExcel; $('btnXls0').onclick = bajarExcel;
+
+/* ── Editar: unidades y edificios (sin pasar por el Excel) ─────────── */
+function abrirModal(html){ $('modalCaja').innerHTML = html; $('modal').classList.remove('hid'); }
+function cerrarModal(){ $('modal').classList.add('hid'); $('modalCaja').innerHTML = ''; }
+$('modal').addEventListener('mousedown', function(e){ if (e.target === $('modal')) cerrarModal(); });
+function formUnidad(r){
+  var nueva = !r; r = r || {u:'', p:'', rk:false, i:'', t:'', m:[], s:''};
+  abrirModal('<h2>' + (nueva ? 'Nueva unidad' : 'Editar unidad ' + esc(r.u)) + '</h2><div class="form-grid">' +
+    '<label class="f">Unidad<input id="fu_u" value="' + esc(r.u) + '" placeholder="Ej: 101, PB, CC 3"></label>' +
+    '<label class="f">m² superficie<input id="fu_s" type="number" step="any" value="' + esc(r.s) + '"></label>' +
+    '<label class="f full">Propietario<input id="fu_p" value="' + esc(r.p) + '"></label>' +
+    '<label class="chk full"><input type="checkbox" id="fu_rk"' + (r.rk ? ' checked' : '') + '> Es de RK (los mails del propietario no se cargan)</label>' +
+    '<label class="f">Teléfono<input id="fu_t" value="' + esc(r.t) + '"></label>' +
+    '<label class="f">Mail(s) del propietario<input id="fu_m" value="' + esc(r.m.join('; ')) + '" placeholder="uno@mail.com; otro@mail.com"></label>' +
+    '<label class="f full">Inquilino/a (nombre, teléfono, mail)<input id="fu_i" value="' + esc(r.i) + '"></label></div>' +
+    '<div class="modal-pie"><button class="btn" id="fu_x">Cancelar</button><button class="btn pri" id="fu_ok">Guardar</button></div>');
+  $('fu_x').onclick = cerrarModal;
+  $('fu_ok').onclick = function(){ guardarUnidad(r, nueva); };
+}
+function guardarUnidad(r, nueva){
+  var n = $('fu_u').value.trim(), s = parseFloat($('fu_s').value);
+  if (!n) { toast('Falta el nombre de la unidad'); return; }
+  if (isNaN(s) || s < 0) { toast('Los m² tienen que ser un número'); return; }
+  var k = nueva ? claveUnidad(n) : r.k;
+  if (nueva && U.some(function(x){ return x.k === k; })) { toast('Ya existe una unidad “' + n + '”'); return; }
+  var rk = $('fu_rk').checked, p = $('fu_p').value.trim().replace(/\s+/g, ' ');
+  var o = nueva ? (U.reduce(function(m, x){ return Math.max(m, x.o); }, 0) + 1) : r.o;
+  var mails = rk ? [] : mailsDe($('fu_m').value), i = $('fu_i').value.trim();
+  var base = 'global/edificios/' + edId + '/unidades/' + k + '/', upd = {};
+  upd[base + 'n'] = n; upd[base + 'o'] = o; upd[base + 'p'] = rk ? 'RK' : p; upd[base + 'rk'] = rk;
+  upd[base + 'i'] = i; upd[base + 't'] = $('fu_t').value.trim(); upd[base + 's'] = Math.round(s * 10000) / 10000;
+  upd[base + 'm'] = mails.length ? mails : null; var im = mailsDe(i); upd[base + 'im'] = im.length ? im : null;
+  db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Unidad guardada'); })
+    .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+}
+function borrarUnidad(k){
+  var r = U.filter(function(x){ return x.k === k; })[0]; if (!r) return;
+  if (!window.confirm('¿Borrar la unidad ' + r.u + ' (' + r.p + ')? No se puede deshacer.')) return;
+  db.ref('global/edificios/' + edId + '/unidades/' + k).remove().then(function(){ toast('Unidad borrada'); })
+    .catch(function(){ toast('⚠️ No se pudo borrar (¿permiso?)'); });
+}
+$('btnNuevaU').onclick = function(){ if (puedeEditar && edId) formUnidad(null); };
+$('tb').addEventListener('click', function(e){
+  var b = e.target.closest('button'); if (!b || !puedeEditar) return;
+  if (b.dataset.ed) formUnidad(U.filter(function(x){ return x.k === b.dataset.ed; })[0]);
+  else if (b.dataset.del) borrarUnidad(b.dataset.del);
+});
+function nuevoEdificio(){
+  if (!puedeEditar) return;
+  var nom = (window.prompt('Nombre del edificio (ej: Congreso 1698 / KASA I):') || '').trim();
+  if (!nom) return;
+  var id = slug(nom);
+  if (EDS[id]) { toast('Ya existe ese edificio'); edId = id; cargarEdificio(); return; }
+  var upd = {}; upd['global/edificios/' + id + '/nombre'] = nom; upd['global/edificios/' + id + '/params'] = paramsPorDefecto();
+  db.ref().update(upd).then(function(){ edId = id; try { localStorage.setItem('unid_ed', id); } catch(x) {} toast('✔ Edificio creado. Cargá las unidades con “＋ Nueva unidad” o importá un Excel.'); })
+    .catch(function(){ toast('⚠️ No se pudo crear (¿permiso?)'); });
+}
+$('btnNuevoEd').onclick = nuevoEdificio; $('btnNuevoEd2').onclick = nuevoEdificio;
 
 /* ── Importar Excel ────────────────────────────────────────────────── */
 // Lee la planilla (Unidad · Propietario · Teléfono · Mail · Inquilino · m²) y
