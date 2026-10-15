@@ -16,6 +16,10 @@ Tres pantallas en el menú (`VISTAS`/`setVista`, la última queda en `localStora
 
 ⚠️ La tabla de **Posesión y firma** se ordena **siempre con el orden de la planilla** (`o`), no por fecha: si se ordenara por fecha, la fila saltaría de lugar apenas se carga la fecha y no se podría cargar la hora de esa misma unidad.
 
+## Es una app, no sólo una planilla
+
+Los datos se pueden **cargar y mantener a mano**, sin pasar por el Excel: **＋ Nueva unidad** (formulario), ✏️/🗑 por fila, **Nuevo edificio** en el menú. Al editar una unidad la `<clave>` **no cambia** aunque se cambie el nombre (`n`): sólo una unidad nueva calcula la clave con `claveUnidad(n)`. **⬇ Bajar a Excel** (`bajarExcel`, SheetJS) genera un `.xlsx` con la hoja «Planilla» (lo que se ve con los filtros activos, totales como fórmula `SUM`, formatos de moneda y %) y la hoja «Valuación» (parámetros y total del edificio de cada concepto). Incluye teléfonos y mails: el archivo bajado es del usuario, no del repo.
+
 ## Proyecto de Firebase y permisos
 
 Mismo proyecto que el sistema (`modo-prueba-bb8c2`), igual que `documentacion/`: mismas cuentas y roles, la sesión abierta vale. Hace falta rol en `roles/<uid>` para entrar; `superadmin`/`admin`/`editor` editan, `lector` sólo mira (los campos quedan `disabled`).
