@@ -28,6 +28,15 @@ La tabla de la Planilla es `table-layout:fixed` con un `<colgroup>`; cada column
 
 Mismo proyecto que el sistema (`modo-prueba-bb8c2`), igual que `documentacion/`: mismas cuentas y roles, la sesión abierta vale. Hace falta rol en `roles/<uid>` para entrar; `superadmin`/`admin`/`editor` editan, `lector` sólo mira (los campos quedan `disabled`).
 
+## Rol `posesiones`: cuentas que sólo entran a este módulo
+
+`roles/<uid> = 'posesiones'` (en Config → Usuarios: «🏢 Solo Planilla posesiones»). Qué hace cada capa:
+
+- **Reglas (`database.rules.json`) — el límite de verdad.** Todo nodo que se leía con «tiene rol» (`empresas`, `global`, `documentacion`, `solicitudesBorrado`, `dashboardPagos`, `cajaDiaria/<uid>`, `temp-pdf`) ahora exige «tiene rol **y no es `posesiones`**». Como en Firebase un permiso del padre no se puede quitar en el hijo pero un hijo sí puede **sumar**, `global/edificios` vuelve a abrirse con «tiene rol» (lectura) y `global/edificios/<edId>/unidades` permite escribir a `posesiones`. Resultado: una cuenta `posesiones` lee y edita las unidades y nada más (no ve empresas, proveedores, facturas ni config). ⚠️ **Las reglas no se aplican solas**: hay que publicarlas a mano en Firebase → Realtime Database → Reglas; hasta entonces esa cuenta, desde la consola del navegador, puede leer lo mismo que un lector.
+- **Sistema (`index.html`)**: en el ingreso, si el rol es `posesiones` se hace `location.replace('unidades/')` antes de mostrar el selector. `documentacion/` la bloquea con un cartel. (La Caja no mira roles; con las reglas nuevas esa cuenta no puede leer ni escribir su `cajaDiaria`.)
+- **Este módulo**: `puedeEditar` (cargar/editar unidades, fechas, horas) vale para `superadmin`/`admin`/`editor`/`posesiones`; `puedeAdmin` (importar, nuevo/eliminar edificio, parámetros de valuación, borrar unidades) sólo para `superadmin`/`admin`/`editor`. El botón de abajo del menú pasa a «Cerrar sesión» (no hay otro módulo adónde volver). Las reglas sólo distinguen a `posesiones` por la rama `unidades`: parámetros y nombre del edificio no los puede escribir.
+- **Backend (`functions/server.js`)**: `/usuarios/rol` acepta `posesiones` (`/usuarios/crear` ya aceptaba cualquier rol). No se tocaron los endpoints del asistente (`/gemini`): los usa cualquier sesión válida, `posesiones` incluida.
+
 ## ⚠️ Los datos personales NO viven en el repo
 
 El repo se publica en GitHub Pages (público). Los teléfonos y mails de los propietarios **no se pueden commitear**: el repo lleva sólo código y los datos entran por **📥 Importar Excel** a la base. Si se agrega un archivo de datos de ejemplo, que sea inventado.

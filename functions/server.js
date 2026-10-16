@@ -2077,7 +2077,7 @@ app.post('/usuarios/rol', async (req, res) => {
     try {
         var b = req.body || {};
         if (!b.uid || !b.rol) return res.status(400).json({ error: 'Faltan uid y/o rol.' });
-        var validos = ['superadmin', 'admin', 'editor', 'lector'];
+        var validos = ['superadmin', 'admin', 'editor', 'lector', 'posesiones'];
         if (validos.indexOf(b.rol) === -1) return res.status(400).json({ error: 'Rol inválido. Opciones: ' + validos.join(', ') });
         await admin.database().ref('roles/' + b.uid).set(b.rol);
         res.json({ ok: true, uid: b.uid, rol: b.rol });
