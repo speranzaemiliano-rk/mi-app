@@ -325,6 +325,23 @@
   .rejilla button{font-family:inherit;font-size:12.5px;padding:4px 10px;border-radius:var(--radius-pill);
                   border:1px solid var(--border);background:transparent;color:var(--text-2);cursor:pointer}
   .rejilla button.act{background:var(--ink);color:#fff;border-color:var(--ink)}
+  /* Elegir lugares para el informe. Va plegado: quien imprime todo el
+     edificio —el caso normal— ve un renglón y sigue de largo. */
+  .lug-tog{
+    display:block;width:100%;text-align:left;font-family:inherit;font-size:12.5px;
+    padding:8px 0 8px;margin-bottom:8px;background:none;border:0;
+    color:var(--acento);cursor:pointer;
+  }
+  .lug-gr{margin-bottom:10px}
+  .lug-cab{
+    display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:10.5px;
+    letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);
+  }
+  .lug-cab .n{flex:1;min-width:0}
+  .lug-cab button{
+    flex:0 0 auto;font-family:inherit;font-size:11px;letter-spacing:0;text-transform:none;
+    background:none;border:0;color:var(--acento);cursor:pointer;padding:6px 2px;white-space:nowrap;
+  }
   /* Bloque para copiar (las reglas de Firebase). user-select:all para que en
      el celular alcance con tocarlo para seleccionar todo. */
   .codigo{background:var(--ink);color:#EAE4FF;border-radius:var(--radius-sm);padding:11px 12px;
@@ -1972,7 +1989,22 @@
      No usa librerías: arma el HTML y llama a window.print().
      Desde ahí el celular ofrece "Guardar como PDF".
   ========================================================= */
-  var infCfg = { alcance:"ambos", rubros:[], soloPendientes:true, firmas:true, formato:"cuadro", tareas:false };
+  var infCfg = { alcance:"ambos", rubros:[], lugares:[], soloPendientes:true,
+                 firmas:true, formato:"cuadro", tareas:false };
+
+  /* Los lugares que entran al informe. El alcance (todo / unidades / comunes)
+     elige el TIPO; `infCfg.lugares` elige cuáles dentro de ese tipo, con la
+     misma convención que los rubros: vacío = todos. Los cuatro formatos
+     pasan por acá, así que el filtro se aplica una sola vez. */
+  function entsInforme(tipo){
+    var sel = infCfg.lugares;
+    return entidadesDe(tipo).filter(function(eid){
+      return !sel.length || sel.indexOf(eid) !== -1;
+    });
+  }
+  function enInforme(eid){
+    return !infCfg.lugares.length || infCfg.lugares.indexOf(eid) !== -1;
+  }
 
   function modalInforme(){
     var rs = rubrosOrdenados().filter(function(r){ return (idx.porRubro[r] || []).length; });
@@ -1989,6 +2021,8 @@
           var p = o.split("|");
           return '<button data-v="' + p[0] + '"' + (infCfg.alcance === p[0] ? ' class="act"' : "") + '>' + p[1] + '</button>';
         }).join("") + '</div>' +
+      '<button type="button" class="lug-tog" id="iLugTog"></button>' +
+      '<div id="iLugares" hidden></div>' +
       '<h3>Rubros (ninguno = todos)</h3>' +
       '<div class="rejilla" id="iRubros">' + rs.map(function(r){
           return '<button data-r="' + esc(r) + '"' + (infCfg.rubros.indexOf(r) !== -1 ? ' class="act"' : "") +
@@ -2002,6 +2036,61 @@
         '> Dejar espacio para firmas</label>' +
       '<div class="ayuda" id="iCuenta" style="margin-top:10px"></div>' +
       '<button class="bfull" id="iHacer">' + (esIOS() ? "Preparar informe" : "Imprimir / Guardar PDF") + '</button>');
+
+    /* Los nombres de las unidades arrancan todos igual («Unidad 101»,
+       «Unidad 102»…): en 39 pastillas eso es ruido y nada más. Si TODAS las
+       de un grupo comparten la primera palabra, se saca — el título del
+       grupo ya dice qué son. Sale de los datos, no de dar por hecho que
+       diga «Unidad»: con los comunes (SUM, Co-Work…) no hay prefijo y no
+       hace nada. */
+    function prefijoComun(noms){
+      if (noms.length < 3) return "";
+      var p = noms[0].split(" ")[0];
+      if (!p || p.length < 3) return "";
+      for (var i = 0; i < noms.length; i++)
+        if (noms[i].indexOf(p + " ") !== 0 || !noms[i].slice(p.length + 1).trim()) return "";
+      return p;
+    }
+
+    var TIPO_NOM = { unidad:"Departamentos", comun:"Espacios comunes" };
+
+    function tiposEnAlcance(){
+      return ["unidad","comun"].filter(function(t){
+        return infCfg.alcance === "ambos" || infCfg.alcance === t;
+      });
+    }
+
+    function pintarLugares(){
+      var cont = $("iLugares"), tog = $("iLugTog");
+      var hay = 0, elegidos = 0;
+      var html = tiposEnAlcance().map(function(t){
+        var eids = entidadesDe(t);
+        if (!eids.length) return "";
+        hay += eids.length;
+        var noms = eids.map(function(e){ return datos.entidades[e].nombre || e; });
+        var pre = prefijoComun(noms);
+        var k = eids.filter(function(e){ return infCfg.lugares.indexOf(e) !== -1; }).length;
+        elegidos += k;
+        // Sin nada elegido en NINGÚN grupo valen todos; con algo elegido en
+        // cualquiera, de este grupo sale únicamente lo marcado — incluso cero.
+        var rotulo = infCfg.lugares.length ? k + " de " + eids.length : "todos (" + eids.length + ")";
+        return '<div class="lug-gr">' +
+          '<div class="lug-cab"><span class="n">' + TIPO_NOM[t] + ' · ' + rotulo + '</span>' +
+            '<button type="button" data-todos="' + t + '">Marcar todos</button>' +
+            '<button type="button" data-ningun="' + t + '">Quitar</button></div>' +
+          '<div class="rejilla">' + eids.map(function(eid, i){
+            var e = datos.entidades[eid];
+            var corto = pre ? noms[i].slice(pre.length + 1) : noms[i];
+            return '<button type="button" data-e="' + esc(eid) + '" title="' + esc(noms[i]) + '"' +
+              (infCfg.lugares.indexOf(eid) !== -1 ? ' class="act"' : "") + '>' +
+              (e.icono ? esc(e.icono) + " " : "") + esc(corto) + '</button>';
+          }).join("") + '</div></div>';
+      }).join("");
+      cont.innerHTML = html || '<div class="ayuda">No hay lugares de ese tipo.</div>';
+      tog.textContent = (cont.hidden ? "▸ " : "▾ ") +
+        (elegidos ? elegidos + (elegidos === 1 ? " lugar elegido" : " lugares elegidos") + " · cambiar"
+                  : "Todos los lugares (" + hay + ") · elegir cuáles");
+    }
 
     function repintarCuenta(){
       if (infCfg.formato === "cuadro" || infCfg.formato === "matriz") {
@@ -2038,6 +2127,10 @@
       if (l) l.style.display = (infCfg.formato === "matriz") ? "" : "none";
     }
     ajustarOpciones();
+    // Si quedó una selección de la vez anterior, se abre: un «3 lugares
+    // elegidos» plegado explica por qué falta el resto del edificio.
+    $("iLugares").hidden = !infCfg.lugares.length;
+    pintarLugares();
     $("iTareas").addEventListener("change", function(){ infCfg.tareas = this.checked; repintarCuenta(); });
     $("iFormato").addEventListener("click", function(e){
       var b = e.target.closest("button[data-f]"); if (!b) return;
@@ -2049,7 +2142,45 @@
       var b = e.target.closest("button[data-v]"); if (!b) return;
       infCfg.alcance = b.getAttribute("data-v");
       Array.prototype.forEach.call(this.children, function(x){ x.classList.remove("act"); });
-      b.classList.add("act"); repintarCuenta();
+      b.classList.add("act");
+      // Lo elegido que ya no entra en el alcance se saca: si no, pasar a
+      // «Sólo comunes» con tres departamentos marcados dejaba el informe
+      // vacío y sin ninguna pista de por qué.
+      var vale = {};
+      tiposEnAlcance().forEach(function(t){
+        entidadesDe(t).forEach(function(eid){ vale[eid] = 1; });
+      });
+      infCfg.lugares = infCfg.lugares.filter(function(eid){ return vale[eid]; });
+      pintarLugares(); repintarCuenta();
+    });
+
+    $("iLugTog").addEventListener("click", function(){
+      var c = $("iLugares");
+      c.hidden = !c.hidden;
+      pintarLugares();
+    });
+
+    $("iLugares").addEventListener("click", function(e){
+      var b = e.target.closest("button"); if (!b) return;
+      var eid = b.getAttribute("data-e");
+      if (eid) {
+        var i = infCfg.lugares.indexOf(eid);
+        if (i === -1) infCfg.lugares.push(eid); else infCfg.lugares.splice(i, 1);
+      } else {
+        // «Marcar todos» de un grupo tiene que conservar lo elegido en el
+        // otro: la lista es una sola para los dos.
+        var t = b.getAttribute("data-todos") || b.getAttribute("data-ningun");
+        if (!t) return;
+        var eids = entidadesDe(t);
+        if (b.getAttribute("data-todos")) {
+          eids.forEach(function(x){
+            if (infCfg.lugares.indexOf(x) === -1) infCfg.lugares.push(x);
+          });
+        } else {
+          infCfg.lugares = infCfg.lugares.filter(function(x){ return eids.indexOf(x) === -1; });
+        }
+      }
+      pintarLugares(); repintarCuenta();
     });
     $("iRubros").addEventListener("click", function(e){
       var b = e.target.closest("button[data-r]"); if (!b) return;
@@ -2068,7 +2199,7 @@
     var tipos = infCfg.alcance === "ambos" ? ["unidad","comun"] : [infCfg.alcance];
     var ents = [], total = 0;
     tipos.forEach(function(t){
-      entidadesDe(t).forEach(function(eid){
+      entsInforme(t).forEach(function(eid){
         var bloques = rubrosDe(eid).map(function(b){
           if (infCfg.rubros.length && infCfg.rubros.indexOf(b.rubro) === -1) return null;
           var its = b.items.filter(function(i){ return infCfg.soloPendientes ? !datos.items[i].ok : true; });
@@ -2094,7 +2225,7 @@
      ya no deben nada salen igual, tachados: sirve tanto para ver lo que
      queda como para mostrar lo que se cerró. */
   function filasCuadro(tipo){
-    return entidadesDe(tipo).map(function(eid){
+    return entsInforme(tipo).map(function(eid){
       var ent = datos.entidades[eid], ids = itemsDe(eid), n = cuentaDe(ids);
       var vistos = {}, rubros = [];
       ids.forEach(function(i){
@@ -2149,6 +2280,9 @@
       // de entrega metían su rubro como una columna más en el cuadro.
       if (e.tipo === "entrega") return;
       if (infCfg.alcance !== "ambos" && e.tipo !== infCfg.alcance) return;
+      // Sin esto, un rubro que sólo falta en un lugar que quedó afuera se
+      // llevaba igual una columna, vacía en todas las filas.
+      if (!enInforme(it.ent)) return;
       if (infCfg.rubros.length && infCfg.rubros.indexOf(it.rubro) === -1) return;
       conPend[it.rubro] = 1;
     });
@@ -2156,7 +2290,7 @@
   }
 
   function filasMatriz(tipo, cols){
-    return entidadesDe(tipo).map(function(eid){
+    return entsInforme(tipo).map(function(eid){
       var ent = datos.entidades[eid], porR = {}, txtR = {}, pend = 0;
       itemsDe(eid).forEach(function(iid){
         var it = datos.items[iid];
