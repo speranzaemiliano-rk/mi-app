@@ -55,7 +55,7 @@ global/edificios/<edId>/unidades/<clave> = { n, o, p, rk, i, t, m:[], im:[], s, 
 
 ## Cálculo
 
-`calc(r)`: valor USD = m² × `usd`; valor $ = USD × `tc`; «TC alt.» = USD × `tc2` (sólo si `tc2` ≠ 0). **Cada concepto es un total del edificio** (`totConcepto(k)`: `pct` → % del valor total del edificio; `monto` → importe en $) **que se reparte según los m² de cada unidad** (`total × m² / m² totales`). Con modo `pct` el reparto da lo mismo que aplicar el % al valor de cada unidad.
+`calc(r)`: valor USD = m² × `usd`; valor $ = USD × `tc`; «TC alt.» = USD × `tc2` (sólo si `tc2` ≠ 0). **Cada concepto es un total del edificio** (`totConcepto(k)`, siempre devuelve **pesos**: `pct` → % del valor total del edificio; `monto` → importe fijo en $; `montousd` → importe fijo en USD, que se pasa a $ al TC base `tc`) **que se reparte según los m² de cada unidad** (`total × m² / m² totales`). Con modo `pct` el reparto da lo mismo que aplicar el % al valor de cada unidad.
 
 ## Trampas
 
