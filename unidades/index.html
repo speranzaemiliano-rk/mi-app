@@ -112,6 +112,16 @@ th.l,td.l{text-align:left}
 td.sticky,th.sticky{position:sticky;left:0;background:var(--card);z-index:1}
 th.sticky{background:var(--sidebar-bg);z-index:3}
 tbody tr:hover td{background:var(--surface-2)}
+table.fijo{table-layout:fixed}
+table.fijo td,table.fijo th{overflow:hidden;text-overflow:ellipsis}
+th{position:sticky}
+.rz{position:absolute;top:0;right:-3px;bottom:0;width:8px;cursor:col-resize;z-index:5;touch-action:none}
+.rz:hover,.rz.activo{background:var(--gold);opacity:.5}
+.lista-sel{max-height:46vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px}
+.lista-sel label{display:flex;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--border-soft);font-size:13px;cursor:pointer}
+.lista-sel label:hover{background:var(--surface-2)}
+.lista-sel input{width:auto}
+.lista-sel small{margin-left:auto;color:var(--text-3)}
 tfoot td{position:sticky;bottom:0;background:var(--sidebar-bg);font-weight:700}
 .tag{font-size:11px;padding:1px 8px;border-radius:99px;background:var(--gold-pale);color:var(--gold);font-weight:600}
 .tag.rk{background:var(--warn-bg);color:var(--warn)}
@@ -204,16 +214,16 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
         <div class="kpis" id="kpis"></div>
         <div class="bar">
           <input type="search" id="q" placeholder="Buscar unidad, propietario, inquilino, mail…">
-          <button class="btn on" data-f="todos">Todos</button>
-          <button class="btn" data-f="rk">Solo RK</button>
-          <button class="btn" data-f="ter">Terceros</button>
+          <button class="btn on" id="fTodos">Todos</button>
+          <button class="btn" id="fSel">Seleccionar</button>
+          <button class="btn" id="btnCols">⚙ Columnas</button>
           <button class="btn" id="pd">👁 Datos personales</button>
           <button class="btn" id="grp">Agrupar por propietario</button>
           <button class="btn" id="btnNuevaU">＋ Nueva unidad</button>
           <button class="btn pri" id="xls">⬇ Bajar a Excel</button>
           <button class="btn" id="mails">✉ Copiar mails visibles</button>
         </div>
-        <div class="tw"><table><thead id="th"></thead><tbody id="tb"></tbody><tfoot id="tf"></tfoot></table></div>
+        <div class="tw"><table id="tbl" class="fijo"><colgroup id="cg"></colgroup><thead id="th"></thead><tbody id="tb"></tbody><tfoot id="tf"></tfoot></table></div>
         <p class="nota">Cada concepto se carga como % del valor total del edificio o como monto total en $, y se reparte entre las unidades según su % de m² (columna “% unidad”). Los cambios se guardan solos en la base y los ven todos los usuarios.</p>
       </section>
 
@@ -267,7 +277,7 @@ var edId = '';                // edificio activo
 var U = [];                   // unidades del edificio activo (array, con c = cálculo)
 var TOTS = 0;                 // m² totales del edificio
 var P = null;                 // parámetros del edificio activo (copia de trabajo)
-var S = {f:'todos', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:''};
+var S = {sel:null, selEd:'', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:''};
 var CONC = [['gan','Retención Ganancias'],['iibb','Ingresos Brutos'],['adm','Fondo de Administración'],
             ['res','Reserva'],['alh','Fondo de Alhajamiento'],['rec','Recupero Bs. Personales (acciones y part.)']];
 var _refEds = null, _tGuardar = null, _pend = false;   // _pend: hay parámetros sin guardar todavía
@@ -372,6 +382,8 @@ function totConcepto(k){ return P.modo[k] === 'monto' ? P.pct[k] : TOTS * P.usd 
 function calc(r){
   var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0};
   CONC.forEach(function(c){ o[c[0]] = TOTS ? totConcepto(c[0]) * r.s / TOTS : 0; o.tot += o[c[0]]; });
+  // Total en USD = valor de la unidad + sus conceptos pasados a dólares al TC base; USD por m² = ese total / m².
+  o.tusd = usd + (P.tc ? o.tot / P.tc : 0); o.usdm2 = r.s ? o.tusd / r.s : 0;
   return o;
 }
 function guardarParams(){
@@ -404,8 +416,7 @@ function refTotales(){
 function filas(){
   var q = S.q.toLowerCase();
   var a = U.filter(function(r){
-    if (S.f === 'rk' && !r.rk) return false;
-    if (S.f === 'ter' && r.rk) return false;
+    if (S.sel && !S.sel[r.k]) return false;
     return !q || [r.u, r.p, r.i, r.t, r.m.join(' '), r.im.join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
   });
   a.forEach(function(r){ r.c = calc(r); });
@@ -415,23 +426,90 @@ function filas(){
   return a;
 }
 function nombreInq(i){ return i.replace(/\s*\(.*?\)/g, '').replace(/\/\s*\S+@\S+/g, '').trim(); }
-var SUMAR = ['usd','ars','tot'].concat(CONC.map(function(c){ return c[0]; }));
+var SUMAR = ['usd','ars','tot','tusd'].concat(CONC.map(function(c){ return c[0]; }));
+/* ── Columnas: mostrar / ocultar / ancho (se recuerda en este equipo) ── */
+var COLS = {oc:{}, w:{}};
+try { var _cs = JSON.parse(localStorage.getItem('unid_cols') || '{}'); if (_cs.oc) COLS.oc = _cs.oc; if (_cs.w) COLS.w = _cs.w; } catch(x) {}
+function guardarCols(){ try { localStorage.setItem('unid_cols', JSON.stringify(COLS)); } catch(x) {} }
+var ANCHO = {u:100, p:200, i:170, t:140, m:220, s:78, pc:88, usd:135, ars:155, alt:155, tusd:145, usdm2:125, tot:155, fp:150, hf:115, acc:90};
+function anchoCol(k){ return COLS.w[k] || ANCHO[k] || 150; }
+// Definición única de las columnas de la planilla: título, alineación, y cómo se pinta cada celda y el total.
+function defCols(){
+  var d = [
+    {k:'u', t:'Unidad', cls:'l sticky', fijo:true},
+    {k:'p', t:'Propietario', cls:'l'},
+    {k:'i', t:'Inquilino/a', cls:'l', solo:'lista'},
+    {k:'t', t:'Teléfono', cls:'l', solo:'pd'},
+    {k:'m', t:'Mail', cls:'l', solo:'pd'},
+    {k:'s', t:'m²', cls:''},
+    {k:'pc', t:'% unidad', cls:''},
+    {k:'usd', t:'Valor USD', cls:''},
+    {k:'ars', t:'Valor $ TC', cls:''},
+    {k:'alt', t:'Valor $ TC alt.', cls:''},
+    {k:'tusd', t:'Total USD (con conceptos)', cls:''},
+    {k:'usdm2', t:'USD por m²', cls:''}
+  ].concat(CONC.map(function(c){ return {k:c[0], t:c[1], cls:''}; }))
+   .concat([{k:'tot', t:'Total conceptos', cls:''}, {k:'fp', t:'Fecha posesión', cls:'l', solo:'lista'}, {k:'hf', t:'Hora firma', cls:'l', solo:'lista'}, {k:'acc', t:'', cls:'l', solo:'lista', fijo:true}]);
+  return d.filter(function(c){
+    if (c.solo === 'pd' && (!S.pd || S.g)) return false;
+    if (c.solo === 'lista' && S.g) return false;
+    if (c.k === 'alt' && !P.tc2) return false;   // sin TC alternativo cargado no hay nada que mostrar
+    return true;
+  });
+}
+function colVisible(k){ return !COLS.oc[k]; }
+function celdaPlanilla(k, r, c, dis){
+  switch (k) {
+    case 'u': return '<td class="l sticky"><b>' + esc(r.u) + '</b></td>';
+    case 'p': return '<td class="l">' + esc(r.p) + (r.rk ? ' <span class="tag rk">RK</span>' : '') + '</td>';
+    case 'i': return '<td class="l sm">' + esc(S.pd ? r.i : nombreInq(r.i)) + '</td>';
+    case 't': return '<td class="l sm">' + esc(r.t) + '</td>';
+    case 'm': return '<td class="l sm">' + esc(r.m.join(' / ')) + '</td>';
+    case 's': return '<td>' + r.s.toFixed(2) + '</td>';
+    case 'pc': return '<td>' + (TOTS ? (r.s / TOTS * 100).toFixed(2) : '0.00') + '%</td>';
+    case 'usd': return '<td>' + N(c.usd, 'USD') + '</td>';
+    case 'ars': return '<td>' + N(c.ars) + '</td>';
+    case 'alt': return '<td>' + (c.alt == null ? '—' : N(c.alt)) + '</td>';
+    case 'tusd': return '<td>' + N(c.tusd, 'USD') + '</td>';
+    case 'usdm2': return '<td>' + N(r.s ? c.tusd / r.s : 0, 'USD') + '</td>';
+    case 'tot': return '<td><b>' + N(c.tot) + '</b></td>';
+    case 'fp': return '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>';
+    case 'hf': return '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>';
+    case 'acc': return '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button> <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') + '</td>';
+    default: return '<td>' + N(c[k]) + '</td>';     // conceptos
+  }
+}
+function celdaTotal(k, T, n){
+  switch (k) {
+    case 'u': return '<td class="l sticky">Total (' + n + ')</td>';
+    case 's': return '<td>' + T.s.toFixed(2) + '</td>';
+    case 'usd': return '<td>' + N(T.usd, 'USD') + '</td>';
+    case 'ars': return '<td>' + N(T.ars) + '</td>';
+    case 'alt': return '<td>' + (P.tc2 ? N(T.alt) : '—') + '</td>';
+    case 'tusd': return '<td>' + N(T.tusd, 'USD') + '</td>';
+    case 'usdm2': return '<td>' + N(T.s ? T.tusd / T.s : 0, 'USD') + '</td>';
+    case 'tot': return '<td>' + N(T.tot) + '</td>';
+    case 'p': case 'i': case 't': case 'm': case 'pc': case 'fp': case 'hf': case 'acc': return '<td></td>';
+    default: return '<td>' + N(T[k] || 0) + '</td>';
+  }
+}
 function render(){
   if (!P) return;
+  cargarSel();
   var a = filas();
-  var cols = [['u','Unidad','l sticky'],['p','Propietario','l'],['i','Inquilino/a','l'],['s','m²',''],['pc','% unidad',''],['usd','Valor USD',''],
-    ['ars','Valor $ TC',''],['alt','Valor $ TC alt.','']].concat(CONC.map(function(c){ return [c[0], c[1], '']; }))
-    .concat([['tot','Total conceptos',''],['fp','Fecha posesión','l'],['hf','Hora firma','l'],['acc','','l']]);
-  if (S.pd && !S.g) cols.splice(3, 0, ['t','Teléfono','l'], ['m','Mail','l']);
-  if (S.g) cols = cols.filter(function(c){ return ['i','t','m','fp','hf','acc'].indexOf(c[0]) < 0; });
+  var cols = defCols().filter(function(c){ return c.fijo || colVisible(c.k); });
+  var tw = cols.reduce(function(m, c){ return m + anchoCol(c.k); }, 0);
+  $('tbl').style.width = tw + 'px';
+  $('cg').innerHTML = cols.map(function(c){ return '<col data-k="' + c.k + '" style="width:' + anchoCol(c.k) + 'px">'; }).join('');
   $('th').innerHTML = '<tr>' + cols.map(function(c){
-    return '<th class="' + c[2] + '" data-k="' + c[0] + '">' + c[1] + (S.k === c[0] ? (S.d > 0 ? ' ▲' : ' ▼') : '') + '</th>'; }).join('') + '</tr>';
+    return '<th class="' + c.cls + '" data-k="' + c.k + '" title="' + esc(c.t) + '">' + esc(c.t) + (S.k === c.k || (S.k === 's' && c.k === 'pc') ? (S.d > 0 ? ' ▲' : ' ▼') : '') +
+      (c.k === 'acc' ? '' : '<span class="rz" data-k="' + c.k + '" title="Arrastrá para cambiar el ancho"></span>') + '</th>'; }).join('') + '</tr>';
   var list = a;
   if (S.g) {
     var m = {}, o = [];
     a.forEach(function(r){
       var g = m[r.p];
-      if (!g) { g = m[r.p] = {u:'', p:r.p, rk:r.rk, s:0, us:[], c:{usd:0, ars:0, alt:P.tc2 ? 0 : null, tot:0}};
+      if (!g) { g = m[r.p] = {u:'', p:r.p, rk:r.rk, s:0, us:[], c:{usd:0, ars:0, alt:P.tc2 ? 0 : null, tot:0, tusd:0}};
         CONC.forEach(function(c){ g.c[c[0]] = 0; }); o.push(g); }
       g.s += r.s; g.us.push(r.u);
       SUMAR.forEach(function(z){ g.c[z] += r.c[z]; });
@@ -440,27 +518,17 @@ function render(){
     o.forEach(function(g){ g.u = g.us.join(', '); });
     list = o;
   }
-  var T = {s:0, usd:0, ars:0, alt:0, tot:0}; CONC.forEach(function(c){ T[c[0]] = 0; });
+  var T = {s:0, usd:0, ars:0, alt:0, tot:0, tusd:0}; CONC.forEach(function(c){ T[c[0]] = 0; });
   var dis = puedeEditar ? '' : ' disabled';
   $('tb').innerHTML = list.map(function(r){
     var c = r.c; T.s += r.s; SUMAR.forEach(function(z){ T[z] += c[z]; }); if (c.alt != null) T.alt += c.alt;
-    var h = '<tr><td class="l sticky"><b>' + esc(r.u) + '</b></td><td class="l">' + esc(r.p) + (r.rk ? ' <span class="tag rk">RK</span>' : '') + '</td>';
-    if (!S.g) {
-      h += '<td class="l sm">' + esc(S.pd ? r.i : nombreInq(r.i)) + '</td>';
-      if (S.pd) h += '<td class="l sm">' + esc(r.t) + '</td><td class="l sm">' + esc(r.m.join(' / ')) + '</td>';
-    }
-    h += '<td>' + r.s.toFixed(2) + '</td><td>' + (TOTS ? (r.s / TOTS * 100).toFixed(2) : '0.00') + '%</td><td>' + N(c.usd, 'USD') + '</td><td>' + N(c.ars) + '</td><td>' + (c.alt == null ? '—' : N(c.alt)) + '</td>';
-    CONC.forEach(function(k){ h += '<td>' + N(c[k[0]]) + '</td>'; });
-    h += '<td><b>' + N(c.tot) + '</b></td>';
-    if (!S.g) h += '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>' +
-      '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>' +
-      '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button> <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') + '</td>';
-    return h + '</tr>';
+    return '<tr>' + cols.map(function(col){ return celdaPlanilla(col.k, r, c, dis); }).join('') + '</tr>';
   }).join('');
-  var span = S.g ? 2 : 3 + (S.pd ? 2 : 0);
-  $('tf').innerHTML = '<tr><td class="l sticky" colspan="' + span + '">Total (' + list.length + ')</td><td>' + T.s.toFixed(2) + '</td><td></td><td>' + N(T.usd, 'USD') +
-    '</td><td>' + N(T.ars) + '</td><td>' + (P.tc2 ? N(T.alt) : '—') + '</td>' + CONC.map(function(k){ return '<td>' + N(T[k[0]]) + '</td>'; }).join('') +
-    '<td>' + N(T.tot) + '</td>' + (S.g ? '' : '<td></td><td></td><td></td>') + '</tr>';
+  $('tf').innerHTML = '<tr>' + cols.map(function(col){ return celdaTotal(col.k, T, list.length); }).join('') + '</tr>';
+  // botones de filtro
+  $('fTodos').classList.toggle('on', !S.sel);
+  $('fSel').classList.toggle('on', !!S.sel);
+  $('fSel').textContent = S.sel ? 'Seleccionar (' + Object.keys(S.sel).length + ' de ' + U.length + ')' : 'Seleccionar';
   var conF = U.filter(function(r){ return r.fp; }).length;
   var kpiHtml = [['Unidades', U.length + ' · ' + TOTS.toFixed(2) + ' m²'], ['Valor total USD', N(TOTS * P.usd, 'USD')],
     ['Valor total $ (TC ' + P.tc + ')', N(TOTS * P.usd * P.tc)], ['Con fecha de posesión', conF + ' de ' + U.length]]
@@ -525,6 +593,7 @@ $('params').addEventListener('change', function(e){
   P.modo[s.dataset.m] = s.value; guardarParams(); refTotales(); render();
 });
 $('th').addEventListener('click', function(e){
+  if (e.target.classList.contains('rz')) return;
   var t = e.target.closest('th'); if (!t) return;
   var k = t.dataset.k; if (k === 'pc') k = 's';
   if (['fp','hf','t','m','i','acc'].indexOf(k) >= 0 || !k) return;
@@ -548,10 +617,6 @@ $('pq').oninput = function(e){ S.pq = e.target.value; renderPosesion(); };
 try { var _v = localStorage.getItem('unid_vista'); if (_v && VISTAS[_v]) S.v = _v; } catch(x) {}
 $('selEd').onchange = function(){ edId = this.value; try { localStorage.setItem('unid_ed', edId); } catch(e) {} P = null; cargarEdificio(); };
 $('q').oninput = function(e){ S.q = e.target.value; render(); };
-[].forEach.call(document.querySelectorAll('button[data-f]'), function(b){
-  b.onclick = function(){ S.f = b.dataset.f;
-    [].forEach.call(document.querySelectorAll('button[data-f]'), function(x){ x.classList.toggle('on', x === b); }); render(); };
-});
 $('pd').onclick = function(e){ S.pd = !S.pd; e.target.classList.toggle('on', S.pd);
   e.target.textContent = S.pd ? '🙈 Ocultar datos personales' : '👁 Datos personales'; render(); };
 $('grp').onclick = function(e){ S.g = !S.g; e.target.classList.toggle('on', S.g); render(); };
@@ -561,6 +626,78 @@ $('mails').onclick = function(e){
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function(){ toast('✔ ' + ls.length + ' mails copiados'); },
     function(){ window.prompt('Copiá los mails:', t); });
 };
+/* ── Seleccionar qué unidades mostrar (se recuerda por edificio, en este equipo) ── */
+function cargarSel(){
+  if (S.selEd === edId) return;
+  S.selEd = edId; S.sel = null;
+  try {
+    var g = JSON.parse(localStorage.getItem('unid_sel_' + edId) || 'null');
+    if (g && g.length) { var o = {}; g.forEach(function(k){ o[k] = 1; }); S.sel = o; }
+  } catch(x) {}
+}
+function guardarSel(){ try { localStorage.setItem('unid_sel_' + edId, JSON.stringify(S.sel ? Object.keys(S.sel) : null)); } catch(x) {} }
+function abrirSeleccion(){
+  var marc = {}; U.forEach(function(r){ marc[r.k] = S.sel ? !!S.sel[r.k] : true; });
+  var lista = U.slice().sort(function(x, y){ return x.o - y.o; });
+  abrirModal('<h2>Elegí qué unidades mostrar</h2>' +
+    '<input type="search" id="sl_q" placeholder="Buscar unidad o propietario…" style="width:100%">' +
+    '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="sl_all">Marcar todas</button><button class="btn" id="sl_none">Ninguna</button><span class="sm" id="sl_cnt" style="align-self:center;margin-left:auto"></span></div>' +
+    '<div class="lista-sel" id="sl_lista">' + lista.map(function(r){
+      return '<label data-b="' + esc((r.u + ' ' + r.p).toLowerCase()) + '"><input type="checkbox" data-k="' + esc(r.k) + '"' + (marc[r.k] ? ' checked' : '') + '><b>' + esc(r.u) + '</b> ' + esc(r.p) +
+        '<small>' + r.s.toFixed(2) + ' m²</small></label>'; }).join('') + '</div>' +
+    '<div class="modal-pie"><button class="btn" id="sl_x">Cancelar</button><button class="btn pri" id="sl_ok">Mostrar las marcadas</button></div>');
+  function cuenta(){ var n = $('sl_lista').querySelectorAll('input:checked').length; $('sl_cnt').textContent = n + ' de ' + lista.length + ' marcadas'; }
+  cuenta();
+  $('sl_lista').addEventListener('change', cuenta);
+  $('sl_q').oninput = function(){ var q = this.value.toLowerCase().trim();
+    [].forEach.call($('sl_lista').children, function(l){ l.style.display = !q || l.dataset.b.indexOf(q) >= 0 ? '' : 'none'; }); };
+  // «Marcar todas» / «Ninguna» actúan sobre lo que se ve con la búsqueda
+  function marcarVisibles(v){ [].forEach.call($('sl_lista').children, function(l){ if (l.style.display !== 'none') l.querySelector('input').checked = v; }); cuenta(); }
+  $('sl_all').onclick = function(){ marcarVisibles(true); }; $('sl_none').onclick = function(){ marcarVisibles(false); };
+  $('sl_x').onclick = cerrarModal;
+  $('sl_ok').onclick = function(){
+    var o = {}, n = 0; [].forEach.call($('sl_lista').querySelectorAll('input:checked'), function(i){ o[i.dataset.k] = 1; n++; });
+    if (!n) { toast('Marcá al menos una unidad'); return; }
+    S.sel = n === lista.length ? null : o; guardarSel(); cerrarModal(); render();
+  };
+}
+$('fTodos').onclick = function(){ S.sel = null; guardarSel(); render(); };
+$('fSel').onclick = abrirSeleccion;
+
+/* ── Elegir columnas ── */
+function abrirColumnas(){
+  var todas = defCols().filter(function(c){ return !c.fijo; });
+  abrirModal('<h2>Columnas de la planilla</h2><p class="sm" style="margin:0">Tildá las que querés ver. También podés cambiar el ancho arrastrando el borde derecho de cada título.</p>' +
+    '<div class="lista-sel">' + todas.map(function(c){
+      return '<label><input type="checkbox" data-k="' + c.k + '"' + (colVisible(c.k) ? ' checked' : '') + '>' + esc(c.t) + '</label>'; }).join('') + '</div>' +
+    '<div class="modal-pie"><button class="btn" id="cl_ancho">Restaurar anchos</button><button class="btn" id="cl_todas">Mostrar todas</button><button class="btn pri" id="cl_ok">Listo</button></div>');
+  $('modalCaja').addEventListener('change', function(e){ var i = e.target; if (!i.dataset.k) return; if (i.checked) delete COLS.oc[i.dataset.k]; else COLS.oc[i.dataset.k] = 1; guardarCols(); render(); });
+  $('cl_todas').onclick = function(){ COLS.oc = {}; guardarCols(); render(); [].forEach.call($('modalCaja').querySelectorAll('input'), function(i){ i.checked = true; }); };
+  $('cl_ancho').onclick = function(){ COLS.w = {}; guardarCols(); render(); toast('Anchos restaurados'); };
+  $('cl_ok').onclick = cerrarModal;
+}
+$('btnCols').onclick = abrirColumnas;
+
+/* ── Cambiar el ancho de una columna arrastrando el borde del título ── */
+(function(){
+  var cur = null;
+  $('th').addEventListener('pointerdown', function(e){
+    var h = e.target; if (!h.classList.contains('rz')) return;
+    var k = h.dataset.k, col = $('cg').querySelector('col[data-k="' + k + '"]'); if (!col) return;
+    e.preventDefault(); e.stopPropagation();
+    cur = {k:k, x:e.clientX, w:parseInt(col.style.width, 10) || anchoCol(k), col:col, h:h};
+    h.classList.add('activo'); h.setPointerCapture(e.pointerId);
+  });
+  $('th').addEventListener('pointermove', function(e){
+    if (!cur) return;
+    var w = Math.max(50, Math.round(cur.w + e.clientX - cur.x));
+    cur.col.style.width = w + 'px'; cur.nw = w;
+    var tot = 0; [].forEach.call($('cg').children, function(c){ tot += parseInt(c.style.width, 10) || 0; }); $('tbl').style.width = tot + 'px';
+  });
+  function fin(){ if (!cur) return; cur.h.classList.remove('activo'); if (cur.nw) { COLS.w[cur.k] = cur.nw; guardarCols(); } cur = null; }
+  $('th').addEventListener('pointerup', fin); $('th').addEventListener('pointercancel', fin);
+})();
+
 /* ── Bajar a Excel (.xlsx) con formato ─────────────────────────────── */
 // Usa ExcelJS (SheetJS gratuito no permite colores ni bordes). Genera un libro presentable:
 // «Planilla» (título, grupos de columnas con color, filas alternadas, totales, filtros y
@@ -603,9 +740,12 @@ function bajarExcel(){
   C.push(['i','Inquilino/a',pd ? 38 : 24,'@','left',1], ['s','m²',10,'0.00','right',1], ['pc','% de la unidad',11,'0.00%','right',1],
          ['usd','Valor USD',17,'"USD" #,##0.00','right',2], ['ars','Valor $ (TC ' + P.tc + ')',19,'"$" #,##0.00','right',2]);
   if (alt) C.push(['alt','Valor $ (TC ' + P.tc2 + ')',21,'"$" #,##0.00','right',2]);
+  C.push(['tusd','Total USD (con conceptos)',20,'"USD" #,##0.00','right',2], ['usdm2','USD por m²',15,'"USD" #,##0.00','right',2]);
   conceptos.forEach(function(c){ C.push([c[0], c[1].replace(' (acciones y part.)', ''), 19, '"$" #,##0.00', 'right', 3]); });
   if (conceptos.length) C.push(['tot','Total conceptos',19,'"$" #,##0.00','right',3]);
   C.push(['fp','Fecha de posesión',15,'dd/mm/yyyy','center',4], ['hf','Hora de firma',11,'@','center',4]);
+  // lo que se ocultó en pantalla tampoco se baja
+  C = C.filter(function(c){ return c[0] === 'u' || colVisible(c[0]); });
   var n = C.length, GR = {1:['DATOS DE LA UNIDAD', XL.g1], 2:['VALUACIÓN', XL.g2], 3:['CONCEPTOS', XL.g3], 4:['POSESIÓN Y FIRMA', XL.g4]};
 
   var wb = new ExcelJS.Workbook(); wb.creator = 'Mess'; wb.created = new Date();
@@ -642,12 +782,13 @@ function bajarExcel(){
   });
   // totales (con fórmula, y con el valor calculado para que se vea aunque se abra en un visor)
   var rt = 6 + a.length, ult = rt - 1, tr = ws.getRow(rt); tr.height = 22;
-  var sumas = {s:0, usd:0, ars:0, alt:0, tot:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
-  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.tot += r.c.tot; conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
+  var sumas = {s:0, usd:0, ars:0, alt:0, tot:0, tusd:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
+  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.tot += r.c.tot; sumas.tusd += r.c.tusd; conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
   C.forEach(function(col, j){
     var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
     if (j === 0) cell.value = 'TOTAL';
     else if (sumas[key] !== undefined) cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:sumas[key]};
+    else if (key === 'usdm2') cell.value = sumas.s ? sumas.tusd / sumas.s : 0;
     else if (key === 'pc') cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:TOTS ? sumas.s / TOTS : 0};
     cell.numFmt = col[3]; cell.alignment = {horizontal:j === 0 ? 'center' : col[4], vertical:'middle'};
     cell.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
