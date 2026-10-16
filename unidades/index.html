@@ -185,7 +185,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
     </div>
     <div class="sidebar-footer">
       <div class="user-info"><b id="quienMail"></b><span id="quienRol"></span></div>
-      <a class="btn" href="../" style="width:100%;justify-content:center">← Cambiar de módulo</a>
+      <a class="btn" id="volver" href="../" style="width:100%;justify-content:center">← Cambiar de módulo</a>
       <div class="ver">Planilla posesiones</div>
     </div>
   </aside>
@@ -201,7 +201,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 
     <div id="vacio" class="card hid" style="text-align:center;padding:40px 16px">
       <h2 style="margin-top:0">Todavía no hay edificios cargados</h2>
-      <p class="sm">Importá la planilla de unidades (Excel) para crear el primero. Columnas esperadas: Unidad, Propietario, Teléfono, Mail, Inquilino/a, m² Superficie.</p>
+      <p class="sm" id="vacioTxt">Importá la planilla de unidades (Excel) para crear el primero. Columnas esperadas: Unidad, Propietario, Teléfono, Mail, Inquilino/a, m² Superficie.</p>
       <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="btn pri" id="btnImp2">📥 Importar Excel</button>
         <button class="btn" id="btnNuevoEd2">＋ Crear edificio vacío</button>
@@ -271,7 +271,9 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
    ══════════════════════════════════════════════════════════════════════ */
 var CFG = window.UNID_CONFIG || {};
 var db = null, auth = null;
-var uid = '', mail = '', rol = '', puedeEditar = false;
+var uid = '', mail = '', rol = '', puedeEditar = false, puedeAdmin = false;
+// puedeAdmin = superadmin/admin/editor (todo: importar, borrar, parámetros). El rol «posesiones» (usuarios que sólo entran a este módulo)
+// puede cargar y editar unidades, fechas y horas, pero no tocar parámetros, borrar ni importar.
 var EDS = {};                 // todos los edificios {id: {nombre, params, unidades}}
 var edId = '';                // edificio activo
 var U = [];                   // unidades del edificio activo (array, con c = cálculo)
@@ -330,9 +332,16 @@ function normParams(p){
                  '<a class="btn" href="../">← Volver</a>');
         return;
       }
-      puedeEditar = ['superadmin','admin','editor'].indexOf(rol) >= 0;
+      puedeAdmin = ['superadmin','admin','editor'].indexOf(rol) >= 0;
+      puedeEditar = puedeAdmin || rol === 'posesiones';
+      if (!puedeAdmin) { $('vacioTxt').textContent = 'Todavía no hay edificios cargados. Pedile a un administrador que cargue la planilla.'; ['btnImp2','btnNuevoEd2'].forEach(function(id){ $(id).classList.add('hid'); }); }
+      if (rol === 'posesiones') {   // sólo este módulo: no hay otro adónde volver, y menos opciones en el menú
+        ['btnNuevoEd','btnImp','btnDel'].forEach(function(id){ $(id).classList.add('hid'); });
+        var v = $('volver'); v.textContent = 'Cerrar sesión'; v.removeAttribute('href'); v.style.cursor = 'pointer';
+        v.onclick = function(){ auth.signOut().then(function(){ location.href = './'; }); };
+      }
       $('quienMail').textContent = mail; $('quienRol').textContent = rol;
-      $('btnImp').disabled = !puedeEditar; $('btnDel').disabled = !puedeEditar; $('btnImp2').disabled = !puedeEditar; $('btnNuevoEd').disabled = !puedeEditar; $('btnNuevoEd2').disabled = !puedeEditar; $('btnNuevaU').disabled = !puedeEditar;
+      $('btnImp').disabled = !puedeAdmin; $('btnDel').disabled = !puedeAdmin; $('btnImp2').disabled = !puedeAdmin; $('btnNuevoEd').disabled = !puedeAdmin; $('btnNuevoEd2').disabled = !puedeAdmin; $('btnNuevaU').disabled = !puedeEditar;
       escucharEdificios();
     }).catch(function(){
       bloquear('No se pudo leer tu permiso', 'Probá de nuevo en un rato.', '<a class="btn" href="../">← Volver</a>');
@@ -354,7 +363,7 @@ function escucharEdificios(){
     $('selEd').innerHTML = ids.map(function(i){
       return '<option value="' + esc(i) + '"' + (i === edId ? ' selected' : '') + '>' + esc(EDS[i].nombre || i) + '</option>'; }).join('');
     $('selEd').classList.toggle('hid', !ids.length);
-    $('btnDel').classList.toggle('hid', !ids.length); $('btnXls0').classList.toggle('hid', !ids.length);
+    $('btnDel').classList.toggle('hid', !ids.length || !puedeAdmin); $('btnXls0').classList.toggle('hid', !ids.length);
     cargarEdificio();
   }, function(err){
     bloquear('No se pudo leer la base', 'Es probable que falte permiso en global/edificios: ' + (err && err.message || ''),
@@ -387,7 +396,7 @@ function calc(r){
   return o;
 }
 function guardarParams(){
-  if (!puedeEditar || !edId) return;
+  if (!puedeAdmin || !edId) return;
   clearTimeout(_tGuardar); _pend = true;
   _tGuardar = setTimeout(function(){
     db.ref('global/edificios/' + edId + '/params').set(P)
@@ -397,7 +406,7 @@ function guardarParams(){
 
 /* ── Interfaz ──────────────────────────────────────────────────────── */
 function renderParams(){
-  var d = puedeEditar ? '' : ' disabled';
+  var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
   var h = '<h3>Valuación</h3>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) +
     '<h3>Conceptos del edificio — se reparten según los m² de cada unidad</h3>';
@@ -475,7 +484,7 @@ function celdaPlanilla(k, r, c, dis){
     case 'tot': return '<td><b>' + N(c.tot) + '</b></td>';
     case 'fp': return '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>';
     case 'hf': return '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>';
-    case 'acc': return '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button> <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') + '</td>';
+    case 'acc': return '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button>' + (puedeAdmin ? ' <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') : '') + '</td>';
     default: return '<td>' + N(c[k]) + '</td>';     // conceptos
   }
 }
@@ -583,13 +592,13 @@ function renderPosesion(){
 
 /* ── Eventos ───────────────────────────────────────────────────────── */
 $('params').addEventListener('input', function(e){
-  var i = e.target; if (!i.dataset.k || !puedeEditar) return;
+  var i = e.target; if (!i.dataset.k || !puedeAdmin) return;
   var v = parseFloat(i.value) || 0;
   if (i.dataset.k.indexOf('p_') === 0) P.pct[i.dataset.k.slice(2)] = v; else P[i.dataset.k] = v;
   guardarParams(); refTotales(); render();
 });
 $('params').addEventListener('change', function(e){
-  var s = e.target; if (!s.dataset.m || !puedeEditar) return;
+  var s = e.target; if (!s.dataset.m || !puedeAdmin) return;
   P.modo[s.dataset.m] = s.value; guardarParams(); refTotales(); render();
 });
 $('th').addEventListener('click', function(e){
@@ -608,7 +617,7 @@ $('tb').addEventListener('change', guardarCampo);
 $('ptb').addEventListener('change', guardarCampo);
 [].forEach.call(document.querySelectorAll('.nav-item[data-v]'), function(b){ b.onclick = function(){ setVista(b.dataset.v); }; });
 $('hamb').onclick = function(){ document.body.classList.toggle('menu-abierto'); };
-$('btnImp2').onclick = function(){ if (puedeEditar) $('fileImp').click(); };
+$('btnImp2').onclick = function(){ if (puedeAdmin) $('fileImp').click(); };
 $('pq').oninput = function(e){ S.pq = e.target.value; renderPosesion(); };
 [].forEach.call(document.querySelectorAll('button[data-pf]'), function(b){
   b.onclick = function(){ S.pf = b.dataset.pf;
@@ -911,10 +920,10 @@ $('btnNuevaU').onclick = function(){ if (puedeEditar && edId) formUnidad(null); 
 $('tb').addEventListener('click', function(e){
   var b = e.target.closest('button'); if (!b || !puedeEditar) return;
   if (b.dataset.ed) formUnidad(U.filter(function(x){ return x.k === b.dataset.ed; })[0]);
-  else if (b.dataset.del) borrarUnidad(b.dataset.del);
+  else if (b.dataset.del && puedeAdmin) borrarUnidad(b.dataset.del);
 });
 function nuevoEdificio(){
-  if (!puedeEditar) return;
+  if (!puedeAdmin) return;
   var nom = (window.prompt('Nombre del edificio (ej: Congreso 1698 / KASA I):') || '').trim();
   if (!nom) return;
   var id = slug(nom);
@@ -936,7 +945,7 @@ function mailsDe(t){ var s = [], m = String(t || '').match(RX_MAIL) || [];
   m.forEach(function(x){ x = x.toLowerCase(); if (s.indexOf(x) < 0) s.push(x); }); return s; }
 function normH(s){ return String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, ''); }
 
-$('btnImp').onclick = function(){ if (puedeEditar) $('fileImp').click(); };
+$('btnImp').onclick = function(){ if (puedeAdmin) $('fileImp').click(); };
 $('fileImp').onchange = function(){
   var f = this.files[0]; this.value = ''; if (!f) return;
   var rd = new FileReader();
@@ -1006,7 +1015,7 @@ function importarLibro(wb){
 
 /* ── Eliminar edificio ─────────────────────────────────────────────── */
 $('btnDel').onclick = function(){
-  if (!puedeEditar || !edId || !EDS[edId]) return;
+  if (!puedeAdmin || !edId || !EDS[edId]) return;
   var nom = EDS[edId].nombre || edId;
   if (!window.confirm('¿Eliminar “' + nom + '” con todas sus unidades, fechas y parámetros? No se puede deshacer.')) return;
   db.ref('global/edificios/' + edId).remove().then(function(){ toast('Edificio eliminado'); P = null; edId = ''; })
