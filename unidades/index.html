@@ -248,6 +248,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="config.js"></script>
 <script>
 /* ══════════════════════════════════════════════════════════════════════
@@ -560,41 +561,165 @@ $('mails').onclick = function(e){
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function(){ toast('✔ ' + ls.length + ' mails copiados'); },
     function(){ window.prompt('Copiá los mails:', t); });
 };
-/* ── Bajar a Excel (.xlsx) ─────────────────────────────────────────── */
-// Arma un libro con tres hojas: la planilla (lo que se ve, con totales como fórmula),
-// los parámetros de valuación y los conceptos con su total del edificio.
+/* ── Bajar a Excel (.xlsx) con formato ─────────────────────────────── */
+// Usa ExcelJS (SheetJS gratuito no permite colores ni bordes). Genera un libro presentable:
+// «Planilla» (título, grupos de columnas con color, filas alternadas, totales, filtros y
+// listo para imprimir en hoja horizontal), «Valuación» y «Posesión y firma».
+// Para no llenar la hoja de datos sueltos: los teléfonos y mails salen sólo si está prendido
+// «👁 Datos personales», y no se incluyen la columna de TC alternativo ni los conceptos que valen 0.
+var XL = {ink:'FF1F2937', sub:'FF6B7280', borde:'FFE5E7EB', zebra:'FFF6F7F9', blanco:'FFFFFFFF', rk:'FFFFF4DC',
+          g1:'FF374151', g2:'FF0071E3', g3:'FF6D4BE0', g4:'FF137A38', tot:'FFE8EEF9'};
+function xlFecha(s){ var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : ''; }
+function xlBorde(c, grueso){ var l = {style:'thin', color:{argb:XL.borde}};
+  c.border = {top:grueso ? {style:'medium', color:{argb:XL.g2}} : l, bottom:l, left:l, right:l}; }
+function xlTitulo(ws, texto, sub, ncols){
+  ws.mergeCells(1, 1, 1, ncols); ws.mergeCells(2, 1, 2, ncols);
+  var t = ws.getCell(1, 1); t.value = texto; t.font = {name:'Calibri', size:20, bold:true, color:{argb:XL.ink}}; t.alignment = {vertical:'middle'};
+  var u = ws.getCell(2, 1); u.value = sub; u.font = {name:'Calibri', size:10, color:{argb:XL.sub}};
+  ws.getRow(1).height = 30; ws.getRow(2).height = 18;
+}
+function xlEncabezado(c, color){
+  c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:color}};
+  c.font = {name:'Calibri', size:10, bold:true, color:{argb:XL.blanco}};
+  c.alignment = {horizontal:'center', vertical:'middle', wrapText:true};
+  c.border = {left:{style:'thin', color:{argb:XL.blanco}}, right:{style:'thin', color:{argb:XL.blanco}}};
+}
+function xlDescargar(wb, nombre){
+  return wb.xlsx.writeBuffer().then(function(buf){
+    var u = URL.createObjectURL(new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})), x = document.createElement('a');
+    x.href = u; x.download = nombre; document.body.appendChild(x); x.click(); document.body.removeChild(x);
+    setTimeout(function(){ URL.revokeObjectURL(u); }, 4000);
+  });
+}
 function bajarExcel(){
-  if (typeof XLSX === 'undefined') { toast('⚠️ No cargó la librería de Excel. Revisá la conexión.'); return; }
+  if (typeof ExcelJS === 'undefined') { toast('⚠️ No cargó la librería de Excel. Revisá la conexión.'); return; }
   var e = EDS[edId]; if (!e || !P) return;
-  var a = filas();
-  var H = ['Unidad','Propietario','Teléfono','Mail propietario','Inquilino/a','m²','% unidad','Valor USD','Valor $ TC','Valor $ TC alt.']
-    .concat(CONC.map(function(c){ return c[1]; })).concat(['Total conceptos','Fecha posesión','Hora firma']);
-  var rows = [H].concat(a.map(function(r){
-    var c = r.c;
-    return [r.u, r.p, r.t, r.m.join(' / '), r.i, r.s, TOTS ? r.s / TOTS : 0, c.usd, c.ars, c.alt == null ? '' : c.alt]
-      .concat(CONC.map(function(k){ return c[k[0]]; })).concat([c.tot, r.fp, r.hf]);
-  }));
-  var n = rows.length;                       // fila de totales = n + 1 (1-indexada)
-  var colL = function(i){ return XLSX.utils.encode_col(i); };
-  var tot = ['Total (' + a.length + ')', '', '', '', ''];
-  for (var i = 5; i < H.length - 2; i++) tot.push({f: 'SUM(' + colL(i) + '2:' + colL(i) + n + ')'});
-  tot.push('', '');
-  rows.push(tot);
-  var ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = H.map(function(h, i){ return {wch: i === 1 || i === 3 || i === 4 ? 30 : (i >= 5 ? 18 : 14)}; });
-  for (var r = 1; r <= n; r++) for (var c2 = 5; c2 < H.length - 2; c2++) {
-    var ref = XLSX.utils.encode_cell({r: r, c: c2}); if (!ws[ref]) continue;
-    ws[ref].z = c2 === 5 ? '0.00' : c2 === 6 ? '0.00%' : c2 === 7 ? '"USD" #,##0.00' : '"$" #,##0.00';
+  var a = filas(), hoy = new Date().toLocaleDateString('es-AR');
+  var conceptos = CONC.filter(function(c){ return totConcepto(c[0]) !== 0; });
+  var pd = S.pd, alt = !!P.tc2;
+  // Columnas: [clave, título, ancho, formato, alineación, grupo]
+  var C = [['u','Unidad',9,'@','center',1],['p','Propietario',30,'@','left',1]];
+  if (pd) C.push(['t','Teléfono',22,'@','left',1], ['m','Mail',34,'@','left',1]);
+  C.push(['i','Inquilino/a',pd ? 38 : 24,'@','left',1], ['s','m²',10,'0.00','right',1], ['pc','% de la unidad',11,'0.00%','right',1],
+         ['usd','Valor USD',17,'"USD" #,##0.00','right',2], ['ars','Valor $ (TC ' + P.tc + ')',19,'"$" #,##0.00','right',2]);
+  if (alt) C.push(['alt','Valor $ (TC ' + P.tc2 + ')',21,'"$" #,##0.00','right',2]);
+  conceptos.forEach(function(c){ C.push([c[0], c[1].replace(' (acciones y part.)', ''), 19, '"$" #,##0.00', 'right', 3]); });
+  if (conceptos.length) C.push(['tot','Total conceptos',19,'"$" #,##0.00','right',3]);
+  C.push(['fp','Fecha de posesión',15,'dd/mm/yyyy','center',4], ['hf','Hora de firma',11,'@','center',4]);
+  var n = C.length, GR = {1:['DATOS DE LA UNIDAD', XL.g1], 2:['VALUACIÓN', XL.g2], 3:['CONCEPTOS', XL.g3], 4:['POSESIÓN Y FIRMA', XL.g4]};
+
+  var wb = new ExcelJS.Workbook(); wb.creator = 'Mess'; wb.created = new Date();
+  var ws = wb.addWorksheet('Planilla', {properties:{tabColor:{argb:XL.g2}}});
+  ws.columns = C.map(function(c){ return {width:c[2]}; });
+  xlTitulo(ws, e.nombre || edId, 'Planilla de unidades · ' + hoy + ' · Valor m² USD ' + P.usd.toLocaleString('es-AR') + ' · TC $' + P.tc.toLocaleString('es-AR') + ' · ' + a.length + ' unidades · ' + TOTS.toLocaleString('es-AR', {maximumFractionDigits:2}) + ' m²', n);
+  // fila 4: grupos combinados; fila 5: títulos
+  var ini = 0;
+  for (var i = 1; i <= n; i++) {
+    if (i === n || C[i][5] !== C[ini][5]) {
+      var g = GR[C[ini][5]];
+      if (i - 1 > ini) ws.mergeCells(4, ini + 1, 4, i);
+      var cg = ws.getCell(4, ini + 1); cg.value = g[0]; xlEncabezado(cg, g[1]); cg.font.size = 9; ini = i;
+    }
   }
-  var P2 = [['Parámetro','Valor'],['Edificio', e.nombre || edId],['Valor m² (USD)', P.usd],['Tipo de cambio base', P.tc],['Tipo de cambio alternativo', P.tc2 || ''],['m² totales', TOTS],[],
-    ['Concepto','Se carga como','Valor cargado','Total del edificio ($)']]
-    .concat(CONC.map(function(c){ var k = c[0]; return [c[1], P.modo[k] === 'monto' ? '$ total' : '% del valor total', P.pct[k], totConcepto(k)]; }));
-  var ws2 = XLSX.utils.aoa_to_sheet(P2); ws2['!cols'] = [{wch:44},{wch:22},{wch:16},{wch:22}];
-  var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Planilla');
-  XLSX.utils.book_append_sheet(wb, ws2, 'Valuación');
-  XLSX.writeFile(wb, String(e.nombre || 'unidades').replace(/[\\\/:*?"<>|]+/g, '-') + '.xlsx');
-  toast('✔ Excel generado (' + a.length + ' unidades)');
+  ws.getRow(4).height = 18;
+  C.forEach(function(c, j){ var h = ws.getCell(5, j + 1); h.value = c[1]; xlEncabezado(h, GR[c[5]][1]); });
+  ws.getRow(5).height = 32;
+  // datos
+  a.forEach(function(r, k){
+    var row = ws.getRow(6 + k), c = r.c; row.height = 18;
+    C.forEach(function(col, j){
+      var v, key = col[0];
+      if (key === 'u') v = r.u; else if (key === 'p') v = r.p; else if (key === 't') v = r.t; else if (key === 'm') v = r.m.join(' / ');
+      else if (key === 'i') v = pd ? r.i : nombreInq(r.i); else if (key === 's') v = r.s; else if (key === 'pc') v = TOTS ? r.s / TOTS : 0;
+      else if (key === 'fp') v = xlFecha(r.fp); else if (key === 'hf') v = r.hf; else v = c[key];
+      var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
+      cell.numFmt = col[3]; cell.alignment = {horizontal:col[4], vertical:'middle', wrapText:false};
+      cell.font = {name:'Calibri', size:10, bold:key === 'u' || key === 'tot', color:{argb:XL.ink}};
+      if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
+      if (r.rk && (key === 'u' || key === 'p')) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.rk}};
+      xlBorde(cell);
+    });
+  });
+  // totales (con fórmula, y con el valor calculado para que se vea aunque se abra en un visor)
+  var rt = 6 + a.length, ult = rt - 1, tr = ws.getRow(rt); tr.height = 22;
+  var sumas = {s:0, usd:0, ars:0, alt:0, tot:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
+  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.tot += r.c.tot; conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
+  C.forEach(function(col, j){
+    var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
+    if (j === 0) cell.value = 'TOTAL';
+    else if (sumas[key] !== undefined) cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:sumas[key]};
+    else if (key === 'pc') cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:TOTS ? sumas.s / TOTS : 0};
+    cell.numFmt = col[3]; cell.alignment = {horizontal:j === 0 ? 'center' : col[4], vertical:'middle'};
+    cell.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
+    cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.tot}}; xlBorde(cell, true);
+  });
+  ws.views = [{state:'frozen', xSplit:2, ySplit:5, showGridLines:false}];
+  ws.autoFilter = {from:{row:5, column:1}, to:{row:5 + a.length, column:n}};
+  ws.pageSetup = {orientation:'landscape', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0, printTitlesRow:'4:5',
+                  margins:{left:0.4, right:0.4, top:0.5, bottom:0.5, header:0.3, footer:0.3}};
+  ws.headerFooter = {oddFooter:'&L' + (e.nombre || '') + '&RPágina &P de &N'};
+
+  // ── Valuación ──
+  var wv = wb.addWorksheet('Valuación', {properties:{tabColor:{argb:XL.g3}}});
+  wv.columns = [{width:46},{width:26},{width:20},{width:24}];
+  xlTitulo(wv, 'Valuación y conceptos', (e.nombre || edId) + ' · ' + hoy, 4);
+  var pv = [['Valor del m² (USD)', P.usd, '"USD" #,##0.00'], ['Tipo de cambio base', P.tc, '"$" #,##0.00'], ['Tipo de cambio alternativo', P.tc2 || null, '"$" #,##0.00'],
+            ['m² totales del edificio', TOTS, '0.00'], ['Valor total (USD)', TOTS * P.usd, '"USD" #,##0.00'], ['Valor total ($, TC base)', TOTS * P.usd * P.tc, '"$" #,##0.00']];
+  pv.forEach(function(p, k){
+    var r = 4 + k, c1 = wv.getCell(r, 1), c2 = wv.getCell(r, 2);
+    c1.value = p[0]; c1.font = {name:'Calibri', size:10.5, color:{argb:XL.sub}}; c2.value = p[1]; c2.numFmt = p[2];
+    c2.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}}; c2.alignment = {horizontal:'right'}; xlBorde(c1); xlBorde(c2);
+  });
+  var h0 = 4 + pv.length + 1;
+  ['Concepto','Se carga como','Valor cargado','Total del edificio ($)'].forEach(function(t, j){ var h = wv.getCell(h0, j + 1); h.value = t; xlEncabezado(h, XL.g3); });
+  wv.getRow(h0).height = 22;
+  CONC.forEach(function(c, k){
+    var r = h0 + 1 + k, kk = c[0], monto = P.modo[kk] === 'monto';
+    var cs = [c[1], monto ? '$ total del edificio' : '% del valor total', P.pct[kk], totConcepto(kk)];
+    cs.forEach(function(v, j){
+      var cell = wv.getCell(r, j + 1); cell.value = v; cell.font = {name:'Calibri', size:10.5, color:{argb:XL.ink}};
+      cell.numFmt = j === 2 ? (monto ? '"$" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
+      cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
+      if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}}; xlBorde(cell);
+    });
+  });
+  var rtv = h0 + 1 + CONC.length;
+  var tv = wv.getCell(rtv, 1); tv.value = 'Total de conceptos';
+  var tv4 = wv.getCell(rtv, 4); tv4.value = {formula:'SUM(D' + (h0 + 1) + ':D' + (rtv - 1) + ')', result:CONC.reduce(function(m, c){ return m + totConcepto(c[0]); }, 0)}; tv4.numFmt = '"$" #,##0.00';
+  for (var q = 1; q <= 4; q++) { var tc = wv.getCell(rtv, q); tc.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
+    tc.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.tot}}; xlBorde(tc, true); if (q === 4) tc.alignment = {horizontal:'right'}; }
+  wv.views = [{showGridLines:false}];
+  wv.pageSetup = {orientation:'portrait', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0};
+
+  // ── Posesión y firma ──
+  var wp = wb.addWorksheet('Posesión y firma', {properties:{tabColor:{argb:XL.g4}}});
+  var PC = [['Unidad',9,'center'],['Propietario',30,'left'],['Inquilino/a',26,'left'],['m²',10,'right'],['Fecha de posesión',17,'center'],['Hora de firma',13,'center'],['Estado',16,'center']];
+  wp.columns = PC.map(function(c){ return {width:c[1]}; });
+  var conF = U.filter(function(r){ return r.fp; }).length, conH = U.filter(function(r){ return r.fp && r.hf; }).length;
+  xlTitulo(wp, 'Posesión y firma', (e.nombre || edId) + ' · ' + hoy + ' · con fecha ' + conF + ' de ' + U.length + ' · con fecha y hora ' + conH + ' de ' + U.length, PC.length);
+  PC.forEach(function(c, j){ var h = wp.getCell(4, j + 1); h.value = c[0]; xlEncabezado(h, XL.g4); });
+  wp.getRow(4).height = 24;
+  var lista = U.slice().sort(function(x, y){ return x.o - y.o; });
+  lista.forEach(function(r, k){
+    var est = !r.fp ? 'Sin fecha' : (!r.hf ? 'Falta hora' : 'Programada');
+    var vals = [r.u, r.p, nombreInq(r.i), r.s, xlFecha(r.fp), r.hf, est], row = wp.getRow(5 + k); row.height = 18;
+    vals.forEach(function(v, j){
+      var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
+      cell.numFmt = j === 3 ? '0.00' : j === 4 ? 'dd/mm/yyyy' : '@';
+      cell.alignment = {horizontal:PC[j][2], vertical:'middle'}; cell.font = {name:'Calibri', size:10, bold:j === 0, color:{argb:XL.ink}};
+      if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
+      if (j === 6) { var col = est === 'Programada' ? ['FFE6F4EA','FF137A38'] : est === 'Falta hora' ? ['FFFFF4DC','FF8A560F'] : ['FFFDEEF0','FFB42318'];
+        cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:col[0]}}; cell.font = {name:'Calibri', size:10, bold:true, color:{argb:col[1]}}; }
+      xlBorde(cell);
+    });
+  });
+  wp.views = [{state:'frozen', ySplit:4, showGridLines:false}];
+  wp.autoFilter = {from:{row:4, column:1}, to:{row:4 + lista.length, column:PC.length}};
+  wp.pageSetup = {orientation:'portrait', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0, printTitlesRow:'4:4'};
+
+  var nombre = String(e.nombre || 'unidades').replace(/[\\\/:*?"<>|]+/g, '-') + '.xlsx';
+  xlDescargar(wb, nombre).then(function(){ toast('✔ Excel generado (' + a.length + ' unidades)'); })
+    .catch(function(err){ toast('⚠️ No se pudo generar el Excel: ' + (err && err.message || err)); });
 }
 $('xls').onclick = bajarExcel; $('xls2').onclick = bajarExcel; $('btnXls0').onclick = bajarExcel;
 
