@@ -306,7 +306,7 @@ function normParams(p){
   CONC.forEach(function(c){
     var k = c[0];
     d.pct[k] = +((p.pct || {})[k]) || 0;
-    d.modo[k] = ((p.modo || {})[k]) === 'monto' ? 'monto' : 'pct';
+    var mo = (p.modo || {})[k]; d.modo[k] = (mo === 'monto' || mo === 'montousd') ? mo : 'pct';
   });
   return d;
 }
@@ -387,7 +387,17 @@ function cargarEdificio(){
 }
 
 /* ── Cálculo ───────────────────────────────────────────────────────── */
-function totConcepto(k){ return P.modo[k] === 'monto' ? P.pct[k] : TOTS * P.usd * P.tc * P.pct[k] / 100; }
+// Cada concepto se carga de una de tres formas: % del valor total del edificio, monto fijo en pesos, o monto fijo en dólares
+// (que se pasa a pesos al TC base). Siempre devuelve el total del edificio en PESOS.
+function totConcepto(k){
+  var m = P.modo[k];
+  if (m === 'monto') return P.pct[k];
+  if (m === 'montousd') return P.pct[k] * P.tc;
+  return TOTS * P.usd * P.tc * P.pct[k] / 100;
+}
+function modoTexto(k){ var m = P.modo[k]; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
+function valorCargadoTexto(k){ var m = P.modo[k]; return m === 'monto' ? N(P.pct[k]) : m === 'montousd' ? N(P.pct[k], 'USD') : P.pct[k] + ' %'; }
+function totalConceptoTexto(k){ return 'Total edificio: ' + N(totConcepto(k)) + (P.modo[k] === 'montousd' ? ' (TC ' + P.tc + ')' : ''); }
 function calc(r){
   var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0};
   CONC.forEach(function(c){ o[c[0]] = TOTS ? totConcepto(c[0]) * r.s / TOTS : 0; o.tot += o[c[0]]; });
@@ -414,13 +424,14 @@ function renderParams(){
     var k = c[0];
     h += '<label class="f">' + c[1] + '<span class="dual"><input type="number" step="any" data-k="p_' + k + '" value="' + P.pct[k] + '"' + d + '>' +
       '<select data-m="' + k + '"' + d + '><option value="pct"' + (P.modo[k] === 'pct' ? ' selected' : '') + '>% valor</option>' +
-      '<option value="monto"' + (P.modo[k] === 'monto' ? ' selected' : '') + '>$ total</option></select></span>' +
-      '<small>Total edificio: ' + N(totConcepto(k)) + '</small></label>';
+      '<option value="monto"' + (P.modo[k] === 'monto' ? ' selected' : '') + '>$ total</option>' +
+      '<option value="montousd"' + (P.modo[k] === 'montousd' ? ' selected' : '') + '>USD total</option></select></span>' +
+      '<small>' + totalConceptoTexto(k) + '</small></label>';
   });
   $('params').innerHTML = h;
 }
 function refTotales(){
-  [].forEach.call($('params').querySelectorAll('small'), function(s, i){ s.textContent = 'Total edificio: ' + N(totConcepto(CONC[i][0])); });
+  [].forEach.call($('params').querySelectorAll('small'), function(s, i){ s.textContent = totalConceptoTexto(CONC[i][0]); });
 }
 function filas(){
   var q = S.q.toLowerCase();
@@ -566,8 +577,8 @@ function setVista(v, sinGuardar){
 function renderResumen(){
   $('resBody').innerHTML = CONC.map(function(c){
     var k = c[0];
-    return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + (P.modo[k] === 'monto' ? '$ total del edificio' : '% del valor total') + '</td><td>' +
-      (P.modo[k] === 'monto' ? N(P.pct[k]) : P.pct[k] + ' %') + '</td><td><b>' + N(totConcepto(k)) + '</b></td></tr>';
+    return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + modoTexto(k) + '</td><td>' +
+      valorCargadoTexto(k) + '</td><td><b>' + N(totConcepto(k)) + '</b></td></tr>';
   }).join('');
 }
 function renderPosesion(){
@@ -824,11 +835,11 @@ function bajarExcel(){
   ['Concepto','Se carga como','Valor cargado','Total del edificio ($)'].forEach(function(t, j){ var h = wv.getCell(h0, j + 1); h.value = t; xlEncabezado(h, XL.g3); });
   wv.getRow(h0).height = 22;
   CONC.forEach(function(c, k){
-    var r = h0 + 1 + k, kk = c[0], monto = P.modo[kk] === 'monto';
-    var cs = [c[1], monto ? '$ total del edificio' : '% del valor total', P.pct[kk], totConcepto(kk)];
+    var r = h0 + 1 + k, kk = c[0], md = P.modo[kk];
+    var cs = [c[1], modoTexto(kk), P.pct[kk], totConcepto(kk)];
     cs.forEach(function(v, j){
       var cell = wv.getCell(r, j + 1); cell.value = v; cell.font = {name:'Calibri', size:10.5, color:{argb:XL.ink}};
-      cell.numFmt = j === 2 ? (monto ? '"$" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
+      cell.numFmt = j === 2 ? (md === 'monto' ? '"$" #,##0.00' : md === 'montousd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
       cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
       if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}}; xlBorde(cell);
     });
