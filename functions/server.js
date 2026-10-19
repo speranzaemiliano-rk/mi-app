@@ -1618,6 +1618,21 @@ if (mailBotConfigurado()) {
 let _alquileresCorriendo = false;
 const ALQ_DIAS_AVISO = [5, 1, 0]; // días antes del vencimiento en que se avisa
 
+// Primer / último mes PROPORCIONAL de un contrato: si empieza el 20, ese mes se cobran del 20 a fin de mes (días reales del mes, contando
+// el de inicio); si termina el 19, el último mes se cobra hasta el 19. Es la MISMA regla que `_alqFraccionPeriodo` de index.html: si se
+// cambia una, hay que cambiar la otra. Devuelve null si el período se cobra entero (o el contrato no tiene las marcas).
+function _alqFraccionPeriodo(a, periodo) {
+    if (!a || !a.inicio || !/^\d{4}-\d{2}$/.test(String(periodo || ''))) return null;
+    const y = parseInt(periodo.substring(0, 4), 10), m = parseInt(periodo.substring(5, 7), 10);
+    const diasMes = new Date(y, m, 0).getDate();
+    let desde = 1, hasta = diasMes;
+    if (a.proporcionalInicio && String(a.inicio).substring(0, 7) === periodo) desde = parseInt(String(a.inicio).substring(8, 10), 10) || 1;
+    if (a.proporcionalFin && a.fin && String(a.fin).substring(0, 7) === periodo) hasta = Math.min(diasMes, parseInt(String(a.fin).substring(8, 10), 10) || diasMes);
+    const dias = Math.max(0, hasta - desde + 1);
+    if (dias >= diasMes) return null;
+    return { factor: dias / diasMes, dias, diasMes, desde, hasta };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Lecturas LIVIANAS de la base (para las tareas programadas)
 //
@@ -1720,7 +1735,12 @@ async function revisarAlquileres() {
                     if (cobrada) continue;
 
                     const dia = Math.min(parseInt(a.diaPago) || 1, diasMes);
-                    const vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
+                    let vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
+                    // En el mes en que EMPIEZA el contrato la cuota no vence antes de que empiece (inicio el 20, día de pago 5 → vence el 20).
+                    if (a.inicio && String(a.inicio).substring(0, 7) === periodo) {
+                        const ini = new Date(a.inicio + 'T00:00:00');
+                        if (!isNaN(ini.getTime()) && ini > vence) vence = ini;
+                    }
                     const diasRestantes = Math.round((vence - hoy) / 86400000);
                     if (diasRestantes < 0) continue; // ya vencida (el aviso in-app lo cubre)
                     const rec = (a.recordatoriosPago && a.recordatoriosPago[periodo]) || {};
@@ -1733,14 +1753,16 @@ async function revisarAlquileres() {
                         if (!to) continue;
 
                         const monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
-                        const monto = a.canonActual || a.canon || 0;
+                        let monto = a.canonActual || a.canon || 0;
+                        const fr = _alqFraccionPeriodo(a, periodo);   // primer/último mes proporcional: el monto es el de ese tramo
+                        if (fr) monto = monto * fr.factor;
                         const cuando = diasRestantes === 0 ? 'hoy' : ('en ' + diasRestantes + ' día(s)');
                         const asunto = '⏰ Alquiler ' + (a.unidad || '') + ': la cuota vence ' + cuando;
                         const cuerpo = 'Hola,\n\n' +
                             'Te recordamos que la cuota de alquiler de la unidad "' + (a.unidad || '') + '"' +
                             (a.inquilino ? ' (' + a.inquilino + ')' : '') + '\n' +
-                            'vence el día ' + dia + ' de este mes (' + cuando + ').\n' +
-                            (monto ? 'Monto: ' + monSym + Math.round(monto) + '\n' : '') +
+                            'vence el día ' + vence.getDate() + ' de este mes (' + cuando + ').\n' +
+                            (monto ? 'Monto: ' + monSym + Math.round(monto) + (fr ? ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : '') + '\n' : '') +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
                             '\n\n— ' + BRAND_NOMBRE;

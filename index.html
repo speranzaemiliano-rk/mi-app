@@ -3603,7 +3603,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v550</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v551</div>
         </div>
     </nav>
 
@@ -16772,7 +16772,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v550';
+    var APP_VER = 'v551';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -32527,6 +32527,10 @@
         onAlqIndiceChange();
         _alqIvaToggle();
         _alqDuracionDesdeFechas();
+        document.getElementById('alqPropInicio').checked = !!(a && a.proporcionalInicio);
+        document.getElementById('alqPropFin').checked    = !!(a && a.proporcionalFin);
+        _alqPropFinTocado = !!a;   // un contrato ya cargado no se toca solo; uno nuevo sí (al prender el primer mes se prende el último)
+        _alqProrrataPreview();
         document.getElementById('modalAlquiler').classList.add('active');
     }
 
@@ -32570,6 +32574,44 @@
         if (dfp1.getDate() < di.getDate()) meses -= 1;
         if (meses > 0) el.value = meses;
     }
+
+    // Muestra cuánto sale el primer / último mes proporcional con lo que hay cargado en el formulario, y deshabilita cada casilla si no
+    // corresponde (el contrato empieza el día 1 / termina el último día del mes). Sin marcar, no hace nada más que informar.
+    var _alqPropFinTocado = false;
+    function _alqProrrataDatos() {
+        return {
+            inicio: document.getElementById('alqInicio').value, fin: document.getElementById('alqFin').value,
+            proporcionalInicio: document.getElementById('alqPropInicio').checked, proporcionalFin: document.getElementById('alqPropFin').checked,
+            canon: parseFloat(document.getElementById('alqCanon').value) || 0, canonActual: parseFloat(document.getElementById('alqCanonActual').value) || 0,
+            ajustesCanon: _alqAjustesCanonWorking
+        };
+    }
+    function _alqProrrataCambio(cual) {
+        if (cual === 'fin') _alqPropFinTocado = true;
+        // al prender el primer mes se prende también el último (si aplica): lo normal es que vayan juntos; se puede destildar
+        if (cual === 'inicio' && document.getElementById('alqPropInicio').checked && !_alqPropFinTocado) {
+            var f = document.getElementById('alqPropFin'); if (!f.disabled) f.checked = true;
+        }
+        _alqProrrataPreview();
+    }
+    function _alqProrrataPreview() {
+        var elI = document.getElementById('alqPropInicio'), elF = document.getElementById('alqPropFin'), out = document.getElementById('alqProrrataPreview');
+        if (!elI || !elF || !out) return;
+        var ini = document.getElementById('alqInicio').value, fin = document.getElementById('alqFin').value;
+        var diaIni = ini ? parseInt(ini.substring(8, 10), 10) : 1;
+        var diasMesFin = fin ? new Date(parseInt(fin.substring(0, 4), 10), parseInt(fin.substring(5, 7), 10), 0).getDate() : 0;
+        var aplicaI = !!ini && diaIni > 1;
+        var aplicaF = !!fin && parseInt(fin.substring(8, 10), 10) < diasMesFin;
+        elI.disabled = !aplicaI; if (!aplicaI) elI.checked = false;
+        elF.disabled = !aplicaF; if (!aplicaF) elF.checked = false;
+        var a = _alqProrrataDatos(), fmt = function(n) { return (document.getElementById('alqMoneda').value === 'USD' ? 'USD ' : '$ ') + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var lineas = [];
+        if (ini && !aplicaI) lineas.push('El contrato empieza el día 1: el primer mes se cobra entero.');
+        if (elI.checked) { var pI = ini.substring(0, 7), fI = _alqFraccionPeriodo(a, pI); if (fI) lineas.push('Primer mes: ' + _alqTextoFraccion(fI, pI) + ' → <strong>' + fmt(_alqCanonEsperado(a, pI)) + '</strong>'); }
+        if (elF.checked) { var pF = fin.substring(0, 7), fF = _alqFraccionPeriodo(a, pF); if (fF) lineas.push('Último mes: ' + _alqTextoFraccion(fF, pF) + ' → <strong>' + fmt(_alqCanonEsperado(a, pF)) + '</strong>'); }
+        out.innerHTML = lineas.join('<br>');
+    }
+
     // Al abrir el modal, mostrar la duración derivada del inicio/fin ya cargados.
     function _alqDuracionDesdeFechas() {
         var el = document.getElementById('alqDuracion'); if (!el) return;
@@ -32730,6 +32772,34 @@
     function _quitarAjusteCanon(periodo) {
         _alqAjustesCanonWorking = _alqAjustesCanonWorking.filter(function(a){ return a.periodo !== periodo; });
         _renderAjustesCanonLista();
+    }
+
+    // ── Primer y último mes PROPORCIONALES ──────────────────────────────────────────────────────────────────────
+    // Un contrato que empieza el 20 no cobra el mes entero: cobra del 20 a fin de mes, y desde el mes siguiente la cuota entera
+    // (la fecha límite sigue siendo `diaPago`: «día 5» = se cobra del 1 al 5). El último mes, si el contrato termina el 19, cobra
+    // sólo hasta el 19: así 24 meses de contrato suman 24 cuotas y no 25. Cada punta se prende por separado en el contrato
+    // (`proporcionalInicio` / `proporcionalFin`); sin esas marcas todo funciona como siempre. El proporcional es por DÍAS REALES del
+    // mes (20 al 31 de enero = 12 de 31), contando el día de inicio. Devuelve null si el período se cobra entero.
+    function _alqFraccionPeriodo(a, periodo) {
+        if (!a || !a.inicio || !periodo || !/^\d{4}-\d{2}$/.test(periodo)) return null;
+        var y = parseInt(periodo.substring(0, 4), 10), m = parseInt(periodo.substring(5, 7), 10);
+        var diasMes = new Date(y, m, 0).getDate();
+        var desde = 1, hasta = diasMes;
+        if (a.proporcionalInicio && a.inicio.substring(0, 7) === periodo) desde = parseInt(a.inicio.substring(8, 10), 10) || 1;
+        if (a.proporcionalFin && a.fin && a.fin.substring(0, 7) === periodo) hasta = Math.min(diasMes, parseInt(a.fin.substring(8, 10), 10) || diasMes);
+        var dias = Math.max(0, hasta - desde + 1);
+        if (dias >= diasMes) return null;
+        return { factor: dias / diasMes, dias: dias, diasMes: diasMes, desde: desde, hasta: hasta };
+    }
+    // Lo que corresponde cobrar de ESE período: el canon vigente, prorrateado si es el primer/último mes proporcional.
+    function _alqCanonEsperado(a, periodo) {
+        var base = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
+        var f = _alqFraccionPeriodo(a, periodo);
+        return f ? _r2(base * f.factor) : base;
+    }
+    function _alqTextoFraccion(f, periodo) {
+        var mm = periodo.substring(5, 7) + '/' + periodo.substring(0, 4), d2 = function(n) { return String(n).padStart(2, '0'); };
+        return f.dias + ' de ' + f.diasMes + ' días (' + d2(f.desde) + ' al ' + d2(f.hasta) + '/' + mm + ')';
     }
 
     // Canon vigente en un período dado, según el historial de ajustes cargado. Si el contrato
@@ -34269,6 +34339,8 @@
             ivaActivo:     document.getElementById('alqIvaActivo').checked,
             ivaAlicuota:   parseFloat(document.getElementById('alqIvaAlicuota').value) || 0,
             ivaPctGravado: document.getElementById('alqIvaActivo').checked ? Math.max(0, Math.min(100, parseFloat(document.getElementById('alqIvaPct').value) || 0)) : 0,
+            proporcionalInicio: !!document.getElementById('alqPropInicio').checked && !document.getElementById('alqPropInicio').disabled,
+            proporcionalFin:    !!document.getElementById('alqPropFin').checked && !document.getElementById('alqPropFin').disabled,
             adjuntoId: '', adjuntoNombre: '', adjuntoTipo: '',   // legacy: ahora se usa `adjuntos`
             adjuntos:  _alqAdjuntosWorking.slice(),
             cobrosHistorial: (existente && existente.cobrosHistorial) || []
@@ -34311,7 +34383,11 @@
         if (editandoAlqIdx >= 0) {
             var _ia = _resolverEdicion(alquileres, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.id, _edicionEnCurso.alquiler && _edicionEnCurso.alquiler.snap, 'contrato de alquiler');
             if (_ia < 0) { var _bA=document.getElementById('alqGuardarBtn'); if(_bA){_bA.disabled=false;_bA.textContent='Guardar Contrato';} return; }
-            nuevo.id = alquileres[_ia].id; alquileres[_ia] = nuevo;
+            nuevo.id = alquileres[_ia].id;
+            // El formulario arma `nuevo` sólo con sus campos y se reemplaza el nodo entero: lo que el formulario no maneja
+            // (los recibos de entrega, los meses bonificados del plan…) se perdía al editar el contrato. Se conserva.
+            Object.keys(alquileres[_ia]).forEach(function(k) { if (!(k in nuevo)) nuevo[k] = alquileres[_ia][k]; });
+            alquileres[_ia] = nuevo;
         }
         else alquileres.push(nuevo);
         cerrarModalAlquiler();
@@ -34326,7 +34402,9 @@
         document.getElementById('cobroAlqFecha').valueAsDate = new Date();
         var hoy = new Date();
         var periodo = periodoPrefill || hoy.toISOString().substring(0,7);
-        document.getElementById('cobroAlqMonto').value = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || '';
+        document.getElementById('cobroAlqMonto').value = _alqCanonEsperado(a, periodo) || '';
+        var _fr = _alqFraccionPeriodo(a, periodo), _hp = document.getElementById('cobroAlqProrrata');
+        if (_hp) { _hp.style.display = _fr ? '' : 'none'; if (_fr) _hp.textContent = '📐 Período proporcional: ' + _alqTextoFraccion(_fr, periodo) + ' — se carga el canon por ese tramo. Podés corregir el monto si hace falta.'; }
         document.getElementById('cobroAlqRef').value   = '';
         document.getElementById('cobroAlqPeriodo').value = periodo;
         document.getElementById('cobroAlqConcepto').value = 'alquiler';
@@ -34349,6 +34427,7 @@
         var per = document.getElementById('cobroAlqPeriodo');
         var grp = per && per.closest ? per.closest('.form-group') : null;
         var esDeposito = (concepto === 'deposito');
+        if (esDeposito) { var _hp = document.getElementById('cobroAlqProrrata'); if (_hp) _hp.style.display = 'none'; }   // el aviso del proporcional es sólo del alquiler del mes
         if (grp) grp.style.visibility = esDeposito ? 'hidden' : '';
         if (esDeposito && per) per.value = '';
     }
@@ -34412,7 +34491,7 @@
             var el = document.getElementById(id); if (el) el.value = '';
         });
         if (activo) {
-            var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
+            var canon = _alqCanonEsperado(a, periodo) || 0;
             var brk = _alqCalcIVA(a, canon);
             // Redondear los tres por separado deja al gravado + el no gravado sin dar
             // el canon (hasta un centavo de diferencia). El no gravado se calcula por
@@ -34672,6 +34751,7 @@
                 if (c.facturaId) REF_DOCS.child(c.facturaId).remove();
                 if (c.transfId)  REF_DOCS.child(c.transfId).remove();
             });
+            (alquileres[idx].entregas||[]).forEach(function(e){ if (e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove(); });   // copias firmadas de los recibos de entrega
             alquileres.splice(idx, 1); persistirAlquileres();
         }
     }
@@ -34805,7 +34885,8 @@
             // Canon esperado de ESTE período puntual (según el historial de ajustes, no el canon
             // "actual" en vivo) — así un ajuste que se aplique a futuro nunca recalcula ni cambia
             // el estado de un mes que ya se cobró.
-            var canonPeriodo = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo);
+            var canonPeriodo = _alqCanonEsperado(a, periodo);
+            var _frP = _alqFraccionPeriodo(a, periodo);
             var esBonif = (a.mesesBonificados||[]).indexOf(periodo) !== -1;
             var estado, estadoHtml;
             if (esBonif) {
@@ -34843,7 +34924,8 @@
             var mesLbl = cursor.toLocaleDateString('es-AR', {month:'long', year:'numeric'});
             filas.push('<tr style="background:' + (esBonif?'#F6F2FB':estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
                 + '<td style="padding:7px 10px;text-transform:capitalize;">' + mesLbl + '</td>'
-                + '<td style="padding:7px 10px;text-align:right;' + (esBonif?'color:var(--text-3);text-decoration:line-through;':'') + '">' + monSym + (canonPeriodo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td>'
+                + '<td style="padding:7px 10px;text-align:right;' + (esBonif?'color:var(--text-3);text-decoration:line-through;':'') + '">' + monSym + (canonPeriodo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
+                    + (_frP ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);text-decoration:none;" title="Período proporcional">📐 ' + _frP.dias + ' de ' + _frP.diasMes + ' días</div>' : '') + '</td>'
                 + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (esBonif ? '—' : (cobrado>0 ? monSym+(cobrado).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—')) + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;">' + estadoHtml + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + accion + '</td>'
@@ -34885,6 +34967,8 @@
         var diasMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
         var dia = Math.min(parseInt(a.diaPago)||1, diasMes);
         var vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0,0,0,0);
+        // En el mes en que EMPIEZA el contrato la cuota no puede vencer antes de que empiece (inicio el 20 y día de pago 5 → vence el 20)
+        if (a.inicio && a.inicio.substring(0, 7) === periodo) { var _ini2 = new Date(a.inicio + 'T00:00:00'); if (_ini2 > vence) vence = _ini2; }
         var dias = Math.round((vence - hoy) / 86400000);
         if (dias < 0)  return { estado:'vencida',  label:'Cuota vencida hace ' + Math.abs(dias) + ' día' + (Math.abs(dias)===1?'':'s'), cls:'badge-err',  icon:'⚠️', dias:dias };
         if (dias === 0) return { estado:'vencehoy', label:'La cuota vence hoy', cls:'badge-warn', icon:'⏰', dias:0 };
@@ -35011,6 +35095,7 @@
                     ? '<button class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ')">💵 Cobrar</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Plan de pagos" onclick="abrirPlanAlquiler(' + idx + ')">📅 Plan</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Ver cobros: reimprimir, editar (corregir mes/monto) o eliminar" onclick="abrirHistorialCobrosAlquiler(' + idx + ')">🖨️ Cobros</button> ' +
+                      '<button class="btn btn-outline btn-sm" title="Recibo de entrega SIN dinero (llaves, controles, etc.) para firmar" onclick="abrirEntregaAlq(' + idx + ')">🔑 Entregas' + ((a.entregas||[]).length ? ' (' + a.entregas.length + ')' : '') + '</button> ' +
                       '<button class="btn btn-outline btn-sm" onclick="abrirModalAlquiler(' + idx + ')">✏</button> ' +
                       '<button class="btn btn-outline btn-sm" title="Generar contrato imprimible" onclick="imprimirContratoAlquiler(' + idx + ')">📄</button> ' +
                       _alqAdjuntos(a).map(function(ad, ai, arr){ return '<button class="btn btn-outline btn-sm" title="Ver ' + escHtml(ad.nombre||'adjunto') + '" onclick="_verAlqAdjunto(' + idx + ',' + ai + ')">📎' + (arr.length>1?(ai+1):'') + '</button> '; }).join('') +
@@ -35062,6 +35147,8 @@
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
         var cLabel = {alquiler:'Alquiler mensual',deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'}[concepto]||concepto;
+        var _frRec = (concepto === 'alquiler' || !concepto) ? _alqFraccionPeriodo(a, periodo) : null;
+        if (_frRec) cLabel += ' — proporcional: ' + _alqTextoFraccion(_frRec, periodo);
         if (reg && reg.parteIva === 'gravada') cLabel += ' — Parte A (gravada, con IVA)';
         else if (reg && reg.parteIva === 'nograv') cLabel += ' — Parte B (no gravada)';
         var _rh = buildReciboHeader('Orden de Recibo', nroRecibo || null, emision, {
@@ -35093,6 +35180,194 @@
         var w = window.open('','_blank','width=780,height=950');
         if (!w) { alert('Permití las ventanas emergentes.'); return; }
         w.document.write(html); w.document.close();
+    }
+
+
+    // ═══════════════ RECIBO DE ENTREGA (sin dinero) — llaves, controles y otros elementos de la unidad ═══════════════
+    // Deja firmado que se ENTREGÓ (o se DEVOLVIÓ) algo de la unidad: llaves, el control del aire, tarjetas de la cerradura inteligente…
+    // No es un cobro: no pasa por Caja, ni por Bancos, ni por el plan de pagos. Se guarda en el contrato como `entregas[]`:
+    //   { id, nro:'E-001', fecha, tipo:'entrega'|'devolucion', items:[{desc,cant}], obs, entrega, recibe, adjuntoId/Nombre/Tipo }
+    // El papel se imprime, se firma y la copia firmada (foto o escaneo) se adjunta al recibo (`adjuntoId`, en REF_DOCS como los demás).
+    // ⚠️ `guardarAlquiler` arma el contrato sólo con los campos del formulario: `entregas` sobrevive porque al editar se conservan las
+    // claves que el formulario no maneja; borrar el contrato (`eliminarAlquiler`) borra también las copias firmadas.
+    var _entAlqIdx = -1, _entAlqItems = [], _entAlqAdjI = -1, _entAlqAuto = { entrega: '', recibe: '' };
+    // [ícono del botón, texto que queda en el recibo]: el ícono es sólo del botón, el papel sale limpio.
+    var ENT_ALQ_SUGERIDOS = [
+        ['🔑', 'Llaves de la puerta de entrada'], ['🔑', 'Llaves de planta baja'], ['🔐', 'Cerradura inteligente (llaves / tarjetas / código)'],
+        ['❄️', 'Control remoto del aire acondicionado'], ['🚪', 'Control del portón / cochera'], ['📬', 'Llave del buzón'], ['📺', 'Control remoto del TV']
+    ];
+    function _entAlqContrato() { return alquileres[_entAlqIdx] || null; }
+    function abrirEntregaAlq(idx) {
+        var a = alquileres[idx]; if (!a) return;
+        _entAlqIdx = idx;
+        document.getElementById('entAlqLabel').textContent = [a.unidad, a.inquilino].filter(Boolean).join(' · ');
+        document.getElementById('entAlqFecha').value = new Date().toISOString().substring(0, 10);
+        document.getElementById('entAlqTipo').value = 'entrega';
+        document.getElementById('entAlqObs').value = '';
+        _entAlqItems = [{ desc: '', cant: 1 }];
+        _entAlqAuto = { entrega: '', recibe: '' };
+        document.getElementById('entAlqQuienEntrega').value = ''; document.getElementById('entAlqQuienRecibe').value = '';
+        _entAlqPonerNombres();
+        document.getElementById('entAlqSugeridos').innerHTML = ENT_ALQ_SUGERIDOS.map(function(t, i) {
+            return '<button type="button" class="btn btn-outline btn-sm" onclick="entAlqAgregarItem(ENT_ALQ_SUGERIDOS[' + i + '][1])">' + t[0] + ' ' + escHtml(t[1]) + '</button>';
+        }).join(' ');
+        _entAlqRenderItems();
+        _entAlqRenderLista();
+        document.getElementById('modalEntregaAlq').classList.add('active');
+    }
+    function cerrarEntregaAlq() { document.getElementById('modalEntregaAlq').classList.remove('active'); _entAlqIdx = -1; }
+    // Quién entrega y quién recibe: al revés si es una devolución. Si el usuario ya cambió un nombre a mano, no se lo pisa.
+    function _entAlqPonerNombres() {
+        var a = _entAlqContrato(); if (!a) return;
+        var tipo = document.getElementById('entAlqTipo').value;
+        var loc = getEmpresaParaRecibo().nombre, inq = a.inquilino || 'Inquilino';
+        var nuevo = (tipo === 'devolucion') ? { entrega: inq, recibe: loc } : { entrega: loc, recibe: inq };
+        var elE = document.getElementById('entAlqQuienEntrega'), elR = document.getElementById('entAlqQuienRecibe');
+        if (!elE.value || elE.value === _entAlqAuto.entrega) elE.value = nuevo.entrega;
+        if (!elR.value || elR.value === _entAlqAuto.recibe) elR.value = nuevo.recibe;
+        _entAlqAuto = nuevo;
+    }
+    function entAlqTipoChange() { _entAlqPonerNombres(); }
+    function _entAlqRenderItems() {
+        document.getElementById('entAlqItems').innerHTML = _entAlqItems.map(function(it, i) {
+            return '<div style="display:grid;grid-template-columns:1fr 84px auto;gap:8px;margin-bottom:6px;align-items:center;">'
+                + '<input type="text" value="' + escHtml(it.desc) + '" placeholder="Ej: Llaves de planta baja" oninput="_entAlqItems[' + i + '].desc=this.value" aria-label="Elemento">'
+                + '<input type="number" min="1" step="1" value="' + (it.cant || 1) + '" oninput="_entAlqItems[' + i + '].cant=parseInt(this.value)||1" aria-label="Cantidad" title="Cantidad">'
+                + '<button type="button" class="btn btn-outline btn-sm" onclick="entAlqQuitarItem(' + i + ')" title="Quitar">✕</button></div>';
+        }).join('');
+    }
+    function entAlqAgregarItem(desc) {
+        var d = String(desc || '').trim();
+        if (d) {
+            var ya = _entAlqItems.find(function(x) { return x.desc.trim() === d; });
+            if (ya) { ya.cant = (ya.cant || 1) + 1; _entAlqRenderItems(); return; }   // el mismo elemento otra vez = una unidad más
+            if (_entAlqItems.length === 1 && !_entAlqItems[0].desc.trim()) _entAlqItems = [];   // la fila vacía del principio se reemplaza
+        }
+        _entAlqItems.push({ desc: d, cant: 1 });
+        _entAlqRenderItems();
+        var inputs = document.querySelectorAll('#entAlqItems input[type="text"]');
+        if (!d && inputs.length) inputs[inputs.length - 1].focus();
+    }
+    function entAlqQuitarItem(i) {
+        _entAlqItems.splice(i, 1);
+        if (!_entAlqItems.length) _entAlqItems = [{ desc: '', cant: 1 }];
+        _entAlqRenderItems();
+    }
+    function _entAlqResumen(e) {
+        return (e.items || []).map(function(it) { return (it.cant || 1) + ' × ' + it.desc; }).join(' · ');
+    }
+    function _entAlqRenderLista() {
+        var a = _entAlqContrato(), cont = document.getElementById('entAlqLista'); if (!a || !cont) return;
+        var lista = (a.entregas || []).map(function(e, i) { return { e: e, i: i }; })
+            .sort(function(x, y) { return String(y.e.fecha || '').localeCompare(String(x.e.fecha || '')) || (y.i - x.i); });
+        if (!lista.length) { cont.innerHTML = '<div style="padding:10px 2px;color:var(--text-3);font-size:13px;">Todavía no hay recibos de entrega para este contrato.</div>'; return; }
+        cont.innerHTML = '<div style="font-weight:700;margin:2px 0 8px;">Recibos de este contrato</div>' + lista.map(function(o) {
+            var e = o.e, firmado = !!e.adjuntoId;
+            return '<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:9px 0;border-bottom:1px solid var(--border);">'
+                + '<div style="min-width:220px;flex:1;"><div style="font-weight:600;font-size:13px;">' + (e.fecha ? formatearFecha(e.fecha) : '—') + ' · ' + escHtml(e.nro || '') + ' · '
+                + (e.tipo === 'devolucion' ? '📥 Devolución' : '📤 Entrega') + '</div>'
+                + '<div style="font-size:12px;color:var(--text-2);margin-top:2px;">' + escHtml(_entAlqResumen(e)) + '</div></div>'
+                + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+                + (firmado ? '<span class="badge-rol badge-ok" title="Hay una copia firmada adjunta">✓ Firmado</span>' : '<span class="badge-rol badge-warn" title="Todavía no se adjuntó la copia firmada">⏳ Sin copia firmada</span>')
+                + '<button class="btn btn-outline btn-sm" onclick="imprimirEntregaAlq(' + _entAlqIdx + ',' + o.i + ')" title="Imprimir / reimprimir para firmar">🖨️ Imprimir</button>'
+                + (firmado ? '<button class="btn btn-outline btn-sm" onclick="descargarDoc(' + _pfArg(e.adjuntoId) + ',' + _pfArg(e.adjuntoNombre || 'recibo firmado') + ')" title="Ver la copia firmada">📎 Ver</button>' : '')
+                + '<button class="btn btn-outline btn-sm" onclick="entAlqAdjuntar(' + o.i + ')" title="' + (firmado ? 'Reemplazar la copia firmada' : 'Adjuntar la copia firmada (foto o escaneo)') + '">' + (firmado ? '🔄' : '📤 Adjuntar firmado') + '</button>'
+                + '<button class="btn btn-danger-sm" onclick="entAlqEliminar(' + o.i + ')" title="Eliminar este recibo">✕</button>'
+                + '</div></div>';
+        }).join('');
+    }
+    function _entAlqProximoNro(a) {
+        var max = 0;
+        (a.entregas || []).forEach(function(e) { var n = parseInt(String(e.nro || '').replace(/\D/g, ''), 10); if (n > max) max = n; });
+        return 'E-' + String(max + 1).padStart(3, '0');
+    }
+    function entAlqGuardar(imprimir) {
+        if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para cargar recibos.'); return; }
+        var a = _entAlqContrato(); if (!a) return;
+        var fecha = document.getElementById('entAlqFecha').value;
+        if (!fecha) { alert('Poné la fecha de la entrega.'); return; }
+        var items = _entAlqItems.map(function(it) { return { desc: String(it.desc || '').trim(), cant: Math.max(1, parseInt(it.cant) || 1) }; })
+            .filter(function(it) { return it.desc; });
+        if (!items.length) { alert('Cargá al menos un elemento (por ejemplo «Llaves de planta baja»).'); return; }
+        var e = {
+            id: 'ENT-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+            nro: _entAlqProximoNro(a), fecha: fecha,
+            tipo: document.getElementById('entAlqTipo').value === 'devolucion' ? 'devolucion' : 'entrega',
+            items: items,
+            obs: document.getElementById('entAlqObs').value.trim(),
+            entrega: document.getElementById('entAlqQuienEntrega').value.trim(),
+            recibe: document.getElementById('entAlqQuienRecibe').value.trim()
+        };
+        a.entregas = (a.entregas || []).concat([e]);
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+        // formulario limpio para el próximo; la lista muestra el recibo recién guardado
+        _entAlqItems = [{ desc: '', cant: 1 }]; document.getElementById('entAlqObs').value = '';
+        _entAlqRenderItems(); _entAlqRenderLista();
+        if (imprimir) imprimirEntregaAlq(_entAlqIdx, a.entregas.length - 1);
+    }
+    function entAlqEliminar(i) {
+        var a = _entAlqContrato(); if (!a) return;
+        var e = (a.entregas || [])[i]; if (!e) return;
+        if (!confirm('¿Eliminar el recibo ' + (e.nro || '') + ' (' + _entAlqResumen(e) + ')?' + (e.adjuntoId ? '\n\nTambién se borra la copia firmada que tenía adjunta.' : '') + '\n\nEsta acción no se puede deshacer.')) return;
+        if (e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove();
+        a.entregas.splice(i, 1);
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+        _entAlqRenderLista();
+    }
+    function entAlqAdjuntar(i) {
+        _entAlqAdjI = i;
+        var f = document.getElementById('entAlqArchivo'); f.value = ''; f.click();
+    }
+    async function entAlqAdjuntarElegido() {
+        var a = _entAlqContrato(), e = a && (a.entregas || [])[_entAlqAdjI];
+        var f = document.getElementById('entAlqArchivo');
+        if (!e || !f.files || !f.files[0]) return;
+        try {
+            var sub = await _cobroAlqSubirAdj('entAlqArchivo', 'ENTALQ', 'La copia firmada');
+            if (!sub) return;
+            if (e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove();   // reemplaza la anterior
+            e.adjuntoId = sub.id; e.adjuntoNombre = sub.nombre; e.adjuntoTipo = sub.tipo;
+            persistirAlquileres();
+            _entAlqRenderLista();
+        } catch (err) { alert('No se pudo adjuntar: ' + (err.message || err)); }
+        f.value = '';
+    }
+    function imprimirEntregaAlq(idx, eIdx) {
+        var a = alquileres[idx]; if (!a) return;
+        var e = (a.entregas || [])[eIdx]; if (!e) return;
+        var emp = getEmpresaParaRecibo();
+        var emision = new Date().toLocaleDateString('es-AR');
+        var esDev = e.tipo === 'devolucion';
+        var loc = 'LOCADOR (' + escHtml(emp.nombre) + ')', inq = 'LOCATARIO (' + escHtml(a.inquilino || 'inquilino') + ')';
+        var doc = a.inquilinoDoc ? ' · ' + escHtml(a.inquilinoDocTipo || 'Doc.') + ' ' + escHtml(a.inquilinoDoc) : '';
+        var _rh = buildReciboHeader(esDev ? 'Recibo de Devolución' : 'Recibo de Entrega', e.nro || null, emision, {
+            label: 'Locatario / Inquilino', nombre: a.inquilino || 'Inquilino',
+            detalle: escHtml(a.unidad || '') + (a.tipo ? ' — ' + escHtml(a.tipo) : '') + (a.direccion ? '<br>' + escHtml(a.direccion) : '') + doc
+        });
+        var filas = (e.items || []).map(function(it, i) {
+            return '<tr><td>' + (i + 1) + '</td><td><strong>' + escHtml(it.desc) + '</strong></td><td class="tr">' + (it.cant || 1) + '</td></tr>';
+        }).join('');
+        var unidadTxt = escHtml(a.unidad || 'la unidad') + (a.direccion ? ' (' + escHtml(a.direccion) + ')' : '');
+        var texto = esDev
+            ? 'En la fecha indicada el ' + inq + ' <strong>devuelve</strong> al ' + loc + ' los elementos detallados, correspondientes a ' + unidadTxt + ', que el LOCADOR declara <strong>recibir</strong> conforme, sin perjuicio de las observaciones consignadas debajo.'
+            : 'En la fecha indicada el ' + loc + ' <strong>entrega</strong> al ' + inq + ' los elementos detallados, correspondientes a ' + unidadTxt + ', que el LOCATARIO declara <strong>recibir</strong> a su entera satisfacción, en buen estado y funcionando, sin reclamo alguno por su entrega. El LOCATARIO se hace cargo de su guarda y cuidado y se obliga a restituirlos al finalizar la locación; su pérdida o deterioro que no provenga del uso normal estará a su cargo.';
+        var lineaDatos = '<div style="font-size:12px;margin:0 0 10px;color:#444;"><strong>Fecha de ' + (esDev ? 'la devolución' : 'la entrega') + ':</strong> ' + (e.fecha ? formatearFecha(e.fecha) : '—') + ' &nbsp;·&nbsp; <strong>Unidad:</strong> ' + escHtml(a.unidad || '—') + '</div>';
+        var bloqueFirma = function(rol, nombre) {
+            return '<div class="fi">' + rol + ' — ' + escHtml(nombre || '')
+                + '<div style="font-weight:400;letter-spacing:0;text-transform:none;margin-top:16px;text-align:left;font-size:10px;color:#777;line-height:2.4;">Aclaración: ____________________________<br>DNI / CUIT: ____________________________</div></div>';
+        };
+        var html = '<html><head><meta charset="UTF-8"><title>' + (esDev ? 'Recibo de Devolución' : 'Recibo de Entrega') + ' — ' + escHtml(a.unidad || '') + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh
+            + lineaDatos
+            + '<table class="tbl"><thead><tr><th style="width:36px;">#</th><th>Elemento</th><th class="tr" style="width:90px;">Cantidad</th></tr></thead><tbody>' + filas + '</tbody></table>'
+            + '<div style="margin-top:16px;font-size:12px;line-height:1.7;color:#222;">' + texto + '</div>'
+            + (e.obs ? '<div style="margin-top:12px;font-size:12px;line-height:1.6;"><strong>Observaciones:</strong> ' + escHtml(e.obs) + '</div>' : '')
+            + '<div style="margin-top:12px;font-size:11px;color:#666;">Este recibo <strong>no es dinerario</strong>: no acredita pago ni cobro alguno. Se firma en dos ejemplares de un mismo tenor.</div>'
+            + '<div class="firmas">' + bloqueFirma('Entregó', e.entrega || (esDev ? a.inquilino : emp.nombre)) + bloqueFirma('Recibió conforme', e.recibe || (esDev ? emp.nombre : a.inquilino)) + '</div>'
+            + '<div class="pie">Emitido el ' + emision + ' · ' + escHtml(emp.nombre) + '</div>'
+            + '</div></body></html>';
+        _imprimirDocHTML(html);
     }
 
     function imprimirContratoAlquiler(idx) {
@@ -44708,6 +44983,47 @@
   </div>
 </div>
 
+<!-- ═══════════════ MODAL: RECIBO DE ENTREGA DE LLAVES Y ELEMENTOS (alquileres, sin dinero) ═══════════════ -->
+<div class="modal" id="modalEntregaAlq">
+  <div class="modal-box modal-box-xl">
+    <div class="modal-head">
+      <h2>🔑 Recibo de entrega — <span id="entAlqLabel" style="color:var(--gold);"></span></h2>
+      <button class="modal-close" onclick="cerrarEntregaAlq()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-hint" style="margin-bottom:12px;">Recibo <strong>sin dinero</strong>: deja firmado que se entregaron (o se devolvieron) llaves, controles u otros elementos de la unidad. Se imprime para firmar y después podés adjuntar la copia firmada (foto o escaneo).</div>
+      <div id="entAlqLista"></div>
+      <div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px;">
+        <div style="font-weight:700;margin-bottom:10px;">Nuevo recibo</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group"><label>Fecha</label><input type="date" id="entAlqFecha"></div>
+          <div class="form-group"><label>Tipo</label>
+            <select id="entAlqTipo" onchange="entAlqTipoChange()">
+              <option value="entrega">📤 Entrega al inquilino</option>
+              <option value="devolucion">📥 Devolución del inquilino</option>
+            </select></div>
+        </div>
+        <div class="form-group">
+          <label>¿Qué se entrega?</label>
+          <div id="entAlqSugeridos" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+          <div id="entAlqItems"></div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="entAlqAgregarItem('')">➕ Agregar otro elemento</button>
+        </div>
+        <div class="form-group"><label>Observaciones (opcional)</label><textarea id="entAlqObs" rows="2" style="width:100%;" placeholder="Ej: 2 llaves por cerradura. Aire acondicionado funcionando."></textarea></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group"><label>Entrega (sale en la firma)</label><input type="text" id="entAlqQuienEntrega"></div>
+          <div class="form-group"><label>Recibe (sale en la firma)</label><input type="text" id="entAlqQuienRecibe"></div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" onclick="entAlqGuardar(false)">Guardar sin imprimir</button>
+          <button type="button" class="btn btn-gold" onclick="entAlqGuardar(true)">🖨️ Guardar e imprimir</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="entAlqArchivo" accept="image/*,application/pdf" style="display:none;" onchange="entAlqAdjuntarElegido()">
+</div>
+
 <!-- ═══════════════ MODAL: RESUMEN ALQUILERES ═══════════════ -->
 <div class="modal" id="modalResumenAlq">
   <div class="modal-box modal-box-wide" style="max-width:860px;max-height:94vh;">
@@ -44917,16 +45233,16 @@
       <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Inicio del contrato</label>
-          <input type="date" id="alqInicio" onchange="_alqCalcFin()">
+          <input type="date" id="alqInicio" onchange="_alqCalcFin(); _alqProrrataPreview()">
         </div>
         <div class="form-group">
           <label>Duración (meses)</label>
-          <input type="number" id="alqDuracion" min="0" step="1" placeholder="Ej: 24 · 36" oninput="_alqCalcFin()">
+          <input type="number" id="alqDuracion" min="0" step="1" placeholder="Ej: 24 · 36" oninput="_alqCalcFin(); _alqProrrataPreview()">
           <div class="form-hint" style="font-size:11px;">Calcula la fecha de fin sola.</div>
         </div>
         <div class="form-group">
           <label>Fin del contrato</label>
-          <input type="date" id="alqFin" onchange="_alqFinManual()">
+          <input type="date" id="alqFin" onchange="_alqFinManual(); _alqProrrataPreview()">
           <div class="form-hint" style="font-size:11px;">Podés ajustarla a mano.</div>
         </div>
       </div>
@@ -44944,17 +45260,30 @@
           </div>
           <div class="form-group" style="margin:0;">
             <label>Monto inicial</label>
-            <input type="number" id="alqCanon" step="0.01" min="0" placeholder="0" oninput="_alqCanonChanged()">
+            <input type="number" id="alqCanon" step="0.01" min="0" placeholder="0" oninput="_alqCanonChanged(); _alqProrrataPreview()">
           </div>
           <div class="form-group" style="margin:0;">
             <label>Canon actual</label>
-            <input type="number" id="alqCanonActual" step="0.01" min="0" placeholder="0" oninput="_alqIvaPreview()">
+            <input type="number" id="alqCanonActual" step="0.01" min="0" placeholder="0" oninput="_alqIvaPreview(); _alqProrrataPreview()">
           </div>
           <div class="form-group" style="margin:0;">
             <label>Día de pago del mes</label>
             <input type="number" id="alqDiaPago" step="1" min="1" max="31" placeholder="Ej: 10">
-            <div class="form-hint">Se usa para avisar cuando la cuota está por vencer o vencida.</div>
+            <div class="form-hint">Último día para pagar cada mes: <strong>5</strong> = se cobra del 1 al 5. Se usa para avisar cuando la cuota está por vencer o vencida.</div>
           </div>
+        </div>
+        <!-- Primer / último mes proporcional: el contrato no empieza el 1 ni termina a fin de mes -->
+        <div id="alqProrrataWrap" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
+          <div style="font-weight:600;margin-bottom:6px;">📐 Meses proporcionales</div>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="alqPropInicio" onchange="_alqProrrataCambio('inicio')" style="margin-top:3px;">
+            <span><strong>Primer mes proporcional</strong> — si el contrato empieza el 20, se cobran del 20 a fin de mes; desde el mes siguiente, la cuota entera.</span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="alqPropFin" onchange="_alqProrrataCambio('fin')" style="margin-top:3px;">
+            <span><strong>Último mes proporcional</strong> — si termina el 19, el último mes se cobra sólo hasta el 19 (así 24 meses son 24 cuotas y no 25).</span>
+          </label>
+          <div id="alqProrrataPreview" class="form-hint" style="margin-top:8px;"></div>
         </div>
       </div>
 
@@ -45146,6 +45475,7 @@
         <div class="form-group"><label>Monto cobrado <span id="cobroAlqMonedaContrato" style="color:var(--text-3);font-weight:400;"></span></label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqRefrescarMoneda()"></div>
         <div class="form-group"><label>Referencia / Recibo</label><input type="text" id="cobroAlqRef" placeholder="Opcional"></div>
       </div>
+      <div id="cobroAlqProrrata" class="form-hint" style="display:none; margin:-4px 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border);"></div>
       <!-- Moneda con la que entra la plata: puede diferir de la del contrato
            (ej. alquiler en USD que el inquilino paga en pesos al tipo de cambio del día). -->
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
