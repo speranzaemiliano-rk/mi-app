@@ -3569,7 +3569,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v547</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v548</div>
         </div>
     </nav>
 
@@ -11908,8 +11908,8 @@
         if (!prov || _pagoFDTab !== 'fact') return vacio;
         if (_pagoFDModo === 'varias') {
             var sel = (_pagoFDMulti.items || []).filter(function(x){ return x.checked; });
-            if (!sel.some(function(x){ return _regimenesDeFactura(x.f, prov); })) return vacio;
-            var totalNeto = sel.reduce(function(s,x){ return s + x.neto; }, 0);
+            if (!sel.some(function(x){ return _regimenesDeFactura(x.f, prov) || (x.f && x.f.sinRetencion); })) return vacio;
+            var totalNeto = sel.reduce(function(s,x){ return s + (x.f && x.f.sinRetencion ? 0 : x.neto); }, 0);
             var bi = document.getElementById('pagoFDBase');
             var factor = (bi && bi.dataset.manual === '1' && totalNeto > 0 && base > 0) ? base / totalNeto : 1;
             var bases = {};
@@ -11917,10 +11917,12 @@
                 var aplican = sel.filter(function(x){ return _facturaAplicaRegimen(x.f, r.codigo, prov); });
                 if (aplican.length) bases[r.codigo] = Math.round(aplican.reduce(function(s,x){ return s + x.neto; }, 0) * factor * 100) / 100;
             });
-            return { opts: { bases: bases }, bases: bases, regimenes: null, factor: factor };
+            return { opts: { bases: bases }, bases: bases, regimenes: null, factor: factor, hayExentas: sel.some(function(x){ return x.f && x.f.sinRetencion; }) };
         }
         var selI = document.getElementById('pagoFDItem'), val = selI ? selI.value : '';
         var f = val ? facturas[parseInt(val)] : null;
+        // «Sin retención»: no se calcula ningún régimen (lista vacía = ninguno para calcularRetenciones).
+        if (f && f.sinRetencion) return { opts: { regimenes: [] }, bases: null, regimenes: [], factor: 1, sinElegir: null, sinRetencion: true };
         var lista = _regimenesDeFactura(f, prov);
         if (!lista) {
             // Sin régimen elegido y con 2 o más regímenes: se calcula con todos (como siempre), pero se avisa y se ofrece elegir.
@@ -11937,9 +11939,14 @@
         var fm = function(n){ return '$' + n.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         // Los códigos vienen de la base de datos: se escapan antes de armar el HTML.
         var nomReg = function(c){ return escHtml(/^SUSS/.test(c) ? c : 'Reg.' + c); };
-        if (ctx && ctx.bases) {
-            el.innerHTML = '🏛️ <strong>Base por régimen</strong> — las facturas con régimen elegido suman sólo a ése; las demás, a todos: '
-                + Object.keys(ctx.bases).map(function(c){ return nomReg(c) + ' <strong>' + fm(ctx.bases[c]) + '</strong>'; }).join(' · ');
+        if (ctx && ctx.sinRetencion) {
+            el.innerHTML = '🚫 Esta factura está marcada <strong>sin retención</strong> (se eligió «Ninguno» al cargarla: Comprobante X, monotributista…). '
+                + 'No se calcula ningún régimen ni suma a la base del mes; si querés cambiarlo, editá la factura con ✏.';
+            el.style.display = '';
+        } else if (ctx && ctx.bases) {
+            var _cod = Object.keys(ctx.bases);
+            el.innerHTML = '🏛️ <strong>Base por régimen</strong> — las facturas con régimen elegido suman sólo a ése' + (ctx.hayExentas ? ', las marcadas «sin retención» a ninguno y las demás a todos: ' : '; las demás, a todos: ')
+                + (_cod.length ? _cod.map(function(c){ return nomReg(c) + ' <strong>' + fm(ctx.bases[c]) + '</strong>'; }).join(' · ') : '<strong>ninguna de las facturas elegidas lleva retención</strong>');
             el.style.display = '';
         } else if (ctx && ctx.regimenes) {
             el.innerHTML = '🏛️ Esta factura suma <strong>sólo</strong> a la base de: <strong>'
@@ -11989,7 +11996,7 @@
             _pagoFDRetsCalculadas=rets.map(function(r){return Object.assign({},r,{activa:true});});
             if(!rets.length){
                 desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'
-                    +(prov?'Este proveedor no tiene retenciones automáticas configuradas.':'Seleccioná un ítem para ver retenciones automáticas.')
+                    +(_ctxReg.sinRetencion?'Esta factura está marcada sin retención: no se calcula ningún régimen.':(prov?'Este proveedor no tiene retenciones automáticas configuradas.':'Seleccioná un ítem para ver retenciones automáticas.'))
                     +' Con el botón de abajo podés elegir un régimen (se calcula solo) o cargar una retención a mano.</div>';
             } else {
                 desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
@@ -12212,6 +12219,7 @@
             rows += '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft);cursor:pointer;font-size:13px;">'
                 + '<input type="checkbox" checked onchange="pagoFDMultiToggle('+i+',this.checked)" style="cursor:pointer;">'
                 + '<span style="flex:1;">'+(f.numero?'N°'+escHtml(f.numero)+' — ':'')+escHtml(f.descripcion||'—')
+                + (f.sinRetencion ? ' <span class="pill" style="font-size:10px;background:#F5F5F7;color:#6B6B76;border:1px solid #B8B8C2;" title="Esta factura no lleva retención: no suma a ningún régimen">🚫 sin retención</span>' : '')
                 + (_regimenesFacturaCorto(f) ? ' <span class="pill" style="font-size:10px;background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Suma a la base de retención de: '+escHtml(_regimenesFacturaCorto(f))+'">🏛️ '+escHtml(_regimenesFacturaCorto(f))+'</span>' : '')
                 + '</span>'
                 + '<strong style="white-space:nowrap;">$'+(pend).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong>'
@@ -12259,7 +12267,8 @@
     function _pagoFDMultiRecalc() {
         var sel = _pagoFDMulti.items.filter(function(x){ return x.checked; });
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
-        var baseTotal  = sel.reduce(function(s,x){ return s + x.neto; }, 0);
+        // La base es la de lo que se RETIENE: una factura «sin retención» se paga (suma al monto) pero no a la base.
+        var baseTotal  = sel.reduce(function(s,x){ return s + (x.f && x.f.sinRetencion ? 0 : x.neto); }, 0);
         var mi = document.getElementById('pagoFDMonto'); if (mi) mi.value = montoTotal ? Math.round(montoTotal) : '';
         var bi = document.getElementById('pagoFDBase');
         if (bi && bi.dataset.manual !== '1') bi.value = baseTotal ? Math.round(baseTotal) : '';
@@ -12283,7 +12292,7 @@
         var provNombre = _pagoFDMulti.prov;   // foto: más abajo hay await y la pantalla puede cambiar de proveedor
         var _provMulti = buscarProveedorPorNombre(provNombre);
         if (mod === 'A') {
-            baseTotal = parseFloat(document.getElementById('pagoFDBase').value) || sel.reduce(function(s,x){ return s + x.neto; }, 0);
+            baseTotal = parseFloat(document.getElementById('pagoFDBase').value) || sel.reduce(function(s,x){ return s + (x.f && x.f.sinRetencion ? 0 : x.neto); }, 0);
             rets = _pagoFDRetsCalculadas.filter(function(r){ return r.activa; }).concat(_pagoFDRetsManuales.filter(function(r){ return r.activa; }));
             totalRet = rets.reduce(function(s,r){ return s + r.monto; }, 0);
             // Foto del reparto por régimen AHORA, junto con `sel` y `rets`: más abajo hay await (el comprobante, el
@@ -12291,7 +12300,12 @@
             _ctxMulti = _pagoFDRegCtx(_provMulti, baseTotal);
             // Una retención manual de un régimen concreto cuyas facturas se destildaron después quedaría impresa en la
             // Orden de Pago pero sin guardarse en ningún pago: se frena acá, antes de grabar nada.
-            var _huerf = rets.filter(function(r){ return r.manual && r.codReg && !sel.some(function(y){ return _facturaAplicaRegimen(y.f, r.codReg, _provMulti); }); });
+            var _huerf = rets.filter(function(r){ return r.manual && !sel.some(function(y){ return r.codReg ? _facturaAplicaRegimen(y.f, r.codReg, _provMulti) : !y.f.sinRetencion; }); });
+            var _huerfSR = _huerf.filter(function(r){ return !r.codReg; });
+            if (_huerfSR.length) {
+                alert('La retención manual «' + _huerfSR.map(function(r){ return r.desc; }).join('», «') + '» no se puede repartir: todas las facturas tildadas están marcadas «sin retención».\n\nQuitala (✕) o tildá una factura que sí lleve retención.');
+                return;
+            }
             if (_huerf.length) {
                 alert('La retención manual «' + _huerf.map(function(r){ return r.desc; }).join('», «') + '» es de un régimen al que no suma ninguna de las facturas que quedaron tildadas.\n\nQuitala de la lista (✕) o volvé a tildar la factura que le suma.');
                 return;
@@ -12308,7 +12322,7 @@
         // (y cada pago guarda la base con la que entró en cada uno). Sin eso: todas reparten todo, como siempre.
         // Una retención manual de un régimen concreto («elegir régimen») también se reparte sólo entre las que le suman.
         var _aplicaRet = function(y, r){
-            if (r.manual) return r.codReg ? _facturaAplicaRegimen(y.f, r.codReg, _provMulti) : true;
+            if (r.manual) return r.codReg ? _facturaAplicaRegimen(y.f, r.codReg, _provMulti) : !y.f.sinRetencion;
             return _facturaAplicaRegimen(y.f, r.codigo, _provMulti);
         };
         sel.forEach(function(x, k){
@@ -12347,6 +12361,7 @@
             if (mod === 'A' && medio) entry.medioBancario = medio;
             if (mod === 'A' && nroCbteFD.trim()) entry.nroComprobante = nroCbteFD.trim();
             if (_comp) { entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo; }
+            if (f.sinRetencion) entry.sinRetencion = true;   // no acumula base en ningún régimen
             if (_ctxMulti && _ctxMulti.bases) {
                 var _bRM = _regimenesDeProv(_provMulti).filter(function(r){ return _facturaAplicaRegimen(f, r.codigo, _provMulti); })
                     .map(function(r){ return { codigo: r.codigo, base: Math.round(x.neto * _ctxMulti.factor * 100) / 100 }; });
@@ -12428,6 +12443,9 @@
             var _bRg=_basesRegDePago(_provRg,_regimenesDeFactura(_fRg,_provRg),baseEste);
             if(_bRg) entry.basesReg=_bRg;
         }
+        // «Sin retención»: el pago no acumula base en ningún régimen, tampoco si es en efectivo (✏ puede pasarlo a A después).
+        // Si igual se cargó una retención a mano, el pago SÍ retuvo algo y no se marca.
+        if(_pagoFDTab==='fact'){ var _fSR=facturas[parseInt(val)]; if(_fSR&&_fSR.sinRetencion&&!rets.length) entry.sinRetencion=true; }
         var nroCbteFD=(document.getElementById('pagoFDNroComprobante')||{}).value||'';
         if(mod==='A'&&cuentaId) entry.cuentaId=cuentaId;
         if(mod==='A'&&medio) entry.medioBancario=medio;
@@ -12881,13 +12899,18 @@
         }
         return l;
     }
+    // ⚠️ Una factura marcada «sin retención» (`sinRetencion:true`: un Comprobante X, un monotributista…) no suma a
+    // NINGÚN régimen. Se guarda como bandera aparte y no como `regimenesBase` vacío: en `regimenesBase` ausente o
+    // vacío significa «todos», y Firebase además no guarda arreglos vacíos.
     function _facturaAplicaRegimen(f, codigo, prov) {
+        if (f && f.sinRetencion) return false;
         var l = _regimenesDeFactura(f, prov);
         return !l || l.indexOf(codigo) !== -1;
     }
     // Base con la que un pago entró en un régimen. Los pagos nuevos de facturas que eligieron
     // régimen traen `basesReg`; todos los demás (los de siempre) sumaron su base general a todos.
     function _baseRegDePago(p, codigo) {
+        if (p && p.sinRetencion) return 0;   // el pago de una factura «sin retención» no acumula base en ningún régimen
         if (p && Array.isArray(p.basesReg)) {
             var b = p.basesReg.find(function(x){ return x && x.codigo === codigo; });
             return b ? (b.base || 0) : 0;
@@ -12921,6 +12944,9 @@
         var abre = ed ? 'button type="button"' : 'span', cierra = ed ? 'button' : 'span';
         var base = 'font:inherit;font-size:inherit;line-height:inherit;' + (ed ? 'cursor:pointer;' : '');
         var clic = ed ? ' onclick="editarRegimenesFactura(' + idx + ')"' : '';
+        if (f.sinRetencion) {
+            return ' <' + abre + ' class="pill"' + clic + ' style="' + base + 'background:#F5F5F7;color:#6B6B76;border:1px solid #B8B8C2;" title="Esta factura no lleva retención: no suma a ningún régimen.' + (ed ? ' Tocá para cambiarlo.' : '') + '">🚫 sin retención</' + cierra + '>';
+        }
         if (corto) {
             return ' <' + abre + ' class="pill"' + clic + ' style="' + base + 'background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Esta factura suma a la base de retención de: ' + escHtml(corto) + (ed ? ' (tocá para cambiarlo)' : '') + '">🏛️ ' + escHtml(corto) + '</' + cierra + '>';
         }
@@ -16667,7 +16693,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v547';
+    var APP_VER = 'v548';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19778,7 +19804,7 @@
         if (rets.length === 0) {
             _lfRetsCalculadas = [];
             var _selRL = _regimenesFactLeer('lf');
-            desgEl.innerHTML = '<div class="ret-row" style="color:var(--text-3);font-size:12px;">' + ((_selRL && !_selRL.length) ? 'Tildá al menos un régimen arriba para calcular la retención.' : 'Sin regímenes configurados para este proveedor.') + '</div>';
+            desgEl.innerHTML = '<div class="ret-row" style="color:var(--text-3);font-size:12px;">' + ((_selRL && !_selRL.length) ? 'Esta factura no lleva retención (elegiste «Ninguno» arriba).' : 'Sin regímenes configurados para este proveedor.') + '</div>';
             var te = document.getElementById('lfRetTotal'); if (te) te.textContent = '$0';
             var ne = document.getElementById('lfRetNeto');  if (ne) ne.textContent = '$' + (montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
             return;
@@ -20430,8 +20456,8 @@
         }
         // Regímenes de retención a los que suma esta factura (sólo si el proveedor tiene 2 o más).
         var _regSelLF = _regimenesFactLeer('lf');
-        if (_regSelLF && !_regSelLF.length) { alert('Tildá al menos un régimen de retención: la base de esta factura tiene que sumar a alguno.\n\nSi vale para todos, dejalos todos tildados.'); return; }
-        if (_regSelLF) nueva.regimenesBase = _regSelLF;
+        if (_regSelLF && _regSelLF.length) nueva.regimenesBase = _regSelLF;
+        else if (_regSelLF) nueva.sinRetencion = true;   // «Ninguno»: no lleva retención
 
         // ── Adjuntar PDF en REF_DOCS ─────────────────────────────────
         var factId = 'fact_' + Date.now();
@@ -20500,6 +20526,7 @@
                     nuevoPago.comprobanteTipo = _compPagoLF.comprobanteTipo;
                 }
                 if (mod === 'A') { var _bRLF = _basesRegDePago(provObj, _regSelLF, baseRet); if (_bRLF) nuevoPago.basesReg = _bRLF; }
+                if (nueva.sinRetencion) nuevoPago.sinRetencion = true;   // también en efectivo: ✏ puede pasarlo a A después
                 nueva.pagosHistorial = [nuevoPago];
                 await REF_FACTURAS.child(factId).set(Object.assign({}, nueva, { id: factId }));
                 cerrarLeerFactPDF();
@@ -20620,7 +20647,7 @@
         factClaseChange();
         poblarSelectProveedoresFact(f.proveedor);
         document.getElementById('factProveedor').value   = f.proveedor || '';
-        _regimenesFactRender('fact', f.proveedor, f.regimenesBase, true);   // con lo que se eligió al cargarla
+        _regimenesFactRender('fact', f.proveedor, f.regimenesBase, true, !!f.sinRetencion);   // con lo que se eligió al cargarla
         var _avP = document.getElementById('factRegimenesAvisoPagos'); if (_avP) _avP.style.display = (f.pagosHistorial && f.pagosHistorial.length) ? '' : 'none';
         document.getElementById('factNumero').value       = f.numero || '';
         document.getElementById('factFecha').value        = f.fecha || '';
@@ -21477,7 +21504,7 @@
     // Sólo se muestra si el proveedor tiene 2 o más regímenes. `prefix` = 'fact' | 'lf'.
     // Re-dibujar al seguir tipeando el mismo proveedor NO pisa lo que se tildó: se compara una
     // «firma» (proveedor + regímenes). `forzar` rearma siempre (al abrir/editar una factura).
-    function _regimenesFactRender(prefix, provNombre, seleccion, forzar) {
+    function _regimenesFactRender(prefix, provNombre, seleccion, forzar, ninguno) {
         var grupo = document.getElementById(prefix + 'RegimenesGrupo');
         var lista = document.getElementById(prefix + 'RegimenesLista');
         if (!grupo || !lista) return;
@@ -21496,24 +21523,37 @@
         lista.dataset.firma = firma;
         // Si la selección guardada ya no coincide con ningún régimen del proveedor, arranca con todos.
         var sel = (seleccion || []).filter(function(c){ return regs.some(function(r){ return r.codigo === c; }); });
+        var estiloFila = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text-1);';
         lista.innerHTML = regs.map(function(r){
-            var on = !sel.length || sel.indexOf(r.codigo) !== -1;
-            return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:normal;font-weight:500;color:var(--text-1);">'
-                + '<input type="checkbox" data-cod="' + escHtml(r.codigo) + '"' + (on ? ' checked' : '') + ' onchange="_regimenesFactCambio(\'' + prefix + '\')" style="cursor:pointer;">'
+            var on = !ninguno && (!sel.length || sel.indexOf(r.codigo) !== -1);
+            return '<label style="' + estiloFila + '">'
+                + '<input type="checkbox" data-cod="' + escHtml(r.codigo) + '"' + (on ? ' checked' : '') + ' onchange="_regimenesFactCambio(\'' + prefix + '\',this)" style="cursor:pointer;">'
                 + '<span>' + escHtml(r.label) + '</span></label>';
-        }).join('');
+        }).join('')
+        // «Ninguno»: una factura que no se retiene por ningún régimen (un Comprobante X, un monotributista…).
+        + '<label style="' + estiloFila + 'border-top:1px dashed var(--border);padding-top:7px;margin-top:2px;">'
+        + '<input type="checkbox" data-ninguno="1"' + (ninguno ? ' checked' : '') + ' onchange="_regimenesFactCambio(\'' + prefix + '\',this)" style="cursor:pointer;">'
+        + '<span>🚫 <strong>Ninguno</strong> — no aplicar retención a esta factura <span style="color:var(--text-3);font-weight:400;">(Comprobante X, monotributista…)</span></span></label>';
     }
     // Lo que se eligió: null = todos (o el grupo está oculto) → comportamiento de siempre;
-    // lista de códigos = sólo esos; [] = no tildó ninguno (quien guarda lo tiene que frenar).
+    // lista de códigos = sólo esos; [] = «Ninguno»: la factura no lleva retención (quien guarda marca
+    // `sinRetencion`). Antes [] era un error («tildá al menos uno») y no había forma de decir «ninguno».
     function _regimenesFactLeer(prefix) {
         var grupo = document.getElementById(prefix + 'RegimenesGrupo');
         var lista = document.getElementById(prefix + 'RegimenesLista');
         if (!grupo || !lista || grupo.style.display === 'none') return null;
-        var cajas = lista.querySelectorAll('input[type=checkbox]');
+        var cajas = lista.querySelectorAll('input[data-cod]');
         if (!cajas.length) return null;
+        var ning = lista.querySelector('input[data-ninguno]');
+        if (ning && ning.checked) return [];
         var marc = [];
         cajas.forEach(function(c){ if (c.checked) marc.push(c.getAttribute('data-cod')); });
         return marc.length === cajas.length ? null : marc;
+    }
+    // ¿Se está mostrando el selector? Con el proveedor cambiado a uno de 0 o 1 régimen queda oculto y no decide nada.
+    function _regimenesFactVisible(prefix) {
+        var grupo = document.getElementById(prefix + 'RegimenesGrupo');
+        return !!(grupo && grupo.style.display !== 'none');
     }
     // Vacía el selector para que el próximo proveedor lo arme de cero (cada archivo de una tanda).
     function _regimenesFactReset(prefix) {
@@ -21522,7 +21562,21 @@
         if (lista) { lista.innerHTML = ''; delete lista.dataset.firma; }
         if (grupo) grupo.style.display = 'none';
     }
-    function _regimenesFactCambio(prefix) {
+    // «Ninguno» y los regímenes se excluyen entre sí: tildar «Ninguno» destilda los regímenes, tildar un régimen
+    // destilda «Ninguno», y destildar el último régimen deja «Ninguno» (no hay un estado intermedio sin sentido).
+    function _regimenesFactCambio(prefix, el) {
+        var lista = document.getElementById(prefix + 'RegimenesLista');
+        if (lista && el) {
+            var ning = lista.querySelector('input[data-ninguno]');
+            var cods = Array.prototype.slice.call(lista.querySelectorAll('input[data-cod]'));
+            var algunoOn = function(){ return cods.some(function(c){ return c.checked; }); };
+            if (el.hasAttribute('data-ninguno')) {
+                if (el.checked) cods.forEach(function(c){ c.checked = false; });
+                else if (!algunoOn()) cods.forEach(function(c){ c.checked = true; });   // sin «Ninguno» y sin nada elegido: vuelve a «todos»
+            } else if (ning) {
+                ning.checked = !algunoOn();
+            }
+        }
         if (prefix === 'lf') lfRecalcRet(); else recalcularRetencionesFactura();
     }
     // {codigo, base} de cada régimen al que suma la factura, para guardar en el pago. Sólo si la
@@ -21559,7 +21613,7 @@
         if (rets.length === 0) {
             _factRetsCalculadas = [];
             const _selR = _regimenesFactLeer('fact');
-            desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? ((_selR && !_selR.length) ? 'Tildá al menos un régimen arriba para calcular la retención.' : 'Sin regímenes configurados.') : 'Seleccioná un proveedor.'}</div>`;
+            desglose.innerHTML = `<div class="ret-row" style="color:var(--text-3); font-size:12px;">${prov ? ((_selR && !_selR.length) ? 'Esta factura no lleva retención (elegiste «Ninguno» arriba).' : 'Sin regímenes configurados.') : 'Seleccioná un proveedor.'}</div>`;
             if (totalEl) totalEl.textContent = '$0';
             if (netoEl) netoEl.textContent = '$' + (montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
             return;
@@ -21643,10 +21697,10 @@
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
         // Regímenes de retención a los que suma esta factura (el selector sólo aparece si el
-        // proveedor tiene 2 o más). Sin tildar ninguno no hay a dónde sumar la base.
+        // proveedor tiene 2 o más). «Ninguno» ([]) = la factura no lleva retención: se guarda `sinRetencion`.
         const _regSel = _regimenesFactLeer('fact');
-        if (_regSel && !_regSel.length) { alert('Tildá al menos un régimen de retención: la base de esta factura tiene que sumar a alguno.\n\nSi vale para todos, dejalos todos tildados.'); return; }
-        if (_regSel) nuevo.regimenesBase = _regSel;
+        if (_regSel && _regSel.length) nuevo.regimenesBase = _regSel;
+        else if (_regSel) nuevo.sinRetencion = true;
         // Aviso de posible comprobante DUPLICADO. Antes el chequeo vivía acá suelto y
         // sólo miraba 'facturas' con el número tal cual: ahora usa el control común, que
         // también mira los comprobantes X y normaliza el número.
@@ -21728,10 +21782,13 @@
             // retenciones y la base acumulada del mes) y lo que trajo la IA (CUIT, CAE, dirección…), dejando
             // `pagado`/`estado` sin ningún pago que los respalde. Se conserva lo que el formulario no toca.
             // Los campos que el formulario SÍ decide —y que pueden quedar vacíos a propósito— no se restauran.
-            var _delForm = { presupuestoIdx:1, presupuestoPorcentaje:1, presupuestoComentario:1, regimenesBase:1, docId:1, docNombre:1, docTipo:1 };
+            var _delForm = { presupuestoIdx:1, presupuestoPorcentaje:1, presupuestoComentario:1, regimenesBase:1, sinRetencion:1, docId:1, docNombre:1, docTipo:1 };
             Object.keys(facturas[_if]).forEach(function(k) {
                 if (!(k in nuevo) && !_delForm[k]) nuevo[k] = facturas[_if][k];
             });
+            // «Sin retención» lo decide el selector mientras se ve; si quedó oculto (el proveedor ya no tiene 2 o más
+            // regímenes) no opina, y editar otra cosa no puede borrar lo que se había elegido.
+            if (!_regimenesFactVisible('fact') && facturas[_if].sinRetencion && facturas[_if].proveedor === nuevo.proveedor) nuevo.sinRetencion = true;
             facturas[_if] = nuevo;
         } else {
             nuevo.id = 'F-' + Date.now();
@@ -21776,6 +21833,7 @@
                 nuevoPago.comprobanteTipo = _compPagoFact.comprobanteTipo;
             }
             if (mod === 'A') { const _bR = _basesRegDePago(prov, _regSel, baseRet); if (_bR) nuevoPago.basesReg = _bR; }
+            if (nuevo.sinRetencion) nuevoPago.sinRetencion = true;   // también en efectivo: ✏ puede pasarlo a A después
             nuevo.pagosHistorial.push(nuevoPago);
             nuevo.estado = _estadoFactDoc(nuevo);
             alert(`Pago registrado (${nroCorr}): $${(montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}${totalRet > 0 ? `\nRetenciones: $${(totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}\nNeto al proveedor: $${(montoPago-totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}.\n\nSe imprime la factura + la Orden de Pago.`);
@@ -38187,7 +38245,7 @@
                     + '<td><span class="pill ' + badge[c.est] + '">' + lbl[c.est] + '</span></td>'
                     + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + desap + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNroComprobante(\'' + c.o + '\',' + refA + ')" title="Cambiar sólo el N° del comprobante">N°</button>'
                                                   + (c.o === 'fact' && c.saldo > 0.5 && _regimenesDeProv(buscarProveedorPorNombre(nombre)).length >= 2
-                                                      ? '<button class="btn btn-outline btn-sm" style="color:#C0392B;" onclick="_fichaEditarRegimenes(' + c.ref + ')" title="Elegir a qué base de retención suma esta factura' + (_regimenesFacturaCorto(facturas[c.ref]) ? ' (hoy: ' + escHtml(_regimenesFacturaCorto(facturas[c.ref])) + ')' : ' (hoy: todos los regímenes)') + '">🏛️</button>' : '')
+                                                      ? '<button class="btn btn-outline btn-sm" style="color:#C0392B;" onclick="_fichaEditarRegimenes(' + c.ref + ')" title="Elegir a qué base de retención suma esta factura' + (facturas[c.ref] && facturas[c.ref].sinRetencion ? ' (hoy: ninguno, sin retención)' : (_regimenesFacturaCorto(facturas[c.ref]) ? ' (hoy: ' + escHtml(_regimenesFacturaCorto(facturas[c.ref])) + ')' : ' (hoy: todos los regímenes)')) + '">🏛️</button>' : '')
                                                   + '<button class="btn btn-outline btn-sm" onclick="' + abrir + '" title="Abrir/editar">✏</button>' : '') + borrar + '</div></td>'
                     + '</tr>';
             });
@@ -38539,7 +38597,7 @@
                         // Factura sin pagar de un proveedor con 2 o más regímenes: botón para elegir a cuál suma su base.
                         var _fReg = (m.ref.t === 'factura') ? facturas[m.ref.id] : null;
                         var _btnReg = (_fReg && !_fReg.esNotaCredito && (_fReg.estado || 'pendiente') !== 'pagada' && _regimenesDeProv(buscarProveedorPorNombre(nombre)).length >= 2)
-                            ? ' <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:#C0392B;" onclick="_fichaEditarRegimenes(' + r + ')" title="Elegir a qué base de retención suma esta factura (hoy: ' + escHtml(_regimenesFacturaCorto(_fReg) || 'todos los regímenes') + ')">🏛️' + (_regimenesFacturaCorto(_fReg) ? ' ' + escHtml(_regimenesFacturaCorto(_fReg)) : '') + '</button>' : '';
+                            ? ' <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;color:#C0392B;" onclick="_fichaEditarRegimenes(' + r + ')" title="Elegir a qué base de retención suma esta factura (hoy: ' + escHtml(_fReg.sinRetencion ? 'ninguno, sin retención' : (_regimenesFacturaCorto(_fReg) || 'todos los regímenes')) + ')">' + (_fReg.sinRetencion ? '🚫 sin retención' : '🏛️' + (_regimenesFacturaCorto(_fReg) ? ' ' + escHtml(_regimenesFacturaCorto(_fReg)) : '')) + '</button>' : '';
                         acc = '<button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="editarNroComprobante(\'' + (m.ref.t === 'factura' ? 'fact' : 'doc') + '\',' + r + ')" title="Cambiar sólo el N° del comprobante">N°</button>'
                             + _btnReg
                             + ' <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="_fichaEditarComprob(\'' + m.ref.t + '\',' + r + ')" title="Abrir y editar">✏</button>'
