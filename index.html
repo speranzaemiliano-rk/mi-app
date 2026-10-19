@@ -1412,6 +1412,27 @@
            460px no entraban — el modal entero scrolleaba de costado y se comía las
            etiquetas de la izquierda. */
         .modal-box-xl { max-width: 860px; }
+        /* Ficha de presupuesto: tablas compactas, sin partir las columnas (scrollean de costado si no entran) y, en el celular,
+           un solo scroll (el de la hoja) en vez de uno adentro de otro. */
+        #modalFichaPresup .modal-body td, #modalFichaPresup .modal-body th { padding: 7px 8px; white-space: nowrap; }
+        #modalFichaPresup .modal-body .table-wrap { overflow-x: auto; }
+        @media (max-width: 760px) {
+            /* !important: el cuerpo trae overflow/max-height en el style inline y le ganaría a esta regla */
+            #modalFichaPresup .modal-body { max-height: none !important; overflow: visible !important; padding: 14px !important; }
+            #modalFichaPresup .modal-head { padding: 14px 16px !important; }
+            #modalFichaPresup .modal-close { order: 2; }
+            #modalFichaPresup #fichaPres_btns { order: 3; width: 100%; }
+        }
+        /* Tablet: los botones de la última columna no se apilan (la fila quedaba de 130 px de alto). */
+        @media (max-width: 768px) { #modalFichaPresup .action-btns { flex-wrap: nowrap; } }
+        /* Celular: la regla global convierte las tablas en tarjetas; sin nowrap entran en el ancho, y la fila «Total» (tfoot,
+           que la regla global no convierte) se acomoda en un renglón en vez de salir cortada. */
+        @media (max-width: 600px) {
+            #modalFichaPresup .modal-body td, #modalFichaPresup .modal-body th { white-space: normal; }
+            #modalFichaPresup .table-wrap table tfoot, #modalFichaPresup .table-wrap table tfoot tr { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 12px; }
+            #modalFichaPresup .table-wrap table tfoot td { display: block; padding: 0; }
+            #modalFichaPresup .table-wrap table tfoot td[colspan]:empty { display: none; }
+        }
 
         /* ── Detalle del comprobante: una fila = un ítem ─────────────────────────── */
         .fact-items-cab, .fact-item-fila {
@@ -3569,7 +3590,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v548</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v549</div>
         </div>
     </nav>
 
@@ -7008,6 +7029,7 @@
                 <div class="form-group" id="grupoPagado">
                     <label>Monto Pagado (capital)</label>
                     <input type="number" id="pagado" step="0.01" min="0" required>
+                    <div class="form-hint" id="pagadoHist" style="display:none;">Sale de los pagos registrados. Para cambiarlo editá o eliminá el pago desde la ficha del presupuesto (👁 Ver) o en Pagos a proveedores.</div>
                 </div>
                 <div class="form-group">
                     <label>Fecha de Entrega</label>
@@ -7851,7 +7873,7 @@
     // Los nodos pesados (comprobantes y vencimientos, con los PDF adjuntos) se
     // enganchan después de lo liviano: estas banderas distinguen "todavía no llegó"
     // de "llegó y está vacío", para no mostrar un "no hay nada" que es mentira.
-    let _docsCargados = false, _vencCargados = false;
+    let _docsCargados = false, _vencCargados = false, _emitidosCargados = false;
     let puedeEditar   = false;
     let esAdmin       = false;  // admin o superadmin
     let esSuperAdmin  = false;
@@ -8468,7 +8490,7 @@
             return;
         }
         datosInicializado = true;
-        _docsCargados = false; _vencCargados = false;
+        _docsCargados = false; _vencCargados = false; _emitidosCargados = false;
         mostrarTab('Home');
 
         // Marcadores para saber cuándo llegó lo liviano (ver _engancharPesados abajo).
@@ -8600,6 +8622,7 @@
                 }
                 _docsCargados = true;
                 renderDocumentos();
+                _presupFichaRefrescar();   // la ficha de presupuesto lista también los comprobantes X vinculados
                 // Caja General, Banco, Efectivo y Egresos arman renglones con los pagos
                 // de documentos: como ahora llegan más tarde, hay que repintar la pestaña
                 // que el usuario esté mirando o le quedaría incompleta. (Repintamos sólo
@@ -8759,6 +8782,9 @@
 
             const tr = document.createElement('tr');
             _filaMovClickeable(tr, 'presupuesto', index);
+            // Esta lista es «densa»: un clic en la fila sólo la selecciona y muestra su detalle al costado (con el 👁 Ver, que es
+            // el primer botón: Enter lo aprieta). El doble clic ENTRA al presupuesto: avance y pagos.
+            tr.addEventListener('dblclick', function(ev) { if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return; abrirFichaPresupuesto(index); });
             tr.innerHTML = `
                 <td>${formatearFecha(item.fecha)}</td>
                 <td><strong>${escHtml(item.proveedor)}</strong> ${badgeCompartido(item)}</td>
@@ -8776,10 +8802,11 @@
                 <td><span class="${vencida}">${estadoTexto}</span></td>
                 <td>
                     <div class="action-btns">
+                        <button class="btn btn-outline btn-sm" onclick="abrirFichaPresupuesto(${index})" title="Ver el avance y los pagos">👁 Ver</button>
                         ${docLink}
                         <button class="btn btn-outline btn-sm" onclick="imprimirPresupuestoDoc(${index})" title="Imprimir el Presupuesto (documento formal para presentar)">📄</button>
                         <button class="btn btn-outline btn-sm" onclick="imprimirRecibo(${index})" title="Imprimir Orden de Pago / último comprobante">🧾</button>
-                        ${(datos[index] && (datos[index].pagosHistorial||[]).length > 1) ? `<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosPresupuesto(${index})" title="Reimprimir pago anterior">🖨️</button>` : ''}
+                        ${(datos[index] && (datos[index].pagosHistorial||[]).filter(p => !_esPagoEspejo(p)).length > 1) ? `<button class="btn btn-outline btn-sm" onclick="abrirHistorialPagosPresupuesto(${index})" title="Reimprimir pago anterior">🖨️</button>` : ''}
                         ${(puedeEditar && tieneFactODoc(index)) ? `<button class="btn btn-gold btn-sm" onclick="abrirPagoDe(${index})" title="Hay facturas/docs aplicados a este presupuesto">💵 Pagar</button>` : ''}
                         ${botonesEdicion}
                     </div>
@@ -8791,6 +8818,7 @@
         actualizarEstadisticas();
         actualizarGraficos();
         if (document.getElementById('proveedoresPresupuestos')) renderProveedoresConPresupuestos();
+        _presupFichaRefrescar();   // si la ficha de un presupuesto está abierta, se repinta con lo nuevo
     }
 
     // ===================== ESTADÍSTICAS =====================
@@ -9038,6 +9066,8 @@
         document.getElementById('grupoPagado').style.display = 'none';
         document.getElementById('pagado').value = 0;
         document.getElementById('pagado').required = false;
+        document.getElementById('pagado').readOnly = false;
+        document.getElementById('pagado').min = '0';
         document.getElementById('cacBase').value = '';
         _setPresupTipoIndice('CAC');
         document.getElementById('docEstado').textContent = '';
@@ -9578,6 +9608,19 @@
         _renderPresupItems(item.items || []);
         const c = calcPresupuesto(item);
         document.getElementById('pagado').value      = c.pagCap;
+        // Con pagos registrados que EXPLICAN el total, «Pagado» sale del historial y no se tipea. Si el total tiene plata cargada a
+        // mano que el historial no explica (presupuestos viejos), sigue editable —sin bajar de lo detallado— para poder corregirla.
+        var _hist = item.pagosHistorial || [];
+        var _sumHist = _hist.reduce(function(s, x) { return s + (x.capital || 0) + (x.canjeCapital || 0); }, 0);
+        var _tieneHist = _hist.length > 0 && Math.abs(c.pagCap - _sumHist) < 1;
+        var _pg = document.getElementById('pagado');
+        _pg.readOnly = _tieneHist;
+        _pg.min = _hist.length ? String(Math.round(_sumHist * 100) / 100) : '0';
+        var _ph = document.getElementById('pagadoHist');
+        _ph.style.display = _hist.length ? '' : 'none';
+        _ph.textContent = _tieneHist
+            ? 'Sale de los pagos registrados. Para cambiarlo editá o eliminá el pago desde la ficha del presupuesto (👁 Ver) o en Pagos a proveedores.'
+            : 'Incluye $' + (c.pagCap - _sumHist).toLocaleString('es-AR', { maximumFractionDigits: 2 }) + ' cargados a mano sin pago registrado (los pagos registrados suman $' + _sumHist.toLocaleString('es-AR', { maximumFractionDigits: 2 }) + '). Podés corregirlo acá.';
         document.getElementById('entrega').value     = item.entrega;
         document.getElementById('cacBase').value     = item.indiceCACBase || '';
         _setPresupTipoIndice(item.indiceTipo || 'CAC');
@@ -10088,8 +10131,10 @@
 
     document.getElementById('formPago').addEventListener('submit', async function(e) {
         e.preventDefault();
-        const capPagado = parseFloat(document.getElementById('pagado').value) || 0;
         const anterior = editandoIndex >= 0 ? datos[editandoIndex] : null;
+        // Si el «Pagado» salió del historial el campo está en sólo lectura (ver editarFila): se toma de ahí. Si se pudiera tipear
+        // otro número, `pagado` y el historial —que ahora se conserva al editar— dirían cosas distintas.
+        const capPagado = (anterior && document.getElementById('pagado').readOnly) ? calcPresupuesto(anterior).pagCap : (parseFloat(document.getElementById('pagado').value) || 0);
         const nuevoDato = {
             fecha: document.getElementById('fecha').value,
             proveedor: document.getElementById('proveedor').value,
@@ -10135,7 +10180,14 @@
             } catch (err) { alert('No se pudo subir el documento: ' + (err.message || err)); return; }
         }
         const _esPresupNuevo = editandoIndex < 0;
-        if (editandoIndex >= 0) { nuevoDato.recibo = anterior.recibo || generarNumeroRecibo(); datos[editandoIndex] = nuevoDato; }
+        if (editandoIndex >= 0) {
+            nuevoDato.recibo = anterior.recibo || generarNumeroRecibo();
+            // `nuevoDato` se arma sólo con los campos del formulario. Reemplazar el presupuesto con eso le borraba el `id`
+            // (se guardaba como uno nuevo) y, sobre todo, `pagosHistorial`: los pagos con su OP, medio y retenciones
+            // desaparecían y sólo quedaban los totales. Se conserva lo que el formulario no maneja.
+            Object.keys(anterior).forEach(function(k) { if (!(k in nuevoDato)) nuevoDato[k] = anterior[k]; });
+            datos[editandoIndex] = nuevoDato;
+        }
         else { nuevoDato.recibo = generarNumeroRecibo(); datos.push(nuevoDato); }
         cerrarModal();
         persistir();
@@ -10152,7 +10204,9 @@
             }
         }
         // Compartir con proyectos seleccionados
-        const selPres = leerSeleccionCompartir('checkboxesCompartirPres');
+        // Sólo en altas: al editar, el panel está oculto pero sus casillas pueden seguir tildadas de una apertura anterior, y la copia
+        // viajaría con todo el historial de pagos (mismo criterio que el formulario de facturas).
+        const selPres = _esPresupNuevo ? leerSeleccionCompartir('checkboxesCompartirPres') : [];
         if (selPres.length > 0) {
             const datoCopia = editandoIndex >= 0 ? datos[editandoIndex] : datos[datos.length - 1];
             compartirEnProyectos(datoCopia, 'datos', selPres);
@@ -11261,6 +11315,9 @@
         var rows=[],tP=0,tB=0,tE=0,tR=0,tN=0;
         datos.forEach(function(d,di){
             (d.pagosHistorial||[]).forEach(function(p,pi){
+                // El «pago espejo» (origenFacturaId) refleja en el presupuesto un pago que YA sale como pago de la factura:
+                // listarlo dos veces duplicaba la fila y todos los totales (y se podía «editar» una entrada sintética).
+                if(_esPagoEspejo(p)) return;
                 if(!_pagoPasaFiltroMod(filtM,p.modalidad,p.medioBancario)) return;
                 if(desde&&p.fecha&&p.fecha<desde) return;
                 if(hasta&&p.fecha&&p.fecha>hasta) return;
@@ -11298,6 +11355,8 @@
         });
         (comprobantesEmitidos||[]).forEach(function(e){
             var provNomE = e.proveedorNombre || (e.proveedorId ? ((proveedores.find(function(p){return p.id===e.proveedorId;})||{}).razonSocial||'') : '');
+            // Sin proveedor asignado pero imputado a un presupuesto: el pago es de ese proveedor (antes salía por el pago-espejo del presupuesto).
+            if(!provNomE && e.presupuestoIdx!=null && datos[e.presupuestoIdx]) provNomE = datos[e.presupuestoIdx].proveedor||'';
             if((!e.proveedorId&&!provNomE)||!e.afectaCaja||e.movTipo==='ingreso') return;
             if(e.confidencial&&!esSuperAdmin) return;
             if(!_pagoPasaFiltroMod(filtM,e.tipoAB,'')) return;
@@ -12373,6 +12432,8 @@
             f.estado = _estadoFactDoc(f);
             REF_FACTURAS.child(f.id || (f.id = _colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
             sincronizarPagoPlan('factura', x.idx);
+            // El pago de una factura aplicada a un presupuesto se refleja en él (el pago de UNA factura ya lo hacía; el de varias, no).
+            if (!f._compartidoDe && f.presupuestoIdx != null && datos[f.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(f.presupuestoIdx, { id: f.id, pagado: f.pagado, fecha: f.fecha, numero: f.numero });
             facturasPagadas.push(f);
         });
         cerrarPagoFD(); renderFacturas(); renderDocumentos();
@@ -12472,7 +12533,7 @@
             sincronizarPagoPlan('factura',idx);
             // Si la factura está aplicada a un presupuesto, reflejar el pago en el presupuesto
             // (igual que la rama de documentos). Antes faltaba y el presupuesto no se actualizaba.
-            if(f.presupuestoIdx!=null && datos[f.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(f.presupuestoIdx,{id:f.id,pagado:f.pagado,fecha:f.fecha,numero:f.numero});
+            if(!f._compartidoDe && f.presupuestoIdx!=null && datos[f.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(f.presupuestoIdx,{id:f.id,pagado:f.pagado,fecha:f.fecha,numero:f.numero});
             itemImp={tipo:'fact',item:f,idx:idx};
         } else {
             var docId=val,d=documentos.find(function(x){return x.id===docId;}); if(!d) return;
@@ -12480,7 +12541,7 @@
             d.pagosHistorial.push(entry);
             d.pagado=(d.pagado||0)+monto;
             REF_DOCS.child(docId).update({pagado:d.pagado,pagosHistorial:d.pagosHistorial});
-            if(d.presupuestoIdx!=null && datos[d.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(d.presupuestoIdx,{id:d.id,pagado:d.pagado,fecha:fecha,numero:d.numero});
+            if(!d._compartidoDe && d.presupuestoIdx!=null && datos[d.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(d.presupuestoIdx,{id:d.id,pagado:d.pagado,fecha:fecha,numero:d.numero});
             itemImp={tipo:'doc',item:d};
         }
         cerrarPagoFD(); renderFacturas(); renderDocumentos();
@@ -13839,6 +13900,7 @@
         var itPago = [];
         datos.forEach(function(d, di) {
             (d.pagosHistorial||[]).forEach(function(p, pi) {
+                if (_esPagoEspejo(p)) return;   // no es un pago editable: es el reflejo de uno de factura
                 if (itPago.length >= MAXG || !_gsMatch([d.proveedor, d.concepto], q)) return;
                 itPago.push({ icon:'💳', titulo:(d.proveedor||'—')+' · '+(d.concepto||'—'),
                     sub:'Pago presupuesto · $'+((p.capital||0)+(p.mayores||0)||p.montoPagado||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+(p.fecha?' · '+formatearFecha(p.fecha):''),
@@ -16693,7 +16755,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v548';
+    var APP_VER = 'v549';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17608,7 +17670,7 @@
                 }
                 case 'factura': {
                     var i = facturas.findIndex(function(f){ return f.proveedor===D.proveedor && f.numero===D.numero && f.fecha===D.fecha && f.importe===D.importe; });
-                    if (i !== -1) { facturas.splice(i, 1); persistirFacturas(); deleted = true; } break;
+                    if (i !== -1) { _espejoSync(Object.assign({}, facturas[i], { pagado: 0 })); facturas.splice(i, 1); persistirFacturas(); deleted = true; } break;
                 }
                 case 'venta': {
                     var i = ventas.findIndex(function(v){ return v.uf===D.uf && v.comprador===D.comprador; });
@@ -20722,6 +20784,9 @@
 
     function eliminarFactura(index) {
         if (confirm('¿Eliminar esta factura?')) {
+            // Si estaba aplicada a un presupuesto, su pago espejo se quita (si no, el avance del presupuesto quedaba inflado).
+            var _fDel = facturas[index];
+            if (_fDel && _fDel.presupuestoIdx != null && datos[_fDel.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(_fDel.presupuestoIdx, { id: _fDel.id, pagado: 0, fecha: _fDel.fecha, numero: _fDel.numero });
             facturas.splice(index, 1);
             persistirFacturas();
         }
@@ -21361,6 +21426,31 @@
     // Sirven para el AVANCE del presupuesto, pero NO deben sumarse en los totales de caja/banco/
     // egresos, o la misma plata se contaría dos veces.
     function _esPagoEspejo(p) { return !!(p && p.origenFacturaId); }
+    // Un espejo cuyo comprobante de origen YA NO EXISTE (factura/documento/emitido borrado antes de que se reconciliara el espejo)
+    // no refleja ningún pago real: sólo infla el avance del presupuesto. Sólo se afirma cuando las tres colecciones ya cargaron
+    // (si no, un comprobante que todavía no llegó pasaría por huérfano).
+    function _espejoHuerfano(p) {
+        if (!_esPagoEspejo(p) || !_docsCargados || !_emitidosCargados) return false;
+        var id = p.origenFacturaId;
+        return !((facturas || []).some(function(f) { return f && f.id === id; })
+            || (documentos || []).some(function(d) { return d && d.id === id; })
+            || (comprobantesEmitidos || []).some(function(e) { return e && e.id === id; }));
+    }
+    // Mantiene al día el pago-espejo del presupuesto al que está aplicada una factura/documento.
+    // El espejo es un valor DERIVADO (y no se ve ni se puede borrar desde Pagos), así que todo
+    // camino que cambie `pagado` de la factura/documento tiene que llamarlo después de hacerlo.
+    function _espejoSync(item) {
+        // Una copia compartida (`_compartidoDe`) trae el presupuestoIdx del proyecto de ORIGEN: acá apuntaría a otro presupuesto.
+        if (!item || item._compartidoDe || item.presupuestoIdx == null || item.presupuestoIdx === '' || !datos[item.presupuestoIdx]) return;
+        // Sin espejo previo y con un «Pagado» cargado a mano que el historial no explica: crearlo lo pisaría (el reconciliador
+        // recalcula `pagado` sólo desde el historial). Antes de este helper esos caminos no tocaban el presupuesto: se respeta.
+        var _pres = datos[item.presupuestoIdx], _hist = _pres.pagosHistorial || [];
+        if (!_hist.some(function(x) { return x && x.origenFacturaId === item.id; })) {
+            var _suma = _hist.reduce(function(s, x) { return s + (((x.capital || 0) + (x.mayores || 0) + (x.canjeCapital || 0)) || (x.montoPagado || 0)); }, 0);
+            if ((_pres.pagado || 0) - _suma > 0.005) return;
+        }
+        _reconciliarFacturaEnPresupuesto(item.presupuestoIdx, { id: item.id, pagado: item.pagado, fecha: item.fecha, numero: item.numero });
+    }
     // Pagado "propio" del presupuesto (pagos directos, SIN los espejos de facturas/documentos).
     // Es lo que corresponde sumar como egreso del presupuesto en caja/banco.
     function _presupPagadoPropio(d) {
@@ -22079,6 +22169,7 @@
         f.estado = _estadoFactDoc(f);
         REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial: f.pagosHistorial || [], pagado: f.pagado, estado: f.estado });
         if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', index);
+        _espejoSync(f);
         renderFacturas();
         if (typeof renderDocumentos === 'function') renderDocumentos();
         if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
@@ -22149,6 +22240,7 @@
             if (e.tipoItem === 'fact') {
                 REF_FACTURAS.child(e.item.id || (e.item.id = _colUidItem())).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado, estado: e.item.estado });
                 if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', e.ref);
+                _espejoSync(e.item);
             } else {
                 try { REF_DOCS.child(e.item.id).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado }); } catch (err) {}
                 if (e.item.presupuestoIdx != null && datos[e.item.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
@@ -22257,6 +22349,7 @@
             el3.textContent = '$' + (total).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
         }
         if (typeof renderProvPendientes === 'function') renderProvPendientes();
+        _presupFichaRefrescar();   // si la ficha de un presupuesto está abierta, sus facturas y pagos se repintan
     }
 
     // Corrige facturas cuyo campo "pagado" quedó desincronizado del historial real de
@@ -22271,6 +22364,7 @@
         f.pagado = sumHist;
         f.estado = _estadoFactDoc(f);
         persistirFacturas();
+        _espejoSync(f);
         renderFacturas();
         alert('✓ Monto pagado corregido.');
     }
@@ -24290,6 +24384,10 @@
             nroCorrelativo: e.nro || ''
         };
         if (mod === 'A' && e.cuentaId) pagoEntry.cuentaId = e.cuentaId;
+        // El vínculo con el presupuesto pasa al documento/factura nuevo (y con él su pago-espejo): si no, el espejo del emitido
+        // quedaba huérfano en el presupuesto.
+        var _convPI = (e.presupuestoIdx != null && e.presupuestoIdx !== '' && datos[e.presupuestoIdx]) ? e.presupuestoIdx : null;
+        var _convNuevoId = null;
 
         if (destino === 'D') {
             var docId = 'doc_' + Date.now();
@@ -24311,6 +24409,8 @@
                 adjuntoTipo: e.adjuntoTipo || '',
                 pagosHistorial: [pagoEntry]
             };
+            if (_convPI != null) nuevoDoc.presupuestoIdx = _convPI;
+            _convNuevoId = docId;
             REF_DOCS.child(docId).set(nuevoDoc);
         } else {
             var factId = 'F-' + Date.now();
@@ -24329,6 +24429,8 @@
                 pagosHistorial: [pagoEntry]
             };
             if (e.adjuntoId) { nuevaFact.docId = e.adjuntoId; nuevaFact.docNombre = e.adjuntoNombre || ''; nuevaFact.docTipo = e.adjuntoTipo || ''; }
+            if (_convPI != null) nuevaFact.presupuestoIdx = _convPI;
+            _convNuevoId = factId;
             facturas.push(nuevaFact);
             persistirFacturas();
         }
@@ -24342,6 +24444,10 @@
         if (cambio) persistirIngGeneral();
         var ci = comprobantesEmitidos.findIndex(function(x){ return x.id === id; });
         if (ci >= 0) { comprobantesEmitidos.splice(ci, 1); persistirEmitidos(); if (e.nro) _liberarNroComprobante(e.nro, e.tipoAB); }
+        if (_convPI != null) {
+            _reconciliarFacturaEnPresupuesto(_convPI, { id: e.id, pagado: 0, fecha: e.fecha, numero: e.nro });
+            _reconciliarFacturaEnPresupuesto(_convPI, { id: _convNuevoId, pagado: total, fecha: e.fecha, numero: e.nro });
+        }
 
         renderEmitidos();
         if (typeof renderDocumentos === 'function') renderDocumentos();
@@ -25103,6 +25209,7 @@
         if (!confirm(`Monto pagado actual: $${(pagadoActual).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}\nSegún el historial de pagos registrados: $${(sumHist).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}\n\n¿Corregir el monto pagado de este comprobante para que coincida con su historial?`)) return;
         d.pagado = sumHist;
         REF_DOCS.child(d.id).update({ pagado: sumHist });
+        _espejoSync(d);
         renderDocumentos();
         alert('✓ Monto pagado corregido.');
     }
@@ -25714,9 +25821,11 @@
             d.pagado = 0;
         }
         REF_DOCS.child(docId).update({ pagado: d.pagado, pagosHistorial: d.pagosHistorial || [] });
+        _espejoSync(d);
         // Ofrecer eliminar también el documento completo
         if (confirm('Pago eliminado. ¿Querés eliminar también el documento completo?')) {
             REF_DOCS.child(docId).remove();
+            _espejoSync(Object.assign({}, d, { pagado: 0 }));
         }
         if (typeof renderDocumentos==='function') renderDocumentos();
         if (typeof renderCajaGeneral==='function') renderCajaGeneral();
@@ -26214,12 +26323,13 @@
         _cargarConListener(REF_DESARROLLOS, function(v) { desarrollos = v; if (typeof renderDesarrollos==='function') renderDesarrollos(); if (typeof renderAportantes==='function') renderAportantes(); }, 'desarrollos');
         _cargarConListener(REF_APORTANTES,  function(v) { aportantes  = v; if (typeof renderAportantes==='function') renderAportantes(); }, 'aportantes');
         _cargarConListener(REF_METROS,      function(v) { metrosCanje = v; if (typeof renderMetros==='function') renderMetros(); }, 'metrosCanje');
-        _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; if (typeof renderEmitidos==='function') renderEmitidos(); if (_tabActivo==='Documentos' && typeof renderDocumentos==='function') renderDocumentos(); var _mA=document.getElementById('modalFacturasARCA'); if (_mA && _mA.classList.contains('active') && typeof renderFacturasARCA==='function') renderFacturasARCA(); }, 'emitidos');
+        _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; _emitidosCargados = true; if (typeof renderEmitidos==='function') renderEmitidos(); _presupFichaRefrescar(); if (_tabActivo==='Documentos' && typeof renderDocumentos==='function') renderDocumentos(); var _mA=document.getElementById('modalFacturasARCA'); if (_mA && _mA.classList.contains('active') && typeof renderFacturasARCA==='function') renderFacturasARCA(); }, 'emitidos');
         _cargarConListener(REF_REMUN,       function(v) { remuneraciones = v; if (typeof renderRemuneraciones==='function') renderRemuneraciones(); }, 'remuneraciones');
         if (REF_PLAN) {
             REF_PLAN.on('value', function(snap) {
                 planTrabajo = _colProcesarCarga('planTrabajo', REF_PLAN, snap.val());
                 renderPlanTrabajo();
+                _presupFichaRefrescar();   // el avance de obra de la ficha de presupuesto sale del plan
             });
             activeListeners.push({ ref: REF_PLAN, event: 'value' });
         }
@@ -35313,7 +35423,9 @@
             var comp = comprobantesEmitidos.find(function(x){ return x && x.id===emitId; });
             if(comp && confirm('Este movimiento estaba asociado al comprobante '+(comp.nro||'')+'. ¿Eliminar también el comprobante?')){
                 var ci = comprobantesEmitidos.findIndex(function(x){ return x && x.id===emitId; });
-                if(ci>=0){ comprobantesEmitidos.splice(ci,1); persistirEmitidos(); if(comp.nro) _liberarNroComprobante(comp.nro, comp.tipoAB); if(typeof renderEmitidos==='function')renderEmitidos(); }
+                if(ci>=0){ comprobantesEmitidos.splice(ci,1); persistirEmitidos(); if(comp.nro) _liberarNroComprobante(comp.nro, comp.tipoAB); if(typeof renderEmitidos==='function')renderEmitidos();
+                    // Si estaba imputado a un presupuesto, se va también su pago-espejo (igual que eliminarEmitido).
+                    if(comp.presupuestoIdx!=null && datos[comp.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(comp.presupuestoIdx,{id:comp.id,pagado:0,fecha:comp.fecha,numero:comp.nro}); }
             }
         }
         if(typeof renderCajaGeneral==='function')renderCajaGeneral();
@@ -36633,8 +36745,9 @@
 
     function abrirHistorialPagosPresupuesto(index) {
         var item = datos[index]; if (!item) return;
-        var hist = item.pagosHistorial || [];
-        if (!hist.length) { alert('Este presupuesto no tiene pagos registrados aún.'); return; }
+        // El «pago espejo» de una factura no se reimprime: la OP es la de la factura.
+        var hist = (item.pagosHistorial || []).filter(function(p) { return !_esPagoEspejo(p); });
+        if (!hist.length) { alert('Este presupuesto no tiene pagos propios registrados aún (los de sus facturas se reimprimen desde la factura).'); return; }
         var lista = hist.map(function(p, i) {
             return (i+1) + ') ' + (p.fecha ? formatearFecha(p.fecha) : '—') + ' — $ ' + Number(p.montoPagado||p.capital||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' (' + (p.modalidad==='A'?'Banc.':'Ef.') + ')';
         }).join('\n');
@@ -37026,6 +37139,7 @@
             var hist = d.pagosHistorial || [];
             if (hist.length > 0) {
                 hist.forEach(function(p) {
+                    if (_esPagoEspejo(p)) return;   // ya sale como «Pago Factura»: contarlo acá era contar la plata dos veces
                     var monto = (p.capital||0) + (p.mayores||0) || p.montoPagado||0;
                     movs.push({
                         fecha: p.fecha, moneda: 'ARS',
@@ -37706,6 +37820,7 @@
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             if (_provCambia) doc.proveedor = _provNuevo;
             REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial, proveedor: doc.proveedor });
+            _espejoSync(doc);
         } else {
             var f = facturas[di];
             var pf = f.pagosHistorial[pi];
@@ -37719,6 +37834,7 @@
             if (_provCambia) f.proveedor = _provNuevo;
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
             REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado, proveedor:f.proveedor });
+            _espejoSync(f);
         }
 
         cerrarModalEditarPago();
@@ -37759,6 +37875,7 @@
             doc.pagosHistorial.splice(pi, 1);
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
+            _espejoSync(doc);
         } else {
             var f = facturas[di];
             if (!f || !f.pagosHistorial) { cerrarModalEditarPago(); return; }
@@ -37767,6 +37884,7 @@
             f.estado = _estadoFactDoc(f);
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
             REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
+            _espejoSync(f);
         }
 
         cerrarModalEditarPago();
@@ -37847,6 +37965,7 @@
         datos.forEach(function(d, di) {
             if (d.proveedor !== nombre) return;
             (d.pagosHistorial||[]).forEach(function(p, pi) {
+                if (_esPagoEspejo(p)) return;   // el pago de la factura ya figura abajo; el espejo duplicaba filas y el total
                 var monto = (p.capital||0)+(p.mayores||0)||p.montoPagado||0;
                 totalPagado += monto;
                 var modBadge = p.modalidad==='A'
@@ -37958,7 +38077,8 @@
         (comprobantesEmitidos||[]).forEach(function(e) {
             var esDeEsteProv = (_provIdParaEmitidos && e.proveedorId === _provIdParaEmitidos)
                 || e.proveedorNombre === nombre
-                || (!!e.proveedorId && e.cliente === nombre);
+                || (!!e.proveedorId && e.cliente === nombre)
+                || (!e.proveedorId && !e.proveedorNombre && e.presupuestoIdx != null && !!datos[e.presupuestoIdx] && datos[e.presupuestoIdx].proveedor === nombre);
             if (!esDeEsteProv || !e.afectaCaja || e.movTipo === 'ingreso') return;
             if (e.confidencial && !esSuperAdmin) return;
             totalPagado += e.total||0;
@@ -38123,6 +38243,273 @@
             else verFichaProveedor(window._fichaProvNombre);
         }
     }
+    // ═══════════════ FICHA DE PRESUPUESTO ═══════════════
+    // «Entrar» a un presupuesto: su avance, las facturas/comprobantes vinculados y TODOS sus pagos, cada uno
+    // una sola vez. Antes un clic en el presupuesto abría directo la edición, y el historial de pagos era un
+    // prompt() que sólo reimprimía.
+    // ⚠️ Los pagos NO se leen del «pago espejo» del presupuesto (`origenFacturaId`): esa entrada es sintética (un
+    // solo renglón con el total pagado de la factura, fecha de la factura, siempre «Banco», sin OP ni retenciones).
+    // Se leen de donde nacieron —los directos del propio presupuesto y los pagos reales de cada comprobante
+    // vinculado— y el espejo sólo sirve para el total (`calcPresupuesto().pagadoTotal`) y para el control.
+    function _presupPagoMonto(p) {
+        return ((p.capital || 0) + (p.mayores || 0) + (p.canjeCapital || 0)) || (p.montoPagado || 0) || (p.monto || 0);
+    }
+    // Argumento de texto o número para un onclick armado como string.
+    function _pfArg(x) { return typeof x === 'number' ? String(x) : "'" + String(x).replace(/['\\"<>&]/g, '') + "'"; }
+    // Comprobantes aplicados a un presupuesto. El vínculo se guarda como ÍNDICE de datos[] (`presupuestoIdx`).
+    function _presupVinculados(idx) {
+        var r = { facturas: [], documentos: [], emitidos: [] };
+        // Las copias compartidas desde otro proyecto (`_compartidoDe`) conservan el presupuestoIdx del ORIGEN, que acá
+        // apunta a otro presupuesto: no son de éste. Y un emitido confidencial no se muestra a quien no es superadmin.
+        var es = function(x) { return x && !x._compartidoDe && x.presupuestoIdx != null && x.presupuestoIdx !== '' && Number(x.presupuestoIdx) === idx; };
+        (facturas || []).forEach(function(f, i) { if (es(f) && !f.esNotaCredito) r.facturas.push({ f: f, i: i }); });
+        (documentos || []).forEach(function(d) { if (es(d)) r.documentos.push({ d: d }); });
+        (comprobantesEmitidos || []).forEach(function(e) { if (es(e) && !(e.confidencial && !esSuperAdmin)) r.emitidos.push({ e: e }); });
+        return r;
+    }
+    function _pfBtnComp(p) {
+        if (!p || !p.comprobanteId) return '';
+        return '<button class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + String(p.comprobanteId).replace(/['"\\]/g, '') + '\',\'' + String(p.comprobanteNombre || 'comprobante').replace(/['"\\]/g, '') + '\')" title="Ver el comprobante del pago">📎</button>';
+    }
+    // Una fila por pago real, ordenadas por fecha.
+    function _presupPagosFilas(idx) {
+        var d = datos[idx]; if (!d) return [];
+        var filas = [];
+        var forma = function(p) {
+            if (p.formaPago === 'canje') return 'Canje m²';
+            if (p.formaPago === 'credito') return 'Crédito a favor';
+            return p.modalidad === 'A' ? '🏦 Banco' : '💵 Efectivo';
+        };
+        var medio = function(p) { return (p.modalidad === 'A' && p.medioBancario && !p.formaPago) ? _medioPagoInfo(p.medioBancario).nombre : ''; };
+        var hist = d.pagosHistorial || [];
+        hist.forEach(function(p, pi) {
+            if (_esPagoEspejo(p)) {
+                // Espejo huérfano (su comprobante ya no existe): se muestra con ✏ para poder quitarlo, porque infla el avance.
+                if (_espejoHuerfano(p)) filas.push({ fecha: p.fecha || '', origen: '⚠️ Comprobante eliminado', forma: '—', medio: 'ya no existe: quitalo con ✏ → Eliminar', op: p.nroComprobante || '', monto: _presupPagoMonto(p), ret: 0, editar: ['presup', idx, pi] });
+                return;
+            }
+            filas.push({ fecha: p.fecha || '', origen: 'Pago directo', forma: forma(p), medio: medio(p), op: p.nroCorrelativo || '', monto: _presupPagoMonto(p), ret: p.totalRet || 0,
+                imprimir: 'imprimirPagoPresup(' + idx + ',' + pi + ')', editar: ['presup', idx, pi],
+                retBtn: _retBtnsHTML('imprimirRetPresup', idx, pi, p.retenciones), comp: _pfBtnComp(p) });
+        });
+        // Un presupuesto viejo con plata pagada y sin historial detallado.
+        if (!hist.length && (d.pagado || 0) > 0) filas.push({ fecha: d.fecha || '', origen: 'Pagos anteriores', forma: '—', medio: '', op: '', monto: d.pagado, ret: 0, sinDetalle: true });
+        var v = _presupVinculados(idx);
+        v.facturas.forEach(function(o) {
+            var f = o.f, pagos = f.pagosHistorial || [], rotulo = 'Fact. ' + (f.numero || f.descripcion || 's/n');
+            pagos.forEach(function(p, pi) {
+                filas.push({ mon: f.moneda || '', fecha: p.fecha || '', origen: rotulo, forma: forma(p), medio: medio(p), op: p.nroCorrelativo || '', monto: p.monto || 0, ret: p.totalRet || 0,
+                    imprimir: p.grupoPagoId ? "imprimirPagoGrupoFact('" + String(p.grupoPagoId).replace(/['"\\]/g, '') + "')" : 'imprimirPagoFact(' + o.i + ',' + pi + ')',
+                    editar: p.grupoPagoId ? null : ['factura', o.i, pi],
+                    retBtn: p.grupoPagoId ? '' : _retBtnsHTML('imprimirRetFact', o.i, pi, p.retenciones), comp: _pfBtnComp(p) });
+            });
+            if (!pagos.length && (f.pagado || 0) > 0) filas.push({ mon: f.moneda || '', fecha: f.fecha || '', origen: rotulo, forma: '—', medio: '', op: '', monto: f.pagado, ret: 0, sinDetalle: true });
+        });
+        v.documentos.forEach(function(o) {
+            var dc = o.d, pagos = dc.pagosHistorial || [], rotulo = 'Comprob. ' + (dc.numero || dc.descripcion || 's/n');
+            pagos.forEach(function(p, pi) {
+                filas.push({ mon: dc.moneda || '', fecha: p.fecha || '', origen: rotulo, forma: forma(p), medio: medio(p), op: p.nroCorrelativo || '', monto: p.monto || 0, ret: p.totalRet || 0,
+                    imprimir: 'imprimirPagoDoc(' + _pfArg(dc.id) + ',' + pi + ')', editar: ['doc', dc.id, pi],
+                    retBtn: _retBtnsHTML('imprimirRetDoc', _pfArg(dc.id), pi, p.retenciones), comp: _pfBtnComp(p) });
+            });
+            if (!pagos.length && (dc.pagado || 0) > 0) filas.push({ mon: dc.moneda || '', fecha: dc.fecha || '', origen: rotulo, forma: '—', medio: '', op: '', monto: dc.pagado, ret: 0, sinDetalle: true });
+        });
+        v.emitidos.forEach(function(o) {
+            var e = o.e;
+            if ((e.pagado || 0) > 0) filas.push({ fecha: e.fecha || '', origen: 'Comprob. emitido ' + (e.nro || ''), forma: e.tipoAB === 'A' ? '🏦 Banco' : '💵 Efectivo', medio: '', op: '', monto: e.pagado, ret: 0, sinDetalle: true });
+        });
+        filas.sort(function(a, b) { return String(a.fecha).localeCompare(String(b.fecha)); });
+        return filas;
+    }
+    // Resumen de un presupuesto para tablas (cuenta corriente, listados): una sola definición de «avance» y «estado».
+    function _presupResumen(d) {
+        var c = calcPresupuesto(d);
+        var base = c.base || 0, pagado = c.pagadoTotal || 0;
+        // «Cerrado» con la misma regla que la lista de Presupuestos (_presupCerrado), SIN redondear antes: con
+        // 99,6% pagado el porcentaje mostrado redondea a 100 pero todavía hay saldo y no está cerrado.
+        var cerrado = base > 0 && pagado / base * 100 >= 100;
+        var pct = base > 0 ? Math.round(pagado / base * 100) : (pagado > 0 ? 100 : 0);
+        if (!cerrado && base > 0 && pct >= 100) pct = 99;
+        return { c: c, base: base, pagado: pagado, saldo: c.capitalPend, pct: pct, cerrado: cerrado,
+            est: cerrado ? 'Cerrado' : (pagado > 0 ? 'Parcial' : 'Sin pagos') };
+    }
+    function _presupFichaHTML(idx) {
+        var d = datos[idx]; if (!d) return '<div style="padding:30px;text-align:center;color:var(--text-3);">Este presupuesto ya no existe.</div>';
+        var rs = _presupResumen(d), c = rs.c, base = rs.base, pagado = rs.pagado, pct = rs.pct;
+        var fmtA = function(n) { return '$' + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var fmtM = function(n, mon) { return mon === 'USD' ? 'USD ' + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : fmtA(n); };
+        var puedeEd = (typeof puedeEditar !== 'undefined' && puedeEditar);
+        var barra = function(titulo, valor, texto, color) {
+            var w = Math.max(0, Math.min(100, valor));
+            return '<div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;gap:2px 10px;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin-bottom:3px;"><span>' + titulo + '</span><strong style="color:' + color + ';white-space:nowrap;">' + texto + '</strong></div>'
+                + '<div style="height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;"><div style="height:100%;width:' + w + '%;background:' + color + ';border-radius:4px;"></div></div></div>';
+        };
+        var th = function(t, der) { return '<th' + (der ? ' style="text-align:right;"' : '') + '>' + t + '</th>'; };
+        var v = _presupVinculados(idx);
+        var comps = [];
+        v.facturas.forEach(function(o) { var f = o.f; comps.push({ mon: f.moneda || '', fecha: f.fecha, tipo: _facTipoLabel(f), num: f.numero || '—', imp: f.importe || 0, pag: f.pagado || 0, saldo: _saldoFactDoc(f), est: _ccEstadoItem(f), pctPres: f.presupuestoPorcentaje, coment: f.presupuestoComentario || '',
+            acc: puedeEd ? '<button class="btn btn-outline btn-sm" onclick="_pfAccion(\'factura\',' + o.i + ')" title="Editar la factura">✏</button>' : '' }); });
+        v.documentos.forEach(function(o) { var dc = o.d; comps.push({ mon: dc.moneda || '', fecha: dc.fecha, tipo: 'Comprobante X', num: dc.numero || '—', imp: dc.importe || 0, pag: dc.pagado || 0, saldo: _saldoFactDoc(dc), est: _ccEstadoItem(dc), pctPres: dc.presupuestoPorcentaje, coment: dc.presupuestoComentario || '', acc: '' }); });
+        v.emitidos.forEach(function(o) { var e = o.e, tot = e.total || 0; comps.push({ fecha: e.fecha, tipo: 'Comprob. emitido', num: e.nro || '—', imp: tot, pag: e.pagado || 0, saldo: Math.max(0, tot - (e.pagado || 0)), est: (e.pagado || 0) > 0 ? ((e.pagado || 0) >= tot ? 'pagado' : 'parcial') : 'pendiente', pctPres: null, coment: '', acc: '' }); });
+        comps.sort(function(a, b) { return String(b.fecha || '').localeCompare(String(a.fecha || '')); });
+        var facturado = comps.reduce(function(s, x) { return s + x.imp; }, 0);
+        var pctFact = base > 0 ? Math.round(facturado / base * 100) : 0;
+        // Avance de obra: sólo existe por ETAPA del Plan de Trabajo (compartido con los demás ítems de la etapa).
+        var etapas = (typeof planTrabajo !== 'undefined' ? planTrabajo : []).filter(function(et) { return (et.items || []).some(function(it) { return it.src === 'presup' && it.idx === idx; }); });
+        var colorPct = rs.cerrado ? 'var(--success)' : 'var(--gold)';
+        var h = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">'
+            + _ccKpiHTML('Presupuestado', fmtA(base), 'var(--blue)')
+            + _ccKpiHTML('Pagado', fmtA(pagado), 'var(--success)')
+            + _ccKpiHTML('Saldo (capital pendiente)', fmtA(c.capitalPend), c.capitalPend > 0.5 ? 'var(--danger)' : 'var(--success)')
+            + (c.mayores > 0.5 ? _ccKpiHTML('Mayores costos', fmtA(c.mayores), 'var(--warn)') : '')
+            + _ccKpiHTML('Avance de pago', pct + '%', colorPct)
+            + '</div>';
+        h += '<div class="table-card" style="margin-bottom:14px;padding:14px 18px;">'
+            + barra('💰 Avance de pago <span style="color:var(--text-3);">(pagado sobre presupuestado)</span>', pct, pct + '% · ' + fmtA(pagado) + ' de ' + fmtA(base), colorPct)
+            + (comps.length ? barra('🧾 Facturado <span style="color:var(--text-3);">(comprobantes vinculados sobre presupuestado)</span>', pctFact, pctFact + '% · ' + fmtA(facturado) + (base > facturado ? ' · sin facturar ' + fmtA(base - facturado) : ''), 'var(--blue)') : '')
+            + (etapas.length ? etapas.map(function(et) { var o = _calcAvanceObraEtapa(et); return barra('🏗️ Avance real de obra — etapa «' + escHtml(et.nombre || 'sin nombre') + '» <span style="color:var(--text-3);">(es de toda la etapa, no sólo de este presupuesto)</span>', o, o + '%', 'var(--blue)'); }).join('')
+                : '<div style="font-size:12px;color:var(--text-3);">🏗️ Sin avance de obra: este presupuesto no está en ninguna etapa del Plan de Trabajo.' + (puedeEd ? ' <button class="btn btn-outline btn-sm" onclick="_pfAccion(\'plan\')">Asignar al plan</button>' : '') + '</div>')
+            + '</div>';
+        // Pagos
+        var filas = _presupPagosFilas(idx), acum = 0, totRet = 0;
+        var hayUSD = comps.some(function(x) { return x.mon === 'USD'; }) || filas.some(function(r) { return r.mon === 'USD'; });
+        // Aviso cuando lo que suman los pagos listados no coincide con el «pagado» del presupuesto (también con 0 pagos listados)
+        var _avisoDif = function(suma) {
+            if (typeof _docsCargados !== 'undefined' && !_docsCargados) return '<div style="padding:10px 16px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border);">⏳ Todavía se están cargando los comprobantes X: la lista de pagos puede estar incompleta.</div>';
+            var dif = Math.round((pagado - suma) * 100) / 100, ms = [];
+            if (Math.abs(dif) > 1) ms.push('⚠️ Los pagos de esta lista suman ' + fmtA(suma) + ' y el presupuesto figura con ' + fmtA(pagado) + ' pagados (diferencia ' + fmtA(Math.abs(dif)) + '). Suele ser un total cargado a mano, un comprobante desvinculado o todavía sin cargar: revisalo.');
+            if (hayUSD) ms.push('💱 Hay comprobantes en dólares vinculados: el presupuesto no tiene moneda y suma sus importes como si fueran pesos.');
+            return ms.length ? '<div style="padding:10px 16px;font-size:12px;color:var(--warn);border-top:1px solid var(--border);">' + ms.join('<br>') + '</div>' : '';
+        };
+        h += '<div class="table-card" style="margin-bottom:14px;"><div class="table-card-head"><h3>💳 Pagos</h3><span style="font-size:12px;color:var(--text-3);">' + filas.length + (filas.length === 1 ? ' pago' : ' pagos') + ' · cada uno una sola vez, con su fecha y medio reales</span></div>';
+        if (!filas.length) h += '<div style="padding:22px;text-align:center;color:var(--text-3);">Este presupuesto todavía no tiene pagos.</div>' + _avisoDif(0) + '</div>';
+        else {
+            h += '<div class="table-wrap"><table><thead><tr>' + th('Fecha') + th('Origen') + th('Forma') + th('N° OP') + th('Monto', 1) + th('Retención', 1) + th('Neto', 1) + th('Acumulado', 1) + th('', 1) + '</tr></thead><tbody>'
+                + filas.map(function(r) {
+                    acum += r.monto; totRet += r.ret;
+                    var acc = r.sinDetalle ? '<span style="font-size:11px;color:var(--text-3);">sin detalle</span>'
+                        : ('<div class="action-btns" style="justify-content:flex-end;">' + (r.imprimir ? '<button class="btn btn-outline btn-sm" onclick="' + r.imprimir + '" title="Imprimir la Orden de Pago">🖨️</button>' : '') + (r.retBtn || '') + (r.comp || '')
+                            + (puedeEd && r.editar ? '<button class="btn btn-outline btn-sm" onclick="_pfAccion(\'editarpago\',\'' + r.editar[0] + '\',' + _pfArg(r.editar[1]) + ',' + r.editar[2] + ')" title="Editar el pago">✏</button>' : '') + '</div>');
+                    return '<tr><td>' + (r.fecha ? formatearFecha(r.fecha) : '—') + '</td><td><strong>' + escHtml(r.origen) + '</strong></td><td>' + escHtml(r.forma) + (r.medio ? '<div style="font-size:11px;color:var(--text-3);">' + escHtml(r.medio) + '</div>' : '') + '</td><td>' + escHtml(r.op || '—') + '</td>'
+                        + '<td style="text-align:right;">' + fmtM(r.monto, r.mon) + '</td><td style="text-align:right;color:var(--danger);">' + (r.ret ? fmtM(r.ret, r.mon) : '—') + '</td><td style="text-align:right;color:var(--success);">' + fmtM(r.monto - r.ret, r.mon) + '</td>'
+                        + '<td style="text-align:right;color:var(--text-3);white-space:nowrap;">' + fmtA(acum) + (base > 0 ? ' <span style="font-size:10px;">(' + Math.round(acum / base * 100) + '%)</span>' : '') + '</td><td style="text-align:right;">' + acc + '</td></tr>';
+                }).join('')
+                + '</tbody><tfoot><tr style="font-weight:700;"><td colspan="4">Total</td><td style="text-align:right;">' + fmtA(acum) + '</td><td style="text-align:right;color:var(--danger);">' + fmtA(totRet) + '</td><td style="text-align:right;color:var(--success);">' + fmtA(acum - totRet) + '</td><td colspan="2"></td></tr></tfoot></table></div>';
+            h += _avisoDif(acum) + '</div>';
+        }
+        // Comprobantes vinculados
+        h += '<div class="table-card" style="margin-bottom:6px;"><div class="table-card-head"><h3>🧾 Facturas y comprobantes vinculados</h3><span style="font-size:12px;color:var(--text-3);">' + comps.length + '</span></div>';
+        if (!comps.length) h += '<div style="padding:22px;text-align:center;color:var(--text-3);">No hay facturas ni comprobantes aplicados a este presupuesto.</div></div>';
+        else {
+            var badge = { pagado: 'badge-ok', parcial: 'badge-warn', pendiente: 'badge-err' }, lbl = { pagado: 'Pagado', parcial: 'Parcial', pendiente: 'A pagar' };
+            h += '<div class="table-wrap"><table><thead><tr>' + th('Fecha') + th('Tipo') + th('N°') + th('% del presupuesto', 1) + th('Importe', 1) + th('Pagado', 1) + th('Saldo', 1) + th('Estado') + th('', 1) + '</tr></thead><tbody>'
+                + comps.map(function(x) {
+                    var pc = (x.pctPres != null && x.pctPres !== '') ? x.pctPres : (base > 0 && x.mon !== 'USD' ? Math.round(x.imp / base * 1000) / 10 : null);
+                    return '<tr><td>' + (x.fecha ? formatearFecha(x.fecha) : '—') + '</td><td>' + escHtml(x.tipo) + '</td><td>' + escHtml(x.num) + (x.coment ? '<div style="font-size:11px;color:var(--text-3);">' + escHtml(x.coment) + '</div>' : '') + '</td>'
+                        + '<td style="text-align:right;">' + (pc != null ? pc + '%' : '—') + '</td><td style="text-align:right;">' + fmtM(x.imp, x.mon) + '</td><td style="text-align:right;color:var(--success);">' + fmtM(x.pag, x.mon) + '</td><td style="text-align:right;font-weight:600;">' + fmtM(x.saldo, x.mon) + '</td>'
+                        + '<td><span class="badge-rol ' + (badge[x.est] || 'badge-err') + '">' + (lbl[x.est] || 'A pagar') + '</span></td><td style="text-align:right;">' + x.acc + '</td></tr>';
+                }).join('')
+                + '</tbody><tfoot><tr style="font-weight:700;"><td colspan="4">Total facturado</td><td style="text-align:right;">' + fmtA(facturado) + '</td><td style="text-align:right;">' + fmtA(comps.reduce(function(s, x) { return s + x.pag; }, 0)) + '</td><td style="text-align:right;">' + fmtA(comps.reduce(function(s, x) { return s + x.saldo; }, 0)) + '</td><td colspan="2"></td></tr></tfoot></table></div></div>';
+        }
+        return h;
+    }
+    var _pfIdx = -1, _pfId = '';
+    function _pfResolver() {
+        // Con id se busca por id: si otro usuario borró el presupuesto, el índice viejo ya apunta a OTRO y la ficha
+        // (y sus botones de pagar/editar) saltaría a él en silencio. Sin id (presupuestos viejos) sólo queda el índice.
+        if (_pfId) return datos.findIndex(function(x) { return x && x.id === _pfId; });
+        return _pfIdx;
+    }
+    function _presupFichaPintar() {
+        var idx = _pfResolver(), d = datos[idx];
+        var cont = document.getElementById('fichaPres_contenido'); if (!cont) return;
+        var puedeEd = (typeof puedeEditar !== 'undefined' && puedeEditar);
+        if (d) {
+            _pfIdx = idx; if (d.id) _pfId = d.id;
+            document.getElementById('fichaPres_titulo').textContent = (d.concepto || 'Presupuesto');
+            var vence = d.entrega ? (new Date(d.entrega) < new Date()) : null;
+            var sub = [d.proveedor || '—', d.rubro, d.subrubro].filter(Boolean).join(' · ');
+            document.getElementById('fichaPres_sub').innerHTML = escHtml(sub)
+                + (d.fecha ? ' · Fecha ' + formatearFecha(d.fecha) : '')
+                + (d.entrega ? ' · Entrega ' + formatearFecha(d.entrega) + ' <span class="' + (vence ? 'badge-rol badge-err' : 'badge-rol badge-ok') + '">' + (vence ? '⚠ VENCIDA' : '✓ EN FECHA') + '</span>' : '')
+                + ' · Modalidad ' + (d.modalidad || 'A');
+        } else {
+            document.getElementById('fichaPres_titulo').textContent = 'Presupuesto';
+            document.getElementById('fichaPres_sub').innerHTML = '';
+        }
+        var btnBlanco = 'style="color:#fff;border-color:rgba(255,255,255,.3);"';
+        document.getElementById('fichaPres_btns').innerHTML = d
+            ? ((d.docId ? '<button class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + String(d.docId).replace(/[\'"\\]/g, '') + '\',\'' + String(d.docNombre || 'documento').replace(/[\'"\\]/g, '') + '\')" ' + btnBlanco + '>📎 Documento</button>' : '')
+                + '<button class="btn btn-outline btn-sm" onclick="imprimirPresupuestoDoc(' + idx + ')" ' + btnBlanco + '>📄 Presupuesto</button>'
+                + (puedeEd ? '<button class="btn btn-gold btn-sm" onclick="_pfAccion(\'pagar\')">💵 Registrar pago</button><button class="btn btn-outline btn-sm" onclick="_pfAccion(\'editar\')" ' + btnBlanco + '>✏ Editar</button>' : ''))
+            : '';
+        cont.innerHTML = _presupFichaHTML(idx);
+        // En el celular las tablas pasan a tarjetas (regla global): la ficha se dibuja acá, fuera de lo que observa esa regla.
+        if (typeof window._mbnEtiquetarTodas === 'function') window._mbnEtiquetarTodas();
+    }
+    function abrirFichaPresupuesto(idx) {
+        if (!datos[idx]) return;
+        _pfIdx = idx; _pfId = datos[idx].id || '';
+        _presupFichaPintar();
+        document.getElementById('modalFichaPresup').classList.add('active');
+    }
+    function cerrarFichaPresupuesto() {
+        document.getElementById('modalFichaPresup').classList.remove('active'); _pfIdx = -1; _pfId = '';
+        // Si se llegó desde la cuenta corriente (pestaña o ficha del proveedor), el sector «Presupuestos» quedó debajo con los
+        // números de antes de pagar/editar: se repinta al volver.
+        try {
+            var mf = document.getElementById('modalFichaProv');
+            if (mf && mf.classList.contains('active') && window._fichaProvNombre && window._fichaVista === 'ctacte') verCtaCteProv(window._fichaProvNombre);
+            var pc = document.getElementById('panelCuentaCorriente');
+            if (pc && pc.classList.contains('active')) _ccRenderDetalle();
+        } catch (e) {}
+    }
+    // Se llama al final de renderizar() y renderFacturas(): si la ficha está abierta, se repinta con lo nuevo.
+    function _presupFichaRefrescar() {
+        var m = document.getElementById('modalFichaPresup');
+        if (m && m.classList.contains('active')) _presupFichaPintar();
+    }
+    // Los modales de pago/edición se abren POR ENCIMA de la ficha (queda abierta debajo y se refresca sola).
+    function _pfAccion(que, a, b, c) {
+        var idx = _pfResolver();
+        if (idx < 0 && (que === 'pagar' || que === 'editar' || que === 'plan')) { alert('Este presupuesto ya no existe.'); return; }
+        if (que === 'pagar')   { abrirPagoDe(idx); _fichaSubirModal('modalPago'); }
+        else if (que === 'editar') { editarFila(idx); _fichaSubirModal('modal'); }
+        else if (que === 'factura') { editarFactura(a); _fichaSubirModal('modalFact'); }
+        else if (que === 'editarpago') { abrirEditarPago(a, b, c); }
+        else if (que === 'plan') { ofrecerAsignarAlPlan('presup', idx, '¿Agregar "' + ((datos[idx] || {}).concepto || 'Presupuesto') + '" al Plan de Trabajo?', function(ok) { if (ok) _presupFichaRefrescar(); }); }
+    }
+    // Sector «Presupuestos» de la cuenta corriente del proveedor: TODOS sus presupuestos. Es informativo: no entra en
+    // el Debe/Haber ni en el saldo (un presupuesto no es deuda; la deuda sale de las facturas y comprobantes, y lo que
+    // se les paga ya se refleja en el presupuesto como pago espejo).
+    function _ccPresupHTML(nombre) {
+        var fmtA = function(n) { return '$' + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var lista = [];
+        (datos || []).forEach(function(d, i) { if (d && d.proveedor === nombre) lista.push({ d: d, i: i, r: _presupResumen(d) }); });
+        lista.sort(function(a, b) { return String(b.d.fecha || '').localeCompare(String(a.d.fecha || '')); });
+        var h = '<div class="table-card" style="margin-bottom:14px;"><div class="table-card-head"><h3>📋 Presupuestos (' + lista.length + ')</h3>'
+            + '<span style="font-size:12px;color:var(--blue);font-weight:600;">👆 Tocá una fila para entrar al presupuesto: avance y pagos</span>'
+            + '<span style="font-size:12px;color:var(--text-3);">Informativo: no suma al saldo de la cuenta corriente</span></div>';
+        if (!lista.length) return h + '<div style="padding:22px;text-align:center;color:var(--text-3);">Este proveedor no tiene presupuestos cargados.</div></div>';
+        var guard = "if(event.target.closest('button,a,input,select,textarea'))return; ";
+        var tB = 0, tP = 0, tS = 0;
+        h += '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Presupuesto</th><th style="text-align:right;">Presupuestado</th><th style="text-align:right;">Pagado</th><th style="text-align:right;">Saldo</th><th>Avance</th><th>Estado</th><th style="text-align:right;">Acción</th></tr></thead><tbody>'
+            + lista.map(function(o) {
+                var r = o.r; tB += r.base; tP += r.pagado; tS += r.saldo;
+                var color = r.cerrado ? 'var(--success)' : 'var(--gold)';
+                var est = { 'Cerrado': 'badge-ok', 'Parcial': 'badge-warn', 'Sin pagos': 'badge-err' }[r.est];
+                return '<tr class="fila-abrible" style="cursor:pointer;" onclick="' + guard + 'abrirFichaPresupuesto(' + o.i + ')">'
+                    + '<td>' + (o.d.fecha ? formatearFecha(o.d.fecha) : '—') + '</td>'
+                    + '<td><strong>' + escHtml(o.d.concepto || '—') + '</strong>' + (o.d.rubro ? '<div style="font-size:11px;color:var(--text-3);">' + escHtml(o.d.rubro) + '</div>' : '') + '</td>'
+                    + '<td style="text-align:right;">' + fmtA(r.base) + '</td><td style="text-align:right;color:var(--success);">' + fmtA(r.pagado) + '</td><td style="text-align:right;font-weight:600;">' + fmtA(r.saldo) + '</td>'
+                    + '<td style="min-width:110px;"><div style="display:flex;align-items:center;gap:6px;"><div style="flex:1;height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;"><div style="height:100%;width:' + Math.min(100, r.pct) + '%;background:' + color + ';"></div></div><span style="font-size:11px;font-weight:600;">' + r.pct + '%</span></div></td>'
+                    + '<td><span class="badge-rol ' + est + '">' + r.est + '</span></td>'
+                    + '<td style="text-align:right;"><button class="btn btn-outline btn-sm" onclick="abrirFichaPresupuesto(' + o.i + ')" title="Ver el avance y los pagos">👁 Ver</button></td></tr>';
+            }).join('')
+            + '</tbody><tfoot><tr style="font-weight:700;"><td colspan="2">Total</td><td style="text-align:right;">' + fmtA(tB) + '</td><td style="text-align:right;color:var(--success);">' + fmtA(tP) + '</td><td style="text-align:right;">' + fmtA(tS) + '</td><td colspan="3"></td></tr></tfoot></table></div></div>';
+        return h;
+    }
+
     // ═══════════════ PESTAÑA CUENTA CORRIENTE (pantalla propia) ═══════════════
     // Misma info que la cuenta corriente de la ficha, pero como pantalla dedicada del
     // sidebar: selector de proveedor + comprobantes (a pagar/pagados) + extracto.
@@ -38135,6 +38522,7 @@
         (proveedores || []).forEach(function(p){ if (p && p.razonSocial) set[p.razonSocial] = 1; });
         (facturas || []).forEach(function(f){ if (f && f.proveedor) set[f.proveedor] = 1; });
         (documentos || []).forEach(function(d){ if (d && d.proveedor) set[d.proveedor] = 1; });
+        (datos || []).forEach(function(d){ if (d && d.proveedor) set[d.proveedor] = 1; });   // un proveedor con sólo presupuestos también
         _ccLista = Object.keys(set).sort(function(a,b){ return a.localeCompare(b, 'es'); });
         sel.innerHTML = '<option value="">Elegí un proveedor…</option>'
             + _ccLista.map(function(n,i){ return '<option value="' + i + '">' + escHtml(n) + '</option>'; }).join('');
@@ -38252,6 +38640,8 @@
             h += '</tbody></table></div>';
         }
         h += '</div>';
+        // Presupuestos del proveedor (informativo: no entra en el saldo)
+        h += _ccPresupHTML(nombre);
         // Extracto cronológico Debe / Haber
         h += '<div class="table-card"><div class="table-card-head"><h3>Extracto (movimientos)</h3></div>';
         if (!cc.movs.length) {
@@ -38328,6 +38718,15 @@
             + '<span class="k">Saldo neto: <b>' + fmtA(cc.saldoNeto) + '</b></span></div>'
             + '<table><thead><tr><th>Fecha</th><th>Movimiento</th><th style="text-align:right;">Debe</th><th style="text-align:right;">Haber</th><th style="text-align:right;">Saldo</th></tr></thead>'
             + '<tbody>' + filas + '</tbody></table>'
+            + (function(){
+                var pl = []; (datos || []).forEach(function(d){ if (d && d.proveedor === nombre) pl.push(d); });
+                if (!pl.length) return '';
+                var tb = 0, tp = 0, ts = 0;
+                var fp = pl.map(function(d){ var r = _presupResumen(d); tb += r.base; tp += r.pagado; ts += r.saldo;
+                    return '<tr><td>' + (d.fecha ? formatearFecha(d.fecha) : '—') + '</td><td>' + escHtml(d.concepto || '—') + '</td><td style="text-align:right;">' + fmtA(r.base) + '</td><td style="text-align:right;">' + fmtA(r.pagado) + '</td><td style="text-align:right;">' + fmtA(r.saldo) + '</td><td>' + r.pct + '% · ' + r.est + '</td></tr>'; }).join('');
+                return '<h2 style="margin:22px 0 6px;">Presupuestos (informativo: no suma al saldo)</h2><table><thead><tr><th>Fecha</th><th>Presupuesto</th><th style="text-align:right;">Presupuestado</th><th style="text-align:right;">Pagado</th><th style="text-align:right;">Saldo</th><th>Avance</th></tr></thead><tbody>' + fp
+                    + '<tr style="font-weight:700;"><td colspan="2">Total</td><td style="text-align:right;">' + fmtA(tb) + '</td><td style="text-align:right;">' + fmtA(tp) + '</td><td style="text-align:right;">' + fmtA(ts) + '</td><td></td></tr></tbody></table>';
+            })()
             + '<scr' + 'ipt>window.onload=function(){window.print();}</scr' + 'ipt></body></html>';
         if (typeof _imprimirDocHTML === 'function') _imprimirDocHTML(html);
     };
@@ -38575,6 +38974,8 @@
             + (cc.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(cc.creditos), 'var(--blue)') : '')
             + _ccKpiHTML('Saldo neto', fmtA(cc.saldoNeto), cc.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
             + '</div>';
+        // Presupuestos del proveedor: van aunque no tenga facturas (informativo, no entra en el saldo)
+        h += _ccPresupHTML(nombre);
         if (!cc.movs.length) {
             h += '<div style="padding:24px;text-align:center;color:var(--text-3);">Este proveedor no tiene facturas ni comprobantes cargados.</div>';
         } else {
@@ -38702,7 +39103,7 @@
             var c = calcPresupuesto(d);
             totalPresupuestado += c.base;
             totalAjustado += c.totalAjustado;
-            totalPagadoPresup += (d.pagado||0);
+            totalPagadoPresup += _presupPagadoPropio(d);   // sin los espejos: las facturas se suman aparte (si no, cuenta doble)
         });
         var totalFacturado = 0, totalPagadoFact = 0, totalPendienteFact = 0, totalNCSinFactura = 0;
         factsDelProv.forEach(function(f) {
@@ -38845,7 +39246,7 @@
             presusDelProv.forEach(function(d) {
                 var c = calcPresupuesto(d);
                 var pag = d.pagado||0;
-                var pct = c.totalAjustado > 0 ? Math.min(100, Math.round((pag / c.totalAjustado) * 100)) : (pag > 0 ? 100 : 0);
+                var pct = _presupResumen(d).pct; pct = Math.min(100, pct);   // sobre lo presupuestado, como la pantalla Presupuestos (antes: sobre el saldo ajustado, daba 100% con la mitad pagada)
                 var mod = d.modalidad === 'A' ? 'Banco' : d.modalidad === 'AB' ? 'Mixto' : 'Efectivo';
                 h += '<tr style="border-bottom:1px solid var(--border);">'
                     + '<td style="padding:8px 12px;">' + (d.fecha ? formatearFecha(d.fecha) : '—') + '</td>'
@@ -38859,7 +39260,7 @@
                     + '<div style="flex:1;max-width:60px;height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;">'
                     + '<div style="height:100%;width:' + pct + '%;background:' + (pct>=100?'var(--success)':pct>=50?'var(--warn)':'var(--danger)') + ';border-radius:3px;"></div></div>'
                     + '<span style="font-size:11px;font-weight:600;color:' + (pct>=100?'var(--success)':pct>=50?'var(--warn)':'var(--danger)') + ';">' + pct + '%</span></div></td>'
-                    + '<td style="padding:8px 12px;text-align:center;white-space:nowrap;">' + _btnEd('presupuesto', datos.indexOf(d)) + (puedeEd ? ' <button class="btn btn-gold btn-sm" style="padding:2px 9px;font-size:11px;" onclick="_fichaPagarPresup(' + datos.indexOf(d) + ')" title="Aplicar un pago a este presupuesto">💵 Pagar</button>' : '') + '</td>'
+                    + '<td style="padding:8px 12px;text-align:center;white-space:nowrap;"><button class="btn btn-outline btn-sm" style="padding:2px 9px;font-size:11px;" onclick="abrirFichaPresupuesto(' + datos.indexOf(d) + ')" title="Ver el avance y los pagos">👁 Ver</button> ' + _btnEd('presupuesto', datos.indexOf(d)) + (puedeEd ? ' <button class="btn btn-gold btn-sm" style="padding:2px 9px;font-size:11px;" onclick="_fichaPagarPresup(' + datos.indexOf(d) + ')" title="Aplicar un pago a este presupuesto">💵 Pagar</button>' : '') + '</td>'
                     + '</tr>';
             });
             h += '</tbody></table></div>';
@@ -44245,6 +44646,27 @@
   </div>
 </div>
 
+
+<!-- ═══════════════ MODAL: FICHA DE PRESUPUESTO ═══════════════ -->
+<div class="modal" id="modalFichaPresup">
+  <div class="modal-box" style="max-width:1120px;max-height:94vh;">
+    <div class="modal-head" style="background:var(--ink);color:#fff;margin:0;padding:18px 24px;border-radius:var(--radius-sm);">
+      <div style="display:flex;align-items:center;gap:14px;width:100%;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;">
+          <div style="font-size:10px;letter-spacing:.22em;text-transform:uppercase;font-family:monospace;color:rgba(255,255,255,.45);margin-bottom:3px;">Ficha de Presupuesto</div>
+          <h2 id="fichaPres_titulo" style="color:#fff;font-size:17px;font-weight:300;letter-spacing:.02em;"></h2>
+          <div id="fichaPres_sub" style="font-size:12px;color:rgba(255,255,255,.7);margin-top:3px;"></div>
+        </div>
+        <div id="fichaPres_btns" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"></div>
+        <button class="modal-close" onclick="cerrarFichaPresupuesto()" style="color:rgba(255,255,255,.6);">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;overflow-y:auto;max-height:calc(94vh - 90px);">
+      <div id="fichaPres_contenido"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════ MODAL: RESUMEN ALQUILERES ═══════════════ -->
 <div class="modal" id="modalResumenAlq">
   <div class="modal-box modal-box-wide" style="max-width:860px;max-height:94vh;">
@@ -46850,6 +47272,7 @@
       });
     }
     function etiquetarTodas(){ document.querySelectorAll('.table-wrap table').forEach(etiquetar); }
+    window._mbnEtiquetarTodas = etiquetarTodas;   // para modales que dibujan sus tablas fuera de un .table-wrap observado (ficha de presupuesto)
     var _deb;
     var obs = new MutationObserver(function(){ clearTimeout(_deb); _deb = setTimeout(etiquetarTodas, 60); });
     window.addEventListener('load', function(){
