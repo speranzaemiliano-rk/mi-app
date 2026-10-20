@@ -1736,8 +1736,9 @@ async function revisarAlquileres() {
 
                     const dia = Math.min(parseInt(a.diaPago) || 1, diasMes);
                     let vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
-                    // En el mes en que EMPIEZA el contrato la cuota no vence antes de que empiece (inicio el 20, día de pago 5 → vence el 20).
-                    if (a.inicio && String(a.inicio).substring(0, 7) === periodo) {
+                    // En el mes en que EMPIEZA un contrato con primer mes proporcional la cuota no vence antes de que empiece (inicio el 20, día de
+                    // pago 5 → vence el 20). Los contratos sin la marca siguen como siempre: no se les manda aviso por un mes que ya pasó.
+                    if (a.proporcionalInicio && a.inicio && String(a.inicio).substring(0, 7) === periodo) {
                         const ini = new Date(a.inicio + 'T00:00:00');
                         if (!isNaN(ini.getTime()) && ini > vence) vence = ini;
                     }
@@ -1762,7 +1763,7 @@ async function revisarAlquileres() {
                             'Te recordamos que la cuota de alquiler de la unidad "' + (a.unidad || '') + '"' +
                             (a.inquilino ? ' (' + a.inquilino + ')' : '') + '\n' +
                             'vence el día ' + vence.getDate() + ' de este mes (' + cuando + ').\n' +
-                            (monto ? 'Monto: ' + monSym + Math.round(monto) + (fr ? ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : '') + '\n' : '') +
+                            (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : Math.round(monto)) + '\n' : '') +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
                             '\n\n— ' + BRAND_NOMBRE;
