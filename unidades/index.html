@@ -115,6 +115,9 @@ tbody tr:hover td{background:var(--surface-2)}
 table.fijo{table-layout:fixed}
 table.fijo td,table.fijo th{overflow:hidden;text-overflow:ellipsis}
 th{position:sticky}
+.mon{cursor:pointer}
+.mon-sw{margin-left:4px;font-size:11px;opacity:.55;cursor:pointer;padding:0 3px;border-radius:5px}
+.mon-sw:hover{opacity:1;background:var(--gold-pale);color:var(--gold)}
 .rz{position:absolute;top:0;right:-3px;bottom:0;width:8px;cursor:col-resize;z-index:5;touch-action:none}
 .rz:hover,.rz.activo{background:var(--gold);opacity:.5}
 .lista-sel{max-height:46vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px}
@@ -516,6 +519,31 @@ function defCols(){
   });
 }
 function colVisible(k){ return !COLS.oc[k]; }
+/* ── Ver una columna de importes en dólares o en pesos (clic en la columna; se recuerda en este equipo) ── */
+// Cada columna de importes tiene una moneda «nativa» (USD para Valor USD, $ para Valor $, la del concepto para los conceptos) y
+// se puede mostrar en la otra al TC base (la de «Valor $ TC alt.» usa el TC alternativo). Sólo cambia lo que se VE (y lo que baja el Excel).
+var MON = {};
+try { MON = JSON.parse(localStorage.getItem('unid_mon') || '{}') || {}; } catch(x) {}
+function monNativa(k){
+  if (k === 'usd' || k === 'usdm2' || k === 'totu') return 'USD';
+  if (k === 'ars' || k === 'alt' || k === 'totp') return '$';
+  var b = k.replace(/^(cb|sd)_/, '');
+  return CONC.some(function(c){ return c[0] === b; }) ? monedaConc(b) : null;
+}
+function monVista(k){ var n = monNativa(k); return n && MON[k] ? MON[k] : n; }
+function convMon(k, v){
+  var n = monNativa(k), d = monVista(k); if (!n || n === d) return v;
+  var tc = k === 'alt' ? P.tc2 : P.tc; if (!tc) return v;
+  return n === 'USD' ? v * tc : v / tc;
+}
+function fm(k, v){ return N(convMon(k, v), monVista(k)); }
+function cambiarMon(k){
+  var n = monNativa(k); if (!n) return;
+  var nueva = monVista(k) === 'USD' ? '$' : 'USD';
+  if (nueva === n) delete MON[k]; else MON[k] = nueva;
+  try { localStorage.setItem('unid_mon', JSON.stringify(MON)); } catch(x) {}
+  render();
+}
 function celdaPlanilla(k, r, c, dis){
   switch (k) {
     case 'u': return '<td class="l sticky"><b>' + esc(r.u) + '</b></td>';
@@ -528,12 +556,12 @@ function celdaPlanilla(k, r, c, dis){
     case 'sc': return '<td>' + (r.sc ? r.sc.toFixed(2) : '') + '</td>';
     case 'ss': return '<td>' + (r.ss ? r.ss.toFixed(2) : '') + '</td>';
     case 'pc': return '<td>' + (TOTS ? (r.s / TOTS * 100).toFixed(2) : '0.00') + '%</td>';
-    case 'usd': return '<td>' + N(c.usd, 'USD') + '</td>';
-    case 'ars': return '<td>' + N(c.ars) + '</td>';
-    case 'alt': return '<td>' + (c.alt == null ? '—' : N(c.alt)) + '</td>';
-    case 'usdm2': return '<td>' + N(r.s ? c.tusd / r.s : 0, 'USD') + '</td>';
-    case 'totp': return '<td><b>' + N(c.totp) + '</b></td>';
-    case 'totu': return '<td><b>' + N(c.totu, 'USD') + '</b></td>';
+    case 'usd': return '<td>' + fm('usd', c.usd) + '</td>';
+    case 'ars': return '<td>' + fm('ars', c.ars) + '</td>';
+    case 'alt': return '<td>' + (c.alt == null ? '—' : fm('alt', c.alt)) + '</td>';
+    case 'usdm2': return '<td>' + fm('usdm2', r.s ? c.tusd / r.s : 0) + '</td>';
+    case 'totp': return '<td><b>' + fm('totp', c.totp) + '</b></td>';
+    case 'totu': return '<td><b>' + fm('totu', c.totu) + '</b></td>';
     case 'fp': return '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>';
     case 'hf': return '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>';
     case 'acc': return '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button>' + (puedeAdmin ? ' <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') : '') + '</td>';
@@ -542,7 +570,7 @@ function celdaPlanilla(k, r, c, dis){
         var e = estadoCobro(k.slice(3), r);
         return '<td class="l">' + (e ? '<span class="tag' + (e === 'Cobrado' ? ' ok' : e === 'Propio' ? '' : ' rk') + '">' + e + '</span>' : '') + '</td>';
       }
-      return '<td>' + N(c[k], monedaConc(k.replace(/^(cb|sd)_/, ''))) + '</td>';     // conceptos y cobros, cada uno en su moneda
+      return '<td>' + fm(k, c[k]) + '</td>';     // conceptos y cobros: cada uno en su moneda (o la que se haya elegido ver)
   }
 }
 function celdaTotal(k, T, n){
@@ -552,14 +580,14 @@ function celdaTotal(k, T, n){
     case 'sc': return '<td>' + (T.sc || 0).toFixed(2) + '</td>';
     case 'ss': return '<td>' + (T.ss || 0).toFixed(2) + '</td>';
     case 'tp': return '<td></td>';
-    case 'usd': return '<td>' + N(T.usd, 'USD') + '</td>';
-    case 'ars': return '<td>' + N(T.ars) + '</td>';
-    case 'alt': return '<td>' + (P.tc2 ? N(T.alt) : '—') + '</td>';
-    case 'usdm2': return '<td>' + N(T.s ? T.tusd / T.s : 0, 'USD') + '</td>';
-    case 'totp': return '<td>' + N(T.totp || 0) + '</td>';
-    case 'totu': return '<td>' + N(T.totu || 0, 'USD') + '</td>';
+    case 'usd': return '<td>' + fm('usd', T.usd) + '</td>';
+    case 'ars': return '<td>' + fm('ars', T.ars) + '</td>';
+    case 'alt': return '<td>' + (P.tc2 ? fm('alt', T.alt) : '—') + '</td>';
+    case 'usdm2': return '<td>' + fm('usdm2', T.s ? T.tusd / T.s : 0) + '</td>';
+    case 'totp': return '<td>' + fm('totp', T.totp || 0) + '</td>';
+    case 'totu': return '<td>' + fm('totu', T.totu || 0) + '</td>';
     case 'p': case 'i': case 't': case 'm': case 'pc': case 'fp': case 'hf': case 'acc': return '<td></td>';
-    default: return k.indexOf('es_') === 0 ? '<td></td>' : '<td>' + N(T[k] || 0, monedaConc(k.replace(/^(cb|sd)_/, ''))) + '</td>';
+    default: return k.indexOf('es_') === 0 ? '<td></td>' : '<td>' + fm(k, T[k] || 0) + '</td>';
   }
 }
 function render(){
@@ -571,7 +599,8 @@ function render(){
   $('tbl').style.width = tw + 'px';
   $('cg').innerHTML = cols.map(function(c){ return '<col data-k="' + c.k + '" style="width:' + anchoCol(c.k) + 'px">'; }).join('');
   $('th').innerHTML = '<tr>' + cols.map(function(c){
-    return '<th class="' + c.cls + '" data-k="' + c.k + '" title="' + esc(c.t) + '">' + esc(c.t) + (S.k === c.k || (S.k === 's' && c.k === 'pc') ? (S.d > 0 ? ' ▲' : ' ▼') : '') +
+    var nat = monNativa(c.k), vista = monVista(c.k), tit = c.t + (nat && vista !== nat ? ' (en ' + vista + ')' : '');
+    return '<th class="' + c.cls + '" data-k="' + c.k + '" title="' + esc(tit) + '">' + esc(tit) + (nat ? ' <span class="mon-sw" title="Ver en ' + (vista === 'USD' ? 'pesos' : 'dólares') + '">⇄</span>' : '') + (S.k === c.k || (S.k === 's' && c.k === 'pc') ? (S.d > 0 ? ' ▲' : ' ▼') : '') +
       (c.k === 'acc' ? '' : '<span class="rz" data-k="' + c.k + '" title="Arrastrá para cambiar el ancho"></span>') + '</th>'; }).join('') + '</tr>';
   var list = a;
   if (S.g) {
@@ -591,7 +620,10 @@ function render(){
   var dis = puedeEditar ? '' : ' disabled';
   $('tb').innerHTML = list.map(function(r){
     var c = r.c; T.s += r.s; sumKeys().forEach(function(z){ T[z] = (T[z] || 0) + c[z]; }); if (c.alt != null) T.alt += c.alt;
-    return '<tr>' + cols.map(function(col){ return celdaPlanilla(col.k, r, c, dis); }).join('') + '</tr>';
+    return '<tr>' + cols.map(function(col){
+      var h = celdaPlanilla(col.k, r, c, dis);
+      return monNativa(col.k) && h.indexOf('<td>') === 0 ? '<td class="mon" data-mk="' + col.k + '" title="Clic para ver esta columna en ' + (monVista(col.k) === 'USD' ? 'pesos' : 'dólares') + '">' + h.slice(4) : h;
+    }).join('') + '</tr>';
   }).join('');
   $('tf').innerHTML = '<tr>' + cols.map(function(col){ return celdaTotal(col.k, T, list.length); }).join('') + '</tr>';
   // botones de filtro
@@ -680,6 +712,7 @@ $('params').addEventListener('change', function(e){
 });
 $('th').addEventListener('click', function(e){
   if (e.target.classList.contains('rz')) return;
+  if (e.target.classList.contains('mon-sw')) { cambiarMon(e.target.closest('th').dataset.k); return; }
   var t = e.target.closest('th'); if (!t) return;
   var k = t.dataset.k; if (k === 'pc') k = 's';
   if (['fp','hf','t','m','i','acc'].indexOf(k) >= 0 || !k) return;
@@ -691,6 +724,10 @@ function guardarCampo(e){
     .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
 }
 $('tb').addEventListener('change', guardarCampo);
+$('tb').addEventListener('click', function(e){
+  var td = e.target.closest('td.mon'); if (!td || (window.getSelection && String(window.getSelection()).length)) return;   // si se está seleccionando texto no se cambia
+  cambiarMon(td.dataset.mk);
+});
 $('ptb').addEventListener('change', guardarCampo);
 [].forEach.call(document.querySelectorAll('.nav-item[data-v]'), function(b){ b.onclick = function(){ setVista(b.dataset.v); }; });
 $('hamb').onclick = function(){ document.body.classList.toggle('menu-abierto'); };
@@ -843,6 +880,11 @@ function bajarExcel(){
   C.push(['fp','Fecha de posesión',15,'dd/mm/yyyy','center',4], ['hf','Hora de firma',11,'@','center',4]);
   // lo que se ocultó en pantalla tampoco se baja
   C = C.filter(function(c){ return c[0] === 'u' || colVisible(c[0]); });
+  // las columnas que se están viendo en la otra moneda se bajan así (título y formato incluidos)
+  C = C.map(function(c){
+    var k = c[0], n = monNativa(k), d = monVista(k); if (!n || n === d) return c;
+    c = c.slice(); c[1] = c[1] + ' (en ' + d + ')'; c[3] = d === 'USD' ? '"USD" #,##0.00' : '"$" #,##0.00'; return c;
+  });
   var n = C.length, GR = {1:['DATOS DE LA UNIDAD', XL.g1], 2:['VALUACIÓN', XL.g2], 3:['CONCEPTOS', XL.g3], 4:['POSESIÓN Y FIRMA', XL.g4]};
 
   var wb = new ExcelJS.Workbook(); wb.creator = 'Mess'; wb.created = new Date();
@@ -871,6 +913,7 @@ function bajarExcel(){
       else if (key === 'i') v = pd ? r.i : nombreInq(r.i);
       else if (key === 'tp') v = r.tp; else if (key === 's') v = r.s; else if (key === 'pc') v = TOTS ? r.s / TOTS : 0;
       else if (key === 'fp') v = xlFecha(r.fp); else if (key === 'hf') v = r.hf; else v = c[key];
+      if (monNativa(key) && typeof v === 'number') v = convMon(key, v);
       var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
       cell.numFmt = col[3]; cell.alignment = {horizontal:col[4], vertical:'middle', wrapText:false};
       cell.font = {name:'Calibri', size:10, bold:key === 'u' || key === 'totp' || key === 'totu', color:{argb:XL.ink}};
@@ -886,8 +929,8 @@ function bajarExcel(){
   C.forEach(function(col, j){
     var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
     if (j === 0) cell.value = 'TOTAL';
-    else if (sumas[key] !== undefined) cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:sumas[key]};
-    else if (key === 'usdm2') cell.value = sumas.s ? sumas.tusd / sumas.s : 0;
+    else if (sumas[key] !== undefined) cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:convMon(key, sumas[key])};
+    else if (key === 'usdm2') cell.value = convMon('usdm2', sumas.s ? sumas.tusd / sumas.s : 0);
     else if (key === 'pc') cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:TOTS ? sumas.s / TOTS : 0};
     cell.numFmt = col[3]; cell.alignment = {horizontal:j === 0 ? 'center' : col[4], vertical:'middle'};
     cell.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
@@ -1328,7 +1371,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v15';
+var UNID_VER = 'unidades-v16';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
