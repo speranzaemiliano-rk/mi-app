@@ -114,7 +114,7 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 ## Unidades y valuación (`unidades/`) — aparte de la app
 
-`unidades/index.html` es una **tabla de las unidades de cada edificio** (propietario, inquilino, m²) con valor por m² en USD y en pesos (TC base y TC alternativo), seis conceptos prorrateados por m² (retención de Ganancias, Ingresos Brutos, fondo de administración, reserva, fondo de alhajamiento, recupero de Bienes Personales), fecha de posesión, hora de firma, agrupado por propietario y copia de mails. Mismo proyecto de Firebase que el sistema (`modo-prueba-bb8c2`), datos en `global/edificios/<edId>` y alta por **Importar Excel**. ⚠️ Los teléfonos y mails de los propietarios **no van al repo** (se publica en GitHub Pages). Ver `unidades/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta) para el modelo de datos y las trampas conocidas.
+`unidades/index.html` es una **tabla de las unidades de cada edificio** (propietario, inquilino, m²) con valor por m² en USD y en pesos (TC base y TC alternativo), siete conceptos prorrateados por m² (retención de Ganancias, Ingresos Brutos, fondo de administración, reserva, fondo de alhajamiento, recupero de Bienes Personales, recupero CDI Edenor), fecha de posesión, hora de firma, agrupado por propietario y copia de mails. Mismo proyecto de Firebase que el sistema (`modo-prueba-bb8c2`), datos en `global/edificios/<edId>` y alta por **Importar Excel**. ⚠️ Los teléfonos y mails de los propietarios **no van al repo** (se publica en GitHub Pages). Ver `unidades/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta) para el modelo de datos y las trampas conocidas.
 
 ## Despliegue
 

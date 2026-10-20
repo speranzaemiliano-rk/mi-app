@@ -4,7 +4,7 @@ Contexto técnico de este módulo. Para el resto del sistema ver el `CLAUDE.md` 
 
 ## Qué es
 
-`unidades/index.html` es una **tabla de las unidades de cada edificio** (propietario, inquilino, m²) con la valuación por m², seis conceptos prorrateados, fecha de posesión y hora de firma. Un solo archivo HTML, JavaScript vanilla sin build, español (Argentina). Se llega desde «¿A dónde entrás?» (`MODULOS.unidades` en el `index.html` de la raíz, y en la lista `todos` de `_modulosDeUsuario`).
+`unidades/index.html` es una **tabla de las unidades de cada edificio** (propietario, inquilino, m²) con la valuación por m², siete conceptos prorrateados, fecha de posesión y hora de firma. Un solo archivo HTML, JavaScript vanilla sin build, español (Argentina). Se llega desde «¿A dónde entrás?» (`MODULOS.unidades` en el `index.html` de la raíz, y en la lista `todos` de `_modulosDeUsuario`).
 
 Nació de la planilla `KASA Núñez I` (Congreso 1698 / KASA I): se importa ese Excel y de ahí se sigue editando en pantalla.
 
@@ -12,7 +12,7 @@ Nació de la planilla `KASA Núñez I` (Congreso 1698 / KASA I): se importa ese 
 
 El módulo **no vive dentro del `index.html` del Sistema**, pero se ve como él: menú lateral (`.sidebar`, `.nav-item`, marca «Mess»), mismas variables de color (`--gold`, `--card`, `--sidebar-bg`…) copiadas de la raíz, y **el mismo tema** (claro / medio / oscuro): el módulo lee `localStorage rk_tema` y `rk_tema_css`, que comparten origen con el Sistema, así que si se cambia el tema allá, acá sale igual. Si se cambia la paleta del sistema, hay que copiarla acá a mano (son dos copias).
 
-Tres pantallas en el menú (`VISTAS`/`setVista`, la última queda en `localStorage unid_vista`): **Planilla** (tabla completa), **Valuación y conceptos** (valor por m², TC y los seis conceptos, con resumen del total del edificio) y **Posesión y firma** (fecha y hora de cada unidad). Importar Excel y Eliminar edificio están en el menú, bajo «Datos». En pantallas angostas el menú se esconde y se abre con ☰.
+Tres pantallas en el menú (`VISTAS`/`setVista`, la última queda en `localStorage unid_vista`): **Planilla** (tabla completa), **Valuación y conceptos** (valor por m², TC y los siete conceptos, con resumen del total del edificio) y **Posesión y firma** (fecha y hora de cada unidad). Importar Excel y Eliminar edificio están en el menú, bajo «Datos». En pantallas angostas el menú se esconde y se abre con ☰.
 
 ⚠️ La tabla de **Posesión y firma** se ordena **siempre con el orden de la planilla** (`o`), no por fecha: si se ordenara por fecha, la fila saltaría de lugar apenas se carga la fecha y no se podría cargar la hora de esa misma unidad.
 
