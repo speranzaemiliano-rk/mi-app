@@ -67,6 +67,7 @@ global/edificios/<edId>/unidades/<clave> = { n, o, p, rk, i, t, m:[], im:[], s, 
 - **Importar actualiza, no reemplaza.** Si el `slug` del nombre ya existe se actualiza **unidad por unidad con `update()` multi-path**, sin tocar `fp`/`hf` ni los parámetros, y no borra unidades que ya no estén en el archivo. Las listas vacías (`m`, `im`) se escriben como `null`.
 - Los m² de la planilla original son fórmulas con vínculo externo; SheetJS lee el **valor guardado**. Si una celda no trae número se importa como 0 y se avisa.
 - Todo lo que viene de la planilla o de la base entra a `innerHTML` por `esc()` (incluidos los atributos).
+- **Aviso de versión nueva**: `chequearVersion()` compara `UNID_VER` (en `index.html`) con el `CACHE` de `sw.js` y muestra «🔄 Hay una versión nueva» con botón Actualizar. ⚠️ **Al cambiar el módulo hay que subir las dos** (`UNID_VER` y `CACHE`), si no el aviso no salta (o salta de más). Existe porque la ventana instalada quedaba días con una versión vieja y el dueño no veía botones nuevos.
 - El módulo tiene su propio `sw.js` (`unidades-vN`, scope `/mi-app/unidades/`), independiente del `rk-vN` del Sistema.
 
 ## Probar sin Firebase
