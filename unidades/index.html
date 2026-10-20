@@ -179,6 +179,8 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <div class="nav-label">Datos</div>
       <button class="nav-item" id="btnNuevoEd"><span class="nav-icon">add_business</span>Nuevo edificio</button>
       <button class="nav-item" id="btnImp"><span class="nav-icon">upload_file</span>Importar Excel</button>
+      <button class="nav-item" id="btnCV"><span class="nav-icon">playlist_add</span>Importes por unidad</button>
+      <input type="file" id="fileCV" accept=".xlsx,.xls,.csv" class="hid">
       <button class="nav-item" id="btnXls0"><span class="nav-icon">download</span>Bajar a Excel</button>
       <button class="nav-item" id="btnDel"><span class="nav-icon">delete</span>Eliminar edificio</button>
       <input type="file" id="fileImp" accept=".xlsx,.xls,.csv" class="hid">
@@ -306,7 +308,7 @@ function normParams(p){
   CONC.forEach(function(c){
     var k = c[0];
     d.pct[k] = +((p.pct || {})[k]) || 0;
-    var mo = (p.modo || {})[k]; d.modo[k] = (mo === 'monto' || mo === 'montousd') ? mo : 'pct';
+    var mo = (p.modo || {})[k]; d.modo[k] = (mo === 'monto' || mo === 'montousd' || mo === 'unidad' || mo === 'unidadusd') ? mo : 'pct';
   });
   return d;
 }
@@ -336,12 +338,12 @@ function normParams(p){
       puedeEditar = puedeAdmin || rol === 'posesiones';
       if (!puedeAdmin) { $('vacioTxt').textContent = 'Todavía no hay edificios cargados. Pedile a un administrador que cargue la planilla.'; ['btnImp2','btnNuevoEd2'].forEach(function(id){ $(id).classList.add('hid'); }); }
       if (rol === 'posesiones') {   // sólo este módulo: no hay otro adónde volver, y menos opciones en el menú
-        ['btnNuevoEd','btnImp','btnDel'].forEach(function(id){ $(id).classList.add('hid'); });
+        ['btnNuevoEd','btnImp','btnCV','btnDel'].forEach(function(id){ $(id).classList.add('hid'); });
         var v = $('volver'); v.textContent = 'Cerrar sesión'; v.removeAttribute('href'); v.style.cursor = 'pointer';
         v.onclick = function(){ auth.signOut().then(function(){ location.href = './'; }); };
       }
       $('quienMail').textContent = mail; $('quienRol').textContent = rol;
-      $('btnImp').disabled = !puedeAdmin; $('btnDel').disabled = !puedeAdmin; $('btnImp2').disabled = !puedeAdmin; $('btnNuevoEd').disabled = !puedeAdmin; $('btnNuevoEd2').disabled = !puedeAdmin; $('btnNuevaU').disabled = !puedeEditar;
+      $('btnImp').disabled = !puedeAdmin; $('btnCV').disabled = !puedeAdmin; $('btnDel').disabled = !puedeAdmin; $('btnImp2').disabled = !puedeAdmin; $('btnNuevoEd').disabled = !puedeAdmin; $('btnNuevoEd2').disabled = !puedeAdmin; $('btnNuevaU').disabled = !puedeEditar;
       escucharEdificios();
     }).catch(function(){
       bloquear('No se pudo leer tu permiso', 'Probá de nuevo en un rato.', '<a class="btn" href="../">← Volver</a>');
@@ -380,7 +382,7 @@ function cargarEdificio(){
   var us = e.unidades || {};
   U = Object.keys(us).map(function(k){ var u = us[k]; return {
     k:k, u:String(u.n == null ? k : u.n), o:+u.o || 0, p:u.p || '', rk:!!u.rk, i:u.i || '', t:u.t || '',
-    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '' }; });
+    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {} }; });
   TOTS = U.reduce(function(s, r){ return s + r.s; }, 0);
   if (!enfocado) renderParams();
   render();
@@ -389,18 +391,27 @@ function cargarEdificio(){
 /* ── Cálculo ───────────────────────────────────────────────────────── */
 // Cada concepto se carga de una de tres formas: % del valor total del edificio, monto fijo en pesos, o monto fijo en dólares
 // (que se pasa a pesos al TC base). Siempre devuelve el total del edificio en PESOS.
+// 'unidad' / 'unidadusd': el importe NO se reparte, está cargado unidad por unidad (r.cv[concepto]), en $ o en USD.
+function esModoUnidad(m){ return m === 'unidad' || m === 'unidadusd'; }
+function sumaCV(k){ return U.reduce(function(s, r){ return s + (+r.cv[k] || 0); }, 0); }      // en la moneda cargada
 function totConcepto(k){
   var m = P.modo[k];
+  if (m === 'unidad') return sumaCV(k);
+  if (m === 'unidadusd') return sumaCV(k) * P.tc;
   if (m === 'monto') return P.pct[k];
   if (m === 'montousd') return P.pct[k] * P.tc;
   return TOTS * P.usd * P.tc * P.pct[k] / 100;
 }
-function modoTexto(k){ var m = P.modo[k]; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
-function valorCargadoTexto(k){ var m = P.modo[k]; return m === 'monto' ? N(P.pct[k]) : m === 'montousd' ? N(P.pct[k], 'USD') : P.pct[k] + ' %'; }
-function totalConceptoTexto(k){ return 'Total edificio: ' + N(totConcepto(k)) + (P.modo[k] === 'montousd' ? ' (TC ' + P.tc + ')' : ''); }
+function modoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return 'Importe por unidad ($)'; if (m === 'unidadusd') return 'Importe por unidad (USD)'; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
+function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return N(sumaCV(k)); if (m === 'unidadusd') return N(sumaCV(k), 'USD'); return m === 'monto' ? N(P.pct[k]) : m === 'montousd' ? N(P.pct[k], 'USD') : P.pct[k] + ' %'; }
+function totalConceptoTexto(k){ return 'Total edificio: ' + N(totConcepto(k)) + (P.modo[k] === 'montousd' || P.modo[k] === 'unidadusd' ? ' (TC ' + P.tc + ')' : ''); }
 function calc(r){
   var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0};
-  CONC.forEach(function(c){ o[c[0]] = TOTS ? totConcepto(c[0]) * r.s / TOTS : 0; o.tot += o[c[0]]; });
+  CONC.forEach(function(c){
+    var k = c[0], m = P.modo[k];
+    o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) * (m === 'unidadusd' ? P.tc : 1) : (TOTS ? totConcepto(k) * r.s / TOTS : 0);
+    o.tot += o[k];
+  });
   // Total en USD = valor de la unidad + sus conceptos pasados a dólares al TC base; USD por m² = ese total / m².
   o.tusd = usd + (P.tc ? o.tot / P.tc : 0); o.usdm2 = r.s ? o.tusd / r.s : 0;
   return o;
@@ -419,13 +430,18 @@ function renderParams(){
   var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
   var h = '<h3>Valuación</h3>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) +
-    '<h3>Conceptos del edificio — se reparten según los m² de cada unidad</h3>';
+    '<h3>Conceptos del edificio — se reparten según los m² de cada unidad (salvo «por unidad»)</h3>';
   CONC.forEach(function(c){
     var k = c[0];
-    h += '<label class="f">' + c[1] + '<span class="dual"><input type="number" step="any" data-k="p_' + k + '" value="' + P.pct[k] + '"' + d + '>' +
+    var um = esModoUnidad(P.modo[k]);
+    h += '<label class="f">' + c[1] + '<span class="dual">' + (um
+      ? '<input type="text" readonly value="' + esc(valorCargadoTexto(k)) + '" title="Cargado unidad por unidad: usá «Importes por unidad» del menú o editá cada unidad">'
+      : '<input type="number" step="any" data-k="p_' + k + '" value="' + P.pct[k] + '"' + d + '>') +
       '<select data-m="' + k + '"' + d + '><option value="pct"' + (P.modo[k] === 'pct' ? ' selected' : '') + '>% valor</option>' +
       '<option value="monto"' + (P.modo[k] === 'monto' ? ' selected' : '') + '>$ total</option>' +
-      '<option value="montousd"' + (P.modo[k] === 'montousd' ? ' selected' : '') + '>USD total</option></select></span>' +
+      '<option value="montousd"' + (P.modo[k] === 'montousd' ? ' selected' : '') + '>USD total</option>' +
+      '<option value="unidad"' + (P.modo[k] === 'unidad' ? ' selected' : '') + '>$ por unidad</option>' +
+      '<option value="unidadusd"' + (P.modo[k] === 'unidadusd' ? ' selected' : '') + '>USD por unidad</option></select></span>' +
       '<small>' + totalConceptoTexto(k) + '</small></label>';
   });
   $('params').innerHTML = h;
@@ -836,10 +852,10 @@ function bajarExcel(){
   wv.getRow(h0).height = 22;
   CONC.forEach(function(c, k){
     var r = h0 + 1 + k, kk = c[0], md = P.modo[kk];
-    var cs = [c[1], modoTexto(kk), P.pct[kk], totConcepto(kk)];
+    var cs = [c[1], modoTexto(kk), esModoUnidad(md) ? sumaCV(kk) : P.pct[kk], totConcepto(kk)];
     cs.forEach(function(v, j){
       var cell = wv.getCell(r, j + 1); cell.value = v; cell.font = {name:'Calibri', size:10.5, color:{argb:XL.ink}};
-      cell.numFmt = j === 2 ? (md === 'monto' ? '"$" #,##0.00' : md === 'montousd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
+      cell.numFmt = j === 2 ? (md === 'monto' || md === 'unidad' ? '"$" #,##0.00' : md === 'montousd' || md === 'unidadusd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
       cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
       if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}}; xlBorde(cell);
     });
@@ -897,7 +913,11 @@ function formUnidad(r){
     '<label class="chk full"><input type="checkbox" id="fu_rk"' + (r.rk ? ' checked' : '') + '> Es de RK (los mails de la planilla son los de la administración)</label>' +
     '<label class="f">Teléfono<input id="fu_t" value="' + esc(r.t) + '"></label>' +
     '<label class="f">Mail(s) del propietario<input id="fu_m" value="' + esc(r.m.join('; ')) + '" placeholder="uno@mail.com; otro@mail.com"></label>' +
-    '<label class="f full">Inquilino/a (nombre, teléfono, mail)<input id="fu_i" value="' + esc(r.i) + '"></label></div>' +
+    '<label class="f full">Inquilino/a (nombre, teléfono, mail)<input id="fu_i" value="' + esc(r.i) + '"></label>' +
+    CONC.filter(function(c){ return esModoUnidad(P.modo[c[0]]); }).map(function(c){
+      var cv = (r.cv || {})[c[0]];
+      return '<label class="f full">' + esc(c[1]) + ' de esta unidad (' + (P.modo[c[0]] === 'unidadusd' ? 'USD' : '$') + ')<input id="fu_cv_' + c[0] + '" type="number" step="any" value="' + (cv == null ? '' : esc(cv)) + '"></label>';
+    }).join('') + '</div>' +
     '<div class="modal-pie"><button class="btn" id="fu_x">Cancelar</button><button class="btn pri" id="fu_ok">Guardar</button></div>');
   $('fu_x').onclick = cerrarModal;
   // Si se le pone a una unidad de RK el nombre de otra persona, ya no es de RK: se destilda sola
@@ -917,6 +937,7 @@ function guardarUnidad(r, nueva){
   var base = 'global/edificios/' + edId + '/unidades/' + k + '/', upd = {};
   upd[base + 'n'] = n; upd[base + 'o'] = o; upd[base + 'p'] = p || (rk ? 'RK' : ''); upd[base + 'rk'] = rk;
   upd[base + 'i'] = i; upd[base + 't'] = $('fu_t').value.trim(); upd[base + 's'] = Math.round(s * 10000) / 10000;
+  CONC.forEach(function(c){ if (!esModoUnidad(P.modo[c[0]])) return; var e = $('fu_cv_' + c[0]), v = e ? parseFloat(e.value) : NaN; upd[base + 'cv/' + c[0]] = isNaN(v) ? null : Math.round(v * 10000) / 10000; });
   upd[base + 'm'] = mails.length ? mails : null; var im = mailsDe(i); upd[base + 'im'] = im.length ? im : null;
   db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Unidad guardada'); })
     .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
@@ -944,6 +965,69 @@ function nuevoEdificio(){
     .catch(function(){ toast('⚠️ No se pudo crear (¿permiso?)'); });
 }
 $('btnNuevoEd').onclick = nuevoEdificio; $('btnNuevoEd2').onclick = nuevoEdificio;
+
+/* ── Importes por unidad desde un Excel (p. ej. el fondo de alhajamiento) ── */
+// Lee un Excel con una columna «Unidad» y una o más columnas de importes, y deja el importe de cada unidad
+// en un concepto (unidades/<k>/cv/<concepto>), poniendo ese concepto en modo «por unidad» ($ o USD).
+// Lo que está en la base y no figura en el archivo (o figura vacío / «-») queda sin importe: el archivo manda.
+var CONC_PISTAS = {alh:['alha','alhaj'], gan:['gananc'], iibb:['ingresosbrutos','iibb'], adm:['administr'], res:['reserva'], rec:['recupero','personales']};
+function conceptoDeTexto(t){ var h = normH(t); for (var k in CONC_PISTAS) if (CONC_PISTAS[k].some(function(p){ return h.indexOf(p) >= 0; })) return k; return ''; }
+$('btnCV').onclick = function(){ if (puedeAdmin && edId) $('fileCV').click(); };
+$('fileCV').onchange = function(){
+  var f = this.files[0]; this.value = ''; if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function(ev){ try { abrirImporteUnidades(XLSX.read(ev.target.result, {type:'array'}), f.name); } catch (e) { toast('⚠️ No se pudo leer el archivo: ' + (e.message || e)); } };
+  rd.readAsArrayBuffer(f);
+};
+function abrirImporteUnidades(wb, nombreArch){
+  var ws = wb.Sheets[wb.SheetNames[0]];
+  var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true}), hi = -1, cu = -1;
+  for (var i = 0; i < rows.length && hi < 0; i++) (rows[i] || []).forEach(function(c, j){ if (hi < 0 && normH(c) === 'unidad') { hi = i; cu = j; } });
+  if (hi < 0) { toast('⚠️ No encontré la columna «Unidad» en el archivo.'); return; }
+  var datos = rows.slice(hi + 1).filter(function(x){ return x && x[cu] != null && String(x[cu]).trim() !== ''; });
+  var cols = [];
+  (rows[hi] || []).forEach(function(h, j){
+    if (j === cu || h == null || String(h).trim() === '') return;
+    var n = datos.filter(function(x){ return typeof x[j] === 'number' && isFinite(x[j]); }).length;
+    if (n) cols.push({j:j, t:String(h).trim().replace(/\s+/g, ' '), n:n});
+  });
+  if (!cols.length) { toast('⚠️ No encontré columnas con importes.'); return; }
+  // Columna sugerida: la que nombra un concepto; si no, la primera cuyo título dice «valor»; si no, la última.
+  var def = cols.filter(function(c){ return conceptoDeTexto(c.t); })[0] || cols.filter(function(c){ return /valor/i.test(c.t); })[0] || cols[cols.length - 1];
+  var keys = {}; U.forEach(function(r){ keys[r.k] = r; });
+  abrirModal('<h2>Importes por unidad</h2><p class="sm" style="margin:0 0 10px">Archivo: ' + esc(nombreArch) + ' · ' + datos.length + ' unidades en el archivo</p>' +
+    '<div class="form-grid"><label class="f full">Columna con los importes<select id="ci_col">' + cols.map(function(c){ return '<option value="' + c.j + '"' + (c === def ? ' selected' : '') + '>' + esc(c.t) + ' (' + c.n + ' importes)</option>'; }).join('') + '</select></label>' +
+    '<label class="f">Concepto<select id="ci_conc">' + CONC.map(function(c){ return '<option value="' + c[0] + '">' + esc(c[1]) + '</option>'; }).join('') + '</select></label>' +
+    '<label class="f">Los importes están en<select id="ci_mon"><option value="usd">Dólares (USD)</option><option value="ars">Pesos ($)</option></select></label></div>' +
+    '<div class="card" id="ci_prev" style="margin-top:12px;font-size:13px"></div>' +
+    '<div class="modal-pie"><button class="btn" id="ci_x">Cancelar</button><button class="btn pri" id="ci_ok">Cargar importes</button></div>');
+  $('ci_conc').value = conceptoDeTexto(def.t) || 'alh';
+  var tabla;
+  function previa(){
+    var j = +$('ci_col').value; tabla = {}; var noEsta = [], tot = 0, n = 0;
+    datos.forEach(function(x){
+      var k = claveUnidad(x[cu]), v = x[j];
+      if (!keys[k]) { noEsta.push(String(x[cu]).trim()); return; }
+      if (typeof v === 'number' && isFinite(v) && v !== 0) { tabla[k] = Math.round(v * 10000) / 10000; tot += v; n++; }
+    });
+    var sin = U.filter(function(r){ return tabla[r.k] == null; }).map(function(r){ return r.u; });
+    var mon = $('ci_mon').value === 'usd' ? 'USD' : '$';
+    $('ci_prev').innerHTML = '<b>' + n + '</b> unidades con importe · total <b>' + N(tot, mon) + '</b>' +
+      (sin.length ? '<br><span class="sm">Quedan sin importe (' + sin.length + '): ' + esc(sin.slice(0, 14).join(', ')) + (sin.length > 14 ? '…' : '') + '</span>' : '') +
+      (noEsta.length ? '<br><span class="sm" style="color:var(--warn)">En el archivo y no en el edificio (' + noEsta.length + '): ' + esc(noEsta.slice(0, 14).join(', ')) + '</span>' : '');
+  }
+  $('ci_col').onchange = function(){ var c = cols.filter(function(x){ return String(x.j) === $('ci_col').value; })[0]; var k = conceptoDeTexto(c.t); if (k) $('ci_conc').value = k; previa(); };
+  $('ci_mon').onchange = previa; previa();
+  $('ci_x').onclick = cerrarModal;
+  $('ci_ok').onclick = function(){
+    var k = $('ci_conc').value, base = 'global/edificios/' + edId + '/', upd = {};
+    if (!Object.keys(tabla).length) { toast('No hay importes para cargar'); return; }
+    U.forEach(function(r){ upd[base + 'unidades/' + r.k + '/cv/' + k] = tabla[r.k] == null ? null : tabla[r.k]; });
+    upd[base + 'params/modo/' + k] = $('ci_mon').value === 'usd' ? 'unidadusd' : 'unidad';
+    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes cargados: ' + Object.keys(tabla).length + ' unidades'); })
+      .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+  };
+}
 
 /* ── Importar Excel ────────────────────────────────────────────────── */
 // Lee la planilla (Unidad · Propietario · Teléfono · Mail · Inquilino · m²) y
