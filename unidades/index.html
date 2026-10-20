@@ -240,6 +240,9 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 
       <!-- VALUACIÓN Y CONCEPTOS -->
       <section class="vista" id="v_valuacion">
+        <div class="bar" id="vmBar"><span class="sm">Ver los importes en:</span>
+          <button class="btn on" data-vm="nat">Como se cargaron</button><button class="btn" data-vm="USD">Dólares (USD)</button><button class="btn" data-vm="$">Pesos ($)</button>
+          <span class="sm" id="vmTc"></span></div>
         <div class="kpis" id="kpis2"></div>
         <div class="card params" id="params"></div>
         <div class="tw"><table><thead><tr><th class="l">Concepto</th><th class="l">Se carga como</th><th>Valor cargado</th><th>Total del edificio</th></tr></thead><tbody id="resBody"></tbody></table></div>
@@ -426,9 +429,16 @@ function totNativo(k){                         // total del edificio en la moned
   return TOTS * P.usd * P.tc * P.pct[k] / 100;
 }
 function totConcepto(k){ return totNativo(k) * (monedaConc(k) === 'USD' ? P.tc : 1); }   // equivalente en pesos (sólo para USD por m²)
+/* ── Pantalla «Valuación y conceptos»: ver todos los importes en dólares, en pesos o como se cargaron ── */
+var VMON = 'nat';
+try { VMON = localStorage.getItem('unid_vmon') || 'nat'; } catch(x) {}
+function Nv(v, nat){                     // formatea un importe cargado en `nat` ('USD' | '$') según el botón de la pantalla
+  var m = VMON === 'nat' ? nat : VMON, x = m === nat ? v : (nat === 'USD' ? v * P.tc : (P.tc ? v / P.tc : v));
+  return N(x, m);
+}
 function modoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return 'Importe por unidad ($)'; if (m === 'unidadusd') return 'Importe por unidad (USD)'; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
-function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return N(sumaCV(k)); if (m === 'unidadusd') return N(sumaCV(k), 'USD'); return m === 'monto' ? N(P.pct[k]) : m === 'montousd' ? N(P.pct[k], 'USD') : P.pct[k] + ' %'; }
-function totalConceptoTexto(k){ return 'Total edificio: ' + N(totNativo(k), monedaConc(k)); }
+function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return Nv(sumaCV(k), '$'); if (m === 'unidadusd') return Nv(sumaCV(k), 'USD'); return m === 'monto' ? Nv(P.pct[k], '$') : m === 'montousd' ? Nv(P.pct[k], 'USD') : P.pct[k] + ' %'; }
+function totalConceptoTexto(k){ return 'Total edificio: ' + Nv(totNativo(k), monedaConc(k)); }
 function calc(r){
   var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
   CONC.forEach(function(c){
@@ -442,10 +452,42 @@ function calc(r){
   o.tusd = usd + (P.tc ? o.tot / P.tc : 0); o.usdm2 = r.s ? o.tusd / r.s : 0;
   return o;
 }
+/* ── Cotización del dólar por fecha (api.argentinadatos.com) ── */
+var COT = {f:'', casa:'oficial', dest:'tc', msg:''};
+function cotHTML(){
+  if (!puedeAdmin) return '';
+  function o(v, l, a){ return '<option value="' + v + '"' + (a === v ? ' selected' : '') + '>' + l + '</option>'; }
+  return '<div class="f"><span>Traer la cotización de una fecha</span><span class="dual">' +
+    '<input type="date" id="cotF" value="' + esc(COT.f) + '">' +
+    '<select id="cotCasa">' + o('oficial','Oficial',COT.casa) + o('blue','Blue',COT.casa) + o('bolsa','MEP',COT.casa) + o('contadoconliqui','CCL',COT.casa) + o('mayorista','Mayorista',COT.casa) + '</select></span>' +
+    '<span class="dual"><select id="cotDest">' + o('tc','Cargar en TC base',COT.dest) + o('tc2','Cargar en TC alternativo',COT.dest) + '</select>' +
+    '<button class="btn" id="cotBtn" type="button">Traer</button></span><small id="cotMsg">' + esc(COT.msg) + '</small></div>';
+}
+function cotTraer(){
+  COT.f = $('cotF').value; COT.casa = $('cotCasa').value; COT.dest = $('cotDest').value;
+  if (!COT.f) { $('cotMsg').textContent = 'Elegí una fecha.'; return; }
+  var d = new Date(COT.f + 'T12:00:00'), n = 0;
+  $('cotMsg').textContent = 'Buscando…'; $('cotBtn').disabled = true;
+  function pad(x){ return (x < 10 ? '0' : '') + x; }
+  function intentar(){
+    var u = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/' + COT.casa + '/' + d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate());
+    fetch(u).then(function(r){ if (!r.ok) throw 0; return r.json(); }).then(function(j){
+      var v = +j.venta; if (!v) throw 0;
+      P[COT.dest] = v; guardarParams();
+      COT.msg = 'Dólar ' + COT.casa + ' del ' + j.fecha + ': $ ' + v + ' (venta)' + (n ? ' — ese día no hay dato, se usó el hábil anterior' : '');
+      renderParams(); render();
+    }).catch(function(){
+      if (++n <= 5) { d.setDate(d.getDate() - 1); intentar(); }
+      else { COT.msg = 'No encontré cotización para esa fecha. Cargala a mano en TC.'; var m = $('cotMsg'); if (m) m.textContent = COT.msg; var b = $('cotBtn'); if (b) b.disabled = false; }
+    });
+  }
+  intentar();
+}
+$('params').addEventListener('click', function(e){ if (e.target.id === 'cotBtn') cotTraer(); });
 function renderParams(){
   var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
-  var h = '<h3>Valuación</h3>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) +
+  var h = '<h3>Valuación</h3>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) + cotHTML() +
     '<h3>Conceptos del edificio — se reparten según los m² de cada unidad (salvo «por unidad»)</h3>';
   CONC.forEach(function(c){
     var k = c[0];
@@ -640,7 +682,7 @@ function render(){
     ['Valor total $ (TC ' + P.tc + ')', N(TOTS * P.usd * P.tc)], ['Con fecha de posesión', conF + ' de ' + U.length]]
     .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
   $('kpis').innerHTML = kpiHtml; $('kpis2').innerHTML = kpiHtml;
-  renderResumen(); renderCobros(); renderPosesion(); setVista(S.v, true);
+  renderResumen(); renderCobros(); renderPosesion(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
 }
 
 /* ── Pantallas (menú lateral) ──────────────────────────────────────── */
@@ -671,8 +713,8 @@ function renderCobros(){
       if (r.pr[k]) { prop += imp - cb; nProp++; } else if (cb < imp - 0.005) { adeu += imp - cb; nAdeu++; }
     });
     h += '<div class="card" style="margin-top:14px"><h3 style="margin:0 0 10px;font-size:15px">' + esc(c[1]) + ' · cobros</h3><div class="kpis" style="margin:0">' +
-      [['Total del fondo', N(tot, mon), nTot + ' unidades'], ['Cobrado', N(cob, mon), nCob + ' unidades al día'], ['Faltante', N(prop + adeu, mon), 'Propios + Adeudan'],
-       ['Propios (del desarrollador)', N(prop, mon), nProp + ' unidades'], ['Adeudan', N(adeu, mon), nAdeu + ' unidades']]
+      [['Total del fondo', Nv(tot, mon), nTot + ' unidades'], ['Cobrado', Nv(cob, mon), nCob + ' unidades al día'], ['Faltante', Nv(prop + adeu, mon), 'Propios + Adeudan'],
+       ['Propios (del desarrollador)', Nv(prop, mon), nProp + ' unidades'], ['Adeudan', Nv(adeu, mon), nAdeu + ' unidades']]
       .map(function(x){ return '<div class="card kpi"><small>' + x[0] + '</small><b>' + esc(x[1]) + '</b><small>' + esc(x[2]) + '</small></div>'; }).join('') + '</div></div>';
   });
   $('cobrosBox').innerHTML = h;
@@ -681,7 +723,7 @@ function renderResumen(){
   $('resBody').innerHTML = CONC.map(function(c){
     var k = c[0];
     return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + modoTexto(k) + '</td><td>' +
-      valorCargadoTexto(k) + '</td><td><b>' + N(totNativo(k), monedaConc(k)) + '</b></td></tr>';
+      valorCargadoTexto(k) + '</td><td><b>' + Nv(totNativo(k), monedaConc(k)) + '</b></td></tr>';
   }).join('');
 }
 function renderPosesion(){
@@ -806,6 +848,13 @@ function abrirColumnas(){
   $('cl_ok').onclick = cerrarModal;
 }
 $('btnCols').onclick = abrirColumnas;
+[].forEach.call(document.querySelectorAll('#vmBar [data-vm]'), function(b){
+  b.onclick = function(){ VMON = b.dataset.vm; try { localStorage.setItem('unid_vmon', VMON); } catch(x) {} render(); };
+});
+function pintarVmBar(){
+  [].forEach.call(document.querySelectorAll('#vmBar [data-vm]'), function(b){ b.classList.toggle('on', b.dataset.vm === VMON); });
+  $('vmTc').textContent = VMON === 'nat' ? '' : 'al tipo de cambio base ($ ' + P.tc + ' por USD)';
+}
 
 /* ── Cambiar el ancho de una columna arrastrando el borde del título ── */
 (function(){
@@ -1377,7 +1426,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v17';
+var UNID_VER = 'unidades-v19';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
