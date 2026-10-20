@@ -142,6 +142,8 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 .ico{padding:3px 8px;border-radius:8px;font-size:12px}
 @media(max-width:600px){.form-grid{grid-template-columns:1fr}}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--surface);border-radius:var(--radius-pill);padding:10px 18px;z-index:950;max-width:90vw;font-weight:500}
+#dropZona{position:fixed;inset:0;z-index:970;background:rgba(0,113,227,.18);border:3px dashed var(--gold);display:flex;align-items:center;justify-content:center;pointer-events:none}
+#dropZona div{background:var(--card);color:var(--text-1);border-radius:var(--radius);padding:22px 32px;font-size:18px;font-weight:600;box-shadow:var(--shadow-lg)}
 #verBanner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:960;background:var(--ink);color:var(--surface);border-radius:var(--radius-pill);padding:9px 14px 9px 18px;display:flex;gap:12px;align-items:center;box-shadow:var(--shadow-lg);font-weight:500}
 #verBanner button{background:var(--gold);border:0;color:#fff;border-radius:var(--radius-pill);padding:5px 14px;font-weight:600}
 .vista{display:none}.vista.on{display:block}
@@ -181,7 +183,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <div class="nav-label">Datos</div>
       <button class="nav-item" id="btnNuevoEd"><span class="nav-icon">add_business</span>Nuevo edificio</button>
       <button class="nav-item" id="btnImp"><span class="nav-icon">upload_file</span>Importar Excel</button>
-      <button class="nav-item" id="btnCV"><span class="nav-icon">playlist_add</span>Importes por unidad</button>
+      <button class="nav-item" id="btnCV"><span class="nav-icon">playlist_add</span>Cargar datos desde planilla</button>
       <input type="file" id="fileCV" accept=".xlsx,.xls,.csv" class="hid">
       <button class="nav-item" id="btnXls0"><span class="nav-icon">download</span>Bajar a Excel</button>
       <button class="nav-item" id="btnDel"><span class="nav-icon">delete</span>Eliminar edificio</button>
@@ -257,6 +259,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
   </main>
 </div>
 <div id="modal" class="modal-fondo hid"><div class="modal-caja" id="modalCaja"></div></div>
+<div id="dropZona" class="hid"><div>📥 Soltá la planilla acá para cargar sus datos</div></div>
 <div id="verBanner" class="hid"><span>🔄 Hay una versión nueva de la planilla</span><button id="verRecargar">Actualizar</button></div>
 <div id="toast" class="hid"></div>
 
@@ -387,7 +390,7 @@ function cargarEdificio(){
   var us = e.unidades || {};
   U = Object.keys(us).map(function(k){ var u = us[k]; return {
     k:k, u:String(u.n == null ? k : u.n), o:+u.o || 0, p:u.p || '', rk:!!u.rk, i:u.i || '', t:u.t || '',
-    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {} }; });
+    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0 }; });
   TOTS = U.reduce(function(s, r){ return s + r.s; }, 0);
   if (!enfocado) renderParams();
   render();
@@ -408,39 +411,32 @@ function estadoCobro(k, r){
 function conceptosUnidad(){ return CONC.filter(function(c){ return esModoUnidad(P.modo[c[0]]); }); }
 function sumKeys(){ var a = SUMAR.slice(); conceptosUnidad().forEach(function(c){ a.push('cb_' + c[0], 'sd_' + c[0]); }); return a; }
 function sumaCV(k){ return U.reduce(function(s, r){ return s + (+r.cv[k] || 0); }, 0); }      // en la moneda cargada
-function totConcepto(k){
+// Cada concepto se muestra y se suma en SU moneda: los cargados en dólares (USD total / USD por unidad) quedan en dólares y NO se
+// pasan a pesos; el resto (% del valor, $ total, $ por unidad) está en pesos. Sólo «USD por m²» convierte, para poder compararlo.
+function monedaConc(k){ var m = P.modo[k]; return (m === 'montousd' || m === 'unidadusd') ? 'USD' : '$'; }
+function totNativo(k){                         // total del edificio en la moneda del concepto
   var m = P.modo[k];
-  if (m === 'unidad') return sumaCV(k);
-  if (m === 'unidadusd') return sumaCV(k) * P.tc;
-  if (m === 'monto') return P.pct[k];
-  if (m === 'montousd') return P.pct[k] * P.tc;
+  if (m === 'unidad' || m === 'unidadusd') return sumaCV(k);
+  if (m === 'monto' || m === 'montousd') return P.pct[k];
   return TOTS * P.usd * P.tc * P.pct[k] / 100;
 }
+function totConcepto(k){ return totNativo(k) * (monedaConc(k) === 'USD' ? P.tc : 1); }   // equivalente en pesos (sólo para USD por m²)
 function modoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return 'Importe por unidad ($)'; if (m === 'unidadusd') return 'Importe por unidad (USD)'; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
 function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return N(sumaCV(k)); if (m === 'unidadusd') return N(sumaCV(k), 'USD'); return m === 'monto' ? N(P.pct[k]) : m === 'montousd' ? N(P.pct[k], 'USD') : P.pct[k] + ' %'; }
-function totalConceptoTexto(k){ return 'Total edificio: ' + N(totConcepto(k)) + (P.modo[k] === 'montousd' || P.modo[k] === 'unidadusd' ? ' (TC ' + P.tc + ')' : ''); }
+function totalConceptoTexto(k){ return 'Total edificio: ' + N(totNativo(k), monedaConc(k)); }
 function calc(r){
-  var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0};
+  var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
   CONC.forEach(function(c){
-    var k = c[0], m = P.modo[k];
-    o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) * (m === 'unidadusd' ? P.tc : 1) : (TOTS ? totConcepto(k) * r.s / TOTS : 0);
-    o.tot += o[k];
-    if (esModoUnidad(m)) { var fac = m === 'unidadusd' ? P.tc : 1; o['cb_' + k] = (+r.cb[k] || 0) * fac; o['sd_' + k] = o[k] - o['cb_' + k]; }   // cobrado / saldo en $
+    var k = c[0], m = P.modo[k], dol = monedaConc(k) === 'USD';
+    o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) : (TOTS ? totNativo(k) * r.s / TOTS : 0);     // en la moneda del concepto
+    if (dol) o.totu += o[k]; else o.totp += o[k];
+    o.tot += o[k] * (dol ? P.tc : 1);                                                      // equivalente en pesos (para USD por m²)
+    if (esModoUnidad(m)) { o['cb_' + k] = +r.cb[k] || 0; o['sd_' + k] = o[k] - o['cb_' + k]; }   // cobrado / saldo, también en su moneda
   });
-  // Total en USD = valor de la unidad + sus conceptos pasados a dólares al TC base; USD por m² = ese total / m².
+  // USD por m² = (valor de la unidad en USD + sus conceptos pasados a dólares al TC base) / m².
   o.tusd = usd + (P.tc ? o.tot / P.tc : 0); o.usdm2 = r.s ? o.tusd / r.s : 0;
   return o;
 }
-function guardarParams(){
-  if (!puedeAdmin || !edId) return;
-  clearTimeout(_tGuardar); _pend = true;
-  _tGuardar = setTimeout(function(){
-    db.ref('global/edificios/' + edId + '/params').set(P)
-      .then(function(){ _pend = false; }, function(){ _pend = false; toast('⚠️ No se pudo guardar (¿permiso?)'); });
-  }, 600);
-}
-
-/* ── Interfaz ──────────────────────────────────────────────────────── */
 function renderParams(){
   var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
@@ -477,12 +473,12 @@ function filas(){
   return a;
 }
 function nombreInq(i){ return i.replace(/\s*\(.*?\)/g, '').replace(/\/\s*\S+@\S+/g, '').trim(); }
-var SUMAR = ['usd','ars','tot','tusd'].concat(CONC.map(function(c){ return c[0]; }));
+var SUMAR = ['usd','ars','tot','totp','totu','tusd','sc','ss'].concat(CONC.map(function(c){ return c[0]; }));
 /* ── Columnas: mostrar / ocultar / ancho (se recuerda en este equipo) ── */
 var COLS = {oc:{}, w:{}};
 try { var _cs = JSON.parse(localStorage.getItem('unid_cols') || '{}'); if (_cs.oc) COLS.oc = _cs.oc; if (_cs.w) COLS.w = _cs.w; } catch(x) {}
 function guardarCols(){ try { localStorage.setItem('unid_cols', JSON.stringify(COLS)); } catch(x) {} }
-var ANCHO = {u:100, p:200, i:170, t:140, m:220, s:78, pc:88, usd:135, ars:155, alt:155, tusd:145, usdm2:125, tot:155, fp:150, hf:115, acc:90};
+var ANCHO = {u:100, p:200, i:170, t:140, m:220, s:78, pc:88, usd:135, ars:155, alt:155, tusd:145, usdm2:125, tot:155, totp:165, totu:165, fp:150, hf:115, acc:90};
 function anchoCol(k){ return COLS.w[k] || ANCHO[k] || 150; }
 // Definición única de las columnas de la planilla: título, alineación, y cómo se pinta cada celda y el total.
 function defCols(){
@@ -490,6 +486,9 @@ function defCols(){
     {k:'u', t:'Unidad', cls:'l sticky', fijo:true},
     {k:'p', t:'Propietario', cls:'l'},
     {k:'i', t:'Inquilino/a', cls:'l', solo:'lista'},
+    {k:'tp', t:'Tipología', cls:'l', solo:'dato'},
+    {k:'sc', t:'Sup. cubierta m²', cls:'', solo:'dato'},
+    {k:'ss', t:'Sup. semicubierta m²', cls:'', solo:'dato'},
     {k:'t', t:'Teléfono', cls:'l', solo:'pd'},
     {k:'m', t:'Mail', cls:'l', solo:'pd'},
     {k:'s', t:'m²', cls:''},
@@ -499,7 +498,7 @@ function defCols(){
     {k:'alt', t:'Valor $ TC alt.', cls:''},
     {k:'usdm2', t:'USD por m²', cls:''}
   ].concat(CONC.map(function(c){ return {k:c[0], t:c[1], cls:''}; }))
-   .concat([{k:'tot', t:'Total conceptos', cls:''}])
+   .concat([{k:'totp', t:'Total conceptos ($)', cls:'', solo:'monp'}, {k:'totu', t:'Total conceptos (USD)', cls:'', solo:'monu'}])
    .concat(CONC.filter(function(c){ return esModoUnidad(P.modo[c[0]]); }).reduce(function(a, c){
       var n = c[1].replace(' (acciones y part.)', '');
       return a.concat([{k:'es_' + c[0], t:'Estado · ' + n, cls:'l'}, {k:'cb_' + c[0], t:'Cobrado · ' + n, cls:''}, {k:'sd_' + c[0], t:'Saldo · ' + n, cls:''}]);
@@ -507,7 +506,11 @@ function defCols(){
    .concat([ {k:'fp', t:'Fecha posesión', cls:'l', solo:'lista'}, {k:'hf', t:'Hora firma', cls:'l', solo:'lista'}, {k:'acc', t:'', cls:'l', solo:'lista', fijo:true}]);
   return d.filter(function(c){
     if (c.solo === 'pd' && (!S.pd || S.g)) return false;
+    if (c.solo === 'dato' && S.g && c.k === 'tp') return false;
+    if (c.solo === 'monp' && !CONC.some(function(x){ return monedaConc(x[0]) === '$' && totNativo(x[0]) !== 0; })) return false;    // sólo si hay conceptos en esa moneda
+    if (c.solo === 'monu' && !CONC.some(function(x){ return monedaConc(x[0]) === 'USD' && totNativo(x[0]) !== 0; })) return false;
     if (c.solo === 'lista' && S.g) return false;
+    if (c.solo === 'dato' && !U.some(function(r){ return c.k === 'tp' ? r.tp : c.k === 'sc' ? r.sc : r.ss; })) return false;   // sólo si hay algún dato cargado
     if (c.k === 'alt' && !P.tc2) return false;   // sin TC alternativo cargado no hay nada que mostrar
     return true;
   });
@@ -521,12 +524,16 @@ function celdaPlanilla(k, r, c, dis){
     case 't': return '<td class="l sm">' + esc(r.t) + '</td>';
     case 'm': return '<td class="l sm">' + esc(r.m.join(' / ')) + '</td>';
     case 's': return '<td>' + r.s.toFixed(2) + '</td>';
+    case 'tp': return '<td class="l sm">' + esc(r.tp || '') + '</td>';
+    case 'sc': return '<td>' + (r.sc ? r.sc.toFixed(2) : '') + '</td>';
+    case 'ss': return '<td>' + (r.ss ? r.ss.toFixed(2) : '') + '</td>';
     case 'pc': return '<td>' + (TOTS ? (r.s / TOTS * 100).toFixed(2) : '0.00') + '%</td>';
     case 'usd': return '<td>' + N(c.usd, 'USD') + '</td>';
     case 'ars': return '<td>' + N(c.ars) + '</td>';
     case 'alt': return '<td>' + (c.alt == null ? '—' : N(c.alt)) + '</td>';
     case 'usdm2': return '<td>' + N(r.s ? c.tusd / r.s : 0, 'USD') + '</td>';
-    case 'tot': return '<td><b>' + N(c.tot) + '</b></td>';
+    case 'totp': return '<td><b>' + N(c.totp) + '</b></td>';
+    case 'totu': return '<td><b>' + N(c.totu, 'USD') + '</b></td>';
     case 'fp': return '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="fp" value="' + esc(r.fp) + '"' + dis + '></td>';
     case 'hf': return '<td class="l"><input type="time" data-k="' + esc(r.k) + '" data-f="hf" value="' + esc(r.hf) + '"' + dis + '></td>';
     case 'acc': return '<td class="l">' + (puedeEditar ? '<button class="btn ico" data-ed="' + esc(r.k) + '" title="Editar">✏️</button>' + (puedeAdmin ? ' <button class="btn ico" data-del="' + esc(r.k) + '" title="Borrar">🗑</button>' : '') : '') + '</td>';
@@ -535,20 +542,24 @@ function celdaPlanilla(k, r, c, dis){
         var e = estadoCobro(k.slice(3), r);
         return '<td class="l">' + (e ? '<span class="tag' + (e === 'Cobrado' ? ' ok' : e === 'Propio' ? '' : ' rk') + '">' + e + '</span>' : '') + '</td>';
       }
-      return '<td>' + N(c[k]) + '</td>';     // conceptos y cobros
+      return '<td>' + N(c[k], monedaConc(k.replace(/^(cb|sd)_/, ''))) + '</td>';     // conceptos y cobros, cada uno en su moneda
   }
 }
 function celdaTotal(k, T, n){
   switch (k) {
     case 'u': return '<td class="l sticky">Total (' + n + ')</td>';
     case 's': return '<td>' + T.s.toFixed(2) + '</td>';
+    case 'sc': return '<td>' + (T.sc || 0).toFixed(2) + '</td>';
+    case 'ss': return '<td>' + (T.ss || 0).toFixed(2) + '</td>';
+    case 'tp': return '<td></td>';
     case 'usd': return '<td>' + N(T.usd, 'USD') + '</td>';
     case 'ars': return '<td>' + N(T.ars) + '</td>';
     case 'alt': return '<td>' + (P.tc2 ? N(T.alt) : '—') + '</td>';
     case 'usdm2': return '<td>' + N(T.s ? T.tusd / T.s : 0, 'USD') + '</td>';
-    case 'tot': return '<td>' + N(T.tot) + '</td>';
+    case 'totp': return '<td>' + N(T.totp || 0) + '</td>';
+    case 'totu': return '<td>' + N(T.totu || 0, 'USD') + '</td>';
     case 'p': case 'i': case 't': case 'm': case 'pc': case 'fp': case 'hf': case 'acc': return '<td></td>';
-    default: return k.indexOf('es_') === 0 ? '<td></td>' : '<td>' + N(T[k] || 0) + '</td>';
+    default: return k.indexOf('es_') === 0 ? '<td></td>' : '<td>' + N(T[k] || 0, monedaConc(k.replace(/^(cb|sd)_/, ''))) + '</td>';
   }
 }
 function render(){
@@ -567,7 +578,7 @@ function render(){
     var m = {}, o = [];
     a.forEach(function(r){
       var g = m[r.p];
-      if (!g) { g = m[r.p] = {u:'', p:r.p, rk:r.rk, s:0, us:[], c:{usd:0, ars:0, alt:P.tc2 ? 0 : null, tot:0, tusd:0}};
+      if (!g) { g = m[r.p] = {u:'', p:r.p, rk:r.rk, s:0, us:[], c:{usd:0, ars:0, alt:P.tc2 ? 0 : null, tot:0, totp:0, totu:0, tusd:0}};
         CONC.forEach(function(c){ g.c[c[0]] = 0; }); o.push(g); }
       g.s += r.s; g.us.push(r.u);
       sumKeys().forEach(function(z){ g.c[z] = (g.c[z] || 0) + r.c[z]; });
@@ -576,7 +587,7 @@ function render(){
     o.forEach(function(g){ g.u = g.us.join(', '); });
     list = o;
   }
-  var T = {s:0, usd:0, ars:0, alt:0, tot:0, tusd:0}; CONC.forEach(function(c){ T[c[0]] = 0; });
+  var T = {s:0, usd:0, ars:0, alt:0, tot:0, totp:0, totu:0, tusd:0}; CONC.forEach(function(c){ T[c[0]] = 0; });
   var dis = puedeEditar ? '' : ' disabled';
   $('tb').innerHTML = list.map(function(r){
     var c = r.c; T.s += r.s; sumKeys().forEach(function(z){ T[z] = (T[z] || 0) + c[z]; }); if (c.alt != null) T.alt += c.alt;
@@ -633,7 +644,7 @@ function renderResumen(){
   $('resBody').innerHTML = CONC.map(function(c){
     var k = c[0];
     return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + modoTexto(k) + '</td><td>' +
-      valorCargadoTexto(k) + '</td><td><b>' + N(totConcepto(k)) + '</b></td></tr>';
+      valorCargadoTexto(k) + '</td><td><b>' + N(totNativo(k), monedaConc(k)) + '</b></td></tr>';
   }).join('');
 }
 function renderPosesion(){
@@ -812,15 +823,22 @@ function bajarExcel(){
   // Columnas: [clave, título, ancho, formato, alineación, grupo]
   var C = [['u','Unidad',9,'@','center',1],['p','Propietario',30,'@','left',1]];
   if (pd) C.push(['t','Teléfono',22,'@','left',1], ['m','Mail',34,'@','left',1]);
-  C.push(['i','Inquilino/a',pd ? 38 : 24,'@','left',1], ['s','m²',10,'0.00','right',1], ['pc','% de la unidad',11,'0.00%','right',1],
+  var hayDato = function(k){ return U.some(function(r){ return k === 'tp' ? r.tp : k === 'sc' ? r.sc : r.ss; }); };
+  C.push(['i','Inquilino/a',pd ? 38 : 24,'@','left',1]);
+  if (hayDato('tp')) C.push(['tp','Tipología',18,'@','left',1]);
+  if (hayDato('sc')) C.push(['sc','Sup. cubierta m²',13,'0.00','right',1]);
+  if (hayDato('ss')) C.push(['ss','Sup. semicubierta m²',13,'0.00','right',1]);
+  C.push( ['s','m²',10,'0.00','right',1], ['pc','% de la unidad',11,'0.00%','right',1],
          ['usd','Valor USD',17,'"USD" #,##0.00','right',2], ['ars','Valor $ (TC ' + P.tc + ')',19,'"$" #,##0.00','right',2]);
   if (alt) C.push(['alt','Valor $ (TC ' + P.tc2 + ')',21,'"$" #,##0.00','right',2]);
   C.push(['usdm2','USD por m²',15,'"USD" #,##0.00','right',2]);
-  conceptos.forEach(function(c){ C.push([c[0], c[1].replace(' (acciones y part.)', ''), 19, '"$" #,##0.00', 'right', 3]); });
-  if (conceptos.length) C.push(['tot','Total conceptos',19,'"$" #,##0.00','right',3]);
+  var fmtC = function(k){ return monedaConc(k) === 'USD' ? '"USD" #,##0.00' : '"$" #,##0.00'; };      // cada concepto en su moneda
+  conceptos.forEach(function(c){ C.push([c[0], c[1].replace(' (acciones y part.)', '') + (monedaConc(c[0]) === 'USD' ? ' (USD)' : ''), 19, fmtC(c[0]), 'right', 3]); });
+  if (conceptos.some(function(c){ return monedaConc(c[0]) === '$'; })) C.push(['totp','Total conceptos ($)',19,'"$" #,##0.00','right',3]);
+  if (conceptos.some(function(c){ return monedaConc(c[0]) === 'USD'; })) C.push(['totu','Total conceptos (USD)',19,'"USD" #,##0.00','right',3]);
   conceptosUnidad().forEach(function(c){
     var n = c[1].replace(' (acciones y part.)', '');
-    C.push(['es_' + c[0], 'Estado · ' + n, 17, '@', 'center', 3], ['cb_' + c[0], 'Cobrado · ' + n, 19, '"$" #,##0.00', 'right', 3], ['sd_' + c[0], 'Saldo · ' + n, 19, '"$" #,##0.00', 'right', 3]);
+    C.push(['es_' + c[0], 'Estado · ' + n, 17, '@', 'center', 3], ['cb_' + c[0], 'Cobrado · ' + n, 19, fmtC(c[0]), 'right', 3], ['sd_' + c[0], 'Saldo · ' + n, 19, fmtC(c[0]), 'right', 3]);
   });
   C.push(['fp','Fecha de posesión',15,'dd/mm/yyyy','center',4], ['hf','Hora de firma',11,'@','center',4]);
   // lo que se ocultó en pantalla tampoco se baja
@@ -850,11 +868,12 @@ function bajarExcel(){
       var v, key = col[0];
       if (key === 'u') v = r.u; else if (key === 'p') v = r.p; else if (key === 't') v = r.t; else if (key === 'm') v = r.m.join(' / ');
       else if (key.indexOf('es_') === 0) v = estadoCobro(key.slice(3), r);
-      else if (key === 'i') v = pd ? r.i : nombreInq(r.i); else if (key === 's') v = r.s; else if (key === 'pc') v = TOTS ? r.s / TOTS : 0;
+      else if (key === 'i') v = pd ? r.i : nombreInq(r.i);
+      else if (key === 'tp') v = r.tp; else if (key === 's') v = r.s; else if (key === 'pc') v = TOTS ? r.s / TOTS : 0;
       else if (key === 'fp') v = xlFecha(r.fp); else if (key === 'hf') v = r.hf; else v = c[key];
       var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
       cell.numFmt = col[3]; cell.alignment = {horizontal:col[4], vertical:'middle', wrapText:false};
-      cell.font = {name:'Calibri', size:10, bold:key === 'u' || key === 'tot', color:{argb:XL.ink}};
+      cell.font = {name:'Calibri', size:10, bold:key === 'u' || key === 'totp' || key === 'totu', color:{argb:XL.ink}};
       if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
       if (r.rk && (key === 'u' || key === 'p')) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.rk}};
       xlBorde(cell);
@@ -862,8 +881,8 @@ function bajarExcel(){
   });
   // totales (con fórmula, y con el valor calculado para que se vea aunque se abra en un visor)
   var rt = 6 + a.length, ult = rt - 1, tr = ws.getRow(rt); tr.height = 22;
-  var sumas = {s:0, usd:0, ars:0, alt:0, tot:0, tusd:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
-  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.tot += r.c.tot; sumas.tusd += r.c.tusd; conceptosUnidad().forEach(function(c){ sumas['cb_' + c[0]] = (sumas['cb_' + c[0]] || 0) + r.c['cb_' + c[0]]; sumas['sd_' + c[0]] = (sumas['sd_' + c[0]] || 0) + r.c['sd_' + c[0]]; }); conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
+  var sumas = {s:0, usd:0, ars:0, alt:0, totp:0, totu:0, tusd:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
+  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.totp += r.c.totp; sumas.totu += r.c.totu; sumas.tusd += r.c.tusd; conceptosUnidad().forEach(function(c){ sumas['cb_' + c[0]] = (sumas['cb_' + c[0]] || 0) + r.c['cb_' + c[0]]; sumas['sd_' + c[0]] = (sumas['sd_' + c[0]] || 0) + r.c['sd_' + c[0]]; }); conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
   C.forEach(function(col, j){
     var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
     if (j === 0) cell.value = 'TOTAL';
@@ -892,23 +911,27 @@ function bajarExcel(){
     c2.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}}; c2.alignment = {horizontal:'right'}; xlBorde(c1); xlBorde(c2);
   });
   var h0 = 4 + pv.length + 1;
-  ['Concepto','Se carga como','Valor cargado','Total del edificio ($)'].forEach(function(t, j){ var h = wv.getCell(h0, j + 1); h.value = t; xlEncabezado(h, XL.g3); });
+  ['Concepto','Se carga como','Valor cargado','Total del edificio'].forEach(function(t, j){ var h = wv.getCell(h0, j + 1); h.value = t; xlEncabezado(h, XL.g3); });
   wv.getRow(h0).height = 22;
   CONC.forEach(function(c, k){
     var r = h0 + 1 + k, kk = c[0], md = P.modo[kk];
-    var cs = [c[1], modoTexto(kk), esModoUnidad(md) ? sumaCV(kk) : P.pct[kk], totConcepto(kk)];
+    var cs = [c[1], modoTexto(kk), esModoUnidad(md) ? sumaCV(kk) : P.pct[kk], totNativo(kk)];
     cs.forEach(function(v, j){
       var cell = wv.getCell(r, j + 1); cell.value = v; cell.font = {name:'Calibri', size:10.5, color:{argb:XL.ink}};
-      cell.numFmt = j === 2 ? (md === 'monto' || md === 'unidad' ? '"$" #,##0.00' : md === 'montousd' || md === 'unidadusd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? '"$" #,##0.00' : '@';
+      cell.numFmt = j === 2 ? (md === 'monto' || md === 'unidad' ? '"$" #,##0.00' : md === 'montousd' || md === 'unidadusd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? fmtC(kk) : '@';
       cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
       if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}}; xlBorde(cell);
     });
   });
-  var rtv = h0 + 1 + CONC.length;
-  var tv = wv.getCell(rtv, 1); tv.value = 'Total de conceptos';
-  var tv4 = wv.getCell(rtv, 4); tv4.value = {formula:'SUM(D' + (h0 + 1) + ':D' + (rtv - 1) + ')', result:CONC.reduce(function(m, c){ return m + totConcepto(c[0]); }, 0)}; tv4.numFmt = '"$" #,##0.00';
-  for (var q = 1; q <= 4; q++) { var tc = wv.getCell(rtv, q); tc.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
-    tc.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.tot}}; xlBorde(tc, true); if (q === 4) tc.alignment = {horizontal:'right'}; }
+  var rtv = h0 + 1 + CONC.length, tots = [['Total de conceptos en $', '$', '"$" #,##0.00'], ['Total de conceptos en USD', 'USD', '"USD" #,##0.00']];
+  tots.forEach(function(t){
+    var ks = CONC.filter(function(c){ return monedaConc(c[0]) === t[1]; }); if (!ks.length) return;
+    wv.getCell(rtv, 1).value = t[0];
+    var tv4 = wv.getCell(rtv, 4); tv4.value = ks.reduce(function(m, c){ return m + totNativo(c[0]); }, 0); tv4.numFmt = t[2];
+    for (var q = 1; q <= 4; q++) { var tc = wv.getCell(rtv, q); tc.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
+      tc.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.tot}}; xlBorde(tc, true); if (q === 4) tc.alignment = {horizontal:'right'}; }
+    rtv++;
+  });
   wv.views = [{showGridLines:false}];
   wv.pageSetup = {orientation:'portrait', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0};
 
@@ -955,6 +978,9 @@ function formUnidad(r){
     '<label class="f">m² superficie<input id="fu_s" type="number" step="any" value="' + esc(r.s) + '"></label>' +
     '<label class="f full">Propietario<input id="fu_p" value="' + esc(r.p) + '"></label>' +
     '<label class="chk full"><input type="checkbox" id="fu_rk"' + (r.rk ? ' checked' : '') + '> Es de RK (los mails de la planilla son los de la administración)</label>' +
+    '<label class="f">Tipología<input id="fu_tp" value="' + esc(r.tp || '') + '" placeholder="Ej: 2 ambientes"></label>' +
+    '<label class="f">Sup. cubierta m²<input id="fu_sc" type="number" step="any" value="' + (r.sc ? esc(r.sc) : '') + '"></label>' +
+    '<label class="f">Sup. semicubierta m²<input id="fu_ss" type="number" step="any" value="' + (r.ss ? esc(r.ss) : '') + '"></label>' +
     '<label class="f">Teléfono<input id="fu_t" value="' + esc(r.t) + '"></label>' +
     '<label class="f">Mail(s) del propietario<input id="fu_m" value="' + esc(r.m.join('; ')) + '" placeholder="uno@mail.com; otro@mail.com"></label>' +
     '<label class="f full">Inquilino/a (nombre, teléfono, mail)<input id="fu_i" value="' + esc(r.i) + '"></label>' +
@@ -983,6 +1009,8 @@ function guardarUnidad(r, nueva){
   var mails = rk ? [] : mailsDe($('fu_m').value), i = $('fu_i').value.trim();
   var base = 'global/edificios/' + edId + '/unidades/' + k + '/', upd = {};
   upd[base + 'n'] = n; upd[base + 'o'] = o; upd[base + 'p'] = p || (rk ? 'RK' : ''); upd[base + 'rk'] = rk;
+  upd[base + 'tp'] = $('fu_tp').value.trim() || null; var vc = parseFloat($('fu_sc').value), vs = parseFloat($('fu_ss').value);
+  upd[base + 'sc'] = isNaN(vc) ? null : vc; upd[base + 'ss'] = isNaN(vs) ? null : vs;
   upd[base + 'i'] = i; upd[base + 't'] = $('fu_t').value.trim(); upd[base + 's'] = Math.round(s * 10000) / 10000;
   CONC.forEach(function(c){ if (!esModoUnidad(P.modo[c[0]])) return; var e = $('fu_cv_' + c[0]), v = e ? parseFloat(e.value) : NaN; upd[base + 'cv/' + c[0]] = isNaN(v) ? null : Math.round(v * 10000) / 10000;
     var eb = $('fu_cb_' + c[0]), vb = eb ? parseFloat(eb.value) : NaN; upd[base + 'cb/' + c[0]] = isNaN(vb) ? null : Math.round(vb * 10000) / 10000;
@@ -1015,39 +1043,91 @@ function nuevoEdificio(){
 }
 $('btnNuevoEd').onclick = nuevoEdificio; $('btnNuevoEd2').onclick = nuevoEdificio;
 
-/* ── Importes por unidad desde un Excel (p. ej. el fondo de alhajamiento) ── */
-// Lee un Excel con una columna «Unidad» y una o más columnas de importes, y deja el importe de cada unidad
-// en un concepto (unidades/<k>/cv/<concepto>), poniendo ese concepto en modo «por unidad» ($ o USD).
-// Lo que está en la base y no figura en el archivo (o figura vacío / «-») queda sin importe: el archivo manda.
-var CONC_PISTAS = {alh:['alha','alhaj'], gan:['gananc'], iibb:['ingresosbrutos','iibb'], adm:['administr'], res:['reserva'], cdi:['edenor','cdi'], rec:['recupero','personales']};   // cdi va antes que rec: «Recupero CDI Edenor» también dice «recupero»
+/* ── Cargar datos desde una planilla (se suelta o se elige; el usuario decide qué columna va a qué campo) ── */
+// Lee un Excel con una columna «Unidad» y deja elegir, para cada columna, en qué campo se carga (propietario, teléfono, mail,
+// inquilino, m², tipología, superficies, fecha de posesión, hora de firma, y el importe / cobrado de cada concepto). Se propone
+// un destino por el título de la columna. Sólo toca las unidades que figuran en el archivo y los campos elegidos; una celda vacía
+// no pisa lo que ya está cargado. Las unidades que no existen se pueden crear o ignorar.
+var CONC_PISTAS = {alh:['alha','alhaj'], gan:['gananc'], iibb:['ingresosbrutos','iibb'], adm:['administr'], res:['reserva'], cdi:['edenor','cdi'], rec:['recupero','personales']};   // cdi antes que rec: «Recupero CDI Edenor» también dice «recupero»
 function conceptoDeTexto(t){ var h = normH(t); for (var k in CONC_PISTAS) if (CONC_PISTAS[k].some(function(p){ return h.indexOf(p) >= 0; })) return k; return ''; }
+var DESTINOS = [['p','Propietario'], ['t','Teléfono'], ['m','Mail del propietario'], ['i','Inquilino/a'], ['s','m² totales'], ['tp','Tipología'],
+                ['sc','Superficie cubierta m²'], ['ss','Superficie semicubierta m²'], ['fp','Fecha de posesión'], ['hf','Hora de firma']];
+function sugerirDestino(h){
+  // Los datos que IDENTIFICAN a la unidad (propietario, teléfono, mail, inquilino, m²) sólo se proponen si el título es exacto: en
+  // la planilla del fondo la columna «Inversores» trae «Disponible» en las unidades de RK y pisaría los propietarios.
+  var n = normH(h), k = conceptoDeTexto(h);
+  if (n.indexOf('cobrad') >= 0) return k ? 'cb_' + k : '';
+  if (/^propietarios?$/.test(n)) return 'p';
+  if (/^(tel|telefonos?)$/.test(n)) return 't';
+  if (/^(mails?|emails?|correos?)$/.test(n)) return 'm';
+  if (/^inquilinoa?$/.test(n)) return 'i';
+  if (/tipolog/.test(n)) return 'tp';
+  if (/semicub/.test(n)) return 'ss';
+  if (/cubierta/.test(n)) return 'sc';
+  if (/posesion/.test(n)) return 'fp';
+  if (/firma/.test(n)) return 'hf';
+  if (k) return 'imp_' + k;
+  return '';
+}
+function p2(n){ n = String(n); return n.length < 2 ? '0' + n : n; }
+function numDe(v){
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  if (typeof v !== 'string') return null;
+  var t = v.replace(/[^\d,.\-]/g, ''); if (!t || t === '-') return null;
+  if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.');
+  var n = parseFloat(t); return isNaN(n) ? null : n;
+}
+function fechaDe(v){
+  if (typeof v === 'number' && v > 20000 && v < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000).toISOString().slice(0, 10);   // número de serie de Excel
+  if (typeof v !== 'string') return '';
+  var t = v.trim(), m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(t);
+  if (m) { var y = +m[3]; if (y < 100) y += 2000; return y + '-' + p2(m[2]) + '-' + p2(m[1]); }
+  return /^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : '';
+}
+function horaDe(v){
+  if (typeof v === 'number' && v >= 0 && v < 1) { var mi = Math.round(v * 1440); return p2(Math.floor(mi / 60)) + ':' + p2(mi % 60); }
+  if (typeof v !== 'string') return '';
+  var m = /^(\d{1,2})[:.hH](\d{2})/.exec(v.trim()); return m ? p2(m[1]) + ':' + m[2] : '';
+}
 $('btnCV').onclick = function(){ if (puedeAdmin && edId) $('fileCV').click(); };
-$('fileCV').onchange = function(){
-  var f = this.files[0]; this.value = ''; if (!f) return;
+$('fileCV').onchange = function(){ var f = this.files[0]; this.value = ''; if (f) leerPlanilla(f); };
+function leerPlanilla(f){
+  if (!puedeAdmin || !edId) { toast('Elegí primero un edificio'); return; }
+  if (typeof XLSX === 'undefined') { toast('⚠️ No cargó la librería de Excel. Revisá la conexión.'); return; }
   var rd = new FileReader();
-  rd.onload = function(ev){ try { abrirImporteUnidades(XLSX.read(ev.target.result, {type:'array'}), f.name); } catch (e) { toast('⚠️ No se pudo leer el archivo: ' + (e.message || e)); } };
+  rd.onload = function(ev){ try { abrirCargaPlanilla(XLSX.read(ev.target.result, {type:'array'}), f.name); } catch (e) { toast('⚠️ No se pudo leer el archivo: ' + (e.message || e)); } };
   rd.readAsArrayBuffer(f);
-};
-function abrirImporteUnidades(wb, nombreArch){
+}
+// Soltar un archivo en cualquier parte de la ventana
+(function(){
+  var z = $('dropZona'), n = 0;
+  function esArchivo(e){ return e.dataTransfer && [].indexOf.call(e.dataTransfer.types || [], 'Files') >= 0; }
+  window.addEventListener('dragenter', function(e){ if (!esArchivo(e) || !puedeAdmin) return; n++; z.classList.remove('hid'); });
+  window.addEventListener('dragleave', function(e){ if (!esArchivo(e)) return; n = Math.max(0, n - 1); if (!n) z.classList.add('hid'); });
+  window.addEventListener('dragover', function(e){ if (esArchivo(e)) e.preventDefault(); });
+  window.addEventListener('drop', function(e){
+    if (!esArchivo(e)) return; e.preventDefault(); n = 0; z.classList.add('hid');
+    var f = e.dataTransfer.files[0]; if (f && /\.(xlsx|xls|csv)$/i.test(f.name)) leerPlanilla(f); else if (f) toast('Soltá un archivo de Excel (.xlsx, .xls o .csv)');
+  });
+})();
+function abrirCargaPlanilla(wb, nombreArch){
   var ws = wb.Sheets[wb.SheetNames[0]];
   var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true}), hi = -1, cu = -1;
   for (var i = 0; i < rows.length && hi < 0; i++) (rows[i] || []).forEach(function(c, j){ if (hi < 0 && normH(c) === 'unidad') { hi = i; cu = j; } });
   if (hi < 0) { toast('⚠️ No encontré la columna «Unidad» en el archivo.'); return; }
-  var datos = rows.slice(hi + 1).filter(function(x){ return x && x[cu] != null && String(x[cu]).trim() !== ''; });
+  var datos = [];   // {k, n, x, fila}
+  rows.forEach(function(x, i){ if (i > hi && x && x[cu] != null && String(x[cu]).trim() !== '') datos.push({k:claveUnidad(x[cu]), n:String(x[cu]).trim(), x:x, fila:i}); });
   var cols = [];
   (rows[hi] || []).forEach(function(h, j){
     if (j === cu || h == null || String(h).trim() === '') return;
-    var n = datos.filter(function(x){ return typeof x[j] === 'number' && isFinite(x[j]); }).length;
-    if (n) cols.push({j:j, t:String(h).trim().replace(/\s+/g, ' '), n:n});
+    var ej = []; datos.forEach(function(d){ var v = d.x[j]; if (v != null && String(v).trim() !== '' && ej.length < 3) ej.push(typeof v === 'number' ? (Math.round(v * 100) / 100) : String(v).trim().slice(0, 28)); });
+    if (ej.length) cols.push({j:j, t:String(h).trim().replace(/\s+/g, ' '), ej:ej});
   });
-  if (!cols.length) { toast('⚠️ No encontré columnas con importes.'); return; }
-  // Columna sugerida: la que nombra un concepto; si no, la primera cuyo título dice «valor»; si no, la última.
-  var def = cols.filter(function(c){ return conceptoDeTexto(c.t); })[0] || cols.filter(function(c){ return /valor/i.test(c.t); })[0] || cols[cols.length - 1];
+  if (!cols.length) { toast('⚠️ No encontré columnas con datos.'); return; }
   var keys = {}; U.forEach(function(r){ keys[r.k] = r; });
-  // Si en el archivo hay celdas rotuladas «Cobrado», «Propios» o «Adeudan» al lado de una fórmula que suma celdas de la
-  // columna de importes (como en la planilla del dueño: =+$I$14+$I$18+…), se leen qué unidades son de cada grupo.
   var rng = XLSX.utils.decode_range(ws['!ref'] || 'A1'), unidadPorFila = {};
-  rows.forEach(function(x, i){ if (i > hi && x && x[cu] != null && String(x[cu]).trim() !== '') unidadPorFila[rng.s.r + i + 1] = claveUnidad(x[cu]); });
+  datos.forEach(function(d){ unidadPorFila[rng.s.r + d.fila + 1] = d.k; });
+  // Bloques «Cobrado / Propios / Adeudan»: celdas rotuladas con una fórmula que suma celdas de la columna de importes.
   function bloquesEstado(j){
     var letra = XLSX.utils.encode_col(rng.s.c + j), res = {};
     Object.keys(ws).forEach(function(a){
@@ -1062,49 +1142,96 @@ function abrirImporteUnidades(wb, nombreArch){
     });
     return res;
   }
-  var est = {};
-  abrirModal('<h2>Importes por unidad</h2><p class="sm" style="margin:0 0 10px">Archivo: ' + esc(nombreArch) + ' · ' + datos.length + ' unidades en el archivo</p>' +
-    '<div class="form-grid"><label class="f full">Columna con los importes<select id="ci_col">' + cols.map(function(c){ return '<option value="' + c.j + '"' + (c === def ? ' selected' : '') + '>' + esc(c.t) + ' (' + c.n + ' importes)</option>'; }).join('') + '</select></label>' +
-    '<label class="f">Concepto<select id="ci_conc">' + CONC.map(function(c){ return '<option value="' + c[0] + '">' + esc(c[1]) + '</option>'; }).join('') + '</select></label>' +
-    '<label class="f">Los importes están en<select id="ci_mon"><option value="usd">Dólares (USD)</option><option value="ars">Pesos ($)</option></select></label></div>' +
-    '<label class="chk" id="ci_estw" style="display:none;margin-top:10px"><input type="checkbox" id="ci_est" checked><span id="ci_estt"></span></label>' +
+  var opcDest = '<option value="">— No cargar —</option><optgroup label="Datos de la unidad">' + DESTINOS.map(function(d){ return '<option value="' + d[0] + '">' + d[1] + '</option>'; }).join('') + '</optgroup>' +
+    '<optgroup label="Conceptos">' + CONC.map(function(c){ return '<option value="imp_' + c[0] + '">Importe por unidad · ' + esc(c[1]) + '</option><option value="cb_' + c[0] + '">Cobrado · ' + esc(c[1]) + '</option>'; }).join('') + '</optgroup>';
+  abrirModal('<h2>Cargar datos desde una planilla</h2><p class="sm" style="margin:0 0 10px">' + esc(nombreArch) + ' · ' + datos.length + ' unidades · elegí qué columna va a cada campo (lo que no elijas no se toca)</p>' +
+    '<div class="lista-sel" style="max-height:34vh"><table style="width:100%;font-size:13px"><thead><tr><th class="l" style="cursor:default">Columna del archivo</th><th class="l" style="cursor:default">Ejemplos</th><th class="l" style="cursor:default">Cargar en</th></tr></thead><tbody>' +
+    cols.map(function(c){ return '<tr><td class="l"><b>' + esc(c.t) + '</b></td><td class="l sm">' + esc(c.ej.join(' · ')) + '</td><td class="l"><select data-j="' + c.j + '" class="ci_map" style="width:100%">' + opcDest + '</select></td></tr>'; }).join('') + '</tbody></table></div>' +
+    '<div id="ci_mons" class="form-grid" style="margin-top:10px"></div>' +
+    '<label class="chk" style="margin-top:8px"><input type="checkbox" id="ci_crear"> Crear las unidades del archivo que todavía no están en el edificio</label>' +
+    '<label class="chk" id="ci_estw" style="display:none;margin-top:6px"><input type="checkbox" id="ci_est" checked><span id="ci_estt"></span></label>' +
     '<div class="card" id="ci_prev" style="margin-top:12px;font-size:13px"></div>' +
-    '<div class="modal-pie"><button class="btn" id="ci_x">Cancelar</button><button class="btn pri" id="ci_ok">Cargar importes</button></div>');
-  $('ci_conc').value = conceptoDeTexto(def.t) || 'alh';
-  var tabla;
+    '<div class="modal-pie"><button class="btn" id="ci_x">Cancelar</button><button class="btn pri" id="ci_ok">Cargar los datos</button></div>');
+  var mapa = {}, mon = {}, est = {}, camb = {}, nuevas = {};
+  [].forEach.call(document.querySelectorAll('.ci_map'), function(sel){
+    var c = cols.filter(function(x){ return String(x.j) === sel.dataset.j; })[0]; sel.value = sugerirDestino(c.t);
+    sel.onchange = recalcular;
+  });
+  $('ci_crear').onchange = recalcular;
+  function destinoDe(j){ var el = document.querySelector('.ci_map[data-j="' + j + '"]'); return el ? el.value : ''; }
+  function recalcular(){
+    mapa = {}; [].forEach.call(document.querySelectorAll('.ci_map'), function(sel){ if (sel.value) mapa[sel.value] = +sel.dataset.j; });   // destino -> columna (el último gana)
+    // monedas de los conceptos usados
+    var usados = CONC.filter(function(c){ return mapa['imp_' + c[0]] != null || mapa['cb_' + c[0]] != null; });
+    usados.forEach(function(c){ if (!mon[c[0]]) mon[c[0]] = esModoUnidad(P.modo[c[0]]) ? (P.modo[c[0]] === 'unidadusd' ? 'usd' : 'ars') : 'usd'; });
+    $('ci_mons').innerHTML = usados.map(function(c){ return '<label class="f">' + esc(c[1]) + ': importes en<select data-mc="' + c[0] + '"><option value="usd"' + (mon[c[0]] === 'usd' ? ' selected' : '') + '>Dólares (USD)</option><option value="ars"' + (mon[c[0]] === 'ars' ? ' selected' : '') + '>Pesos ($)</option></select></label>'; }).join('');
+    [].forEach.call($('ci_mons').querySelectorAll('select'), function(se){ se.onchange = function(){ mon[se.dataset.mc] = se.value; previa(); }; });
+    previa();
+  }
   function previa(){
-    var j = +$('ci_col').value; tabla = {}; est = bloquesEstado(j); var noEsta = [], tot = 0, n = 0;
-    datos.forEach(function(x){
-      var k = claveUnidad(x[cu]), v = x[j];
-      if (!keys[k]) { noEsta.push(String(x[cu]).trim()); return; }
-      if (typeof v === 'number' && isFinite(v) && v !== 0) { tabla[k] = Math.round(v * 10000) / 10000; tot += v; n++; }
+    camb = {}; nuevas = {}; var noEsta = [], cuenta = {}, crear = $('ci_crear').checked, sinMapa = !Object.keys(mapa).length;
+    datos.forEach(function(d){
+      var existe = !!keys[d.k]; if (!existe && !crear) { noEsta.push(d.n); return; }
+      var cb = {}, hay = false;
+      Object.keys(mapa).forEach(function(dst){
+        var v = d.x[mapa[dst]], val = null;
+        if (dst === 'p' || dst === 't' || dst === 'i' || dst === 'tp') { val = v == null ? '' : String(v).trim().replace(/\s+/g, ' '); if (!val) val = null; }
+        else if (dst === 'm') { var ms = mailsDe(v); val = ms.length ? ms : null; }
+        else if (dst === 'fp') { val = fechaDe(v) || null; }
+        else if (dst === 'hf') { val = horaDe(v) || null; }
+        else { var nn = numDe(v); val = (nn == null || nn === 0 && (dst === 's' || dst === 'sc' || dst === 'ss')) ? null : Math.round(nn * 10000) / 10000; }
+        if (val != null) { cb[dst] = val; cuenta[dst] = (cuenta[dst] || 0) + 1; hay = true; }
+      });
+      if (hay || !existe) { camb[d.k] = cb; if (!existe) nuevas[d.k] = d.n; }
     });
-    var sin = U.filter(function(r){ return tabla[r.k] == null; }).map(function(r){ return r.u; });
-    var mon = $('ci_mon').value === 'usd' ? 'USD' : '$';
+    est = {};
+    var cImp = CONC.filter(function(c){ return mapa['imp_' + c[0]] != null; })[0];
+    if (cImp) est = bloquesEstado(mapa['imp_' + cImp[0]]);
     var hayEst = !!(est.cobrado || est.propios);
     $('ci_estw').style.display = hayEst ? '' : 'none';
     if (hayEst) {
-      var sc = (est.cobrado || []).reduce(function(m, k){ return m + (tabla[k] || 0); }, 0);
-      $('ci_estt').textContent = 'Cargar también el estado de cobro que figura en el archivo: ' + (est.cobrado ? est.cobrado.length + ' unidades cobradas (' + N(sc, mon) + ')' : '') +
-        (est.cobrado && est.propios ? ' · ' : '') + (est.propios ? est.propios.length + ' propias' : '') + (est.adeudan ? ' · ' + est.adeudan.length + ' adeudan' : '');
+      var sc = (est.cobrado || []).reduce(function(m, k){ var d = datos.filter(function(x){ return x.k === k; })[0]; return m + (d ? (numDe(d.x[mapa['imp_' + cImp[0]]]) || 0) : 0); }, 0);
+      $('ci_estt').textContent = 'Cargar también el estado de cobro que figura en el archivo (' + (est.cobrado ? est.cobrado.length + ' cobradas, ' + N(sc, mon[cImp[0]] === 'ars' ? '$' : 'USD') : '') + (est.propios ? ' · ' + est.propios.length + ' propias' : '') + (est.adeudan ? ' · ' + est.adeudan.length + ' adeudan' : '') + ')';
     }
-    $('ci_prev').innerHTML = '<b>' + n + '</b> unidades con importe · total <b>' + N(tot, mon) + '</b>' +
-      (sin.length ? '<br><span class="sm">Quedan sin importe (' + sin.length + '): ' + esc(sin.slice(0, 14).join(', ')) + (sin.length > 14 ? '…' : '') + '</span>' : '') +
-      (noEsta.length ? '<br><span class="sm" style="color:var(--warn)">En el archivo y no en el edificio (' + noEsta.length + '): ' + esc(noEsta.slice(0, 14).join(', ')) + '</span>' : '');
+    var nombres = {}; DESTINOS.forEach(function(d){ nombres[d[0]] = d[1]; }); CONC.forEach(function(c){ nombres['imp_' + c[0]] = 'Importe · ' + c[1]; nombres['cb_' + c[0]] = 'Cobrado · ' + c[1]; });
+    $('ci_prev').innerHTML = sinMapa ? '<span class="sm">Elegí en al menos una columna dónde se carga.</span>' :
+      '<b>' + Object.keys(camb).length + '</b> unidades con algo para cargar' + (Object.keys(nuevas).length ? ' (<b>' + Object.keys(nuevas).length + '</b> nuevas)' : '') +
+      '<br><span class="sm">' + Object.keys(cuenta).map(function(k){ return esc(nombres[k] || k) + ': ' + cuenta[k]; }).join(' · ') + '</span>' +
+      (noEsta.length ? '<br><span class="sm" style="color:var(--warn)">En el archivo y no en el edificio (' + noEsta.length + ', se ignoran): ' + esc(noEsta.slice(0, 14).join(', ')) + (noEsta.length > 14 ? '…' : '') + '</span>' : '');
+    var sinImp = CONC.filter(function(c){ return mapa['cb_' + c[0]] != null && mapa['imp_' + c[0]] == null && !esModoUnidad(P.modo[c[0]]); });
+    if (sinImp.length) $('ci_prev').innerHTML += '<br><span style="color:var(--danger)">Para cargar «Cobrado · ' + esc(sinImp[0][1]) + '» también hace falta una columna con el importe de ese concepto.</span>';
   }
-  $('ci_col').onchange = function(){ var c = cols.filter(function(x){ return String(x.j) === $('ci_col').value; })[0]; var k = conceptoDeTexto(c.t); if (k) $('ci_conc').value = k; previa(); };
-  $('ci_mon').onchange = previa; previa();
+  recalcular();
   $('ci_x').onclick = cerrarModal;
   $('ci_ok').onclick = function(){
-    var k = $('ci_conc').value, base = 'global/edificios/' + edId + '/', upd = {};
-    if (!Object.keys(tabla).length) { toast('No hay importes para cargar'); return; }
-    U.forEach(function(r){ upd[base + 'unidades/' + r.k + '/cv/' + k] = tabla[r.k] == null ? null : tabla[r.k]; });
-    if ($('ci_est').checked && ($('ci_estw').style.display !== 'none')) {
-      var cobr = {}, prop = {}; (est.cobrado || []).forEach(function(x){ cobr[x] = 1; }); (est.propios || []).forEach(function(x){ prop[x] = 1; });
-      U.forEach(function(r){ upd[base + 'unidades/' + r.k + '/cb/' + k] = cobr[r.k] && tabla[r.k] != null ? tabla[r.k] : null; upd[base + 'unidades/' + r.k + '/pr/' + k] = prop[r.k] ? 1 : null; });
+    if (!Object.keys(camb).length) { toast('No hay nada para cargar'); return; }
+    var base = 'global/edificios/' + edId + '/', upd = {}, o = U.reduce(function(m, r){ return Math.max(m, r.o); }, 0), n = 0;
+    Object.keys(camb).forEach(function(k){
+      var cb = camb[k], ub = base + 'unidades/' + k + '/';
+      if (nuevas[k]) { upd[ub + 'n'] = nuevas[k]; upd[ub + 'o'] = ++o; if (cb.s == null) upd[ub + 's'] = 0; if (cb.p == null) { upd[ub + 'p'] = ''; upd[ub + 'rk'] = false; } }
+      Object.keys(cb).forEach(function(dst){
+        var v = cb[dst];
+        if (dst === 'p') { upd[ub + 'p'] = v; upd[ub + 'rk'] = /^RK\b/i.test(v); }
+        else if (dst === 'm') upd[ub + 'm'] = v;
+        else if (dst === 'i') { upd[ub + 'i'] = v; var im = mailsDe(v); upd[ub + 'im'] = im.length ? im : null; }
+        else if (dst.indexOf('imp_') === 0) upd[ub + 'cv/' + dst.slice(4)] = v;
+        else if (dst.indexOf('cb_') === 0) upd[ub + 'cb/' + dst.slice(3)] = v;
+        else upd[ub + dst] = v;
+      });
+      n++;
+    });
+    // conceptos con importes: pasan a modo «por unidad» en la moneda elegida
+    CONC.forEach(function(c){ if (mapa['imp_' + c[0]] != null) upd[base + 'params/modo/' + c[0]] = mon[c[0]] === 'ars' ? 'unidad' : 'unidadusd'; });
+    // estado de cobro detectado en las fórmulas del archivo
+    var cImp = CONC.filter(function(c){ return mapa['imp_' + c[0]] != null; })[0];
+    if (cImp && $('ci_estw').style.display !== 'none' && $('ci_est').checked) {
+      var kc = cImp[0], cobr = {}, prop = {}; (est.cobrado || []).forEach(function(x){ cobr[x] = 1; }); (est.propios || []).forEach(function(x){ prop[x] = 1; });
+      U.forEach(function(r){
+        var imp = camb[r.k] && camb[r.k]['imp_' + kc] != null ? camb[r.k]['imp_' + kc] : r.cv[kc];
+        upd[base + 'unidades/' + r.k + '/cb/' + kc] = cobr[r.k] && imp ? imp : null; upd[base + 'unidades/' + r.k + '/pr/' + kc] = prop[r.k] ? 1 : null;
+      });
     }
-    upd[base + 'params/modo/' + k] = $('ci_mon').value === 'usd' ? 'unidadusd' : 'unidad';
-    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes cargados: ' + Object.keys(tabla).length + ' unidades'); })
+    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Datos cargados en ' + n + ' unidades'); })
       .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
   };
 }
@@ -1201,7 +1328,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v14';
+var UNID_VER = 'unidades-v15';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
