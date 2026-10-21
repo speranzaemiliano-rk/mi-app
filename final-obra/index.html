@@ -45,6 +45,9 @@
     --medio:     #C2410C;  --medio-bg: #FFF1E8;
     --menor:     #946200;  --menor-bg: #FDF6E3;
     --listo:     #1A7F37;  --listo-bg: #E9F6EC;
+    /* Sin pendientes pero todavía sin limpiar: azul, para que no se confunda
+       con el verde de "lista para entregar". */
+    --limp:      #1D4ED8;  --limp-bg:  #E8EEFC;
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{
@@ -93,6 +96,8 @@
   }
   .chapa b{font-size:13px;color:var(--acento);font-variant-numeric:tabular-nums}
   .chapa.ok b{color:var(--listo)}
+  .chapa.limp{background:var(--limp-bg);border-color:var(--limp);color:#1E3A8A}
+  .chapa.limp b{color:var(--limp)}
   .chapa.alerta{background:var(--danger-bg);border-color:var(--danger);color:#7A0710}
   .chapa.alerta b{color:var(--danger)}
 
@@ -247,6 +252,11 @@
   .bt.pri:active{background:var(--acento-osc)}
   .bt.mal{color:var(--danger);border-color:rgba(215,0,21,.35)}
 
+  .limp-caja{margin-top:12px;padding:12px 13px;border-radius:var(--radius);
+             background:var(--limp-bg);border:1px solid var(--limp);display:flex;flex-direction:column;gap:9px}
+  .limp-caja.lista{background:var(--listo-bg);border-color:var(--listo);flex-direction:row;align-items:center;justify-content:space-between}
+  .limp-txt{font-size:14px;line-height:1.4;color:var(--ink)}
+  .limp-caja .bfull{margin:0}
   .r-bloque{margin-top:14px;border:1px solid var(--border);border-left:3px solid var(--rc,#888);
             border-radius:var(--radius);background:var(--card);overflow:hidden}
   .r-cab{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--surface-2)}
@@ -441,6 +451,11 @@
   .celda.listo{background:var(--listo-bg);border-color:var(--listo)}
   .celda.listo .n{color:#125C28;text-decoration:line-through}
   .celda.listo .p{color:#125C28}
+  .celda.limpieza{background:var(--limp-bg);border-color:var(--limp)}
+  .celda.limpieza .n{color:#1E3A8A}
+  .celda.limpieza .p{color:var(--limp)}
+  .esp-fila.limpieza{background:var(--limp-bg);border-color:var(--limp)}
+  .esp-fila.limpieza .esp-cab .n{color:var(--limp)}
   .celda.vacia{border-style:dashed;background:var(--surface)}
   .celda.vacia .n{color:var(--text-2)}
   .celda.vacia .p{color:var(--text-2);font-weight:500}
@@ -739,6 +754,7 @@
       <button class="fbtn" data-sev="crit">Críticas</button>
       <button class="fbtn" data-sev="medio">Medias</button>
       <button class="fbtn" data-sev="menor">Menores</button>
+      <button class="fbtn" data-sev="limpieza">Limpieza</button>
       <button class="fbtn" data-sev="listo">Terminadas</button>
     </div>
     <div class="frow" id="filaRubros"><span class="flbl">Rubro</span></div>
@@ -893,6 +909,13 @@
               orden: Number(v.orden) || 0,
               m: Number(v.m) || 0 };
     if (v.del) e.del = 1;
+    // Limpieza final hecha. Sólo se guarda cuando es verdad: así un registro
+    // viejo (sin el campo) se lee igual que uno destildado.
+    if (v.limpieza) {
+      e.limpieza = true;
+      e.limpiezaPor = String(v.limpiezaPor || "");
+      e.limpiezaCuando = Number(v.limpiezaCuando) || 0;
+    }
     return e;
   }
   function normItem(v){
@@ -944,16 +967,54 @@
   /* =========================================================
      3) CÁLCULOS
      El semáforo es por cantidad de pendientes, con los mismos
-     cortes que el tablero original: 0 terminada, 1-4 menores,
-     5-10 medios, 11 o más críticos.
+     cortes que el tablero original: 1-4 menores, 5-10 medios,
+     11 o más críticos. El cero se parte en dos: sin pendientes
+     pero sin limpiar es "pendiente limpieza" (azul), y recién
+     con la limpieza tildada pasa a "terminada" (verde). Una
+     unidad sin nada cargado no es ninguna de las dos.
   ========================================================= */
   var SEV = {
-    crit:  { txt:"Críticos",  color:"var(--crit)",  bg:"var(--crit-bg)"  },
-    medio: { txt:"Medios",    color:"var(--medio)", bg:"var(--medio-bg)" },
-    menor: { txt:"Menores",   color:"var(--menor)", bg:"var(--menor-bg)" },
-    listo: { txt:"Terminada", color:"var(--listo)", bg:"var(--listo-bg)" }
+    crit:     { txt:"Críticos",           color:"var(--crit)",   bg:"var(--crit-bg)"  },
+    medio:    { txt:"Medios",             color:"var(--medio)",  bg:"var(--medio-bg)" },
+    menor:    { txt:"Menores",            color:"var(--menor)",  bg:"var(--menor-bg)" },
+    limpieza: { txt:"Pendiente limpieza", color:"var(--limp)",   bg:"var(--limp-bg)"  },
+    listo:    { txt:"Terminada",          color:"var(--listo)",  bg:"var(--listo-bg)" },
+    vacia:    { txt:"Sin cargar",         color:"var(--text-3)", bg:"var(--surface-2)" }
   };
+  // Por cantidad, sin saber de limpieza. Sirve para los rubros, que no se
+  // limpian: ahí 0 pendientes es "listo" y se acabó.
   function sevDe(pend){ return pend === 0 ? "listo" : (pend <= 4 ? "menor" : (pend <= 10 ? "medio" : "crit")); }
+  // Para una unidad o espacio: tiene en cuenta la limpieza y lo vacío.
+  function sevEnt(eid){
+    var n = cuentaDe(itemsDe(eid));
+    if (!n.total) return "vacia";
+    if (n.pend > 0) return sevDe(n.pend);
+    var e = datos.entidades[eid];
+    return (e && e.limpieza) ? "listo" : "limpieza";
+  }
+
+  function marcarLimpieza(eid, hecha){
+    var e = datos.entidades[eid];
+    if (!e) return;
+    if (hecha) {
+      tocarEnt(eid, { limpieza: true, limpiezaPor: (nube.usuario || ""), limpiezaCuando: Date.now() });
+      return;
+    }
+    // Al deshacer se SACAN las claves en vez de escribir false: normEnt no
+    // copia un false, así que el eco de la nube volvería sin ellas y, con la
+    // firma distinta, parecería un cambio de otro equipo.
+    delete e.limpieza; delete e.limpiezaPor; delete e.limpiezaCuando;
+    subir("entidades", eid, e);
+  }
+  // Si a una unidad ya limpia le vuelve a aparecer trabajo (un pendiente nuevo
+  // o uno destildado), hay que volver a limpiarla: el polvo de la obra no
+  // respeta el tilde. Se avisa, porque pasa solo.
+  function volverAPendienteLimpieza(eid){
+    var e = datos.entidades[eid];
+    if (!e || !e.limpieza) return;
+    marcarLimpieza(eid, false);
+    toast(e.nombre + " vuelve a «pendiente limpieza»");
+  }
 
   function vivos(col, filtro){
     return Object.keys(col).filter(function(k){ return !col[k].del && (!filtro || filtro(col[k], k)); });
@@ -1043,11 +1104,15 @@
     $("avancePct").textContent = pct + "%";
 
     var us = entidadesDe("unidad"), cs = entidadesDe("comun");
-    var listas = us.filter(function(e){ return cuentaDe(itemsDe(e)).pend === 0; }).length;
-    var criticas = us.filter(function(e){ return sevDe(cuentaDe(itemsDe(e)).pend) === "crit"; }).length;
+    var listas = 0, enLimpieza = 0, criticas = 0;
+    us.forEach(function(e){
+      var sv = sevEnt(e);
+      if (sv === "listo") listas++; else if (sv === "limpieza") enLimpieza++; else if (sv === "crit") criticas++;
+    });
     var ch = [];
     ch.push('<span class="chapa">Unidades <b>' + us.length + '</b></span>');
     ch.push('<span class="chapa">Comunes <b>' + cs.length + '</b></span>');
+    if (enLimpieza) ch.push('<span class="chapa limp">Limpieza <b>' + enLimpieza + '</b></span>');
     ch.push('<span class="chapa ok">Terminadas <b>' + listas + '</b></span>');
     if (criticas) ch.push('<span class="chapa alerta">Críticas <b>' + criticas + '</b></span>');
     $("chapas").innerHTML = ch.join("");
@@ -1070,7 +1135,7 @@
   // ¿Esta entidad pasa los filtros de arriba?
   function pasaFiltro(eid){
     var ids = itemsDe(eid), n = cuentaDe(ids), e = datos.entidades[eid];
-    if (filtro.sev !== "todas" && sevDe(n.pend) !== filtro.sev) return false;
+    if (filtro.sev !== "todas" && sevEnt(eid) !== filtro.sev) return false;
     if (filtro.rubros.length) {
       var tiene = filtro.rubros.some(function(r){
         return ids.some(function(i){ return datos.items[i].rubro === r && !datos.items[i].ok; });
@@ -1087,8 +1152,8 @@
 
   function tarjetaEntidad(eid){
     var e = datos.entidades[eid], ids = itemsDe(eid), n = cuentaDe(ids);
-    var sv = sevDe(n.pend), s = SEV[sv];
-    var pct = n.total ? Math.round(n.ok * 100 / n.total) : 100;
+    var sv = sevEnt(eid), s = SEV[sv];
+    var pct = n.total ? Math.round(n.ok * 100 / n.total) : 0;
 
     // Chips de rubros con lo que falta de cada uno.
     var porR = {}, ordenR = [];
@@ -1156,9 +1221,11 @@
   // Distinguirlas importa: si no, 39 unidades vacías se ven todas listas.
   function estadoDe(eid){
     var n = cuentaDe(itemsDe(eid));
-    if (!n.total) return { clase:"vacia", pend:0, total:0, listo:false, vacio:true };
-    return { clase: n.pend === 0 ? "listo" : "", pend:n.pend, total:n.total,
-             listo: n.pend === 0, vacio:false };
+    if (!n.total) return { clase:"vacia", pend:0, total:0, listo:false, limpieza:false, vacio:true };
+    var sinPend = n.pend === 0;
+    var limpia = !!(datos.entidades[eid] && datos.entidades[eid].limpieza);
+    return { clase: sinPend ? (limpia ? "listo" : "limpieza") : "", pend:n.pend, total:n.total,
+             listo: sinPend && limpia, limpieza: sinPend && !limpia, vacio:false };
   }
 
   // Nombres de los rubros que TODAVÍA tienen algo pendiente en esa entidad,
@@ -1176,16 +1243,17 @@
 
   function cuadroGrilla(titulo, tipo){
     var lista = entidadesDe(tipo);
-    var listos = 0, sinCargar = 0;
+    var listos = 0, enLimpieza = 0, sinCargar = 0;
     lista.forEach(function(eid){
       var e = estadoDe(eid);
-      if (e.vacio) sinCargar++; else if (e.listo) listos++;
+      if (e.vacio) sinCargar++; else if (e.listo) listos++; else if (e.limpieza) enLimpieza++;
     });
     var conDatos = lista.length - sinCargar;
 
     var h = ['<div class="res-tit"><h3>' + esc(titulo) + '</h3>' +
       (conDatos ? '<span class="cnt' + (listos === conDatos ? ' fin' : '') + '">' +
-        listos + ' de ' + conDatos + ' terminados</span>' : '') + '</div>'];
+        listos + ' de ' + conDatos + ' terminados' +
+        (enLimpieza ? ' · ' + enLimpieza + ' en limpieza' : '') + '</span>' : '') + '</div>'];
     if (sinCargar) {
       h.push('<div class="res-nota">' + sinCargar +
         (sinCargar === 1 ? ' todavía no tiene pendientes cargados (borde punteado).'
@@ -1199,7 +1267,7 @@
       h.push('<button class="celda ' + e.clase + '" data-ent="' + esc(eid) + '" title="' +
         esc(ent.nombre) + (ent.piso ? " · piso " + esc(ent.piso) : "") + '">' +
         '<span class="n">' + esc(nomCorto(ent.nombre)) + '</span>' +
-        '<span class="p">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ listo" : e.pend + " pend.")) + '</span>' +
+        '<span class="p">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ listo" : (e.limpieza ? "🧹 limpieza" : e.pend + " pend."))) + '</span>' +
       '</button>');
     });
     h.push('</div>');
@@ -1208,16 +1276,17 @@
 
   function cuadroEspacios(){
     var lista = entidadesDe("comun");
-    var listos = 0, sinCargar = 0;
+    var listos = 0, enLimpieza = 0, sinCargar = 0;
     lista.forEach(function(eid){
       var e = estadoDe(eid);
-      if (e.vacio) sinCargar++; else if (e.listo) listos++;
+      if (e.vacio) sinCargar++; else if (e.listo) listos++; else if (e.limpieza) enLimpieza++;
     });
     var conDatos = lista.length - sinCargar;
 
     var h = ['<div class="res-tit"><h3>Espacios comunes</h3>' +
       (conDatos ? '<span class="cnt' + (listos === conDatos ? ' fin' : '') + '">' +
-        listos + ' de ' + conDatos + ' terminados</span>' : '') + '</div>'];
+        listos + ' de ' + conDatos + ' terminados' +
+        (enLimpieza ? ' · ' + enLimpieza + ' en limpieza' : '') + '</span>' : '') + '</div>'];
     if (!lista.length) return h.join("") + '<div class="vacio">No hay espacios comunes cargados.</div>';
 
     lista.forEach(function(eid){
@@ -1225,7 +1294,7 @@
       h.push('<div class="esp-fila ' + (e.listo ? "listo" : "") + '" data-ent="' + esc(eid) + '">' +
         '<div class="esp-cab"><span class="nom">' +
           (ent.icono ? esc(ent.icono) + " " : "") + esc(ent.nombre) + '</span>' +
-          '<span class="n">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ terminado" : e.pend + " pendientes")) + '</span>' +
+          '<span class="n">' + (e.vacio ? "sin cargar" : (e.listo ? "✓ terminado" : (e.limpieza ? "🧹 pendiente limpieza" : e.pend + " pendientes"))) + '</span>' +
         '</div>' +
         (rs.length
           ? '<div class="esp-rub">' + rs.map(function(r){
@@ -1405,18 +1474,36 @@
 
   function pintarDetalleEntidad(eid){
     var e = datos.entidades[eid], n = cuentaDe(itemsDe(eid));
+    var sv = sevEnt(eid);
     $("dTitulo").textContent = (e.icono ? e.icono + " " : "") + e.nombre;
     $("dSub").textContent = (e.piso ? "Piso " + e.piso + " · " : "") +
-      n.pend + " de " + n.total + " pendientes";
+      (sv === "listo" ? "terminada y limpia" :
+       (sv === "limpieza" ? "sin pendientes · falta la limpieza" :
+        n.pend + " de " + n.total + " pendientes"));
 
-    var h = ['<div class="d-acciones">' +
+    var h = [];
+    // El tilde de limpieza aparece recién cuando no queda nada: antes no tiene
+    // sentido limpiar. Una vez hecha, queda a la vista con quién y cuándo, y
+    // se puede deshacer.
+    if (sv === "limpieza") {
+      h.push('<div class="limp-caja">' +
+        '<div class="limp-txt"><b>No queda ningún pendiente.</b> Falta la limpieza final para darla por terminada.</div>' +
+        '<button class="bfull" data-acc="limpiezaHecha">🧹 Marcar limpieza hecha</button></div>');
+    } else if (sv === "listo") {
+      h.push('<div class="limp-caja lista">' +
+        '<div class="limp-txt"><b>✓ Terminada y limpia.</b> Limpieza: ' + esc(nombreDe(e.limpiezaPor)) +
+          (e.limpiezaCuando ? " · " + esc(fechaCorta(e.limpiezaCuando)) : "") + '</div>' +
+        '<button class="bt" data-acc="limpiezaDeshacer">Deshacer</button></div>');
+    }
+
+    h.push('<div class="d-acciones">' +
       '<button class="bt pri" data-acc="nuevoRubro">+ Rubro</button>' +
       '<button class="bt" data-acc="verHechos">' + (verHechos ? "Ocultar hechos" : "Ver hechos") + '</button>' +
       '<button class="bt" data-acc="compartir">Compartir</button>' +
       '<button class="bt" data-acc="fotosEnt">📷 ' + fotosDeEntidad(eid).length + '</button>' +
       '<button class="bt" data-acc="editarEnt">Renombrar</button>' +
       '<button class="bt mal" data-acc="borrarEnt">Borrar</button>' +
-    '</div>'];
+    '</div>');
 
     var bloques = rubrosDe(eid);
     if (!bloques.length) h.push('<div class="vacio">Todavía no hay nada cargado acá.<br>Tocá «+ Rubro» para empezar.</div>');
@@ -1509,6 +1596,7 @@
     var iid = "i_" + eid + "_" + rid + "_" + uid();
     datos.items[iid] = { ent: eid, rubro: rid, texto: t, ok: false, orden: ultimo + 1 };
     subir("items", iid, datos.items[iid]);
+    volverAPendienteLimpieza(eid);
     return iid;
   }
 
@@ -1838,7 +1926,7 @@
         L.push("*" + rubroNom(b.rubro) + "*");
         pend.forEach(function(i){ L.push("• " + datos.items[i].texto + _quien(i)); });
       });
-      if (L.length === 1) L.push("", "Sin pendientes ✅");
+      if (L.length === 1) L.push("", e.limpieza ? "Terminada y limpia ✅" : "Sin pendientes · falta la limpieza 🧹");
     } else {
       L.push("*" + obra + " — " + rubroNom(id) + "*");
       var porEnt = {};
@@ -2425,7 +2513,9 @@
       });
       L.push('<div class="rep-ent' + (conF ? " cf" : "") + '"><h2>' +
         esc((e.icono ? e.icono + " " : "") + e.nombre + (e.piso ? " — Piso " + e.piso : "")) +
-        '<span>' + n.pend + ' de ' + n.total + ' pendientes</span></h2>' +
+        '<span>' + (n.total && !n.pend
+            ? (e.limpieza ? 'terminada y limpia' : 'sin pendientes · falta limpieza')
+            : n.pend + ' de ' + n.total + ' pendientes') + '</span></h2>' +
         x.bloques.map(function(b){
           return '<div class="rep-ru">' + esc(rubroNom(b.rubro)) + '</div>' +
             b.items.map(function(i){
@@ -2758,9 +2848,20 @@
       tocarItem(iid, pasaAHecho
         ? { ok: true, por: (nube.usuario || ""), cuando: Date.now() }
         : { ok: false, por: "", cuando: 0 });
+      if (!pasaAHecho) volverAPendienteLimpieza(datos.items[iid].ent);
       render();
+      // Se tildó el último: avisar que ahora toca la limpieza, que es el paso
+      // que después nadie se acuerda.
+      if (pasaAHecho && sevEnt(datos.items[iid].ent) === "limpieza")
+        toast("Sin pendientes · queda la limpieza 🧹");
       return;
     }
+    if (acc === "limpiezaHecha") {
+      marcarLimpieza(det.id, true); render();
+      toast(datos.entidades[det.id].nombre + ": terminada y limpia ✓");
+      return;
+    }
+    if (acc === "limpiezaDeshacer") { marcarLimpieza(det.id, false); render(); return; }
     if (acc === "responsable" && iid) { modalResponsable(iid); return; }
     if (acc === "fotos" && iid) { modalFotos(iid); return; }
     if (acc === "editar" && iid) { editarEnLugar(fila); return; }
@@ -3670,7 +3771,8 @@
     '{"tipo":"hecho","item":"<id>"}                        → se cumplió\n' +
     '{"tipo":"pendiente","item":"<id>"}                    → volvió a quedar pendiente\n' +
     '{"tipo":"nuevo","ent":"<id>","rubro":"<id>","texto":"..."} → pendiente nuevo\n' +
-    '{"tipo":"responsable","item":"<id>","persona":"<id o nombre nuevo>"}\n\n' +
+    '{"tipo":"responsable","item":"<id>","persona":"<id o nombre nuevo>"}\n' +
+    '{"tipo":"limpieza","ent":"<id>"}                       → ya se hizo la limpieza final de ese lugar\n\n' +
     "Reglas:\n" +
     "- Usá SIEMPRE los ids que te paso. Nunca inventes un id de lugar o rubro.\n" +
     "- Si no encontrás a qué ítem se refiere, no adivines: dejá acciones vacío y " +
@@ -3755,7 +3857,9 @@
         var e = datos.entidades[x.ent];
         return (e ? e.nombre : "?") + " · " + rubroNom(x.rubro);
       };
-      if (a.tipo === "hecho" && it && !it.del) {
+      if (a.tipo === "limpieza" && a.ent && datos.entidades[a.ent] && !datos.entidades[a.ent].del) {
+        out.push({ tipo:"limpieza", ent:a.ent, rotulo:"Limpieza hecha", detalle: datos.entidades[a.ent].nombre });
+      } else if (a.tipo === "hecho" && it && !it.del) {
         out.push({ tipo:"hecho", item:a.item, rotulo:"Marcar hecho", detalle: it.texto + " — " + donde(it) });
       } else if (a.tipo === "pendiente" && it && !it.del) {
         out.push({ tipo:"pendiente", item:a.item, rotulo:"Volver a pendiente", detalle: it.texto + " — " + donde(it) });
@@ -3778,8 +3882,9 @@
       if (chk.checked) marcadas.push(asisPropuesta[+chk.getAttribute("data-i")]);
     });
     if (!marcadas.length) { asisPropuesta = null; asisPintar(); return; }
-    var n = 0;
+    var n = 0, limpiezas = [], sinLimpiar = [];
     marcadas.forEach(function(a){
+      if (a.tipo === "limpieza")   { limpiezas.push(a); return; }   // van al final, ver abajo
       if (a.tipo === "hecho")      { tocarItem(a.item, { ok:true, por:(nube.usuario||""), cuando:Date.now() }); n++; }
       else if (a.tipo === "pendiente") { tocarItem(a.item, { ok:false, por:"", cuando:0 }); n++; }
       else if (a.tipo === "nuevo") { if (nuevoItem(a.ent, a.rubro, a.texto)) n++; }
@@ -3793,9 +3898,21 @@
         tocarItem(a.item, { resp: pid }); n++;
       }
     });
+    // La limpieza se marca recién cuando no queda ningún pendiente, igual que
+    // desde la ficha. Por eso va después de los tildes del mismo pedido («se
+    // hizo todo y ya se limpió») y, si al lugar todavía le falta trabajo, no
+    // se marca y se dice por qué: si quedara guardada escondida, al tildar el
+    // último pendiente saltaría a verde sin pasar por «pendiente limpieza».
+    limpiezas.forEach(function(a){
+      var sv = sevEnt(a.ent);
+      if (sv === "limpieza") { marcarLimpieza(a.ent, true); n++; }
+      else if (sv !== "listo") sinLimpiar.push(datos.entidades[a.ent].nombre + " (" + cuentaDe(itemsDe(a.ent)).pend + " pendientes)");
+    });
     asisPropuesta = null;
     render();
-    asisDecir("el", "Listo: " + n + (n === 1 ? " cambio aplicado." : " cambios aplicados."));
+    asisDecir("el", "Listo: " + n + (n === 1 ? " cambio aplicado." : " cambios aplicados.") +
+      (sinLimpiar.length ? " No marqué la limpieza de " + sinLimpiar.join(", ") +
+        ": se marca cuando no queda ningún pendiente." : ""));
   }
 
   /* ---- Dictar ----

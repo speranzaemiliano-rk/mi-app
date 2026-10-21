@@ -12,7 +12,7 @@ Contexto para trabajar dentro de `final-obra/`. Se carga solo cuando Claude Code
 
 ```
 rubros[rid]    = { nombre, color, orden, m }
-entidades[eid] = { tipo:'unidad'|'comun', nombre, piso, icono, orden, del, m }
+entidades[eid] = { tipo:'unidad'|'comun', nombre, piso, icono, orden, del, m, limpieza, limpiezaPor, limpiezaCuando }
 items[iid]     = { ent, rubro, texto, ok, orden, del, m, resp, por, cuando }
 personas[pid]  = { nombre, email, del, m }          ← responsables
 fotos[fid]     = { item, ent, rubro, nota, mime, por, del, m }   ← sólo la ficha
@@ -40,7 +40,7 @@ El nombre de la obra se edita desde Ajustes y vive en `finalObra/<obraId>/obra`,
 
 **Carga inicial.** `final-obra/datos-iniciales.js` (`window.FINAL_OBRA_SEED`) tiene las 39 unidades, los 13 espacios comunes y los 820 pendientes del relevamiento. Es la carga de arranque, **no la base**: se usa la primera vez en un equipo o con la nube vacía. Editarlo no cambia una obra en uso.
 
-**Semáforo**: por cantidad de pendientes — 0 terminada, 1-4 menores, 5-10 medios, 11+ críticos. Son los cortes del tablero original; si se tocan, hay que tocar `sevDe()` y los textos de `SEV`.
+**Semáforo**: por cantidad de pendientes — 1-4 menores, 5-10 medios, 11+ críticos. Son los cortes del tablero original; si se tocan, hay que tocar `sevDe()` y los textos de `SEV`. **El cero se parte en dos**: una unidad o espacio **sin pendientes pero sin limpiar** está en «Pendiente limpieza» (azul, `--limp`) y recién con la limpieza final tildada pasa a «Terminada» (verde). Lo pidió el dueño: la limpieza es el último paso antes de entregar y es el que nadie se acuerda de hacer. `sevDe(pend)` sigue siendo sólo por cantidad (lo usan los **rubros**, que no se limpian: ahí 0 es «listo» y se acabó); para un lugar hay que usar **`sevEnt(eid)`**, que además devuelve `vacia` (sin nada cargado: ni azul ni verde, para que 39 unidades vacías no parezcan terminadas). La marca vive en la entidad: `limpieza:true` + `limpiezaPor`/`limpiezaCuando` (quién y cuándo, como `por`/`cuando` en el tilde de un ítem), se escribe con `marcarLimpieza(eid, hecha)` y **sólo se guarda cuando es verdad**: al deshacer se sacan las claves en vez de escribir `false`, porque `normEnt` no copia un `false` y el eco de la nube volvería con otra firma. ⚠️ **Se deshace sola** (`volverAPendienteLimpieza`, con toast) cuando a un lugar limpio le vuelve a aparecer trabajo: un ítem destildado o un pendiente nuevo (`nuevoItem`); el polvo de la obra no respeta el tilde. El tilde «🧹 Marcar limpieza hecha» aparece en la ficha del lugar recién sin pendientes; el asistente tiene la acción `{"tipo":"limpieza","ent":…}`, que `asisAplicar` aplica **después** de los tildes del mismo pedido y **sólo si no queda nada**: si quedara guardada escondida en un lugar con pendientes, al tildar el último saltaría a verde sin pasar por el azul. Filtro «Limpieza» en la lista, chapa «Limpieza N» en la cabecera, celda azul «🧹 limpieza» en el Resumen y «sin pendientes · falta la limpieza» en el WhatsApp y el informe.
 
 **Permiso denegado con sesión abierta.** No abrir el formulario de ingreso: la cuenta ya entró bien, volver a entrar no cambia nada. `btnNube` tiene una rama propia para `estado === "mal" && nube.usuario` que muestra `bloqueReglas()` —las reglas con el mail de quien entró ya puesto— con botón de copiar y un «reintentar» que hace `soltarDatos()` + `conectarDatos()` sin recargar.
 
