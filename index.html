@@ -3603,7 +3603,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v551</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v552</div>
         </div>
     </nav>
 
@@ -7775,6 +7775,15 @@
                             <input type="file" id="factPagoComprobante" accept=".pdf,image/*" style="font-size:13px;">
                             <div class="form-hint" id="factPagoComprobanteEstado">Subí el PDF o imagen de la transferencia, del cupón de la tarjeta o del recibo. Si es pesado se comprime solo. También podés adjuntarlo después desde Pagos (📎+).</div>
                         </div>
+                        <!-- VEP / AFIP-ARCA-AGIP: DDJJ presentada y acuse (sólo si la clase es VEP o el proveedor es un organismo recaudador) -->
+                        <div class="form-group" id="factVepDocs" style="display:none; margin-bottom:10px;">
+                            <label>🏛️ Papeles del VEP <span style="font-weight:400;color:var(--text-3);font-size:11px;">(opcionales)</span></label>
+                            <div style="font-size:12px;color:var(--text-2);margin:2px 0;">📋 Declaración jurada presentada</div>
+                            <input type="file" id="factPagoDdjj" accept=".pdf,image/*" style="font-size:13px;">
+                            <div style="font-size:12px;color:var(--text-2);margin:8px 0 2px;">✅ Acuse de presentación</div>
+                            <input type="file" id="factPagoAcuse" accept=".pdf,image/*" style="font-size:13px;">
+                            <div class="form-hint" id="factVepEstado">Quedan guardados en el pago. También podés cargarlos después desde Pagos (📋+ / ✅+).</div>
+                        </div>
                         <div class="form-group" style="margin-bottom:10px;">
                             <label>Fecha del pago</label>
                             <input type="date" id="factFechaPago">
@@ -9847,22 +9856,75 @@
     // guarda en REF_DOCS. Devuelve {comprobanteId, comprobanteNombre, comprobanteTipo} o null.
     // `estadoElId` (opcional): id de un elemento de texto donde mostrar «Subiendo…» y el progreso
     // de la compresión. Sin eso un PDF pesado dejaba el botón de guardar sin ninguna señal.
-    async function _subirComprobantePago(fileInputId, estadoElId) {
+    // `prefijo`/`etiqueta` (opcionales) sirven para los otros papeles del pago (DDJJ y acuse de un VEP): cambian el id del archivo y el texto de los avisos.
+    async function _subirComprobantePago(fileInputId, estadoElId, prefijo, etiqueta) {
         var fi = document.getElementById(fileInputId);
         var file = fi && fi.files && fi.files[0];
         if (!file) return null;
-        if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert('El comprobante supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
+        etiqueta = etiqueta || 'El comprobante';
+        if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) { alert(etiqueta + ' supera los ' + MAX_DOC_MB + ' MB.'); throw new Error('comprobante-grande'); }
         var est = estadoElId ? document.getElementById(estadoElId) : null;
         var textoPrevio = est ? est.textContent : '';
-        if (est) est.textContent = 'Subiendo comprobante…';
+        if (est) est.textContent = 'Subiendo ' + etiqueta.replace(/^(El|La) /, '').toLowerCase() + '…';
         try {
             var base64 = await leerArchivoBase64(file, est ? _progresoEnElemento(estadoElId) : undefined);
-            var id = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            var id = (prefijo || 'COMPPAGO') + '-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
             await REF_DOCS.child(id).set({ nombre: file.name, tipo: file.type, contenido: base64 });
             return { comprobanteId: id, comprobanteNombre: file.name, comprobanteTipo: file.type };
         } finally {
             if (est) est.textContent = textoPrevio;
         }
+    }
+    // ═══════════ VEP: declaración jurada presentada + acuse ═══════════
+    // Al pagar un VEP (o cualquier comprobante de AFIP/ARCA/AGIP/ARBA) se pueden dejar a mano los dos papeles que lo
+    // respaldan: la DDJJ presentada y el acuse de presentación. Cuelgan del PAGO (ddjjId/Nombre/Tipo y acuseId/Nombre/Tipo),
+    // igual que el comprobante de la transferencia, y se guardan en REF_DOCS con prefijo DDJJ-/ACUSE-.
+    var VEP_DOCS = {
+        ddjj:  { prefijo: 'DDJJ',  id: 'ddjjId',  nombre: 'ddjjNombre',  tipo: 'ddjjTipo',  etiqueta: 'La declaración jurada', corto: 'DDJJ',  icono: '📋' },
+        acuse: { prefijo: 'ACUSE', id: 'acuseId', nombre: 'acuseNombre', tipo: 'acuseTipo', etiqueta: 'El acuse',              corto: 'Acuse', icono: '✅' }
+    };
+    function _esProvImpuestos(nombre) {
+        var n = _txtNorm(nombre);
+        return /\b(afip|arca|agip|arba)\b/.test(n) || n.indexOf('administracion federal de ingresos') >= 0 || n.indexOf('administracion gubernamental de ingresos') >= 0;
+    }
+    // ¿Este comprobante admite DDJJ/acuse? Un VEP (factura con esVEP o documento tipo VEP) o cualquier cosa de un organismo recaudador.
+    function _vepDocsAplica(item) {
+        return !!item && (!!item.esVEP || item.tipo === 'vep' || _esProvImpuestos(item.proveedor));
+    }
+    // Sube los dos archivos (los que se hayan elegido). Si el segundo falla se borra el primero para no dejarlo huérfano.
+    async function _subirDocsVEP(ddjjInputId, acuseInputId, estadoElId) {
+        var out = {}, subidos = [];
+        try {
+            for (var k of [['ddjj', ddjjInputId], ['acuse', acuseInputId]]) {
+                var c = VEP_DOCS[k[0]];
+                var r = await _subirComprobantePago(k[1], estadoElId, c.prefijo, c.etiqueta);
+                if (r) { out[c.id] = r.comprobanteId; out[c.nombre] = r.comprobanteNombre; out[c.tipo] = r.comprobanteTipo; subidos.push(r.comprobanteId); }
+            }
+        } catch (e) {
+            subidos.forEach(function(id) { try { REF_DOCS.child(id).remove(); } catch (_) {} });
+            throw e;
+        }
+        return out;
+    }
+    function _quitarDocsVEP(o) {   // deshace una subida (si después falla otra cosa antes de guardar el pago)
+        if (!o) return;
+        ['ddjj', 'acuse'].forEach(function(k) { var id = o[VEP_DOCS[k].id]; if (id) { try { REF_DOCS.child(id).remove(); } catch (_) {} } });
+    }
+    // Botones 📋 DDJJ / ✅ Acuse para ver lo adjunto al pago.
+    function _btnsVerDocsVEP(p) {
+        if (!p) return '';
+        return ['ddjj', 'acuse'].map(function(k) {
+            var c = VEP_DOCS[k]; if (!p[c.id]) return '';
+            return '<button class="btn btn-outline btn-sm" title="Ver ' + c.etiqueta.toLowerCase() + ' del VEP" onclick="descargarDoc(\'' + String(p[c.id]).replace(/['"\\]/g, '') + '\',\'' + String(p[c.nombre] || c.corto).replace(/['"\\]/g, '') + '\')">' + c.icono + '</button>';
+        }).join('');
+    }
+    // Botones de la fila de Pagos para subir o reemplazar la DDJJ / el acuse de un pago ya hecho.
+    function _btnsAdjuntarDocsVEP(p, srcTipo, di, gr) {
+        return ['ddjj', 'acuse'].map(function(k) {
+            var c = VEP_DOCS[k];
+            return '<button class="btn btn-outline btn-sm" title="' + (p[c.id] ? 'Reemplazar ' : 'Adjuntar ') + c.etiqueta.toLowerCase() + ' del VEP" ' +
+                   'onclick="adjuntarCompPago(\'' + srcTipo + '\',' + di + ',' + p.pi + ',' + gr + ',\'' + k + '\')">' + c.icono + (p[c.id] ? '🔄' : '+') + '</button>';
+        }).join('');
     }
     // Botón/enlace para ver el comprobante de un pago (reutiliza descargarDoc).
     // ═══════════ Unificar proveedores duplicados ═══════════
@@ -10086,11 +10148,18 @@
                    'onclick="adjuntarCompPago(\'' + _st + '\',' + _di + ',' + p.pi + ',' + _gr + ')">' +
                    (p.comprobanteId ? '🔄' : '📎+') + '</button>';
         }
+        // VEP: DDJJ presentada y acuse (se ven siempre; se cargan/reemplazan si se puede editar)
+        out += _btnsVerDocsVEP(p);
+        if (puedeEditar && !p.esEmit && p.vepDocs) {
+            out += _btnsAdjuntarDocsVEP(p, p.esDoc ? 'doc' : 'factura', p.esDoc ? ("'" + p.di + "'") : p.di,
+                (p.esFact && p._nGrupo > 1 && p.grupoPagoId) ? ("'" + p.grupoPagoId + "'") : 'null');
+        }
         return out;
     }
-    // Sube el comprobante de transferencia y lo cuelga del pago ya registrado.
-    window.adjuntarCompPago = function(srcTipo, di, pi, grupoId) {
+    // Sube el comprobante de transferencia (o, con `clave` 'ddjj'/'acuse', la DDJJ o el acuse de un VEP) y lo cuelga del pago ya registrado.
+    window.adjuntarCompPago = function(srcTipo, di, pi, grupoId, clave) {
         if (!puedeEditar) { alert('No tenés permisos para modificar pagos.'); return; }
+        var K = VEP_DOCS[clave] || { prefijo: 'COMPPAGO', id: 'comprobanteId', nombre: 'comprobanteNombre', tipo: 'comprobanteTipo', etiqueta: 'El comprobante' };
         var inp = document.getElementById('_inpAdjCompPago');
         if (!inp) {
             inp = document.createElement('input');
@@ -10102,18 +10171,18 @@
         inp.value = '';   // permite volver a elegir el MISMO archivo
         inp.onchange = function() {
             var file = inp.files && inp.files[0]; if (!file) return;
-            var docId = 'COMPPAGO-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            var docId = K.prefijo + '-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
             var tipo = file.type || 'application/pdf';
-            leerArchivoBase64(file, function(t){ console.log('Comprobante:', t); }).then(function(b64) {
+            leerArchivoBase64(file, function(t){ console.log('Adjunto:', t); }).then(function(b64) {
                 return REF_DOCS.child(docId).set({ nombre: file.name, tipo: tipo, contenido: b64 });
             }).then(function() {
-                var n = _aplicarCompAPagos(srcTipo, di, pi, grupoId,
-                    { comprobanteId: docId, comprobanteNombre: file.name, comprobanteTipo: tipo });
-                if (!n) { alert('No se encontró el pago al que adjuntarlo.'); return; }
-                alert('✅ Comprobante adjuntado' + (n > 1 ? ' a las ' + n + ' facturas de este pago' : '') + '.');
+                var adj = {}; adj[K.id] = docId; adj[K.nombre] = file.name; adj[K.tipo] = tipo;
+                var n = _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj);
+                if (!n) { try { REF_DOCS.child(docId).remove(); } catch (_) {} alert('No se encontró el pago al que adjuntarlo.'); return; }
+                alert('✅ ' + K.etiqueta + (K.etiqueta.indexOf('La ') === 0 ? ' quedó adjunta' : ' quedó adjunto') + (n > 1 ? ' a las ' + n + ' facturas de este pago' : '') + '.');
                 if (typeof renderizar === 'function') renderizar();
             }).catch(function(e) {
-                alert('❌ No se pudo adjuntar el comprobante: ' + (e && e.message ? e.message : e));
+                alert('❌ No se pudo adjuntar: ' + (e && e.message ? e.message : e));
             });
         };
         inp.click();
@@ -10124,7 +10193,7 @@
         var n = 0;
         var poner = function(p) {
             if (!p) return;
-            p.comprobanteId = adj.comprobanteId; p.comprobanteNombre = adj.comprobanteNombre; p.comprobanteTipo = adj.comprobanteTipo;
+            Object.keys(adj).forEach(function(k) { p[k] = adj[k]; });
             n++;
         };
         if (grupoId) {
@@ -11355,7 +11424,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:(f.esVEP?'VEP ':'Fact.')+(f.numero||f.descripcion||'—'),tipo:(f.esVEP?'VEP':'Factura'),esVEP:!!f.esVEP,mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||''});
+                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:(f.esVEP?'VEP ':'Fact.')+(f.numero||f.descripcion||'—'),tipo:(f.esVEP?'VEP':'Factura'),esVEP:!!f.esVEP,mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||'',vepDocs:_vepDocsAplica(f),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
             });
         });
         documentos.forEach(function(d){
@@ -11367,7 +11436,7 @@
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
                 tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,vepDocs:_vepDocsAplica(d),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
             });
         });
         (comprobantesEmitidos||[]).forEach(function(e){
@@ -11507,6 +11576,15 @@
             + (r.comprobanteId
                 ? '<div style="font-size:12px;color:var(--success);">✓ Adjunto: ' + escHtml(r.comprobanteNombre || 'comprobante') + '</div>'
                 : '<div style="font-size:12px;color:var(--text-3);">Sin adjuntar. Usá 📎+ en la fila para subirlo.</div>')
+            + (r.vepDocs
+                ? '<div class="c-titulo" style="margin:10px 0 6px;">DDJJ Y ACUSE DEL VEP</div>'
+                  + ['ddjj', 'acuse'].map(function(k) {
+                        var c = VEP_DOCS[k];
+                        return r[c.id]
+                            ? '<div style="font-size:12px;color:var(--success);">✓ ' + c.corto + ': ' + escHtml(r[c.nombre] || c.corto) + '</div>'
+                            : '<div style="font-size:12px;color:var(--text-3);">' + c.corto + ': sin adjuntar (' + c.icono + '+ en la fila).</div>';
+                    }).join('')
+                : '')
             + '</div>';
     }
     // Abre la factura/documento/presupuesto del que salió el pago seleccionado.
@@ -11861,6 +11939,7 @@
         var nroCbteEl=document.getElementById('pagoFDNroComprobante'); if(nroCbteEl) nroCbteEl.value='';
         _medioPagoReset('pagoFDNroComprobante','pagoFDMedio');
         var compEl=document.getElementById('pagoFDComprobante'); if(compEl) compEl.value='';
+        ['pagoFDDdjj','pagoFDAcuse'].forEach(function(id){var e=document.getElementById(id); if(e) e.value='';});
         var selC=document.getElementById('pagoFDCuenta');
         selC.innerHTML='<option value="">— Sin especificar —</option>';
         cuentasBancarias.forEach(function(cu){var o=document.createElement('option');o.value=cu.id||cu.banco;o.textContent=cu.banco+' · '+cu.tipo+' ('+(cu.moneda||'ARS')+')';selC.appendChild(o);});
@@ -11902,10 +11981,18 @@
         }
         pagoFDActualizarItem();
     }
+    // Muestra el bloque de la DDJJ/acuse sólo si hay UN comprobante elegido y es un VEP o de AFIP/ARCA/AGIP/ARBA.
+    function _pagoFDVepPanel() {
+        var box=document.getElementById('pagoFDVepDocs'); if(!box) return;
+        var sel=document.getElementById('pagoFDItem'), val=sel?sel.value:'', it=null;
+        if(_pagoFDModo==='una'&&val){ it=(_pagoFDTab==='fact')?facturas[parseInt(val)]:documentos.find(function(x){return x.id===val;}); }
+        box.style.display=(it&&_vepDocsAplica(it))?'':'none';
+    }
     function pagoFDActualizarItem() {
         var sel=document.getElementById('pagoFDItem'),info=document.getElementById('pagoFDInfo');
         var val=sel?sel.value:'';
         _pagoFDMostrarBanco();
+        _pagoFDVepPanel();
         if(!val){ if(info)info.style.display='none'; _pagoFDRegAvisoPintar(null); return; }
         var imp=0,pag=0,_itFD=null;
         if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(!f){info.style.display='none';return;}_itFD=f;imp=f.importe||0;pag=f.pagado||0;}
@@ -12257,7 +12344,7 @@
         if (bU) bU.className = 'modalidad-btn' + (modo === 'una' ? ' selected-A' : '');
         if (bV) bV.className = 'modalidad-btn' + (modo === 'varias' ? ' selected-A' : '');
         var mi = document.getElementById('pagoFDMonto'); if (mi) mi.readOnly = (modo === 'varias');
-        if (modo === 'varias') _pagoFDPoblarProveedores();
+        if (modo === 'varias') { _pagoFDPoblarProveedores(); _pagoFDVepPanel(); }
         else pagoFDActualizarItem();
     }
     function _pagoFDProveedoresConPendiente() {
@@ -12533,6 +12620,16 @@
             var _comp=await _subirComprobantePago('pagoFDComprobante');
             if(_comp){ entry.comprobanteId=_comp.comprobanteId; entry.comprobanteNombre=_comp.comprobanteNombre; entry.comprobanteTipo=_comp.comprobanteTipo; }
         } catch(e){ return; }
+        // VEP: declaración jurada presentada y acuse (sólo si el bloque está a la vista; con el panel oculto un archivo elegido antes se ignora)
+        var _boxVep=document.getElementById('pagoFDVepDocs');
+        if(_boxVep&&_boxVep.style.display!=='none'){
+            try { Object.assign(entry, await _subirDocsVEP('pagoFDDdjj','pagoFDAcuse','pagoFDVepEstado')); }
+            catch(e){
+                if(_comp){ try{ REF_DOCS.child(_comp.comprobanteId).remove(); }catch(_){} }
+                if(!(e&&e.message==='comprobante-grande')) alert('No se pudo subir el archivo del VEP: '+((e&&e.message)||e));
+                return;
+            }
+        }
         // Numeración correlativa de la Orden de Pago (serie OP), por empresa+proyecto
         entry.tipoAB = mod;
         entry.nroCorrelativo = await obtenerProximoComprobante(mod, 'OP');
@@ -16772,7 +16869,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v551';
+    var APP_VER = 'v552';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -20738,6 +20835,8 @@
         document.getElementById('factMoneda').value       = f.moneda || 'ARS';
         document.getElementById('factArchivo').value      = '';
         var _fpc = document.getElementById('factPagoComprobante'); if (_fpc) _fpc.value = '';
+        ['factPagoDdjj', 'factPagoAcuse'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+        _factVepDocsRefrescar();
         _factRevisarDuplicado();   // excluye este mismo registro; avisa si hay OTRO parecido
         _factChequearProvNuevo();
         var _fae = document.getElementById('factArchivoEstado');
@@ -21196,6 +21295,7 @@
             var cg = document.getElementById('factComputaGrupo'); if (cg) cg.style.display = esX ? 'none' : '';
         }
         if (typeof _factMostrarNroProvHint === 'function') _factMostrarNroProvHint();
+        _factVepDocsRefrescar();
     }
 
     // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
@@ -21305,7 +21405,15 @@
     }
 
     // Cuando cambia el proveedor en la factura, filtrar presupuestos de ese proveedor
+    // Muestra DDJJ/acuse si la clase es VEP o el proveedor es AFIP/ARCA/AGIP/ARBA (se llama al cambiar cualquiera de los dos).
+    function _factVepDocsRefrescar() {
+        var box = document.getElementById('factVepDocs'); if (!box) return;
+        var clase = (document.getElementById('factClaseVal') || {}).value;
+        var prov = (document.getElementById('factProveedor') || {}).value;
+        box.style.display = (clase === 'vep' || _esProvImpuestos(prov)) ? '' : 'none';
+    }
     function onFactProveedorChange() {
+        _factVepDocsRefrescar();
         poblarPresupuestosFactura();
         _regimenesFactRender('fact', document.getElementById('factProveedor').value);
         recalcularRetencionesFactura();
@@ -21857,6 +21965,20 @@
             }
             finally { if (_btnSub) _btnSub.disabled = false; }
         }
+        // VEP: declaración jurada presentada y acuse (sólo si el bloque está a la vista)
+        let _vepDocsFact = null;
+        const _boxVepF = document.getElementById('factVepDocs');
+        if (document.getElementById('factPagarAhora').value === 'true' && _boxVepF && _boxVepF.style.display !== 'none') {
+            const _btnSub2 = document.getElementById('factSubmitBtn');
+            if (_btnSub2) _btnSub2.disabled = true;
+            try { _vepDocsFact = await _subirDocsVEP('factPagoDdjj', 'factPagoAcuse', 'factVepEstado'); }
+            catch (err) {
+                if (_compPagoFact) { try { REF_DOCS.child(_compPagoFact.comprobanteId).remove(); } catch (_) {} }
+                if (!(err && err.message === 'comprobante-grande')) alert('No se pudo subir el archivo del VEP: ' + ((err && err.message) || err));
+                return;
+            }
+            finally { if (_btnSub2) _btnSub2.disabled = false; }
+        }
 
         // Vincular a presupuesto si corresponde
         const _prevPresupIdx = editandoFactIndex >= 0 ? facturas[editandoFactIndex].presupuestoIdx : undefined;
@@ -21966,6 +22088,7 @@
                 nuevoPago.comprobanteNombre = _compPagoFact.comprobanteNombre;
                 nuevoPago.comprobanteTipo = _compPagoFact.comprobanteTipo;
             }
+            if (_vepDocsFact) Object.assign(nuevoPago, _vepDocsFact);
             if (mod === 'A') { const _bR = _basesRegDePago(prov, _regSel, baseRet); if (_bR) nuevoPago.basesReg = _bR; }
             if (nuevo.sinRetencion) nuevoPago.sinRetencion = true;   // también en efectivo: ✏ puede pasarlo a A después
             nuevo.pagosHistorial.push(nuevoPago);
@@ -35345,10 +35468,13 @@
         a.entregas = (a.entregas || []).concat([e]);
         persistirAlquileres();
         if (typeof renderAlquileres === 'function') renderAlquileres();
-        // formulario limpio para el próximo; la lista muestra el recibo recién guardado
-        _entAlqItems = [{ desc: '', cant: 1 }]; document.getElementById('entAlqObs').value = '';
-        _entAlqRenderItems(); _entAlqRenderLista();
-        if (imprimir) imprimirEntregaAlq(alquileres.indexOf(a), a.entregas.length - 1);
+        // Guardado: el modal se cierra (antes quedaba abierto con un formulario nuevo y parecía que no había guardado).
+        // La copia firmada se adjunta después desde el 🔑 del contrato.
+        // Al persistir, el listener de Firebase puede haber reemplazado los objetos del array: se vuelve a buscar por id.
+        var aVivo = alquileres.find(function(x) { return x.id === a.id; }) || a;
+        var idxA = alquileres.indexOf(aVivo), eIdx = (aVivo.entregas || []).findIndex(function(x) { return x.id === e.id; });
+        cerrarEntregaAlq();
+        if (imprimir && idxA >= 0 && eIdx >= 0) imprimirEntregaAlq(idxA, eIdx);
     }
     function entAlqEliminar(i) {
         var a = _entAlqContrato(); if (!a) return;
@@ -38632,8 +38758,11 @@
         return r;
     }
     function _pfBtnComp(p) {
-        if (!p || !p.comprobanteId) return '';
-        return '<button class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + String(p.comprobanteId).replace(/['"\\]/g, '') + '\',\'' + String(p.comprobanteNombre || 'comprobante').replace(/['"\\]/g, '') + '\')" title="Ver el comprobante del pago">📎</button>';
+        if (!p) return '';
+        var c = p.comprobanteId
+            ? '<button class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + String(p.comprobanteId).replace(/['"\\]/g, '') + '\',\'' + String(p.comprobanteNombre || 'comprobante').replace(/['"\\]/g, '') + '\')" title="Ver el comprobante del pago">📎</button>'
+            : '';
+        return c + _btnsVerDocsVEP(p);   // DDJJ y acuse, si es un VEP que los tiene
     }
     // Una fila por pago real, ordenadas por fecha.
     function _presupPagosFilas(idx) {
@@ -46492,6 +46621,19 @@
           <input type="file" id="pagoFDComprobante" accept=".pdf,image/*" style="font-size:13px;">
           <div class="form-hint">Subí el PDF o imagen del comprobante (transferencia, cupón de la tarjeta, recibo…). Si es pesado se comprime automáticamente. También podés adjuntarlo después desde Pagos → ✏.</div>
         </div>
+      </div>
+      <!-- VEP / AFIP-ARCA-AGIP: DDJJ presentada y acuse. Se muestra sólo si el comprobante elegido es un VEP o de uno de esos organismos. -->
+      <div id="pagoFDVepDocs" class="form-group" style="display:none;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--surface);">
+        <label style="margin-bottom:6px;">🏛️ Papeles del VEP <span style="font-weight:400;color:var(--text-3);font-size:11px;">(opcionales)</span></label>
+        <div style="margin-bottom:8px;">
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:2px;">📋 Declaración jurada presentada</div>
+          <input type="file" id="pagoFDDdjj" accept=".pdf,image/*" style="font-size:13px;">
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:2px;">✅ Acuse de presentación</div>
+          <input type="file" id="pagoFDAcuse" accept=".pdf,image/*" style="font-size:13px;">
+        </div>
+        <div class="form-hint" id="pagoFDVepEstado">Quedan guardados en el pago. También podés cargarlos después desde Pagos (📋+ / ✅+).</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="form-group">
