@@ -3603,7 +3603,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v552</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v553</div>
         </div>
     </nav>
 
@@ -11629,10 +11629,11 @@
     function imprimirPagoDoc(docId,pi){var d=documentos.find(function(x){return x.id===docId;});if(!d)return;var p=(d.pagosHistorial||[])[pi];if(!p)return;imprimirReciboFactura(d,p.monto,p.fecha,p.modalidad,(p.retenciones||[]).map(function(r){return{codigo:r.codigo,monto:r.monto,desc:r.desc||r.codigo};}),p.totalRet||0,p.nroCorrelativo,p.nroComprobante,false,p.medioBancario);}
     // Reimprime UNA sola Orden de Pago para varias facturas pagadas juntas (mismo grupoPagoId).
     function imprimirPagoGrupoFact(grupoId){
-        var incl=[],montoTotal=0,totalRet=0,fecha='',mod='A',nroCorr='',nroTransf='',medio='',prov='',retMap={},monedas={};
+        var incl=[],facsGrupo=[],montoTotal=0,totalRet=0,fecha='',mod='A',nroCorr='',nroTransf='',medio='',prov='',retMap={},monedas={};
         facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){
             if((p.grupoPagoId||'')!==grupoId) return;
             incl.push(f.numero?('N°'+f.numero):(f.descripcion||'s/n'));
+            if(facsGrupo.indexOf(f)<0) facsGrupo.push(f);
             montoTotal+=p.monto||0; totalRet+=p.totalRet||0;
             fecha=p.fecha; mod=p.modalidad; nroCorr=p.nroCorrelativo||''; nroTransf=p.nroComprobante||''; medio=p.medioBancario||''; prov=f.proveedor||prov;
             monedas[f.moneda||'ARS']=1;
@@ -11644,7 +11645,7 @@
         // una sola moneda válida para el total: se deja ARS, como venía.
         var _monsGrupo=Object.keys(monedas);
         var itemSint={proveedor:prov,descripcion:incl.length+' facturas: '+incl.join(', '),numero:nroCorr,
-                      moneda:(_monsGrupo.length===1?_monsGrupo[0]:'ARS')};
+                      moneda:(_monsGrupo.length===1?_monsGrupo[0]:'ARS'),opPresupFilas:_opPresupFilas(facsGrupo)};
         imprimirReciboFactura(itemSint,montoTotal,fecha,mod,rets,totalRet,nroCorr,nroTransf,false,medio);
     }
     // Reimprime el comprobante de retención combinado de un pago de varias facturas (mismo grupoPagoId).
@@ -12384,6 +12385,7 @@
                 + '<span style="flex:1;">'+(f.numero?'N°'+escHtml(f.numero)+' — ':'')+escHtml(f.descripcion||'—')
                 + (f.sinRetencion ? ' <span class="pill" style="font-size:10px;background:#F5F5F7;color:#6B6B76;border:1px solid #B8B8C2;" title="Esta factura no lleva retención: no suma a ningún régimen">🚫 sin retención</span>' : '')
                 + (_regimenesFacturaCorto(f) ? ' <span class="pill" style="font-size:10px;background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Suma a la base de retención de: '+escHtml(_regimenesFacturaCorto(f))+'">🏛️ '+escHtml(_regimenesFacturaCorto(f))+'</span>' : '')
+                + (function(){ var _pd=_presupDeComprobante(f); return _pd ? ' <span class="pill" style="font-size:10px;background:#E8F0FE;color:#1a56c4;border:1px solid #B6CDF8;" title="Aplicada al presupuesto de '+escHtml(_pd.proveedor||'—')+'">📋 '+escHtml(_pd.concepto||_pd.proveedor||'presupuesto')+(_pd.proveedor&&_pd.concepto?' · '+escHtml(_pd.proveedor):'')+'</span>' : ''; })()
                 + '</span>'
                 + '<strong style="white-space:nowrap;">$'+(pend).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong>'
                 + '</label>';
@@ -12437,7 +12439,13 @@
         if (bi && bi.dataset.manual !== '1') bi.value = baseTotal ? Math.round(baseTotal) : '';
         var res = document.getElementById('pagoFDMultiResumen');
         if (res) {
-            if (sel.length) { res.style.display = ''; res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>$' + (montoTotal).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong>'; }
+            if (sel.length) {
+                res.style.display = '';
+                res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>$' + (montoTotal).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong>';
+                var _mz = _presupMezclaProveedores(sel.map(function(x){ return x.f; }));
+                if (_mz) res.innerHTML += '<div style="margin-top:8px;color:var(--danger,#b3261e);font-weight:600;">⛔ Aplicadas a presupuestos de proveedores distintos (' + _mz.map(function(g){ return escHtml(g.prov); }).join(' y ') +
+                    '). Un pago no puede repartirse entre ellos: destildá las de uno y pagalas por separado.</div>';
+            }
             else res.style.display = 'none';
         }
         pagoFDRecalcRet();
@@ -12451,6 +12459,13 @@
         if (!fecha) { alert('Ingresá la fecha del pago.'); return; }
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
         if (montoTotal <= 0) { alert('El total a pagar debe ser mayor a cero.'); return; }
+        // Un pago no puede repartirse entre presupuestos de distinto proveedor: se frena acá, antes de subir nada ni gastar el N° de OP.
+        var _mezcla = _presupMezclaProveedores(sel.map(function(x){ return x.f; }));
+        if (_mezcla) {
+            alert('Estas facturas están aplicadas a presupuestos de proveedores distintos:\n\n' + _presupMezclaTexto(_mezcla) +
+                '\n\nUn pago no puede aplicarse a presupuestos de proveedores distintos. Destildá las de uno de ellos y pagalas por separado.');
+            return;
+        }
         var baseTotal = 0, rets = [], totalRet = 0, _ctxMulti = null;
         var provNombre = _pagoFDMulti.prov;   // foto: más abajo hay await y la pantalla puede cambiar de proveedor
         var _provMulti = buscarProveedorPorNombre(provNombre);
@@ -12544,7 +12559,7 @@
         var listaNums = facturasPagadas.map(function(f){ return f.numero ? ('N°' + f.numero) : (f.descripcion || 's/n'); }).join(', ');
         // Ningún pago sale sin OP: la Orden de Pago (combinada) se imprime siempre.
         alert('Pago registrado (' + nroCorr + ') — ' + facturasPagadas.length + ' facturas de ' + provNombre + ', total $' + (montoTotal).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + (totalRet > 0 ? '\nRetenciones: $' + (totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '\nNeto al proveedor: $' + (montoTotal - totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) : '') + '.\n\nSe imprime la Orden de Pago.');
-        var itemSint = { proveedor: provNombre, descripcion: 'Pago de ' + facturasPagadas.length + ' facturas: ' + listaNums, numero: nroCorr };
+        var itemSint = { proveedor: provNombre, descripcion: 'Pago de ' + facturasPagadas.length + ' facturas: ' + listaNums, numero: nroCorr, opPresupFilas: _opPresupFilas(facturasPagadas) };
         imprimirReciboFactura(itemSint, montoTotal, fecha, mod, rets.map(function(r){ return { codigo:r.codigo, monto:r.monto, desc:r.desc }; }), totalRet, nroCorr, nroCbteFD.trim(), false, medio);
         if (totalRet > 0) {
             var pagoSint = { fecha: fecha, nroCorrelativo: nroCorr, monto: montoTotal, baseImponible: baseTotal, retenciones: rets.map(function(r){ return { codigo:r.codigo, monto:r.monto, desc:r.desc }; }), totalRet: totalRet, modalidad: mod };
@@ -16869,7 +16884,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v552';
+    var APP_VER = 'v553';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -21564,6 +21579,85 @@
         if (m) return m;
         return (e.presupuestoIdx != null && datos[e.presupuestoIdx]) ? datos[e.presupuestoIdx] : null;
     }
+    // Presupuesto al que está aplicada una factura/documento, para rotularlo en la Orden de Pago y para la regla «un pago no se reparte entre
+    // proveedores». Sólo cuenta un vínculo de ESTE proyecto (`_vinculoLocal`): una copia compartida trae el índice —y hasta el pago-espejo— del
+    // origen, y la app no le imputa el pago a ningún presupuesto de acá. Se usa `presupuestoIdx` cuando su presupuesto contiene el espejo del
+    // comprobante (el caso normal); si no, se busca el espejo en el resto (acompaña si borrar otro presupuesto corrió los índices) y, si
+    // tampoco hay, el índice solo (comprobante todavía sin pagos). `_presupIdxManda` (lo pone el formulario de la factura al imprimir):
+    // el índice que el usuario ACABA de elegir manda aunque el espejo del presupuesto anterior todavía no se haya movido.
+    function _presupDeComprobante(item) {
+        if (!item || !_vinculoLocal(item)) return null;
+        var ix = item.presupuestoIdx;
+        var porIdx = (ix != null && ix !== '' && datos[ix]) ? datos[ix] : null;
+        if (item._presupIdxManda || !item.id) return porIdx;
+        var conEspejo = function(x) { return !!x && (x.pagosHistorial || []).some(function(p) { return p && p.origenFacturaId === item.id; }); };
+        if (porIdx && conEspejo(porIdx)) return porIdx;
+        return (datos || []).find(conEspejo) || porIdx;
+    }
+    // Un pago (una Orden de Pago) no puede repartirse entre presupuestos de DISTINTO proveedor. Devuelve null si los comprobantes van a
+    // presupuestos de un solo proveedor (o a ninguno); si mezclan, la lista [{prov, lineas}] para explicárselo al usuario. Un presupuesto
+    // sin proveedor cargado no cuenta como «otro»; el nombre se compara sin tildes ni mayúsculas (MÁRMOLA = MARMOLA). Varios presupuestos
+    // del MISMO proveedor sí se pueden: la OP los lista uno por uno.
+    function _presupMezclaProveedores(items) {
+        var porProv = [], idx = {};
+        (items || []).filter(Boolean).forEach(function(it) {
+            var d = _presupDeComprobante(it); if (!d || !String(d.proveedor || '').trim()) return;
+            var k = _txtNorm(d.proveedor), g = idx[k];
+            if (!g) { g = idx[k] = { prov: d.proveedor, lineas: [] }; porProv.push(g); }
+            g.lineas.push((d.concepto || d.proveedor) + ' ← ' + (it.numero ? 'N°' + it.numero : (it.descripcion || 's/n')));
+        });
+        return porProv.length > 1 ? porProv : null;
+    }
+    function _presupMezclaTexto(m) { return m.map(function(g) { return '• ' + g.prov + ': ' + g.lineas.join('; '); }).join('\n'); }
+    // Lo mismo, pero al revés: ¿aplicar `item` al presupuesto `dest` dejaría repartido entre proveedores distintos un pago que YA cubrió varias
+    // facturas juntas (mismo grupoPagoId)? Devuelve el texto del conflicto o ''. Sin esto, «Aplicar a presupuesto» o la edición de una factura
+    // ya pagada en grupo esquivaban la regla de arriba.
+    function _presupConflictoGrupo(item, dest) {
+        if (!item || !dest || !String(dest.proveedor || '').trim()) return '';
+        var gids = {};
+        (item.pagosHistorial || []).forEach(function(p) { if (p && p.grupoPagoId) gids[p.grupoPagoId] = 1; });
+        if (!Object.keys(gids).length) return '';
+        var k = _txtNorm(dest.proveedor), out = [];
+        (facturas || []).forEach(function(g) {
+            if (!g || g === item || (item.id && g.id === item.id)) return;
+            if (!(g.pagosHistorial || []).some(function(p) { return p && p.grupoPagoId && gids[p.grupoPagoId]; })) return;
+            var d = _presupDeComprobante(g);
+            if (d && String(d.proveedor || '').trim() && _txtNorm(d.proveedor) !== k) out.push('• ' + (g.numero ? 'N°' + g.numero : (g.descripcion || 's/n')) + ' → ' + (d.concepto || d.proveedor) + ' (' + d.proveedor + ')');
+        });
+        return out.join('\n');
+    }
+    function _presupAvisoGrupo(txt) {
+        return 'Esta factura se pagó junto con otras en UN solo pago, y esas están aplicadas a presupuestos de otro proveedor:\n\n' + txt +
+            '\n\nUn pago no puede quedar aplicado a presupuestos de proveedores distintos. Elegí un presupuesto del mismo proveedor, o desaplicá primero ese pago.';
+    }
+    // Filas (<tr>, vacías si ninguno está aplicado a un presupuesto) que la Orden de Pago imprime bajo el comprobante para decir A QUÉ
+    // PRESUPUESTO se aplicó el pago. `items` = las facturas/documentos que cubre la OP: uno solo, o varios si se pagaron juntos (entonces
+    // se agrupa por presupuesto y se nombran los comprobantes cuando no todos van al mismo). El % y el comentario que se cargaron al
+    // aplicarlo («anticipo 30% de obra») salen sólo cuando la fila es de UN comprobante. Todo el texto va escapado.
+    function _opPresupFilas(items) {
+        items = (items || []).filter(Boolean);
+        var grupos = [];
+        items.forEach(function(it) {
+            var d = _presupDeComprobante(it); if (!d) return;
+            var g = grupos.find(function(x) { return x.d === d; });
+            if (!g) { g = { d: d, its: [] }; grupos.push(g); }
+            g.its.push(it);
+        });
+        var nombrarComps = grupos.length > 1 || (grupos.length === 1 && grupos[0].its.length < items.length);
+        return grupos.map(function(g) {
+            var d = g.d;
+            var txt = '→ Aplicado al presupuesto: <strong>' + escHtml(d.concepto || d.proveedor || 'sin nombre') + '</strong>';
+            if (d.concepto && d.proveedor) txt += ' — ' + escHtml(d.proveedor);
+            if (nombrarComps) txt += ' (' + g.its.map(function(it) { return escHtml(it.numero ? 'N°' + it.numero : (it.descripcion || 's/n')); }).join(', ') + ')';
+            if (g.its.length === 1) {
+                var pct = Number(g.its[0].presupuestoPorcentaje);
+                if (isFinite(pct) && pct > 0) txt += ' · ' + pct.toLocaleString('es-AR', { maximumFractionDigits: 2 }) + '% del presupuesto';
+                var com = String(g.its[0].presupuestoComentario || '').trim();
+                if (com) txt += ' · ' + escHtml(com);
+            }
+            return '<tr><td colspan="3" style="font-size:12px;color:var(--ink);padding:3px 12px 12px;">' + txt + '</td></tr>';
+        }).join('');
+    }
     // Egresos por comprobante emitido que son de este proveedor (por proveedorId, nombre, cliente o, sin proveedor asignado, el del
     // presupuesto imputado). Lo usan la tabla de pagos y la tarjeta «Total pagado» de la ficha del proveedor: tienen que coincidir.
     function _emitidosEgresoDeProv(nombre) {
@@ -21689,7 +21783,10 @@
         if (nuevoIdx != null && !datos[nuevoIdx]) { alert('El presupuesto elegido ya no existe.'); return; }
         if (ctx.tipo === 'fact') {
             var f = facturas[parseInt(ctx.id)]; if (!f) { alert('No se encontró la factura.'); return; }
+            if (nuevoIdx != null) { var _cg = _presupConflictoGrupo(f, datos[nuevoIdx]); if (_cg) { alert(_presupAvisoGrupo(_cg)); return; } }
             f.presupuestoIdx = (nuevoIdx == null) ? null : nuevoIdx;
+            // El % del presupuesto y el comentario («anticipo 30% de obra») eran del vínculo anterior: la Orden de Pago los imprime junto al presupuesto nuevo.
+            if (nuevoIdx !== prevIdx) { f.presupuestoPorcentaje = null; f.presupuestoComentario = ''; }
             if (nuevoIdx != null && f._compartidoDe) f.presupuestoLocal = true;   // copia compartida vinculada a un presupuesto de ESTE proyecto
             persistirFacturas();
             if (prevIdx != null && prevIdx !== nuevoIdx && datos[prevIdx]) _reconciliarFacturaEnPresupuesto(prevIdx, { id: f.id, pagado: 0, fecha: f.fecha, numero: f.numero });
@@ -21697,7 +21794,9 @@
         } else {
             var d = (documentos || []).find(function(x){ return x.id === ctx.id; }); if (!d) { alert('No se encontró el comprobante.'); return; }
             d.presupuestoIdx = (nuevoIdx == null) ? null : nuevoIdx;
-            REF_DOCS.child(d.id).update({ presupuestoIdx: (nuevoIdx == null) ? null : nuevoIdx });
+            var _upd = { presupuestoIdx: (nuevoIdx == null) ? null : nuevoIdx };
+            if (nuevoIdx !== prevIdx) { d.presupuestoPorcentaje = null; d.presupuestoComentario = ''; _upd.presupuestoPorcentaje = null; _upd.presupuestoComentario = null; }
+            REF_DOCS.child(d.id).update(_upd);
             if (prevIdx != null && prevIdx !== nuevoIdx && datos[prevIdx]) _reconciliarFacturaEnPresupuesto(prevIdx, { id: d.id, pagado: 0, fecha: d.fecha, numero: d.numero });
             if (nuevoIdx != null) _reconciliarFacturaEnPresupuesto(nuevoIdx, { id: d.id, pagado: (d.pagado || 0), fecha: d.fecha, numero: d.numero });
         }
@@ -21951,6 +22050,15 @@
             return;
         }
 
+        // Una factura que ya se pagó junto con otras (un solo pago) no puede pasar a un presupuesto de OTRO proveedor que los de sus compañeras.
+        if (editandoFactIndex >= 0 && nuevo.tipo === 'presup') {
+            const _piCg = document.getElementById('factPresupuesto').value;
+            if (_piCg !== '' && datos[parseInt(_piCg)]) {
+                const _cgF = _presupConflictoGrupo(facturas[editandoFactIndex], datos[parseInt(_piCg)]);
+                if (_cgF) { alert(_presupAvisoGrupo(_cgF)); return; }
+            }
+        }
+
         // Comprobante del pago (opcional). Se sube ANTES de tocar nada: si es muy pesado o falla,
         // se corta acá y no queda la factura a medio guardar ni un número de OP gastado.
         let _compPagoFact = null;
@@ -22094,7 +22202,7 @@
             nuevo.pagosHistorial.push(nuevoPago);
             nuevo.estado = _estadoFactDoc(nuevo);
             alert(`Pago registrado (${nroCorr}): $${(montoPago).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}${totalRet > 0 ? `\nRetenciones: $${(totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}\nNeto al proveedor: $${(montoPago-totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}.\n\nSe imprime la factura + la Orden de Pago.`);
-            imprimirFacturaMasOP(nuevo, montoPago, fechaPago, mod, retenciones, totalRet, nroCorr, nroComprobante, null, medioBancario);
+            imprimirFacturaMasOP(Object.assign({}, nuevo, { _presupIdxManda: true }), montoPago, fechaPago, mod, retenciones, totalRet, nroCorr, nroComprobante, null, medioBancario);
             if (totalRet > 0) {
                 const _tp = _tiposRetPago(nuevoPago.retenciones);
                 if (confirm('¿Imprimir el/los comprobante(s) de retención (Ganancias y/o SUSS)?')) {
@@ -22144,6 +22252,8 @@
             });
             retsBlock += '<div class="tot-row neto"><span>Neto al proveedor</span><span>' + fmt(neto) + '</span></div>';
         }
+        // Si el pago se aplicó a un presupuesto, la OP lo dice (una OP de varias facturas trae sus filas ya armadas en `opPresupFilas`).
+        var _presupRows = (f && typeof f.opPresupFilas === 'string') ? f.opPresupFilas : _opPresupFilas([f]);
         var _rh = buildReciboHeader('Orden de Pago',nroDoc, fechaDoc, {
             nombre: f.proveedor||'—', detalle: _provDetalleImpresion(f.proveedor, f.descripcion)
         });
@@ -22151,7 +22261,7 @@
             '<html><head><meta charset="UTF-8"><title>Orden de Pago ' + nroDoc + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
             '<table class="tbl">' +
             '<thead><tr><th>Descripción</th><th>N° Factura</th><th class="tr">Importe</th></tr></thead>' +
-            '<tbody><tr><td>' + (f.descripcion||'—') + '</td><td>' + (f.numero||'—') + '</td><td class="tr">' + fmt(f.importe) + '</td></tr></tbody>' +
+            '<tbody><tr><td>' + (f.descripcion||'—') + '</td><td>' + (f.numero||'—') + '</td><td class="tr">' + fmt(f.importe) + '</td></tr>' + _presupRows + '</tbody>' +
             '<tfoot><tr><td colspan="2"><strong>Total factura</strong></td><td class="tr">' + fmt(f.importe) + '</td></tr></tfoot>' +
             '</table>' +
             '<div class="bottom">' +
