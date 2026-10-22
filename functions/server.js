@@ -1633,6 +1633,19 @@ function _alqFraccionPeriodo(a, periodo) {
     return { factor: dias / diasMes, dias, diasMes, desde, hasta };
 }
 
+// Canon vigente en un período, según el historial de ajustes (`ajustesCanon`). Es la MISMA regla que `_canonVigenteEnPeriodo` de index.html
+// (si se cambia una hay que cambiar la otra): sin ajustes con período vale el canon actual «plano»; con ajustes, un período anterior a todos
+// usa el canon inicial. Firebase devuelve la lista como arreglo o como objeto según cómo se haya escrito: se acepta cualquiera.
+function _alqCanonVigenteEnPeriodo(a, periodo) {
+    const raw = a.ajustesCanon || [];
+    const ajustes = (Array.isArray(raw) ? raw : Object.values(raw)).filter((x) => x && x.periodo);
+    ajustes.sort((x, y) => (x.periodo < y.periodo ? -1 : x.periodo > y.periodo ? 1 : 0));
+    if (!ajustes.length) return Number(a.canonActual) || Number(a.canon) || 0;
+    let aplicable = null;
+    for (const x of ajustes) { if (x.periodo <= periodo) aplicable = x; else break; }
+    return aplicable ? (Number(aplicable.monto) || 0) : (Number(a.canon) || 0);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Lecturas LIVIANAS de la base (para las tareas programadas)
 //
@@ -1737,7 +1750,7 @@ async function revisarAlquileres() {
                     const delPeriodo = cobros.filter((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
                     const cobradoCanon = delPeriodo.reduce((s, c) => s + (Number(c.monto) || 0) - (Number(c.iva) || 0), 0);
                     const frEsp = _alqFraccionPeriodo(a, periodo);
-                    const esperadoCanon = (a.canonActual || a.canon || 0) * (frEsp ? frEsp.factor : 1);
+                    const esperadoCanon = _alqCanonVigenteEnPeriodo(a, periodo) * (frEsp ? frEsp.factor : 1);   // con los ajustes de canon: el esperado de ESE mes
                     if (delPeriodo.length && (esperadoCanon <= 0 || cobradoCanon >= esperadoCanon * 0.98)) continue;   // cobrada completa
                     const saldoParcial = delPeriodo.length ? Math.max(0, esperadoCanon - cobradoCanon) : 0;
 
@@ -1761,7 +1774,7 @@ async function revisarAlquileres() {
                         if (!to) continue;
 
                         const monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
-                        let monto = a.canonActual || a.canon || 0;
+                        let monto = _alqCanonVigenteEnPeriodo(a, periodo);
                         const fr = _alqFraccionPeriodo(a, periodo);   // primer/último mes proporcional: el monto es el de ese tramo
                         if (fr) monto = monto * fr.factor;
                         const cuando = diasRestantes === 0 ? 'hoy' : ('en ' + diasRestantes + ' día(s)');
