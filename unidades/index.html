@@ -758,12 +758,19 @@ function renderPosesion(){
 
 /* ── Eventos ───────────────────────────────────────────────────────── */
 $('params').addEventListener('input', function(e){
-  var i = e.target; if (!i.dataset.k || !puedeAdmin) return;
+  var i = e.target; if (!i.dataset.k || !puedeAdmin || i.dataset.k === 'usd') return;   // el valor del m² se aplica en 'change', con confirmación
   var v = parseFloat(i.value) || 0;
   if (i.dataset.k.indexOf('p_') === 0) P.pct[i.dataset.k.slice(2)] = v; else P[i.dataset.k] = v;
   guardarParams(); refTotales(); render();
 });
 $('params').addEventListener('change', function(e){
+  var u = e.target;
+  if (u.dataset.k === 'usd' && puedeAdmin) {
+    var nv = parseFloat(u.value) || 0;
+    if (nv === P.usd) return;
+    if (!confirm('¿Seguro que querés cambiar el valor del m² de USD ' + P.usd + ' a USD ' + nv + '?\n\nSe recalcula el valor de todas las unidades y queda grabado.')) { u.value = P.usd; return; }
+    P.usd = nv; guardarParams(); refTotales(); render(); toast('✔ Valor del m² guardado'); return;
+  }
   var s = e.target; if (!s.dataset.m || !puedeAdmin) return;
   P.modo[s.dataset.m] = s.value; guardarParams(); refTotales(); render();
 });
@@ -955,6 +962,40 @@ function bajarExcel(){
   var wb = new ExcelJS.Workbook(); wb.creator = 'Mess'; wb.created = new Date();
   var ws = wb.addWorksheet('Planilla', {properties:{tabColor:{argb:XL.g2}}});
   ws.columns = C.map(function(c){ return {width:c[2]}; });
+  // ── Fórmulas: la Planilla lee los parámetros de la hoja «Valuación» (celdas amarillas), así que cambiar un % o el TC recalcula todo ──
+  var H0 = 11;                                   // fila del encabezado de la tabla de conceptos en «Valuación»
+  var V = "'Valuación'!", VAL = {usd:V + '$B$4', tc:V + '$B$5', tc2:V + '$B$6', tots:V + '$B$7'}, colL = {};
+  C.forEach(function(c, j){ colL[c[0]] = ws.getColumn(j + 1).letter; });
+  var concIdx = function(k){ return CONC.map(function(c){ return c[0]; }).indexOf(k); };
+  var natVista = function(k){ return !monNativa(k) || monNativa(k) === monVista(k); };
+  var conv = function(k, f){                     // la fórmula calcula en la moneda nativa; si la columna se ve en la otra, se convierte
+    var n = monNativa(k), d = monVista(k); if (!n || n === d) return f;
+    var tc = k === 'alt' ? VAL.tc2 : VAL.tc; return n === 'USD' ? '(' + f + ')*' + tc : '(' + f + ')/' + tc;
+  };
+  var sumaConc = function(mon, r){               // suma de las columnas de concepto en esa moneda; null si falta alguna o se ve en la otra moneda
+    var t = [];
+    for (var q = 0; q < conceptos.length; q++) {
+      var kc = conceptos[q][0]; if (monedaConc(kc) !== mon) continue;
+      if (!colL[kc] || !natVista(kc)) return null; t.push(colL[kc] + r);
+    }
+    return t.length ? t.join('+') : '0';
+  };
+  var formulaCelda = function(key, r){
+    var s = colL.s ? colL.s + r : null, ci = concIdx(key);
+    if (key === 'pc') return s ? 'IFERROR(' + s + '/' + VAL.tots + ',0)' : null;
+    if (key === 'usd') return s ? conv('usd', s + '*' + VAL.usd) : null;
+    if (key === 'ars') return s ? conv('ars', s + '*' + VAL.usd + '*' + VAL.tc) : null;
+    if (key === 'alt') return s ? conv('alt', s + '*' + VAL.usd + '*' + VAL.tc2) : null;
+    if (ci >= 0) return (esModoUnidad(P.modo[key]) || !s) ? null : conv(key, 'IFERROR(' + V + '$D$' + (H0 + 1 + ci) + '*' + s + '/' + VAL.tots + ',0)');
+    if (key === 'totp' || key === 'totu') { var t = sumaConc(key === 'totp' ? '$' : 'USD', r); return t ? conv(key, t) : null; }
+    if (key === 'usdm2') {
+      var sp = sumaConc('$', r), su = sumaConc('USD', r); if (!s || sp == null || su == null) return null;
+      return conv('usdm2', 'IFERROR(' + VAL.usd + '+((' + sp + ')/' + VAL.tc + '+(' + su + '))/' + s + ',0)');
+    }
+    var m = key.match(/^sd_(.+)$/);
+    if (m && colL[m[1]] && colL['cb_' + m[1]] && natVista(m[1]) && natVista('cb_' + m[1])) return conv(key, colL[m[1]] + r + '-' + colL['cb_' + m[1]] + r);
+    return null;
+  };
   xlTitulo(ws, e.nombre || edId, 'Planilla de unidades · ' + hoy + ' · Valor m² USD ' + P.usd.toLocaleString('es-AR') + ' · TC $' + P.tc.toLocaleString('es-AR') + ' · ' + a.length + ' unidades · ' + TOTS.toLocaleString('es-AR', {maximumFractionDigits:2}) + ' m²', n);
   // fila 4: grupos combinados; fila 5: títulos
   var ini = 0;
@@ -979,6 +1020,7 @@ function bajarExcel(){
       else if (key === 'tp') v = r.tp; else if (key === 's') v = r.s; else if (key === 'pc') v = TOTS ? r.s / TOTS : 0;
       else if (key === 'fp') v = xlFecha(r.fp); else if (key === 'hf') v = r.hf; else v = c[key];
       if (monNativa(key) && typeof v === 'number') v = convMon(key, v);
+      var fx = typeof v === 'number' ? formulaCelda(key, 6 + k) : null; if (fx) v = {formula:fx, result:v};
       var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
       cell.numFmt = col[3]; cell.alignment = {horizontal:col[4], vertical:'middle', wrapText:false};
       cell.font = {name:'Calibri', size:10, bold:key === 'u' || key === 'totp' || key === 'totu', color:{argb:XL.ink}};
@@ -995,7 +1037,7 @@ function bajarExcel(){
     var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
     if (j === 0) cell.value = 'TOTAL';
     else if (sumas[key] !== undefined) cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:convMon(key, sumas[key])};
-    else if (key === 'usdm2') cell.value = convMon('usdm2', sumas.s ? sumas.tusd / sumas.s : 0);
+    else if (key === 'usdm2') { var vu = convMon('usdm2', sumas.s ? sumas.tusd / sumas.s : 0), fu = formulaCelda('usdm2', rt); cell.value = fu ? {formula:fu, result:vu} : vu; }
     else if (key === 'pc') cell.value = {formula:'SUM(' + L + '6:' + L + ult + ')', result:TOTS ? sumas.s / TOTS : 0};
     cell.numFmt = col[3]; cell.alignment = {horizontal:j === 0 ? 'center' : col[4], vertical:'middle'};
     cell.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
@@ -1011,6 +1053,8 @@ function bajarExcel(){
   var wv = wb.addWorksheet('Valuación', {properties:{tabColor:{argb:XL.g3}}});
   wv.columns = [{width:46},{width:26},{width:20},{width:24}];
   xlTitulo(wv, 'Valuación y conceptos', (e.nombre || edId) + ' · ' + hoy, 4);
+  var nota = wv.getCell(3, 1); nota.value = 'Las celdas amarillas se pueden cambiar: la hoja «Planilla» se recalcula sola.'; nota.font = {name:'Calibri', size:9, italic:true, color:{argb:XL.sub}};
+  var entrada = function(c){ c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFFFF6CC'}}; c.font = {name:'Calibri', size:10.5, bold:true, color:{argb:'FF1F4FBF'}}; };
   var pv = [['Valor del m² (USD)', P.usd, '"USD" #,##0.00'], ['Tipo de cambio base', P.tc, '"$" #,##0.00'], ['Tipo de cambio alternativo', P.tc2 || null, '"$" #,##0.00'],
             ['m² totales del edificio', TOTS, '0.00'], ['Valor total (USD)', TOTS * P.usd, '"USD" #,##0.00'], ['Valor total ($, TC base)', TOTS * P.usd * P.tc, '"$" #,##0.00']];
   pv.forEach(function(p, k){
@@ -1018,7 +1062,12 @@ function bajarExcel(){
     c1.value = p[0]; c1.font = {name:'Calibri', size:10.5, color:{argb:XL.sub}}; c2.value = p[1]; c2.numFmt = p[2];
     c2.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}}; c2.alignment = {horizontal:'right'}; xlBorde(c1); xlBorde(c2);
   });
-  var h0 = 4 + pv.length + 1;
+  [3, 4, 5].forEach(function(k){                // m² totales, valor total USD y valor total $ son fórmulas
+    var c = wv.getCell(4 + k, 2), res = pv[k][1];
+    c.value = {formula:k === 3 ? "SUM('Posesión y firma'!D5:D" + (4 + U.length) + ')' : k === 4 ? 'B7*B4' : 'B8*B5', result:res};
+  });
+  [0, 1, 2].forEach(function(k){ entrada(wv.getCell(4 + k, 2)); });
+  var h0 = H0;
   ['Concepto','Se carga como','Valor cargado','Total del edificio'].forEach(function(t, j){ var h = wv.getCell(h0, j + 1); h.value = t; xlEncabezado(h, XL.g3); });
   wv.getRow(h0).height = 22;
   CONC.forEach(function(c, k){
@@ -1028,14 +1077,17 @@ function bajarExcel(){
       var cell = wv.getCell(r, j + 1); cell.value = v; cell.font = {name:'Calibri', size:10.5, color:{argb:XL.ink}};
       cell.numFmt = j === 2 ? (md === 'monto' || md === 'unidad' ? '"$" #,##0.00' : md === 'montousd' || md === 'unidadusd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? fmtC(kk) : '@';
       cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
-      if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}}; xlBorde(cell);
+      if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
+      if (j === 3 && !esModoUnidad(md)) cell.value = {formula:md === 'pct' ? '$B$9*C' + r + '/100' : 'C' + r, result:cs[3]};
+      if (j === 2 && !esModoUnidad(md)) entrada(cell);
+      xlBorde(cell);
     });
   });
   var rtv = h0 + 1 + CONC.length, tots = [['Total de conceptos en $', '$', '"$" #,##0.00'], ['Total de conceptos en USD', 'USD', '"USD" #,##0.00']];
   tots.forEach(function(t){
     var ks = CONC.filter(function(c){ return monedaConc(c[0]) === t[1]; }); if (!ks.length) return;
     wv.getCell(rtv, 1).value = t[0];
-    var tv4 = wv.getCell(rtv, 4); tv4.value = ks.reduce(function(m, c){ return m + totNativo(c[0]); }, 0); tv4.numFmt = t[2];
+    var tv4 = wv.getCell(rtv, 4); tv4.value = {formula:ks.map(function(c){ return 'D' + (h0 + 1 + concIdx(c[0])); }).join('+'), result:ks.reduce(function(m, c){ return m + totNativo(c[0]); }, 0)}; tv4.numFmt = t[2];
     for (var q = 1; q <= 4; q++) { var tc = wv.getCell(rtv, q); tc.font = {name:'Calibri', size:10.5, bold:true, color:{argb:XL.ink}};
       tc.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.tot}}; xlBorde(tc, true); if (q === 4) tc.alignment = {horizontal:'right'}; }
     rtv++;
@@ -1436,7 +1488,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v20';
+var UNID_VER = 'unidades-v21';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
