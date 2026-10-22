@@ -1725,7 +1725,7 @@ async function revisarAlquileres() {
                     : Object.keys(alqs);
                 for (const k of keys) {
                     const a = alqs[k];
-                    if (!a || a.disponible || !String(a.inquilino || '').trim() || !a.diaPago) continue;
+                    if (!a || a.finalizado || a.disponible || !String(a.inquilino || '').trim() || !a.diaPago) continue;   // finalizado = locación cerrada (ver 🏁 Finalizar en la app)
                     if (a.fin) { const f = new Date(a.fin + 'T00:00:00'); if (!isNaN(f.getTime()) && f < hoy) continue; }
                     revisados++;
                     // ¿La cuota del mes ya está cobrada?
