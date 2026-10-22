@@ -95,8 +95,10 @@ h1.page-title{margin:0;font-size:24px;font-weight:600;letter-spacing:-.01em}
 .kpi b{font-size:20px;font-variant-numeric:tabular-nums;font-weight:600}
 .params{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
 .params h3{grid-column:1/-1;margin:0;font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.1em}
-label.f{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--text-3)}
-label.f small{color:var(--text-3);font-size:11px}
+label.f,div.f{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--text-3)}
+div.f{grid-column:1/-1}
+div.f > .dual{flex-wrap:wrap;align-items:center}
+label.f small,div.f small{color:var(--text-3);font-size:11px}
 .dual{display:flex;gap:4px}.dual input{flex:1;min-width:0}
 input,select{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 10px;min-width:0;color:var(--text-1)}
 input:focus,select:focus{outline:2px solid var(--gold);outline-offset:-1px;border-color:transparent}
@@ -314,13 +316,13 @@ function bloquear(tit, txt, acc){
 }
 function paramsPorDefecto(){
   var i = CFG.inicial || {};
-  return { usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
+  return { base:'m2', usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
     pct:  {gan:0, iibb:0, adm:0, res:0, alh:0, rec:0, cdi:0},
     modo: {gan:'pct', iibb:'pct', adm:'pct', res:'pct', alh:'pct', rec:'pct', cdi:'pct'} };
 }
 function normParams(p){
   var d = paramsPorDefecto(); p = p || {};
-  d.usd = +p.usd || d.usd; d.tc = +p.tc || d.tc; d.tc2 = +p.tc2 || 0;
+  d.base = p.base === 'vir' ? 'vir' : 'm2'; d.usd = +p.usd || d.usd; d.tc = +p.tc || d.tc; d.tc2 = +p.tc2 || 0;
   CONC.forEach(function(c){
     var k = c[0];
     d.pct[k] = +((p.pct || {})[k]) || 0;
@@ -398,7 +400,7 @@ function cargarEdificio(){
   var us = e.unidades || {};
   U = Object.keys(us).map(function(k){ var u = us[k]; return {
     k:k, u:String(u.n == null ? k : u.n), o:+u.o || 0, p:u.p || '', rk:!!u.rk, i:u.i || '', t:u.t || '',
-    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0 }; });
+    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0, vf:+u.vf || 0 }; });
   TOTS = U.reduce(function(s, r){ return s + r.s; }, 0);
   if (!enfocado) renderParams();
   render();
@@ -422,11 +424,13 @@ function sumaCV(k){ return U.reduce(function(s, r){ return s + (+r.cv[k] || 0); 
 // Cada concepto se muestra y se suma en SU moneda: los cargados en dólares (USD total / USD por unidad) quedan en dólares y NO se
 // pasan a pesos; el resto (% del valor, $ total, $ por unidad) está en pesos. Sólo «USD por m²» convierte, para poder compararlo.
 function monedaConc(k){ var m = P.modo[k]; return (m === 'montousd' || m === 'unidadusd') ? 'USD' : '$'; }
+/* Base de valuación: 'm2' = m² × valor por m² (USD) · 'vir' = valor inmobiliario de referencia / valuación fiscal cargado por unidad (en $) */
+function valorTotArs(){ return P.base === 'vir' ? U.reduce(function(t, r){ return t + r.vf; }, 0) : TOTS * P.usd * P.tc; }
 function totNativo(k){                         // total del edificio en la moneda del concepto
   var m = P.modo[k];
   if (m === 'unidad' || m === 'unidadusd') return sumaCV(k);
   if (m === 'monto' || m === 'montousd') return P.pct[k];
-  return TOTS * P.usd * P.tc * P.pct[k] / 100;
+  return valorTotArs() * P.pct[k] / 100;
 }
 function totConcepto(k){ return totNativo(k) * (monedaConc(k) === 'USD' ? P.tc : 1); }   // equivalente en pesos (sólo para USD por m²)
 /* ── Pantalla «Valuación y conceptos»: ver todos los importes en dólares, en pesos o como se cargaron ── */
@@ -440,7 +444,8 @@ function modoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return 'Importe po
 function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return Nv(sumaCV(k), '$'); if (m === 'unidadusd') return Nv(sumaCV(k), 'USD'); return m === 'monto' ? Nv(P.pct[k], '$') : m === 'montousd' ? Nv(P.pct[k], 'USD') : P.pct[k] + ' %'; }
 function totalConceptoTexto(k){ return 'Total edificio: ' + Nv(totNativo(k), monedaConc(k)); }
 function calc(r){
-  var usd = r.s * P.usd, ars = usd * P.tc, o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
+  var vir = P.base === 'vir', usd = vir ? (P.tc ? r.vf / P.tc : 0) : r.s * P.usd, ars = vir ? r.vf : usd * P.tc;
+  var o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, vf:r.vf || 0, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
   CONC.forEach(function(c){
     var k = c[0], m = P.modo[k], dol = monedaConc(k) === 'USD';
     o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) : (TOTS ? totNativo(k) * r.s / TOTS : 0);     // en la moneda del concepto
@@ -493,11 +498,18 @@ function cotTraer(){
   }
   intentar();
 }
-$('params').addEventListener('click', function(e){ if (e.target.id === 'cotBtn') cotTraer(); });
+$('params').addEventListener('click', function(e){
+  if (e.target.id === 'cotBtn') cotTraer();
+  var b = e.target.dataset && e.target.dataset.base; if (!b || !puedeAdmin || b === P.base) return;
+  if (b === 'vir' && !U.some(function(r){ return r.vf; }) && !confirm('Todavía ninguna unidad tiene VIR / valuación fiscal cargado: los valores van a dar 0.\n\nCargalo con ✏️ en cada unidad o importando una planilla («VIR / valuación fiscal»). ¿Cambiar igual?')) return;
+  P.base = b; guardarParams(); refTotales(); render(); toast(b === 'vir' ? '✔ Valuando con el VIR / valuación fiscal' : '✔ Valuando con el valor por m²');
+});
 function renderParams(){
   var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
-  var h = '<h3>Valuación</h3>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) + cotHTML() +
+  var h = '<h3>Valuación</h3><div class="f"><span>Valuar las unidades con</span><span class="dual"><button class="btn' + (P.base !== 'vir' ? ' on' : '') + '" type="button" data-base="m2"' + d + '>Valor por m² (USD)</button>' +
+    '<button class="btn' + (P.base === 'vir' ? ' on' : '') + '" type="button" data-base="vir"' + d + '>VIR / valuación fiscal</button></span>' +
+    '<small>' + (P.base === 'vir' ? 'Usa el VIR / valuación fiscal ($) cargado en cada unidad; el valor por m² queda de referencia.' : 'Usa m² × valor por m². Podés alternar al VIR cuando lo tengas cargado.') + '</small></div>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) + cotHTML() +
     '<h3>Conceptos del edificio — se reparten según los m² de cada unidad (salvo «por unidad»)</h3>';
   CONC.forEach(function(c){
     var k = c[0];
@@ -530,7 +542,7 @@ function filas(){
   return a;
 }
 function nombreInq(i){ return i.replace(/\s*\(.*?\)/g, '').replace(/\/\s*\S+@\S+/g, '').trim(); }
-var SUMAR = ['usd','ars','tot','totp','totu','tusd','sc','ss'].concat(CONC.map(function(c){ return c[0]; }));
+var SUMAR = ['usd','ars','vf','tot','totp','totu','tusd','sc','ss'].concat(CONC.map(function(c){ return c[0]; }));
 /* ── Columnas: mostrar / ocultar / ancho (se recuerda en este equipo) ── */
 var COLS = {oc:{}, w:{}};
 try { var _cs = JSON.parse(localStorage.getItem('unid_cols') || '{}'); if (_cs.oc) COLS.oc = _cs.oc; if (_cs.w) COLS.w = _cs.w; } catch(x) {}
@@ -550,6 +562,7 @@ function defCols(){
     {k:'m', t:'Mail', cls:'l', solo:'pd'},
     {k:'s', t:'m²', cls:''},
     {k:'pc', t:'% unidad', cls:''},
+    {k:'vf', t:'VIR / Val. fiscal ($)', cls:'', solo:'vir'},
     {k:'usd', t:'Valor USD', cls:''},
     {k:'ars', t:'Valor $ TC', cls:''},
     {k:'alt', t:'Valor $ TC alt.', cls:''},
@@ -568,6 +581,7 @@ function defCols(){
     if (c.solo === 'monu' && !CONC.some(function(x){ return monedaConc(x[0]) === 'USD' && totNativo(x[0]) !== 0; })) return false;
     if (c.solo === 'lista' && S.g) return false;
     if (c.solo === 'dato' && !U.some(function(r){ return c.k === 'tp' ? r.tp : c.k === 'sc' ? r.sc : r.ss; })) return false;   // sólo si hay algún dato cargado
+    if (c.solo === 'vir' && P.base !== 'vir' && !U.some(function(r){ return r.vf; })) return false;   // sólo si se usa el VIR o hay alguno cargado
     if (c.k === 'alt' && !P.tc2) return false;   // sin TC alternativo cargado no hay nada que mostrar
     return true;
   });
@@ -610,6 +624,7 @@ function celdaPlanilla(k, r, c, dis){
     case 'sc': return '<td>' + (r.sc ? r.sc.toFixed(2) : '') + '</td>';
     case 'ss': return '<td>' + (r.ss ? r.ss.toFixed(2) : '') + '</td>';
     case 'pc': return '<td>' + (TOTS ? (r.s / TOTS * 100).toFixed(2) : '0.00') + '%</td>';
+    case 'vf': return '<td>' + (r.vf ? N(r.vf, '$') : '') + '</td>';
     case 'usd': return '<td>' + fm('usd', c.usd) + '</td>';
     case 'ars': return '<td>' + fm('ars', c.ars) + '</td>';
     case 'alt': return '<td>' + (c.alt == null ? '—' : fm('alt', c.alt)) + '</td>';
@@ -634,6 +649,7 @@ function celdaTotal(k, T, n){
     case 'sc': return '<td>' + (T.sc || 0).toFixed(2) + '</td>';
     case 'ss': return '<td>' + (T.ss || 0).toFixed(2) + '</td>';
     case 'tp': return '<td></td>';
+    case 'vf': return '<td>' + N(T.vf || 0, '$') + '</td>';
     case 'usd': return '<td>' + fm('usd', T.usd) + '</td>';
     case 'ars': return '<td>' + fm('ars', T.ars) + '</td>';
     case 'alt': return '<td>' + (P.tc2 ? fm('alt', T.alt) : '—') + '</td>';
@@ -688,8 +704,8 @@ function render(){
   $('fSel').classList.toggle('on', !!S.sel);
   $('fSel').textContent = S.sel ? 'Seleccionar (' + Object.keys(S.sel).length + ' de ' + U.length + ')' : 'Seleccionar';
   var conF = U.filter(function(r){ return r.fp; }).length;
-  var kpiHtml = [['Unidades', U.length + ' · ' + TOTS.toFixed(2) + ' m²'], ['Valor total USD', N(TOTS * P.usd, 'USD')],
-    ['Valor total $ (TC ' + P.tc + ')', N(TOTS * P.usd * P.tc)], ['Con fecha de posesión', conF + ' de ' + U.length]]
+  var kpiHtml = [['Unidades', U.length + ' · ' + TOTS.toFixed(2) + ' m²'], ['Valor total USD', N(P.tc ? valorTotArs() / P.tc : 0, 'USD')],
+    ['Valor total $ (TC ' + P.tc + ')', N(valorTotArs())], ['Con fecha de posesión', conF + ' de ' + U.length]]
     .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
   $('kpis').innerHTML = kpiHtml; $('kpis2').innerHTML = kpiHtml;
   renderResumen(); renderCobros(); renderPosesion(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
@@ -938,7 +954,7 @@ function bajarExcel(){
   if (hayDato('sc')) C.push(['sc','Sup. cubierta m²',13,'0.00','right',1]);
   if (hayDato('ss')) C.push(['ss','Sup. semicubierta m²',13,'0.00','right',1]);
   C.push( ['s','m²',10,'0.00','right',1], ['pc','% de la unidad',11,'0.00%','right',1],
-         ['usd','Valor USD',17,'"USD" #,##0.00','right',2], ['ars','Valor $ (TC ' + P.tc + ')',19,'"$" #,##0.00','right',2]);
+         ['vf','VIR / Val. fiscal ($)',19,'"$" #,##0.00','right',2], ['usd','Valor USD',17,'"USD" #,##0.00','right',2], ['ars','Valor $ (TC ' + P.tc + ')',19,'"$" #,##0.00','right',2]);
   if (alt) C.push(['alt','Valor $ (TC ' + P.tc2 + ')',21,'"$" #,##0.00','right',2]);
   C.push(['usdm2','USD por m²',15,'"USD" #,##0.00','right',2]);
   var fmtC = function(k){ return monedaConc(k) === 'USD' ? '"USD" #,##0.00' : '"$" #,##0.00'; };      // cada concepto en su moneda
@@ -983,14 +999,15 @@ function bajarExcel(){
   var formulaCelda = function(key, r){
     var s = colL.s ? colL.s + r : null, ci = concIdx(key);
     if (key === 'pc') return s ? 'IFERROR(' + s + '/' + VAL.tots + ',0)' : null;
-    if (key === 'usd') return s ? conv('usd', s + '*' + VAL.usd) : null;
-    if (key === 'ars') return s ? conv('ars', s + '*' + VAL.usd + '*' + VAL.tc) : null;
-    if (key === 'alt') return s ? conv('alt', s + '*' + VAL.usd + '*' + VAL.tc2) : null;
+    var vir = P.base === 'vir', vf = colL.vf ? colL.vf + r : null;          // con base VIR el valor sale de la columna VIR, no de los m²
+    if (key === 'usd') return vir ? (vf ? conv('usd', vf + '/' + VAL.tc) : null) : s ? conv('usd', s + '*' + VAL.usd) : null;
+    if (key === 'ars') return vir ? (vf ? conv('ars', vf) : null) : s ? conv('ars', s + '*' + VAL.usd + '*' + VAL.tc) : null;
+    if (key === 'alt') return vir ? (vf ? conv('alt', vf + '/' + VAL.tc + '*' + VAL.tc2) : null) : s ? conv('alt', s + '*' + VAL.usd + '*' + VAL.tc2) : null;
     if (ci >= 0) return (esModoUnidad(P.modo[key]) || !s) ? null : conv(key, 'IFERROR(' + V + '$D$' + (H0 + 1 + ci) + '*' + s + '/' + VAL.tots + ',0)');
     if (key === 'totp' || key === 'totu') { var t = sumaConc(key === 'totp' ? '$' : 'USD', r); return t ? conv(key, t) : null; }
     if (key === 'usdm2') {
-      var sp = sumaConc('$', r), su = sumaConc('USD', r); if (!s || sp == null || su == null) return null;
-      return conv('usdm2', 'IFERROR(' + VAL.usd + '+((' + sp + ')/' + VAL.tc + '+(' + su + '))/' + s + ',0)');
+      var sp = sumaConc('$', r), su = sumaConc('USD', r); if (!s || sp == null || su == null || (vir && !vf)) return null;
+      return conv('usdm2', 'IFERROR(' + (vir ? vf + '/' + VAL.tc + '/' + s : VAL.usd) + '+((' + sp + ')/' + VAL.tc + '+(' + su + '))/' + s + ',0)');
     }
     var m = key.match(/^sd_(.+)$/);
     if (m && colL[m[1]] && colL['cb_' + m[1]] && natVista(m[1]) && natVista('cb_' + m[1])) return conv(key, colL[m[1]] + r + '-' + colL['cb_' + m[1]] + r);
@@ -1031,8 +1048,8 @@ function bajarExcel(){
   });
   // totales (con fórmula, y con el valor calculado para que se vea aunque se abra en un visor)
   var rt = 6 + a.length, ult = rt - 1, tr = ws.getRow(rt); tr.height = 22;
-  var sumas = {s:0, usd:0, ars:0, alt:0, totp:0, totu:0, tusd:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
-  a.forEach(function(r){ sumas.s += r.s; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.totp += r.c.totp; sumas.totu += r.c.totu; sumas.tusd += r.c.tusd; conceptosUnidad().forEach(function(c){ sumas['cb_' + c[0]] = (sumas['cb_' + c[0]] || 0) + r.c['cb_' + c[0]]; sumas['sd_' + c[0]] = (sumas['sd_' + c[0]] || 0) + r.c['sd_' + c[0]]; }); conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
+  var sumas = {s:0, vf:0, usd:0, ars:0, alt:0, totp:0, totu:0, tusd:0}; conceptos.forEach(function(c){ sumas[c[0]] = 0; });
+  a.forEach(function(r){ sumas.s += r.s; sumas.vf += r.vf; sumas.usd += r.c.usd; sumas.ars += r.c.ars; if (r.c.alt != null) sumas.alt += r.c.alt; sumas.totp += r.c.totp; sumas.totu += r.c.totu; sumas.tusd += r.c.tusd; conceptosUnidad().forEach(function(c){ sumas['cb_' + c[0]] = (sumas['cb_' + c[0]] || 0) + r.c['cb_' + c[0]]; sumas['sd_' + c[0]] = (sumas['sd_' + c[0]] || 0) + r.c['sd_' + c[0]]; }); conceptos.forEach(function(c){ sumas[c[0]] += r.c[c[0]]; }); });
   C.forEach(function(col, j){
     var cell = tr.getCell(j + 1), key = col[0], L = ws.getColumn(j + 1).letter;
     if (j === 0) cell.value = 'TOTAL';
@@ -1056,7 +1073,7 @@ function bajarExcel(){
   var nota = wv.getCell(3, 1); nota.value = 'Las celdas amarillas se pueden cambiar: la hoja «Planilla» se recalcula sola.'; nota.font = {name:'Calibri', size:9, italic:true, color:{argb:XL.sub}};
   var entrada = function(c){ c.fill = {type:'pattern', pattern:'solid', fgColor:{argb:'FFFFF6CC'}}; c.font = {name:'Calibri', size:10.5, bold:true, color:{argb:'FF1F4FBF'}}; };
   var pv = [['Valor del m² (USD)', P.usd, '"USD" #,##0.00'], ['Tipo de cambio base', P.tc, '"$" #,##0.00'], ['Tipo de cambio alternativo', P.tc2 || null, '"$" #,##0.00'],
-            ['m² totales del edificio', TOTS, '0.00'], ['Valor total (USD)', TOTS * P.usd, '"USD" #,##0.00'], ['Valor total ($, TC base)', TOTS * P.usd * P.tc, '"$" #,##0.00']];
+            ['m² totales del edificio', TOTS, '0.00'], ['Valor total (USD)', P.tc ? valorTotArs() / P.tc : 0, '"USD" #,##0.00'], ['Valor total ($, TC base)', valorTotArs(), '"$" #,##0.00']];
   pv.forEach(function(p, k){
     var r = 4 + k, c1 = wv.getCell(r, 1), c2 = wv.getCell(r, 2);
     c1.value = p[0]; c1.font = {name:'Calibri', size:10.5, color:{argb:XL.sub}}; c2.value = p[1]; c2.numFmt = p[2];
@@ -1064,7 +1081,8 @@ function bajarExcel(){
   });
   [3, 4, 5].forEach(function(k){                // m² totales, valor total USD y valor total $ son fórmulas
     var c = wv.getCell(4 + k, 2), res = pv[k][1];
-    c.value = {formula:k === 3 ? "SUM('Posesión y firma'!D5:D" + (4 + U.length) + ')' : k === 4 ? 'B7*B4' : 'B8*B5', result:res};
+    var vir = P.base === 'vir', f = k === 3 ? "SUM('Posesión y firma'!D5:D" + (4 + U.length) + ')' : k === 4 ? (vir ? 'B9/B5' : 'B7*B4') : 'B8*B5';
+    c.value = (vir && k === 5) ? res : {formula:f, result:res};          // con base VIR el total en $ es la suma de los VIR cargados (dato) y los USD salen de él
   });
   [0, 1, 2].forEach(function(k){ entrada(wv.getCell(4 + k, 2)); });
   var h0 = H0;
@@ -1138,6 +1156,7 @@ function formUnidad(r){
     '<label class="f">m² superficie<input id="fu_s" type="number" step="any" value="' + esc(r.s) + '"></label>' +
     '<label class="f full">Propietario<input id="fu_p" value="' + esc(r.p) + '"></label>' +
     '<label class="chk full"><input type="checkbox" id="fu_rk"' + (r.rk ? ' checked' : '') + '> Es de RK (los mails de la planilla son los de la administración)</label>' +
+    '<label class="f">VIR / valuación fiscal ($)<input id="fu_vf" type="number" step="any" value="' + (r.vf ? esc(r.vf) : '') + '" placeholder="Valor en pesos"></label>' +
     '<label class="f">Tipología<input id="fu_tp" value="' + esc(r.tp || '') + '" placeholder="Ej: 2 ambientes"></label>' +
     '<label class="f">Sup. cubierta m²<input id="fu_sc" type="number" step="any" value="' + (r.sc ? esc(r.sc) : '') + '"></label>' +
     '<label class="f">Sup. semicubierta m²<input id="fu_ss" type="number" step="any" value="' + (r.ss ? esc(r.ss) : '') + '"></label>' +
@@ -1170,6 +1189,7 @@ function guardarUnidad(r, nueva){
   var base = 'global/edificios/' + edId + '/unidades/' + k + '/', upd = {};
   upd[base + 'n'] = n; upd[base + 'o'] = o; upd[base + 'p'] = p || (rk ? 'RK' : ''); upd[base + 'rk'] = rk;
   upd[base + 'tp'] = $('fu_tp').value.trim() || null; var vc = parseFloat($('fu_sc').value), vs = parseFloat($('fu_ss').value);
+  var vv = parseFloat($('fu_vf').value); upd[base + 'vf'] = isNaN(vv) || vv <= 0 ? null : vv;
   upd[base + 'sc'] = isNaN(vc) ? null : vc; upd[base + 'ss'] = isNaN(vs) ? null : vs;
   upd[base + 'i'] = i; upd[base + 't'] = $('fu_t').value.trim(); upd[base + 's'] = Math.round(s * 10000) / 10000;
   CONC.forEach(function(c){ if (!esModoUnidad(P.modo[c[0]])) return; var e = $('fu_cv_' + c[0]), v = e ? parseFloat(e.value) : NaN; upd[base + 'cv/' + c[0]] = isNaN(v) ? null : Math.round(v * 10000) / 10000;
@@ -1211,12 +1231,13 @@ $('btnNuevoEd').onclick = nuevoEdificio; $('btnNuevoEd2').onclick = nuevoEdifici
 var CONC_PISTAS = {alh:['alha','alhaj'], gan:['gananc'], iibb:['ingresosbrutos','iibb'], adm:['administr'], res:['reserva'], cdi:['edenor','cdi'], rec:['recupero','personales']};   // cdi antes que rec: «Recupero CDI Edenor» también dice «recupero»
 function conceptoDeTexto(t){ var h = normH(t); for (var k in CONC_PISTAS) if (CONC_PISTAS[k].some(function(p){ return h.indexOf(p) >= 0; })) return k; return ''; }
 var DESTINOS = [['p','Propietario'], ['t','Teléfono'], ['m','Mail del propietario'], ['i','Inquilino/a'], ['s','m² totales'], ['tp','Tipología'],
-                ['sc','Superficie cubierta m²'], ['ss','Superficie semicubierta m²'], ['fp','Fecha de posesión'], ['hf','Hora de firma']];
+                ['sc','Superficie cubierta m²'], ['ss','Superficie semicubierta m²'], ['fp','Fecha de posesión'], ['hf','Hora de firma'], ['vf','VIR / valuación fiscal ($)']];
 function sugerirDestino(h){
   // Los datos que IDENTIFICAN a la unidad (propietario, teléfono, mail, inquilino, m²) sólo se proponen si el título es exacto: en
   // la planilla del fondo la columna «Inversores» trae «Disponible» en las unidades de RK y pisaría los propietarios.
   var n = normH(h), k = conceptoDeTexto(h);
   if (n.indexOf('cobrad') >= 0) return k ? 'cb_' + k : '';
+  if (/^vir$|valuacionfiscal|valorfiscal|valorinmobiliario/.test(n)) return 'vf';
   if (/^propietarios?$/.test(n)) return 'p';
   if (/^(tel|telefonos?)$/.test(n)) return 't';
   if (/^(mails?|emails?|correos?)$/.test(n)) return 'm';
@@ -1488,7 +1509,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v21';
+var UNID_VER = 'unidades-v22';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
