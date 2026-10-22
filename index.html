@@ -3603,7 +3603,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v555</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v556</div>
         </div>
     </nav>
 
@@ -16894,7 +16894,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v555';
+    var APP_VER = 'v556';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -29061,7 +29061,16 @@
             });
         });
         var sospechosos = [];
-        Object.keys(grupos).forEach(function(k) { if (grupos[k].length > 1) sospechosos.push(grupos[k]); });
+        Object.keys(grupos).forEach(function(k) {
+            var g = grupos[k]; if (g.length < 2) return;
+            // Dos cobros iguales del mismo mes que juntos NO pasan el canon son pagos parciales (50 + 50 de un alquiler de 100), no un duplicado.
+            var c0 = g[0].c, per0 = c0.periodo || '';
+            if ((c0.concepto || 'alquiler') === 'alquiler' && /^\d{4}-\d{2}$/.test(per0)) {
+                var esp0 = _alqCanonEsperado(g[0].a, per0) || 0;
+                if (esp0 > 0 && _alqCobradoPeriodo(g[0].a, per0) <= esp0 * 1.02) return;
+            }
+            sospechosos.push(g);
+        });
         if (!sospechosos.length) { alert('No se encontraron cobros duplicados.'); return; }
 
         var fmt = function(n) { return '$' + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
@@ -33056,6 +33065,24 @@
         var f = _alqFraccionPeriodo(a, periodo);
         return f ? _r2(base * f.factor) : base;
     }
+    // ── Cobros PARCIALES: el saldo de un período ──
+    // Todo en unidades de CANON (sin IVA): un cobro con desglose trae su IVA aparte (`iva`) y no es parte del canon, así que no «paga» canon. Antes
+    // el plan comparaba la suma de `monto` (IVA incluido) contra el canon: en un contrato con IVA un cobro de apenas el 83% del canon ya figuraba pagado.
+    // «Pagada» sigue siendo ≥98% del esperado (tolerancia de centavos). El esperado ya viene prorrateado si el mes es proporcional.
+    function _alqCobradoPeriodo(a, periodo) {
+        return _r2((a.cobrosHistorial || []).filter(function(c) { return c && c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto); })
+            .reduce(function(s, c) { return s + (c.monto || 0) - (c.iva || 0); }, 0));
+    }
+    function _alqSaldoPeriodo(a, periodo) {
+        var esp = _alqCanonEsperado(a, periodo) || 0, cob = _alqCobradoPeriodo(a, periodo);
+        var pagada = esp > 0 && cob >= esp * 0.98;
+        return { esperado: esp, cobrado: cob, pagada: pagada, parcial: cob > 0 && !pagada && esp > 0, saldo: pagada ? 0 : Math.max(0, _r2(esp - cob)) };
+    }
+    // Lo que se propone cobrar de un período: el SALDO si ya hubo un pago parcial, si no el canon entero.
+    function _alqMontoSugerido(a, periodo) {
+        var sp = _alqSaldoPeriodo(a, periodo);
+        return sp.parcial ? sp.saldo : (sp.esperado || 0);
+    }
     function _alqTextoFraccion(f, periodo) {
         var mm = periodo.substring(5, 7) + '/' + periodo.substring(0, 4), d2 = function(n) { return String(n).padStart(2, '0'); };
         return f.dias + ' de ' + f.diasMes + ' días (' + d2(f.desde) + ' al ' + d2(f.hasta) + '/' + mm + ')';
@@ -34670,7 +34697,7 @@
         document.getElementById('cobroAlqFecha').valueAsDate = new Date();
         var hoy = new Date();
         var periodo = periodoPrefill || hoy.toISOString().substring(0,7);
-        document.getElementById('cobroAlqMonto').value = _alqCanonEsperado(a, periodo) || '';
+        document.getElementById('cobroAlqMonto').value = _alqMontoSugerido(a, periodo) || '';   // si ya hubo un pago parcial de ese mes, propone el SALDO
         _cobroAlqMontoAMano = false;
         _cobroAlqHintProrrata(a, periodo);
         document.getElementById('cobroAlqRef').value   = '';
@@ -34689,6 +34716,36 @@
         modalCobro.classList.add('active');
     }
 
+    // Cobro parcial: dice cuánto del mes ya se cobró y cuánto QUEDA A COBRAR con el monto que está escrito. Si el monto es menor al canon del
+    // período (alquiler 100, se cobran 50) avisa que quedan 50; si ya había un pago parcial, parte de lo ya cobrado. Con el desglose de IVA
+    // cuenta sólo el canon (neto gravado + no gravado), no el IVA.
+    function _cobroAlqSaldoHint() {
+        var box = document.getElementById('cobroAlqSaldo'); if (!box) return;
+        var a = alquileres[parseInt((document.getElementById('cobroAlqIdx') || {}).value)];
+        var periodo = (document.getElementById('cobroAlqPeriodo') || {}).value || '';
+        var concepto = (document.getElementById('cobroAlqConcepto') || {}).value || 'alquiler';
+        if (!a || concepto !== 'alquiler' || !periodo) { box.style.display = 'none'; return; }
+        var sp = _alqSaldoPeriodo(a, periodo);
+        if (sp.esperado <= 0) { box.style.display = 'none'; return; }
+        var des = _cobroAlqDesgloseActivo();
+        var este = des
+            ? (parseFloat(document.getElementById('cobroAlqGravado').value) || 0) + (parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0)
+            : (parseFloat(document.getElementById('cobroAlqMonto').value) || 0);
+        var queda = _r2(sp.esperado - sp.cobrado - este);
+        var f = function(n) { return _alqFmtMon(a, n); }, msg = '', cls = '';
+        if (sp.cobrado > 0 && !sp.pagada) msg += 'Ya se cobró <strong>' + f(sp.cobrado) + '</strong> de ' + f(sp.esperado) + ' de este mes (saldo ' + f(sp.saldo) + '). ';
+        else if (sp.pagada) msg += 'Este mes ya está cobrado (' + f(sp.cobrado) + ' de ' + f(sp.esperado) + '). ';
+        if (este > 0) {
+            if (sp.pagada) { cls = 'warn'; msg += 'Lo que cargues se suma a lo ya cobrado.'; }
+            else if (queda > sp.esperado * 0.02) { cls = 'warn'; msg += '<strong>Con este cobro quedan ' + f(queda) + ' a cobrar</strong> — el mes queda con saldo (pago parcial).'; }
+            else if (queda < -sp.esperado * 0.02) { cls = 'warn'; msg += 'Con este monto se pasa del canon del mes en ' + f(-queda) + '.'; }
+            else if (sp.cobrado > 0) msg += 'Con este cobro el mes queda cobrado completo.';   // cobrar el mes entero de una vez no necesita aviso
+        }
+        box.innerHTML = msg;
+        box.style.display = msg ? '' : 'none';
+        box.style.background = cls === 'warn' ? 'var(--warn-bg)' : 'var(--surface)';
+        box.style.color = cls === 'warn' ? 'var(--warn)' : '';
+    }
     // Aviso del período proporcional en el modal de cobro (sólo si el concepto es el alquiler del mes).
     var _cobroAlqMontoAMano = false;
     function _cobroAlqHintProrrata(a, periodo) {
@@ -34705,16 +34762,18 @@
         var periodo = document.getElementById('cobroAlqPeriodo').value;
         var concepto = (document.getElementById('cobroAlqConcepto') || {}).value || 'alquiler';
         _cobroAlqHintProrrata(a, periodo);
-        if (!periodo || concepto !== 'alquiler' || _cobroAlqMontoAMano) return;
-        var monto = _alqCanonEsperado(a, periodo) || 0;
+        if (!periodo || concepto !== 'alquiler' || _cobroAlqMontoAMano) { _cobroAlqSaldoHint(); return; }
+        var monto = _alqMontoSugerido(a, periodo) || 0;
         if (a.ivaActivo) _cobroAlqCalcDesglose(a, monto);
         // con el desglose prendido el monto sale de sus partes (neto + IVA); si no, es el canon del período
         if (a.ivaActivo && _cobroAlqDesgloseActivo()) _cobroAlqPreview(); else document.getElementById('cobroAlqMonto').value = monto || '';
         _cobroAlqRefrescarMoneda();
+        _cobroAlqSaldoHint();
     }
 
     // El depósito de garantía NO corresponde a un mes: al elegirlo se oculta el período.
     function _cobroAlqConceptoChange() {
+        _cobroAlqSaldoHint();
         var concepto = (document.getElementById('cobroAlqConcepto') || {}).value;
         var per = document.getElementById('cobroAlqPeriodo');
         var grp = per && per.closest ? per.closest('.form-group') : null;
@@ -34782,7 +34841,7 @@
         ['cobroAlqFacturaArchivo','cobroAlqTransfArchivo','cobroAlqFacturaNro'].forEach(function(id){
             var el = document.getElementById(id); if (el) el.value = '';
         });
-        if (activo) _cobroAlqCalcDesglose(a, _alqCanonEsperado(a, periodo) || 0);
+        if (activo) _cobroAlqCalcDesglose(a, _alqMontoSugerido(a, periodo) || 0);
         _cobroAlqToggleDesglose();
     }
     // Reparte un monto en gravado / IVA / no gravado según la proporción del contrato (se usa al abrir el cobro y al cambiar el período).
@@ -34894,6 +34953,7 @@
         var montoInput = document.getElementById('cobroAlqMonto');
         if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
         _cobroAlqAdjuntosToggle();   // cambiar el destino de una parte prende/apaga los papeles
+        _cobroAlqSaldoHint();
     }
 
     // Sube un adjunto del cobro a REF_DOCS y devuelve sus metadatos, o null si no se eligió
@@ -34928,6 +34988,12 @@
             _cobroAlqGuardando = false;
             if (_btn) { _btn.disabled = false; _btn.textContent = 'Registrar Cobro'; }
         }
+    }
+    // Línea para el aviso de «cobro registrado» cuando el mes queda con saldo (pago parcial).
+    function _alqAvisoSaldo(a, periodo, concepto) {
+        if (concepto !== 'alquiler' && concepto) return '';
+        var sp = _alqSaldoPeriodo(a, periodo);
+        return sp.parcial ? '\n\n⚠️ Pago parcial: quedan ' + _alqFmtMon(a, sp.saldo) + ' a cobrar de ' + periodo + '. Cuando entre el resto, cobralo con 💵 Completar en 📅 Plan.' : '';
     }
     async function _guardarCobroAlquilerInterno() {
         var idx     = parseInt(document.getElementById('cobroAlqIdx').value);
@@ -35007,7 +35073,7 @@
             cerrarModalCobroAlquiler();
             persistirAlquileres();
             _refrescarPlanAlquilerSiAbierto(idx);
-            alert('Cobro registrado en ' + recibos.length + ' recibo(s). Se emiten los comprobantes.');
+            alert('Cobro registrado en ' + recibos.length + ' recibo(s). Se emiten los comprobantes.' + _alqAvisoSaldo(a, periodo, concepto));
             recibos.forEach(function(r){ imprimirComprobanteAlquiler(a, r.monto, r.fecha, r.periodo, r.concepto, r.ref, r.nroRecibo, r); });
             return;
         }
@@ -35033,7 +35099,7 @@
                (regCobro.monedaCobro === 'USD' ? 'USD ' : '$') + (regCobro.montoCobrado).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
                ' (TC $' + tcCobro.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ').')
             : '';
-        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.' + _avisoMon);
+        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.' + _avisoMon + _alqAvisoSaldo(a, periodo, concepto));
         imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq, regCobro);
     }
 
@@ -35179,18 +35245,19 @@
             // "actual" en vivo) — así un ajuste que se aplique a futuro nunca recalcula ni cambia
             // el estado de un mes que ya se cobró.
             var canonPeriodo = _alqCanonEsperado(a, periodo);
+            var _spP = _alqSaldoPeriodo(a, periodo);   // en unidades de canon: el IVA de un cobro no paga canon
             var _frP = _alqFraccionPeriodo(a, periodo);
             var esBonif = (a.mesesBonificados||[]).indexOf(periodo) !== -1;
             var estado, estadoHtml;
             if (esBonif) {
                 estado = 'bonificada';
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#EDE7F6;color:#6A1B9A;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">🎁 Bonificado</span>';
-            } else if (canonPeriodo > 0 && cobrado >= canonPeriodo * 0.98) {
+            } else if (_spP.pagada) {
                 estado = 'pagada';
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#E6F4EA;color:#1E8E3E;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">✓ Pagada</span>';
             } else if (cobrado > 0) {
                 estado = 'parcial';
-                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FEF9EE;color:#B7791F;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">◐ Parcial</span>';
+                estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FEF9EE;color:#B7791F;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">◐ Parcial · falta ' + monSym + (_spP.saldo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</span>';
             } else if (periodo < hoyPeriodo) {
                 estado = 'vencida';
                 estadoHtml = '<span style="display:inline-flex;align-items:center;gap:4px;background:#FCE8E6;color:#D93025;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">⚠ Vencida</span>';
@@ -35254,19 +35321,23 @@
         if (a.inicio) { var _ini = new Date(a.inicio+'T00:00:00'); if (_ini > hoy) return { estado:'poriniciar', label:'Inicia el ' + formatearFecha(a.inicio), cls:'badge-warn', icon:'🕒' }; }
         var periodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
         if ((a.mesesBonificados||[]).indexOf(periodo) !== -1) return { estado:'bonificada', label:'Mes bonificado', cls:'badge-ok', icon:'🎁' };
-        var cobrada = (a.cobrosHistorial||[]).some(function(c){ return (c.concepto==='alquiler'||!c.concepto) && c.periodo === periodo; });
-        if (cobrada) return { estado:'cobrada', label:'Cuota del mes cobrada', cls:'badge-ok', icon:'✓' };
-        if (!a.diaPago) return null;
+        // Un pago PARCIAL no deja la cuota cobrada: queda con saldo (antes cualquier cobro del mes la daba por cobrada y el saldo se olvidaba).
+        var hayCobro = (a.cobrosHistorial||[]).some(function(c){ return (c.concepto==='alquiler'||!c.concepto) && c.periodo === periodo; });
+        var sp = _alqSaldoPeriodo(a, periodo);
+        if (hayCobro && (sp.pagada || sp.esperado <= 0)) return { estado:'cobrada', label:'Cuota del mes cobrada', cls:'badge-ok', icon:'✓' };
+        var suf = (hayCobro && sp.parcial) ? ' · saldo ' + _alqFmtMon(a, sp.saldo) : '';
+        var parcialST = (hayCobro && sp.parcial) ? { estado:'parcial', label:'Cobrada en parte' + suf, cls:'badge-warn', icon:'◐' } : null;
+        if (!a.diaPago) return parcialST;
         var diasMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
         var dia = Math.min(parseInt(a.diaPago)||1, diasMes);
         var vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0,0,0,0);
         // En el mes en que EMPIEZA el contrato la cuota no puede vencer antes de que empiece (inicio el 20 y día de pago 5 → vence el 20)
         if (a.inicio && a.inicio.substring(0, 7) === periodo) { var _ini2 = new Date(a.inicio + 'T00:00:00'); if (_ini2 > vence) vence = _ini2; }
         var dias = Math.round((vence - hoy) / 86400000);
-        if (dias < 0)  return { estado:'vencida',  label:'Cuota vencida hace ' + Math.abs(dias) + ' día' + (Math.abs(dias)===1?'':'s'), cls:'badge-err',  icon:'⚠️', dias:dias };
-        if (dias === 0) return { estado:'vencehoy', label:'La cuota vence hoy', cls:'badge-warn', icon:'⏰', dias:0 };
-        if (dias <= 7)  return { estado:'porvencer',label:'Cuota vence en ' + dias + ' día' + (dias===1?'':'s'), cls:'badge-warn', icon:'⏳', dias:dias };
-        return null;
+        if (dias < 0)  return { estado:'vencida',  label:(suf ? 'Saldo vencido hace ' : 'Cuota vencida hace ') + Math.abs(dias) + ' día' + (Math.abs(dias)===1?'':'s') + suf, cls:'badge-err',  icon:'⚠️', dias:dias };
+        if (dias === 0) return { estado:'vencehoy', label:'La cuota vence hoy' + suf, cls:'badge-warn', icon:'⏰', dias:0 };
+        if (dias <= 7)  return { estado:'porvencer',label:'Cuota vence en ' + dias + ' día' + (dias===1?'':'s') + suf, cls:'badge-warn', icon:'⏳', dias:dias };
+        return parcialST;
     }
 
     // Ordenar tocando el encabezado. Escribe en el MISMO selector que ya existe (alqOrden), así
@@ -35424,13 +35495,14 @@
         // Banner de avisos de cuotas (vencidas / por vencer este mes)
         var _avEl = document.getElementById('alqAvisoCuotas');
         if (_avEl) {
-            var _venc = 0, _porv = 0;
-            alquileres.forEach(function(a){ var e = _alqEstadoPago(a); if (!e) return; if (e.estado==='vencida') _venc++; else if (e.estado==='porvencer'||e.estado==='vencehoy') _porv++; });
-            if (!_venc && !_porv) { _avEl.style.display = 'none'; }
+            var _venc = 0, _porv = 0, _par = 0;
+            alquileres.forEach(function(a){ var e = _alqEstadoPago(a); if (!e) return; if (e.estado==='vencida') _venc++; else if (e.estado==='porvencer'||e.estado==='vencehoy') _porv++; else if (e.estado==='parcial') _par++; });
+            if (!_venc && !_porv && !_par) { _avEl.style.display = 'none'; }
             else {
                 var partes = [];
                 if (_venc) partes.push('<strong>' + _venc + '</strong> cuota' + (_venc===1?'':'s') + ' vencida' + (_venc===1?'':'s'));
                 if (_porv) partes.push('<strong>' + _porv + '</strong> por vencer esta semana');
+                if (_par) partes.push('<strong>' + _par + '</strong> con saldo pendiente (cobrada' + (_par===1?'':'s') + ' en parte)');
                 var hayVenc = _venc > 0;
                 _avEl.style.background = hayVenc ? 'var(--danger-bg)' : 'var(--warn-bg)';
                 _avEl.style.color = hayVenc ? 'var(--danger)' : 'var(--warn)';
@@ -35463,6 +35535,15 @@
                 ' · TC $' + Number(reg.tc || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td><td></td><td class="tr"><strong>' +
                 fmtN(reg.montoCobrado, reg.monedaCobro) + '</strong></td></tr>';
         }
+        // Pago parcial: el recibo dice cuánto se lleva cobrado del período y cuánto falta (a la fecha del recibo, para que una reimpresión no cambie).
+        var _parcialRec = '';
+        if ((concepto === 'alquiler' || !concepto) && /^\d{4}-\d{2}$/.test(periodo || '')) {
+            var _espR = _alqCanonEsperado(a, periodo) || 0, _fR = String((reg && reg.fecha) || fecha || '');
+            var _acumR = _r2((a.cobrosHistorial || []).filter(function(c) { return c && c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto) && String(c.fecha || '') <= _fR; })
+                .reduce(function(s, c) { return s + (c.monto || 0) - (c.iva || 0); }, 0));
+            if (_espR > 0 && _acumR > 0 && _acumR < _espR * 0.98)
+                _parcialRec = '<br><strong>Pago parcial</strong> a cuenta del período: cobrado a la fecha ' + fmtN(_acumR, a.moneda) + ' de ' + fmtN(_espR, a.moneda) + ' · <strong>saldo pendiente ' + fmtN(_r2(_espR - _acumR), a.moneda) + '</strong>';
+        }
         var html = '<html><head><meta charset="UTF-8"><title>Orden de Recibo — Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl"><thead><tr><th>Concepto</th><th>Período</th><th class="tr">Monto</th></tr></thead>' +
         '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,a.moneda) + '</strong></td></tr>' + _filasDesglose + '</tbody>' +
@@ -35471,7 +35552,7 @@
         'Vigencia: ' + (a.inicio?formatearFecha(a.inicio):'—') + ' al ' + (a.fin?formatearFecha(a.fin):'sin vto.') +
         '<br>Canon: ' + fmtN(a.canonActual||a.canon,a.moneda) +
         (reg && reg.facturaNro ? '<br>Factura emitida: ' + escHtml(reg.facturaNro) : '') +
-        (a.deposito?'<br>Depósito: ' + fmtN(a.deposito,a.depMoneda):'') + '</div></div>' +
+        (a.deposito?'<br>Depósito: ' + fmtN(a.deposito,a.depMoneda):'') + _parcialRec + '</div></div>' +
         '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmtN(monto,a.moneda) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + escHtml(a.inquilino||'Inquilino') + '</div><div class="fi">Entregó — Locador / ' + escHtml(emp.nombre) + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + escHtml(emp.nombre) + '</div>' +
@@ -35518,10 +35599,8 @@
         while (cur <= ultimo && n < 240) {
             var per = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0');
             if ((a.mesesBonificados || []).indexOf(per) === -1) {
-                var esp = _alqCanonEsperado(a, per) || 0;
-                var cob = (a.cobrosHistorial || []).filter(function(c) { return c.periodo === per && (c.concepto === 'alquiler' || !c.concepto); })
-                    .reduce(function(s, c) { return s + (c.monto || 0); }, 0);
-                if (esp > 0 && cob < esp * 0.98) { var pend = Math.round((esp - cob) * 100) / 100; out.total += pend; out.meses.push({ periodo: per, pend: pend, parcial: cob > 0 }); }
+                var sp = _alqSaldoPeriodo(a, per);
+                if (sp.esperado > 0 && !sp.pagada) { out.total += sp.saldo; out.meses.push({ periodo: per, pend: sp.saldo, parcial: sp.cobrado > 0 }); }
             }
             cur.setMonth(cur.getMonth() + 1); n++;
         }
@@ -46121,10 +46200,12 @@
         <div class="form-group"><label>Período que cubre</label><input type="month" id="cobroAlqPeriodo" placeholder="YYYY-MM" onchange="_cobroAlqPeriodoChange()"></div>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-        <div class="form-group"><label>Monto cobrado <span id="cobroAlqMonedaContrato" style="color:var(--text-3);font-weight:400;"></span></label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqMontoAMano=true; _cobroAlqRefrescarMoneda()"></div>
+        <div class="form-group"><label>Monto cobrado <span id="cobroAlqMonedaContrato" style="color:var(--text-3);font-weight:400;"></span></label><input type="number" id="cobroAlqMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqMontoAMano=true; _cobroAlqRefrescarMoneda(); _cobroAlqSaldoHint()"></div>
         <div class="form-group"><label>Referencia / Recibo</label><input type="text" id="cobroAlqRef" placeholder="Opcional"></div>
       </div>
       <div id="cobroAlqProrrata" class="form-hint" style="display:none; margin:-4px 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border);"></div>
+      <!-- Cobro parcial: cuánto del mes ya se cobró y cuánto queda a cobrar con este monto -->
+      <div id="cobroAlqSaldo" class="form-hint" style="display:none; margin:-4px 0 10px; padding:8px 10px; border-radius:8px; border:1px solid var(--border);"></div>
       <!-- Moneda con la que entra la plata: puede diferir de la del contrato
            (ej. alquiler en USD que el inquilino paga en pesos al tipo de cambio del día). -->
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
