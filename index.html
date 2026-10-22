@@ -12784,7 +12784,7 @@
         add('Proveedores',(snap.proveedores||[]).map(function(p){return{Grupo:p.grupo,RazonSocial:p.razonSocial,CUIT:p.cuit,CondIVA:p.condicionIVA,Rubro:p.rubro,Tel:p.telefono,Dir:p.direccion};}));
         add('Ingresos Generales',(snap.ingresosGenerales||[]).map(function(i){return{Fecha:i.fecha,Tipo:i.tipo,Origen:i.origen,Ref:i.referencia,Moneda:i.moneda,Monto:i.monto};}));
         add('Ventas UF',(snap.ventas||[]).map(function(v){var r=resumenVenta(v);return{UF:v.uf,Tipo:v.tipo,Comprador:v.comprador,Modalidad:v.modalidad,Fecha:v.fecha,PrecioUSD:r.precioUSD,CobUSD:r.cobradoUSD,PrecioARS:r.precioARS,CobARS:r.cobradoARS,Cochera:v.incluyeCochera?((v.cocheraNro||'Sí')+((v.cocheraValorTipo==='aparte'&&(v.cocheraValor||0)>0)?(' - '+(v.cocheraMoneda==='usd'?'USD ':'$')+v.cocheraValor+(v.cocheraFormaPago==='cuotas'?(' en '+(v.cocheraNroCuotas||0)+' cuotas'):' pago único')):' (incluida)')):'',Cuotas:(v.cuotasSimple&&v.cuotasSimple.activo)?v.cuotasSimple.nro+' ('+v.cuotasSimple.moneda.toUpperCase()+')':(v.modalidad==='cuotas_cac'?(v.nroCuotas||''):'')};}));
-        add('Alquileres',(snap.alquileres||[]).map(function(a){var cob=(a.cobrosHistorial||[]).reduce(function(s,x){return s+(x.monto||0);},0);return{Unidad:a.unidad,Inquilino:a.inquilino,Inicio:a.inicio,Fin:a.fin,Canon:a.canonActual||a.canon,Moneda:a.moneda,TotalCobrado:cob};}));
+        add('Alquileres',(snap.alquileres||[]).map(function(a){var cob=(a.cobrosHistorial||[]).reduce(function(s,x){return s+(x.monto||0);},0);return{Unidad:a.unidad,Inquilino:a.inquilino,Inicio:a.inicio,Fin:a.fin,Estado:a.finalizado?'Finalizado':(a.disponible?'Disponible':'Vigente'),FinalizadoEl:a.finalizadoEn||'',Canon:a.canonActual||a.canon,Moneda:a.moneda,TotalCobrado:cob};}));
         add('Servicios',(snap.servicios||[]).map(function(s){return{Fecha:s.fecha,Cliente:s.cliente,Descripcion:s.descripcion,Base:s.base,Avance:s.avance,Cobrado:s.cobrado};}));
         add('Cuentas Bancarias',(snap.cuentasBancarias||[]).map(function(cb){return{Banco:cb.banco,Tipo:cb.tipo,Alias:cb.alias,CBU:cb.cbu,Moneda:cb.moneda,Saldo:cb.saldo};}));
         add('Metadata',[{Campo:'Empresa',Valor:snap.empresa},{Campo:'Proyecto',Valor:snap.proyecto},{Campo:'Exportado',Valor:snap.exportadoEl},{Campo:'TC',Valor:snap.tipoCambio}]);
@@ -17728,7 +17728,7 @@
             case 'alquiler': {
                 var a = alquileres[idx]; if (!a) { alert('Ítem no encontrado.'); return; }
                 descripcion = 'Alquiler: ' + (a.inquilino||'?') + ' — ' + (a.unidad||a.direccion||'?');
-                itemData = { inquilino: a.inquilino, unidad: a.unidad, inicio: a.inicio };
+                itemData = { id: a.id || '', inquilino: a.inquilino || '', unidad: a.unidad || '', inicio: a.inicio || '' };   // sin undefined: Firebase lo rechaza
                 break;
             }
             case 'movcaja': {
@@ -17816,7 +17816,8 @@
                     if (i !== -1) { ventas.splice(i, 1); persistirVentas(); deleted = true; } break;
                 }
                 case 'alquiler': {
-                    var i = alquileres.findIndex(function(a){ return a.inquilino===D.inquilino && a.unidad===D.unidad && a.inicio===D.inicio; });
+                    var i = D.id ? alquileres.findIndex(function(a){ return a && a.id === D.id; }) : -1;
+                    if (i === -1) i = alquileres.findIndex(function(a){ return (a.inquilino||'')===(D.inquilino||'') && (a.unidad||'')===(D.unidad||'') && (a.inicio||'')===(D.inicio||''); });
                     if (i !== -1) { alquileres.splice(i, 1); persistirAlquileres(); deleted = true; } break;
                 }
                 case 'movcaja':
@@ -29141,9 +29142,12 @@
         _alqVigentes().forEach(function(a){
             var fin2=a.fin?new Date(a.fin+'T00:00:00'):null;
             var activo=!fin2||fin2>=hoy;
-            if(activo){nActivos++;} else {nVencidos++;}
-            var tp=tipos[a.tipo]||a.tipo||'Otro';
-            porTipo[tp]=(porTipo[tp]||0)+1;
+            // Una unidad «Disponible» no es un contrato: aparece en la tabla pero no cuenta como activa ni vencida.
+            if(!a.disponible){
+                if(activo){nActivos++;} else {nVencidos++;}
+                var tp=tipos[a.tipo]||a.tipo||'Otro';
+                porTipo[tp]=(porTipo[tp]||0)+1;
+            }
             var cobTotal=(a.cobrosHistorial||[]).filter(function(c){return c.concepto==='alquiler'||!c.concepto;}).reduce(function(s,c){return s+(c.monto||0);},0);
             if(a.moneda==='USD'){totalCobUSD+=cobTotal; if(activo) canonTotUSD+=(a.canonActual||a.canon||0);}
             else {totalCobARS+=cobTotal; if(activo) canonTotARS+=(a.canonActual||a.canon||0);}
@@ -29155,7 +29159,7 @@
         /* stats */
         var html='';
         var cards=[
-            {l:'Total Contratos',v:_alqVigentes().length,c:'var(--text-1)'},
+            {l:'Total Contratos',v:nActivos+nVencidos,c:'var(--text-1)'},
             {l:'Activos',v:nActivos,c:'var(--success)'},
             {l:'Vencidos',v:nVencidos,c:'var(--danger)'},
             {l:'Canon Mensual ARS',v:fmt(canonTotARS),c:'var(--blue)'},
@@ -29163,6 +29167,10 @@
             {l:'Cobrado ARS',v:fmt(totalCobARS),c:'var(--success)'},
             {l:'Cobrado USD',v:fmtUSD(totalCobUSD),c:'var(--success)'}
         ];
+        // El cobrado de las locaciones ya finalizadas (sigue contando en la tarjeta de la lista): así los dos totales se explican.
+        var cobFinARS=0,cobFinUSD=0;
+        alquileres.forEach(function(a){ if(!a.finalizado) return; var c=_alqTotalCobradoAlquiler(a); if(a.moneda==='USD') cobFinUSD+=c; else cobFinARS+=c; });
+        if(cobFinARS||cobFinUSD) cards.push({l:'Cobrado en finalizadas',v:(cobFinARS?fmt(cobFinARS):'')+(cobFinARS&&cobFinUSD?' + ':'')+(cobFinUSD?fmtUSD(cobFinUSD):''),c:'var(--text-2)'});
         cards.forEach(function(c){
             html+='<div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px 16px;">';
             html+='<div style="font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">'+c.l+'</div>';
@@ -29213,10 +29221,11 @@
         if(!win){alert('Permitir ventanas emergentes para imprimir.');return;}
         var hoy=new Date();
         var tipos={departamento:'Depto.',casa:'Casa',local:'Local',cochera:'Cochera',oficina:'Ofic.',otro:'Otro'};
-        var nActivos=0,totalCobARS=0,totalCobUSD=0,rows='';
+        var nActivos=0,nVenc=0,totalCobARS=0,totalCobUSD=0,rows='';
         _alqVigentes().forEach(function(a){
             var fin2=a.fin?new Date(a.fin+'T00:00:00'):null;
-            var activo=!fin2||fin2>=hoy; if(activo)nActivos++;
+            var activo=!fin2||fin2>=hoy;
+            if(!a.disponible){ if(activo)nActivos++; else nVenc++; }   // una unidad «Disponible» no es un contrato
             var cobTotal=(a.cobrosHistorial||[]).filter(function(c){return c.concepto==='alquiler'||!c.concepto;}).reduce(function(s,c){return s+(c.monto||0);},0);
             if(a.moneda==='USD')totalCobUSD+=cobTotal; else totalCobARS+=cobTotal;
             var monSym=a.moneda==='USD'?'USD ':'$';
@@ -29224,7 +29233,7 @@
         });
         var h=buildReciboHeader('RESUMEN ALQUILERES');
         win.document.write('<html><head><meta charset="UTF-8">'+css+'<style>@media print{body{background:#fff}.pg{box-shadow:none;margin:0;max-width:100%}}</style></head><body><div class="pg">'+h+
-            '<div style="display:flex;gap:24px;margin-bottom:18px;font-size:13px;color:var(--muted,#555);"><div><b style="color:var(--ink,#1a1a1a);">Contratos:</b> '+_alqVigentes().length+'</div><div><b style="color:var(--ink,#1a1a1a);">Activos:</b> '+nActivos+'</div><div><b style="color:var(--ink,#1a1a1a);">Vencidos:</b> '+(alquileres.length-nActivos)+'</div></div>'+
+            '<div style="display:flex;gap:24px;margin-bottom:18px;font-size:13px;color:var(--muted,#555);"><div><b style="color:var(--ink,#1a1a1a);">Contratos:</b> '+(nActivos+nVenc)+'</div><div><b style="color:var(--ink,#1a1a1a);">Activos:</b> '+nActivos+'</div><div><b style="color:var(--ink,#1a1a1a);">Vencidos:</b> '+nVenc+'</div></div>'+
             '<table class="tbl"><thead><tr><th>Unidad</th><th>Tipo</th><th>Inquilino</th><th>Período</th><th>Índice</th><th class="tr">Canon</th><th class="tr">Cobrado</th><th>Estado</th></tr></thead><tbody>'+rows+'</tbody>'+
             '<tfoot><tr><td colspan="5">TOTALES</td><td></td><td class="tr">'+(totalCobARS>0?fmt(totalCobARS):'')+(totalCobUSD>0?' + '+fmtUSD(totalCobUSD):'')+'</td><td></td></tr></tfoot></table></div></body></html>');
         win.document.close();
@@ -29555,8 +29564,9 @@
                 row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:13px;border-bottom:1px solid var(--border-soft,#eee);cursor:pointer;';
                 var mon = a.moneda === 'USD' ? 'USD ' : '$';
                 var canon = a.canonActual || a.canon || 0;
-                row.innerHTML = '<input type="checkbox" class="mvAlqChk" data-idx="' + idx + '" checked onchange="_mvAlqContar()">' +
-                    '<span style="flex:1;"><strong>' + escHtml(a.unidad||'—') + '</strong>' + (a.inquilino ? ' · ' + escHtml(a.inquilino) : '') + '</span>' +
+                row.innerHTML = '<input type="checkbox" class="mvAlqChk" data-idx="' + idx + '"' + (a.finalizado ? '' : ' checked') + ' onchange="_mvAlqContar()">' +
+                    '<span style="flex:1;"><strong>' + escHtml(a.unidad||'—') + '</strong>' + (a.inquilino ? ' · ' + escHtml(a.inquilino) : '') +
+                    (a.finalizado ? ' <span style="font-size:11px;color:var(--text-3);">🗄️ finalizada el ' + escHtml(a.finalizadoEn ? formatearFecha(a.finalizadoEn) : '—') + ' (sus cobros se van con ella)</span>' : '') + '</span>' +
                     '<span style="color:var(--text-3);font-size:12px;white-space:nowrap;">' + mon + (canon).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</span>';
                 cont.appendChild(row);
             });
@@ -34636,9 +34646,18 @@
             // El formulario arma `nuevo` sólo con sus campos y se reemplaza el nodo entero: lo que el formulario no maneja
             // (los recibos de entrega, los meses bonificados del plan…) se perdía al editar el contrato. Se conserva.
             Object.keys(alquileres[_ia]).forEach(function(k) { if (!(k in nuevo)) nuevo[k] = alquileres[_ia][k]; });
+            // La fila «Disponible» que creó un cierre, al alquilarse por ✏, deja de serlo: se saca la marca.
+            if (!nuevo.disponible && String(nuevo.inquilino || '').trim()) { delete nuevo.creadaPorFinalizacion; delete nuevo.desdeLocacionId; }
             alquileres[_ia] = nuevo;
         }
-        else alquileres.push(nuevo);
+        else {
+            alquileres.push(nuevo);
+            // Alquilar de nuevo una unidad por «Nuevo contrato»: la fila «Disponible» que había dejado un cierre queda de más.
+            if (String(nuevo.inquilino || '').trim() && !nuevo.disponible) {
+                var _dv = alquileres.findIndex(function(x) { return x && x !== nuevo && x.creadaPorFinalizacion && !x.finalizado && _alqFilaDisponibleVacia(x) && _alqMismaUnidad(x, nuevo); });
+                if (_dv >= 0) alquileres.splice(_dv, 1);
+            }
+        }
         cerrarModalAlquiler();
         persistirAlquileres();
     }
@@ -35385,7 +35404,7 @@
                     '<td>' + escHtml(tipos[a.tipo]||a.tipo||'—') + '</td>' +
                     '<td>' + escHtml(a.inquilino||'—') + '</td>' +
                     '<td style="font-size:12px;">' + (a.inicio ? formatearFecha(a.inicio) : '—') + '<br>' + (a.fin ? formatearFecha(a.fin) : 'sin vto.') + '</td>' +
-                    '<td><span class="pill pill-A" style="font-size:11px;">' + escHtml(indices[a.indice]||a.indice||'—') + (a.indice === 'FIJO' ? '' : ' / ' + freqLabel) + '</span></td>' +
+                    '<td><span class="pill pill-A" style="font-size:11px;">' + escHtml(indices[a.indice]||a.indice||'—') + ((a.indice === 'FIJO' || !a.indice || !a.frecuencia) ? '' : ' / ' + freqLabel) + '</span></td>' +
                     '<td style="text-align:right;"><strong>' + monSym + (canonMostrar).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong></td>' +
                     '<td style="text-align:right; font-size:12px;">' + depStr + '</td>' +
                     '<td style="text-align:right; color:var(--success);">' + cobStr + '</td>' +
@@ -35395,7 +35414,7 @@
             });
         }
         var sEl = function(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
-        sEl('alqTotal', alquileres.filter(function(a){ if (a.finalizado) return false; var f=a.fin?new Date(a.fin+'T00:00:00'):null; return !f||f>=hoy; }).length);
+        sEl('alqTotal', alquileres.filter(function(a){ if (a.finalizado || a.disponible) return false; var f=a.fin?new Date(a.fin+'T00:00:00'):null; return !f||f>=hoy; }).length);
         var _nHist = alquileres.length - _nVig;
         sEl('alqHistCount', _nHist ? ' (' + _nHist + ')' : '');
         var _mh = document.getElementById('modalHistAlq'); if (_mh && _mh.classList.contains('active')) _histAlqRender();
@@ -35479,6 +35498,11 @@
     function _alqOtraVigenteDeUnidad(a) {
         return alquileres.find(function(x) { return x && x.id !== a.id && !x.finalizado && !x.disponible && String(x.inquilino || '').trim() && _alqMismaUnidad(x, a); }) || null;
     }
+    // Fila «Disponible» sin nada cargado (ni inquilino, cobros, recibos, adjuntos ni observaciones): se puede quitar sin perder nada.
+    function _alqFilaDisponibleVacia(d) {
+        return !!d && !!d.disponible && !String(d.inquilino || '').trim() && !(d.cobrosHistorial || []).length && !(d.entregas || []).length &&
+            !_alqAdjuntos(d).length && !String(d.obs || '').trim();
+    }
     function _alqDisponibleDeUnidad(a) {
         return alquileres.find(function(x) { return x && x.id !== a.id && !x.finalizado && x.disponible && _alqMismaUnidad(x, a); }) || null;
     }
@@ -35536,14 +35560,14 @@
         var dep = document.getElementById('finAlqDep'); dep.value = '';
         var _chkD = document.getElementById('finAlqDisp'); delete _chkD.dataset.tocado; _chkD.checked = true; _chkD.disabled = false;   // cada apertura arranca limpia
         document.getElementById('finAlqDepWrap').style.display = a.deposito > 0 ? '' : 'none';
-        var kv = function(k, v) { return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px;"><span style="color:var(--text-3);">' + k + '</span><span style="text-align:right;font-weight:600;">' + v + '</span></div>'; };
+        var kv = function(k, v) { return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px;"><span style="color:var(--text-3);">' + k + '</span><span style="text-align:right;font-weight:600;min-width:0;overflow-wrap:anywhere;">' + v + '</span></div>'; };
         document.getElementById('finAlqResumen').innerHTML =
             kv('Inquilino', escHtml(a.inquilino || '—') + (a.inquilinoDoc ? ' <span style="font-weight:400;color:var(--text-3);">(' + escHtml(a.inquilinoDocTipo || 'Doc.') + ' ' + escHtml(a.inquilinoDoc) + ')</span>' : '')) +
             kv('Vigencia', (a.inicio ? formatearFecha(a.inicio) : '—') + ' al ' + (a.fin ? formatearFecha(a.fin) : 'sin vto.')) +
             kv('Canon actual', _alqFmtMon(a, a.canonActual || a.canon)) +
             kv('Cobrado en alquileres', _alqFmtMon(a, _alqTotalCobradoAlquiler(a))) +
             (a.deposito > 0 ? kv('Depósito en garantía', (a.depMoneda === 'USD' ? 'USD ' : '$ ') + Number(a.deposito).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : '') +
-            kv('Recibos de entrega', (a.entregas || []).length ? (a.entregas || []).length + ' · devolución de llaves en 🔑 Entregas' : 'ninguno');
+            kv('Recibos de entrega', (a.entregas || []).length ? (a.entregas || []).length + ' · la devolución de llaves se carga en 🔑 Entregas (también desde el Historial)' : 'ninguno');
         _finAlqAvisos();
         document.getElementById('modalFinAlq').classList.add('active');
     }
@@ -35590,9 +35614,11 @@
         if (crear) {
             // La unidad vuelve a estar libre: una fila nueva con lo que es de la UNIDAD (no del contrato ni del inquilino).
             disp = {
-                id: _colUidItem(), unidad: a.unidad, tipo: a.tipo || '', direccion: a.direccion || '',
+                // id derivado del contrato: dos cierres simultáneos de la misma locación escriben el MISMO nodo en vez de duplicar la fila
+                id: 'disp_' + a.id, unidad: a.unidad, tipo: a.tipo || '', direccion: a.direccion || '',
                 incluyeCochera: !!a.incluyeCochera, cocheraDetalle: a.cocheraDetalle || '', amueblado: !!a.amueblado,
                 disponible: true, inquilino: '', moneda: a.moneda || 'ARS', canon: 0, canonActual: 0,
+                inicio: '', fin: '', diaPago: null, indice: 'FIJO', frecuencia: 3,
                 cobrosHistorial: [], adjuntos: [], ajustesCanon: [], obs: '',
                 creadaPorFinalizacion: true, desdeLocacionId: a.id
             };
@@ -35642,8 +35668,10 @@
                 '<td style="font-size:12px;">' + escHtml(FIN_ALQ_MOTIVOS[a.finalizadoMotivo] || a.finalizadoMotivo || '—') +
                     (a.finalizadoDeposito ? '<br><span style="color:var(--text-3);">Depósito: ' + escHtml(FIN_ALQ_DEPOSITO[a.finalizadoDeposito] || a.finalizadoDeposito) + '</span>' : '') +
                     (a.finalizadoSaldo > 0 ? '<br><span class="badge-rol badge-err" title="Cuotas con saldo al cerrar">⚠ saldo ' + _alqFmtMon(a, a.finalizadoSaldo) + '</span>' : '') + '</td>' +
-                '<td><div class="action-btns">' +
+                '<td><div class="action-btns" style="flex-wrap:wrap;justify-content:flex-end;max-width:300px;">' +
                     '<button class="btn btn-outline btn-sm" title="Ficha imprimible de la locación (partes, condiciones, cobros y entregas)" onclick="imprimirFichaLocacion(' + idx + ')">📄 Ficha</button> ' + cob + adj +
+                    (puedeEd ? '<button class="btn btn-outline btn-sm" title="Recibo de entrega o devolución de llaves SIN dinero (también después de cerrar)" onclick="abrirEntregaAlq(' + idx + ')">🔑 Entregas' + ((a.entregas || []).length ? ' (' + a.entregas.length + ')' : '') + '</button> ' : '') +
+                    (puedeEd && a.finalizadoSaldo > 0 ? '<button class="btn btn-gold btn-sm" title="Registrar el cobro de una cuota que quedó con saldo al cerrar" onclick="abrirModalCobroAlquiler(' + idx + ')">💵 Cobrar</button> ' : '') +
                     (puedeEd ? '<button class="btn btn-outline btn-sm" title="Deshacer la finalización: el contrato vuelve a la lista" onclick="reabrirLocacionAlq(\'' + String(a.id).replace(/['"\\]/g, '') + '\')">↩️ Reabrir</button>' : '') +
                 '</div></td></tr>';
         }).join('');
@@ -35656,14 +35684,16 @@
         if (!a || !a.finalizado) { alert('Esta locación ya no figura como finalizada.'); _histAlqRender(); return; }
         var otra = _alqOtraVigenteDeUnidad(a);
         if (otra) { alert('No se puede reabrir: la unidad ya tiene otra locación vigente (' + (otra.inquilino || '—') + ').\n\nFinalizá esa primero.'); return; }
-        if (!confirm('¿Reabrir la locación de ' + (a.inquilino || '—') + ' en ' + (a.unidad || '—') + '?\n\nVuelve a la lista de contratos' + (a.finalizadoDisponibleId ? ' y se quita la fila «Disponible» que se creó al finalizarla (si sigue sin usar)' : '') + '.')) return;
-        if (a.finalizadoDisponibleId) {
-            var di = alquileres.findIndex(function(x) { return x && x.id === a.finalizadoDisponibleId; });
-            if (di >= 0) { var d = alquileres[di]; if (d.disponible && !String(d.inquilino || '').trim() && !(d.cobrosHistorial || []).length) alquileres.splice(di, 1); }
-        }
+        // La unidad deja de estar libre: se quitan sus filas «Disponible» VACÍAS (la que creó este cierre u otra que haya quedado de otro).
+        // Una que ya tiene algo cargado (recibos, adjuntos, observaciones…) no se toca: se avisa.
+        var libres = alquileres.filter(function(x) { return x && x.id !== a.id && !x.finalizado && x.disponible && _alqMismaUnidad(x, a); });
+        var vacias = libres.filter(_alqFilaDisponibleVacia), conDatos = libres.filter(function(x) { return !_alqFilaDisponibleVacia(x); });
+        if (!confirm('¿Reabrir la locación de ' + (a.inquilino || '—') + ' en ' + (a.unidad || '—') + '?\n\nVuelve a la lista de contratos' + (vacias.length ? ' y se quita la fila «Disponible» de esa unidad' : '') + '.')) return;
+        vacias.forEach(function(d) { var di = alquileres.indexOf(d); if (di >= 0) alquileres.splice(di, 1); });
         ['finalizado', 'finalizadoEn', 'finalizadoMotivo', 'finalizadoObs', 'finalizadoDeposito', 'finalizadoSaldo', 'finalizadoTs', 'finalizadoPor', 'finalizadoDisponibleId'].forEach(function(k) { delete a[k]; });
         persistirAlquileres();
         renderAlquileres();
+        if (conDatos.length) alert('La locación se reabrió, pero la unidad sigue teniendo una fila «Disponible» con datos cargados (recibos, adjuntos u observaciones): revisala y borrala a mano si ya no corresponde.');
     }
     // Ficha imprimible de una locación (la de un contrato finalizado o de cualquiera): partes, condiciones, cobros, entregas y cierre.
     function imprimirFichaLocacion(idx) {
@@ -35704,10 +35734,10 @@
         var cobros = (a.cobrosHistorial || []).slice().sort(function(x, y) { return String(x.fecha || '').localeCompare(String(y.fecha || '')); });
         var tCob = cobros.length ? '<table class="tbl" style="margin-bottom:6px;"><thead><tr><th>Fecha</th><th>Concepto</th><th>Período</th><th>Medio</th><th class="tr">Monto</th></tr></thead><tbody>' +
             cobros.map(function(c) { return '<tr><td>' + fecha(c.fecha) + '</td><td>' + e(c.concepto || 'alquiler') + '</td><td>' + e(c.periodo || '—') + '</td><td>' + (c.tipoAB === 'A' ? 'Banco' : 'Efectivo') + '</td><td class="tr">' + f(c.monto) + '</td></tr>'; }).join('') +
-            '</tbody><tfoot><tr><td colspan="4"><strong>Total cobrado en alquileres</strong></td><td class="tr">' + f(_alqTotalCobradoAlquiler(a)) + '</td></tr></tfoot></table>' : '';
+            '<tr><td colspan="4"><strong>Total cobrado en alquileres</strong></td><td class="tr"><strong>' + f(_alqTotalCobradoAlquiler(a)) + '</strong></td></tr></tbody></table>' : '';
         var tEnt = (a.entregas || []).length ? '<table class="tbl" style="margin-bottom:6px;"><thead><tr><th>N°</th><th>Fecha</th><th>Tipo</th><th>Elementos</th></tr></thead><tbody>' +
             a.entregas.map(function(x) { return '<tr><td>' + e(x.nro || '') + '</td><td>' + fecha(x.fecha) + '</td><td>' + (x.tipo === 'devolucion' ? 'Devolución' : 'Entrega') + '</td><td>' + e((x.items || []).map(function(i) { return (i.cant > 1 ? i.cant + ' × ' : '') + i.desc; }).join(', ')) + '</td></tr>'; }).join('') + '</tbody></table>' : '';
-        var html = '<html><head><meta charset="UTF-8"><title>Ficha de locación — ' + e(a.unidad || '') + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
+        var html = '<html><head><meta charset="UTF-8"><title>Ficha de locación — ' + e(a.unidad || '') + '</title>' + _rCSS() + '<style>tr{page-break-inside:avoid;break-inside:avoid;}</style></head><body><div class="pg">' + _rh +
             bloque('Unidad y vigencia', unidad) + bloque('Partes', partes) + bloque('Condiciones económicas', cond) + bloque('Ajustes de canon', ajustes) +
             bloque('Cobros', tCob) + bloque('Recibos de entrega', tEnt) + bloque('Obs. del contrato', a.obs ? '<div style="font-size:12.5px;">' + e(a.obs) + '</div>' : '') +
             bloque('Cierre de la locación', cierre) +
@@ -37569,7 +37599,7 @@
         closeBtn.onclick = function(){ overlay.remove(); };
         var headDiv = document.createElement('div');
         headDiv.style.cssText = 'padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #eee;';
-        headDiv.innerHTML = '<div style="font-weight:700;font-size:14px;color:#1a3a6b;">💵 Cobros — ' + (a.unidad||'') + '</div>';
+        headDiv.innerHTML = '<div style="font-weight:700;font-size:14px;color:#1a3a6b;">💵 Cobros — ' + escHtml(a.unidad||'') + '</div>';
         headDiv.appendChild(closeBtn);
         var lista = document.createElement('div'); lista.style.cssText = 'overflow-y:auto;flex:1;';
         hist.forEach(function(c, i) {
@@ -45586,7 +45616,7 @@
 <div class="modal" id="modalFinAlq">
   <div class="modal-box">
     <div class="modal-head">
-      <h2>🏁 Finalizar locación — <span id="finAlqLabel" style="color:var(--gold);"></span></h2>
+      <h2 style="overflow-wrap:anywhere;">🏁 Finalizar locación — <span id="finAlqLabel" style="color:var(--gold);"></span></h2>
       <button class="modal-close" onclick="cerrarFinalizarAlq()">✕</button>
     </div>
     <div class="modal-body">
@@ -49687,10 +49717,10 @@
       });
       if (linsAlq.length) bloques.push('ALQUILERES:\n' + linsAlq.join('\n'));
       // Locaciones ya terminadas (para «¿a quién se le alquiló…?»): sólo las últimas, para no inflar el contexto.
+      // Va al FINAL de los bloques (lo primero que se corta por el tope): las 15 más recientes alcanzan para «¿a quién se le alquiló…?».
       var linsHist = alquileres.filter(function(a) { return a.finalizado; })
-        .sort(function(x, y) { return String(y.finalizadoEn||'').localeCompare(String(x.finalizadoEn||'')); }).slice(0, 40)
+        .sort(function(x, y) { return String(y.finalizadoEn||'').localeCompare(String(x.finalizadoEn||'')); }).slice(0, 15)
         .map(function(a) { return '- ' + (a.unidad||'—') + ': ' + (a.inquilino||'—') + ', del ' + (a.inicio||'—') + ' al ' + (a.finalizadoEn||'—'); });
-      if (linsHist.length) bloques.push('ALQUILERES FINALIZADOS (historial):\n' + linsHist.join('\n'));
     }
 
     if (typeof servicios !== 'undefined' && servicios.length) {
@@ -49768,6 +49798,7 @@
       if (cobradoUSD) finLins.push('- Total cobrado en dólares: ' + monFmt(cobradoUSD, 'USD'));
       if (finLins.length) bloques.push('SITUACIÓN FINANCIERA (aproximada):\n' + finLins.join('\n'));
     } catch(e) {}
+    if (typeof linsHist !== 'undefined' && linsHist && linsHist.length) bloques.push('ALQUILERES FINALIZADOS (historial, los más recientes):\n' + linsHist.join('\n'));
 
     var texto = bloques.join('\n\n');
     var LIMITE = 6000;
