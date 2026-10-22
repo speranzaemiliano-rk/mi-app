@@ -1731,8 +1731,15 @@ async function revisarAlquileres() {
                     // ¿La cuota del mes ya está cobrada?
                     const cobrosRaw = a.cobrosHistorial || [];
                     const cobros = Array.isArray(cobrosRaw) ? cobrosRaw : Object.values(cobrosRaw);
-                    const cobrada = cobros.some((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
-                    if (cobrada) continue;
+                    // Un pago PARCIAL no deja la cuota cobrada: se sigue avisando, por el SALDO. Todo en unidades de canon (el IVA de un cobro con
+                    // desglose viene aparte en `iva`), igual que `_alqSaldoPeriodo` del frontend. Un mes bonificado (plazo de gracia) no se avisa.
+                    if (Array.isArray(a.mesesBonificados) && a.mesesBonificados.includes(periodo)) continue;
+                    const delPeriodo = cobros.filter((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
+                    const cobradoCanon = delPeriodo.reduce((s, c) => s + (Number(c.monto) || 0) - (Number(c.iva) || 0), 0);
+                    const frEsp = _alqFraccionPeriodo(a, periodo);
+                    const esperadoCanon = (a.canonActual || a.canon || 0) * (frEsp ? frEsp.factor : 1);
+                    if (delPeriodo.length && (esperadoCanon <= 0 || cobradoCanon >= esperadoCanon * 0.98)) continue;   // cobrada completa
+                    const saldoParcial = delPeriodo.length ? Math.max(0, esperadoCanon - cobradoCanon) : 0;
 
                     const dia = Math.min(parseInt(a.diaPago) || 1, diasMes);
                     let vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
@@ -1758,12 +1765,14 @@ async function revisarAlquileres() {
                         const fr = _alqFraccionPeriodo(a, periodo);   // primer/último mes proporcional: el monto es el de ese tramo
                         if (fr) monto = monto * fr.factor;
                         const cuando = diasRestantes === 0 ? 'hoy' : ('en ' + diasRestantes + ' día(s)');
-                        const asunto = '⏰ Alquiler ' + (a.unidad || '') + ': la cuota vence ' + cuando;
+                        const asunto = '⏰ Alquiler ' + (a.unidad || '') + (saldoParcial > 0 ? ': el saldo de la cuota vence ' : ': la cuota vence ') + cuando;
                         const cuerpo = 'Hola,\n\n' +
                             'Te recordamos que la cuota de alquiler de la unidad "' + (a.unidad || '') + '"' +
                             (a.inquilino ? ' (' + a.inquilino + ')' : '') + '\n' +
                             'vence el día ' + vence.getDate() + ' de este mes (' + cuando + ').\n' +
-                            (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : Math.round(monto)) + '\n' : '') +
+                            (saldoParcial > 0
+                                ? 'Ya se cobró ' + monSym + cobradoCanon.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' de la cuota. Saldo pendiente: ' + monSym + saldoParcial.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\n'
+                                : (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : Math.round(monto)) + '\n' : '')) +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
                             '\n\n— ' + BRAND_NOMBRE;
