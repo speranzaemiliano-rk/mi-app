@@ -3603,7 +3603,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v557</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v558</div>
         </div>
     </nav>
 
@@ -6350,7 +6350,8 @@
                             <option value="asc">↑ Más antiguos primero</option>
                         </select>
                         <button class="btn-clear-filters" onclick="cgLimpiarFiltros()">✕ Limpiar</button>
-                        <div style="margin-left:auto;display:flex;gap:8px;">
+                        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-outline btn-sm" id="btnCgImprimir" onclick="cgImprimir()" title="Imprimir (o guardar como PDF) los movimientos que estás viendo: respeta las fechas y los filtros, e incluye los saldos">🖨️ Imprimir</button>
                             <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso')">＋ Ingreso</button>
                             <button class="btn-mov-egr" onclick="abrirMovCaja('egreso')">− Egreso</button>
                         </div>
@@ -16894,7 +16895,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v557';
+    var APP_VER = 'v558';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -38302,6 +38303,9 @@
             m.monedaMov = (m.moneda === 'USD') ? 'USD' : 'ARS';
         });
 
+        // Lo que se ve en pantalla (ya filtrado y con los saldos corridos) queda a mano para 🖨️ Imprimir (`cgImprimir`).
+        _cgUltimo = { filas: filtrados, aperturaARS: aperturaARS, aperturaUSD: aperturaUSD };
+
         // ── Render tabla (más recientes primero) ───────────────
         var tbody = document.getElementById('cgBody');
         if (!tbody) return;
@@ -38356,6 +38360,116 @@
             });
             _pintarFilas(tbody, _cgFilas);
         }
+    }
+
+    // ── 🖨️ Imprimir el libro de caja ──
+    // Imprime EXACTAMENTE lo que está en pantalla: mismas fechas y filtros, mismo orden, con los saldos corridos y el saldo anterior si hay
+    // «Desde». Sale en hoja apaisada (son hasta 11 columnas) y las columnas en dólares aparecen sólo si hay movimientos en dólares.
+    // Va por el iframe de `_imprimirDocHTML` (el navegador deja «Guardar como PDF»). Todo dato se escapa: la descripción es texto libre.
+    var _cgUltimo = null;
+    function cgImprimir() {
+        renderCajaGeneral();   // vuelve a calcular con los filtros de este instante: lo impreso nunca queda desfasado de la pantalla
+        var u = _cgUltimo;
+        if (!u || !u.filas || !u.filas.length) { alert('No hay movimientos para imprimir con los filtros actuales.'); return; }
+        var e = escHtml;
+        var val = function(id) { return ((document.getElementById(id) || {}).value || '').trim(); };
+        var optTxt = function(id) { var el = document.getElementById(id); return (el && el.value && el.selectedIndex >= 0) ? el.options[el.selectedIndex].text : ''; };
+        var money = function(n, usd) { n = Number(n) || 0; return (n < 0 ? '-' : '') + (usd ? 'USD ' : '$') + Math.abs(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var desde = val('cgFiltroDesde'), hasta = val('cgFiltroHasta');
+        var asc = val('cgOrden') === 'asc';
+        var filas = u.filas;
+        var hayUSD = filas.some(function(m) { return m.moneda === 'USD'; }) || Math.abs(u.aperturaUSD) > 0.004;
+
+        // Totales del período mostrado, por moneda
+        var T = { ARS: { ing: 0, egr: 0 }, USD: { ing: 0, egr: 0 } };
+        filas.forEach(function(m) { var t = T[m.moneda === 'USD' ? 'USD' : 'ARS']; if (m.esIngreso) t.ing += m.monto || 0; else t.egr += m.monto || 0; });
+
+        // Qué filtros están puestos (para que el papel diga de qué recorte se trata)
+        var filtros = [];
+        if (optTxt('cgFiltroTipo')) filtros.push('Movimiento: ' + optTxt('cgFiltroTipo'));
+        if (val('cgFiltroMovTipo')) filtros.push('Tipo: ' + val('cgFiltroMovTipo'));
+        if (val('cgFiltroMedio')) filtros.push('Medio: ' + val('cgFiltroMedio'));
+        if (val('cgFiltroBusq')) filtros.push('Descripción: «' + val('cgFiltroBusq') + '»');
+        if (val('cgFiltroOrigen')) filtros.push('Origen / destino: «' + val('cgFiltroOrigen') + '»');
+        var periodo = (desde || hasta)
+            ? ((desde ? 'desde el ' + formatearFecha(desde) : 'hasta el ' + formatearFecha(hasta)) + (desde && hasta ? ' hasta el ' + formatearFecha(hasta) : ''))
+            : 'todos los movimientos';
+
+        var cab = '<tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Origen / Destino</th><th>Medio</th>' +
+            '<th class="n">Ingreso ARS</th><th class="n">Egreso ARS</th><th class="n">Saldo ARS</th>' +
+            (hayUSD ? '<th class="n">Ingreso USD</th><th class="n">Egreso USD</th><th class="n">Saldo USD</th>' : '') + '</tr>';
+        var vacio = '<td class="n mu">—</td>';
+        var filaApertura = '';
+        if (desde) {
+            filaApertura = '<tr class="ap"><td colspan="5">Saldo anterior al ' + e(formatearFecha(desde)) + '</td>' + vacio + vacio + '<td class="n b">' + e(money(u.aperturaARS)) + '</td>' +
+                (hayUSD ? vacio + vacio + '<td class="n b">' + e(money(u.aperturaUSD, true)) + '</td>' : '') + '</tr>';
+        }
+        var ordenadas = asc ? filas : filas.slice().reverse();
+        var cuerpo = ordenadas.map(function(m) {
+            var usd = m.moneda === 'USD';
+            var celda = function(esEsta, esIng, v, usdCol) {
+                if (!esEsta) return vacio;
+                return '<td class="n ' + (esIng ? 'ing' : 'egr') + '">' + e(money(v, usdCol)) + '</td>';
+            };
+            var sld = function(v, movida, usdCol) { return '<td class="n ' + (movida ? 'b' : 'mu') + '">' + e(money(v, usdCol)) + '</td>'; };
+            return '<tr><td class="f">' + (m.fecha ? e(formatearFecha(m.fecha)) : '—') + '</td>' +
+                '<td class="t">' + e(m.tipo || '') + '</td>' +
+                '<td>' + e(m.desc || '') + '</td>' +
+                '<td>' + e(m.origen || '') + '</td>' +
+                '<td class="t">' + e(m.medio || '') + '</td>' +
+                celda(!usd && m.esIngreso, true, m.monto, false) + celda(!usd && !m.esIngreso, false, m.monto, false) + sld(m.saldoCorrARS, !usd, false) +
+                (hayUSD ? celda(usd && m.esIngreso, true, m.monto, true) + celda(usd && !m.esIngreso, false, m.monto, true) + sld(m.saldoCorrUSD, usd, true) : '') +
+                '</tr>';
+        }).join('');
+
+        // Resumen del período, en una tabla chica al final (un tfoot se repetiría en cada hoja)
+        var resumenFila = function(rot, a, b, cls) {
+            return '<tr class="' + (cls || '') + '"><td>' + rot + '</td><td class="n">' + e(a) + '</td>' + (hayUSD ? '<td class="n">' + e(b) + '</td>' : '') + '</tr>';
+        };
+        var finARS = u.aperturaARS + T.ARS.ing - T.ARS.egr, finUSD = u.aperturaUSD + T.USD.ing - T.USD.egr;
+        var resumen = '<table class="res"><thead><tr><th></th><th class="n">Pesos (ARS)</th>' + (hayUSD ? '<th class="n">Dólares (USD)</th>' : '') + '</tr></thead><tbody>' +
+            (desde ? resumenFila('Saldo anterior', money(u.aperturaARS), money(u.aperturaUSD, true)) : '') +
+            resumenFila('Ingresos del período', money(T.ARS.ing), money(T.USD.ing, true), 'ing') +
+            resumenFila('Egresos del período', money(T.ARS.egr), money(T.USD.egr, true), 'egr') +
+            resumenFila('Saldo final', money(finARS), money(finUSD, true), 'fin') + '</tbody></table>';
+
+        var emp = getEmpresaParaRecibo();
+        var ahora = new Date();
+        var css = _rCSS() + '<style>' +
+            '@page{size:A4 landscape;margin:9mm;}' +
+            '.pg{max-width:100%;margin:0;padding:14px 18px 10px;box-shadow:none;}' +
+            '.cab{margin-bottom:12px;padding-bottom:12px;}' +
+            '.info{display:flex;flex-wrap:wrap;gap:6px 28px;font-size:11px;color:var(--muted);margin-bottom:12px;}' +
+            '.info b{color:var(--ink);}' +
+            'table.cg{width:100%;border-collapse:collapse;font-size:9.5px;margin-bottom:14px;}' +
+            'table.cg thead{display:table-header-group;}' +
+            'table.cg th{background:var(--ink);color:#fff;font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:6px 6px;text-align:left;white-space:nowrap;}' +
+            'table.cg td{padding:4px 6px;border-bottom:1px solid #e9e9e9;vertical-align:top;}' +
+            'table.cg tr{page-break-inside:avoid;}' +
+            'table.cg .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}' +
+            'table.cg .f{white-space:nowrap;}' +
+            'table.cg .t{white-space:nowrap;color:#444;}' +
+            'table.cg .ing{color:#0f7e5e;font-weight:600;}table.cg .egr{color:#c0392b;font-weight:600;}' +
+            'table.cg .b{font-weight:700;}table.cg .mu{color:#aaa;}' +
+            'table.cg tr.ap td{background:#F7F5FE;font-weight:700;border-bottom:1px solid #d9d2f5;}' +
+            'table.res{border-collapse:collapse;font-size:11px;min-width:360px;page-break-inside:avoid;}' +
+            'table.res th{background:var(--ink);color:#fff;font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:6px 12px;text-align:left;}' +
+            'table.res th.n,table.res td.n{text-align:right;}' +
+            'table.res td{padding:5px 12px;border-bottom:1px solid #e9e9e9;}' +
+            'table.res tr.ing td.n{color:#0f7e5e;font-weight:600;}table.res tr.egr td.n{color:#c0392b;font-weight:600;}' +
+            'table.res tr.fin td{background:#F7F5FE;font-weight:800;border-top:2px solid var(--gold);font-size:12px;}' +
+            '</style>';
+        var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + e('Libro de caja - ' + emp.nombre + ' - ' + _hoyLocalISO()) + '</title>' + css + '</head><body><div class="pg">' +
+            buildReciboHeader('Libro de caja') +
+            '<div class="info"><div><b>Período:</b> ' + e(periodo) + '</div>' +
+            (filtros.length ? '<div><b>Filtros:</b> ' + e(filtros.join(' · ')) + '</div>' : '') +
+            '<div><b>Movimientos:</b> ' + filas.length + '</div>' +
+            '<div><b>Orden:</b> ' + (asc ? 'del más antiguo al más reciente' : 'del más reciente al más antiguo') + '</div></div>' +
+            '<table class="cg"><thead>' + cab + '</thead><tbody>' + (asc ? filaApertura : '') + cuerpo + (asc ? '' : filaApertura) + '</tbody></table>' +
+            resumen +
+            '<div class="pie">Emitido el ' + e(ahora.toLocaleDateString('es-AR') + ' ' + ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })) + ' · ' + e(emp.nombre) + (emp.proyecto ? ' · ' + e(emp.proyecto) : '') + '</div>' +
+            '</div></body></html>';
+        _imprimirDocHTML(html);
     }
 
     // ══════════════════════════════════════════════════════════
