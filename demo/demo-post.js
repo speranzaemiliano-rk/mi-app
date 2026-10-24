@@ -40,8 +40,28 @@ window.addEventListener('load', function () {
         cont.appendChild(b); cont.scrollTop = cont.scrollHeight;
     };
 
+    // «Saldo total» del Inicio = nodo `caja` + saldos de apertura de los bancos. En la instalación real alguien mantiene `caja`; en la demo
+    // sale siempre de la Caja General (así coincide con lo que se ve ahí aunque pase el tiempo o se carguen movimientos nuevos).
+    if (typeof window._hKPIs === 'function') {
+        var _kpisOriginal = window._hKPIs;
+        window._hKPIs = function () {
+            try {
+                renderCajaGeneral();
+                if (window._cgSaldos) caja = { ars: window._cgSaldos.ars, usd: window._cgSaldos.usd };
+            } catch (e) { console.warn('[demo] no se pudo calcular la caja:', e); }
+            return _kpisOriginal.apply(this, arguments);
+        };
+    }
+
+    // Actualización de sueldos pide crear una clave la primera vez: en la demo entra directo (la clave es una traba de pantalla, no seguridad).
+    if (typeof window._actMostrarBloqueo === 'function') {
+        window._actMostrarBloqueo = function () { window._actDesbloqueado = true; if (typeof _actPintar === 'function') _actPintar(); };
+    }
+
     // Funciones que dependen de cuentas de Google reales (consentimiento OAuth con la aplicación del dueño).
     ['abrirImportarGmail', 'impExtLeerGmail', 'impExtLeerGmailTarjeta'].forEach(function (n) {
         if (typeof window[n] === 'function') window[n] = aviso('Importar desde Gmail');
     });
+    // …y las que mandan mails por EmailJS.
+    if (typeof window.enviarRecordatorioTarea === 'function') window.enviarRecordatorioTarea = aviso('Enviar recordatorio por mail');
 });

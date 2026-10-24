@@ -494,6 +494,7 @@
             '#demoCartel .dc-sub{font-weight:400;color:#c9c9d1;}' +
             '#demoCartel button{background:#7C5CFF;color:#fff;border:0;border-radius:999px;padding:5px 11px;font:600 12px "Space Grotesk",system-ui,sans-serif;cursor:pointer;flex-shrink:0;}' +
             '#demoCartel .dc-x{background:transparent;color:#c9c9d1;padding:2px 6px;}' +
+            '@media (min-width:769px){#demoCartel{left:268px;}}' +   // al costado del menú lateral, que en escritorio ocupa el borde izquierdo
             '@media (max-width:768px){#demoCartel{bottom:74px;left:8px;font-size:11px;}#demoCartel .dc-sub{display:none;}}' +
             '@media print{#demoCartel{display:none!important;}}';
         document.head.appendChild(st);
