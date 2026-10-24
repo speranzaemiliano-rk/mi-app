@@ -31,4 +31,10 @@
             proyectos: { proy_plata: { nombre: 'Cartera de alquileres' } }
         }
     };
+    // Inmobiliaria: una cuenta bancaria donde entran las cobranzas por transferencia (los cobros por banco la usan como cuentaId)
+    DEMO.set(r, DEMO.base2 + '/banco', DEMO.porId([
+        { id: 'cta_nacion_ars', banco: 'Banco Nación', tipo: 'Cuenta Corriente', alias: 'DELPLATA.ALQUILERES.BNA', cbu: '0110999099990000246810',
+          moneda: 'ARS', saldo: 3500000, notas: 'Cuenta de cobranzas de alquileres y honorarios.', empresaId: DEMO.EMP2 }
+    ]));
+    DEMO.set(r, DEMO.base2 + '/tipoCambio', DEMO.TC);
 });

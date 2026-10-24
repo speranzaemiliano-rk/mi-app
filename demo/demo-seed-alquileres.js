@@ -120,7 +120,7 @@
     var L1 = new Libro('CLA-EDIFIC', B1), L2 = new Libro('IDP-CARTER', B2);
 
     // Dónde entra la plata: efectivo, banco sin cuenta puntual (queda «sin especificar») o banco con su cuenta
-    var EF = { t: 'B' }, BCO = { t: 'A' }, BCO_GAL = { t: 'A', cta: GAL }, BCO_SAN = { t: 'A', cta: SAN };
+    var EF = { t: 'B' }, BCO = { t: 'A', cta: 'cta_nacion_ars' }, BCO_GAL = { t: 'A', cta: GAL }, BCO_SAN = { t: 'A', cta: SAN };
 
     // ── Contratos ─────────────────────────────────────────────────────────
     var FACT_SEQ = 130;
@@ -160,7 +160,7 @@
         return a;
     }
 
-    // Cuota que ya no está en la lista de contratos vigentes: una locación que se cerró con 🏁 Finalizar
+    // Cierra una locación como lo hace 🏁 Finalizar: el contrato queda en `alquileres` (sus cobros siguen en los libros) con las marcas del cierre
     function finalizar(a, o) {
         a.finalizado = true;
         a.finalizadoEn = o.en;
@@ -275,14 +275,14 @@
         obs: 'Se entrega pintado y con la cocina limpia.', entrega: ADM, recibe: 'Valeria Soledad Ortega' }]);
     ALQ2.push(a5c);
 
-    // 2 · Depto 2D — ICL semestral, la cuota de este mes está VENCIDA (la fecha límite se calcula con el día en que se abre la demo)
+    // 2 · Depto 2D — ICL semestral, EN MORA: debe la cuota del mes pasado y la de este mes está VENCIDA (la fecha límite se calcula con el día en que se abre la demo)
     var a2d = contrato({ id: 'alq_2d', unidad: 'Depto 2D', tipo: 'departamento', direccion: 'Thames 1850, 2° D, Palermo',
         inquilino: 'Matías Gómez Lanza', email: 'matias.gomezlanza@correo-demo.com', doc: ['DNI', '35670214'],
         garante: ['Silvia Lanza', 'DNI', '14233901', '11 5557-8812'],
         inicio: fm(-14, 10), meses: 36, canon: 880000, ajustes: [[-8, 1012000], [-2, 1166000]], indice: 'ICL', frecuencia: 6,
-        diaPago: Math.max(1, DIA_HOY - 9), deposito: [1760000, 2], obs: 'Paga siempre por transferencia a la cuenta de la inmobiliaria. Se le mandó recordatorio por mail.' });
+        diaPago: Math.max(1, DIA_HOY - 9), deposito: [1760000, 2], obs: 'Venía pagando por transferencia a la cuenta de la inmobiliaria. Debe la cuota del mes pasado y la de este mes; se le mandó recordatorio por mail.' });
     cobroOtro(L2, a2d, a2d.inicio, 'deposito', 1760000, BCO, 'Depósito de garantía (2 meses)');
-    serie(L2, a2d, -14, -1, { dia: 8, medio: BCO, mes: { '-1': { dia: 14 } } });
+    serie(L2, a2d, -14, -2, { dia: 8, medio: BCO, mes: { '-2': { dia: 16 } } });   // el mes pasado ya no pagó: en el Plan figura «Vencida»
     ALQ2.push(a2d);
 
     // 3 · Depto 8A — IPC trimestral, la cuota de este mes vence en unos días
@@ -488,10 +488,10 @@
     var SRV2 = [
         servicio(L2, { id: 'srv_adm_dominguez', f: dia(-130), cliente: 'Raúl Domínguez (propietario)', tipo: 'consultoria',
             descripcion: 'Administración de 6 propiedades — honorarios del semestre', base: 5400000, avance: 67,
-            obs: 'Cobro mensual del 5 % de los alquileres de sus unidades. Van 4 de 6 meses.',
-            cobros: [{ f: dia(-95), monto: 900000, concepto: 'anticipo', ref: 'Honorarios septiembre y octubre', medio: BCO },
-                     { f: dia(-40), monto: 900000, ref: 'Honorarios noviembre y diciembre', medio: BCO },
-                     { f: dia(-8), monto: 900000, ref: 'Honorarios del tramo siguiente', medio: BCO }] }),
+            obs: 'Honorarios del 5 % de los alquileres de sus unidades, en 6 cuotas mensuales. Van 4 de 6 meses.',
+            cobros: [{ f: dia(-95), monto: 900000, concepto: 'anticipo', ref: 'Honorarios — cuota 1 de 6', medio: BCO },
+                     { f: dia(-40), monto: 900000, ref: 'Honorarios — cuota 2 de 6', medio: BCO },
+                     { f: dia(-8), monto: 900000, ref: 'Honorarios — cuota 3 de 6', medio: BCO }] }),
         servicio(L2, { id: 'srv_tasacion_pasteur', f: dia(-75), cliente: 'Consorcio Pasteur 880', tipo: 'consultoria',
             descripcion: 'Tasación y asesoramiento para la venta de las cocheras del subsuelo', base: 1350000, avance: 100,
             cobros: [{ f: dia(-60), monto: 675000, concepto: 'anticipo', ref: 'Anticipo del 50 %' }, { f: dia(-22), monto: 675000, ref: 'Saldo contra entrega del informe' }] }),
@@ -499,9 +499,9 @@
             descripcion: 'Trámites previos a la escritura: libre deuda, certificado de dominio e informe de inhibiciones', base: 620000, avance: 100, adicionales: 94000,
             obs: 'Los adicionales son los sellados y aranceles que adelantó la inmobiliaria.',
             cobros: [{ f: dia(-30), monto: 400000, concepto: 'anticipo', ref: 'Anticipo', medio: BCO }] }),
-        servicio(L2, { id: 'srv_comision_3a', f: dia(-245), cliente: 'Alberto Mir (propietario)', tipo: 'otro',
+        servicio(L2, { id: 'srv_comision_3a', f: a3a.inicio, cliente: 'Alberto Mir (propietario)', tipo: 'otro',
             descripcion: 'Comisión por locación — Depto 3A Montevideo 1450 (1,5 meses de alquiler)', base: 1545000, avance: 100,
-            cobros: [{ f: dia(-243), monto: 1545000, ref: 'Cobrado el día de la firma del contrato' }] }),
+            cobros: [{ f: a3a.inicio, monto: 1545000, ref: 'Cobrado el día de la firma del contrato' }] }),
         servicio(L2, { id: 'srv_inspeccion_soler', f: dia(-6), cliente: 'Sucesión Benítez', tipo: 'inspeccion',
             descripcion: 'Informe de estado del inmueble Soler 3800 con fotos y relevamiento de faltantes', base: 180000, avance: 100,
             obs: 'Pendiente de cobro: se factura al entregar el informe firmado.', cobros: [] })
