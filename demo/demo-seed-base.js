@@ -12,7 +12,12 @@
         'demo-lector': { email: 'socio@constructora-demo.com', nombre: 'Pablo Ruiz', ultimoAcceso: Date.now() - 86400000 * 9 }
     };
     r.global = r.global || {};
-    r.global.config = { backendUrl: 'https://backend-demo.invalid' };
+    r.global.config = {
+        backendUrl: 'https://backend-demo.invalid',
+        // una dirección de ARCA por empresa (inválida a propósito): emitir llega al aviso «no disponible en la versión de prueba»
+        afipFunctionUrl: 'https://backend-demo.invalid/afip',
+        afipConfig: { emp_demo_1: { url: 'https://backend-demo.invalid/afip' }, emp_demo_2: { url: 'https://backend-demo.invalid/afip' } }
+    };
 
     // Esqueleto: las semillas de cada módulo cuelgan sus colecciones de empresas/<id>/proyectos/<id>/…
     r.empresas = {

@@ -12,7 +12,7 @@ t('el «Firebase» es el simulado y apunta a un dominio inválido', fb.v === 'de
 // 2) la red: lo que intenta salir y NO es lectura pública, vuelve «no disponible»
 const intentos = await J(async () => {
   const out = {};
-  const pr = async (k, f) => { try { const r = await f(); out[k] = { s: r.status, j: await r.json().catch(() => null) }; } catch (e) { out[k] = { err: String(e) }; } };
+  const pr = async (k, f) => { try { const r = await f(); const txt = await r.clone().text(); out[k] = { s: r.status, j: await r.json().catch(() => null), txt }; } catch (e) { out[k] = { err: String(e) }; } };
   await pr('backend', () => fetch('https://mi-app-production-e1cd.up.railway.app/diag'));
   await pr('arca', () => fetch('https://mi-app-production-e1cd.up.railway.app/afip', { method: 'POST', body: '{}' }));
   await pr('firebaseReal', () => fetch('https://modo-prueba-bb8c2-default-rtdb.firebaseio.com/empresas.json?shallow=true'));
@@ -27,8 +27,10 @@ const intentos = await J(async () => {
   out.bk = await (async () => { try { const j = await _fetchBackend('/afip/importar?ptoVta=1'); return j; } catch (e) { return String(e); } })();
   return out;
 });
-for (const k of ['backend', 'arca', 'firebaseReal', 'gmail', 'emailjs', 'spotify', 'postAunqueSeaPublico'])
+for (const k of ['backend', 'arca', 'firebaseReal', 'gmail', 'spotify', 'postAunqueSeaPublico'])
   t('fetch ' + k + ' → 503 «no disponible en la versión de prueba»', intentos[k].s === 503 && intentos[k].j && intentos[k].j.demo === true && /no está disponible/.test(intentos[k].j.error), intentos[k]);
+// EmailJS: el cuerpo va en texto plano porque la app muestra err.text tal cual
+t('fetch emailjs → 503 con el aviso en texto plano', intentos.emailjs.s === 503 && /no está disponible en la versión de prueba/.test(intentos.emailjs.txt) && !/^\{/.test(intentos.emailjs.txt), intentos.emailjs);
 t('XHR a EmailJS falla (onerror)', intentos.xhr === 'error', intentos.xhr);
 t('sendBeacon devuelve false', intentos.beacon === false);
 t('WebSocket no se abre', intentos.ws === 'bloqueado', intentos.ws);

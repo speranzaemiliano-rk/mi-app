@@ -43,12 +43,21 @@ window.addEventListener('load', function () {
     // «Saldo total» del Inicio = nodo `caja` + saldos de apertura de los bancos. En la instalación real alguien mantiene `caja`; en la demo
     // sale siempre de la Caja General (así coincide con lo que se ve ahí aunque pase el tiempo o se carguen movimientos nuevos).
     if (typeof window._hKPIs === 'function') {
-        var _kpisOriginal = window._hKPIs;
+        var _kpisOriginal = window._hKPIs, _kpisTimer = null, _kpisRecalculando = false;
+        var _calcularCaja = function () {
+            try { renderCajaGeneral(); if (window._cgSaldos) caja = { ars: window._cgSaldos.ars, usd: window._cgSaldos.usd }; }
+            catch (e) { console.warn('[demo] no se pudo calcular la caja:', e); }
+        };
         window._hKPIs = function () {
-            try {
-                renderCajaGeneral();
-                if (window._cgSaldos) caja = { ars: window._cgSaldos.ars, usd: window._cgSaldos.usd };
-            } catch (e) { console.warn('[demo] no se pudo calcular la caja:', e); }
+            if (_kpisRecalculando) return _kpisOriginal.apply(this, arguments);
+            _calcularCaja();
+            // La app llama a _hKPIs cada vez que llega una colección: las primeras veces la Caja General todavía no tiene todo (movimientos,
+            // pagos, documentos…). Una pasada final, cuando dejaron de llegar datos, deja el número definitivo.
+            clearTimeout(_kpisTimer);
+            _kpisTimer = setTimeout(function () {
+                _kpisRecalculando = true;
+                try { _calcularCaja(); _kpisOriginal(); } finally { _kpisRecalculando = false; }
+            }, 1500);
             return _kpisOriginal.apply(this, arguments);
         };
     }
@@ -56,6 +65,31 @@ window.addEventListener('load', function () {
     // Actualización de sueldos pide crear una clave la primera vez: en la demo entra directo (la clave es una traba de pantalla, no seguridad).
     if (typeof window._actMostrarBloqueo === 'function') {
         window._actMostrarBloqueo = function () { window._actDesbloqueado = true; if (typeof _actPintar === 'function') _actPintar(); };
+    }
+
+    // Música (YouTube, radio, Spotify): no aporta a la demo, y «Conectar con Spotify» navega la pestaña a accounts.spotify.com con el client_id
+    // del dueño y la devuelve a la raíz de la app REAL (sin ?demo): el visitante saldría de la demo en plena presentación. Se esconde el widget.
+    var _stOculto = document.createElement('style');
+    _stOculto.textContent = '[id^="rk-music"]{display:none !important;}' +
+        '@media (max-width:768px){html,body{overflow-x:hidden;}}';   // la barra superior (tipo de cambio) desborda en celular
+    document.head.appendChild(_stOculto);
+    if (typeof window.rkSpotifyConnect === 'function') window.rkSpotifyConnect = aviso('Spotify');
+
+    // Mails (EmailJS): enviar una factura o un recordatorio avisa en vez de mostrar un error técnico.
+    if (window.emailjs) window.emailjs.send = function () { return Promise.reject({ status: 0, text: NO_DISP }); };
+
+    // Lectura con IA (facturas, presupuestos, vencimientos, notas de crédito): sin backend no hay IA. Se avisa de entrada, en vez de dejar
+    // 12 segundos de «Reintentando con gemini-2.5-flash…» y terminar en «Gemini está saturado».
+    var avisoIA = function () { alert('Leer con IA: ' + NO_DISP + '\n\nEn la versión real subís el PDF o la foto y el sistema completa los datos solo.'); };
+    ['abrirLeerPresup', 'abrirLeerFacturaPDF', 'procesarVencimientoPDF', '_ncLeerPDF'].forEach(function (n) {
+        if (typeof window[n] === 'function') window[n] = avisoIA;
+    });
+    var _sinIA = function () { return Promise.resolve(new Response(JSON.stringify({ error: { message: NO_DISP } }), { status: 403, headers: { 'Content-Type': 'application/json' } })); };
+    if (typeof window._geminiProxy === 'function') window._geminiProxy = _sinIA;
+    if (typeof window._groqProxy === 'function') window._groqProxy = _sinIA;
+    if (typeof window.geminiEsErrorAuth === 'function') {
+        var _esAuthOrig = window.geminiEsErrorAuth;
+        window.geminiEsErrorAuth = function (m) { return /versión de prueba/.test(m || '') || _esAuthOrig(m); };   // corta los reintentos con otros modelos
     }
 
     // Funciones que dependen de cuentas de Google reales (consentimiento OAuth con la aplicación del dueño).

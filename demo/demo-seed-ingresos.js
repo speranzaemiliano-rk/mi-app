@@ -252,9 +252,9 @@
         VENTAS.push(recalc(v));
     })();
     // 6A · dúplex recién reservado: seña del 10 %
-    VENTAS.push(ventaUSD({ id: 'vta_6a', uf: '6A', comprador: 'Tomás Villalba', fecha: dia(-9), m2: 112, m2a: 14, obs: 'Boleto a firmar dentro de los 30 días.',
+    VENTAS.push(ventaUSD({ id: 'vta_6a', uf: '6A', comprador: 'Tomás Villalba', fecha: dia(0), m2: 112, m2a: 14, obs: 'Boleto a firmar dentro de los 30 días.',
         acuerdo: 'Seña del 10 %, 30 % al boleto y saldo en 12 cuotas en dólares', precio: 289000,
-        cobros: [{ f: dia(-9), monto: 28900, m: 'E', ref: 'Seña del 10 %' }] }));
+        cobros: [{ f: dia(0), monto: 28900, m: 'E', ref: 'Seña del 10 %' }] }));   // de HOY: el «Cobrado este mes» del Inicio nunca queda en cero, ni el día 1
 
     // Movimientos manuales de metros (además de los canjes que generan las ventas)
     METROS.push({ id: 'MC-manual-01', fecha: dia(-60), tipo: 'salida', desarrolloId: PARQUE, cantidadM2: 12, valorM2: 2450, moneda: 'USD', valorTotal: 12 * 2450,
