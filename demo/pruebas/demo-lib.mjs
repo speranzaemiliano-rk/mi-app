@@ -42,6 +42,7 @@ export async function abrirDemo(opts = {}) {
     red.push(r.request().method() + ' ' + u);
     return r.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
+  if (opts.init) await p.addInitScript(opts.init);   // script que corre antes que cualquier otro de la página
   await p.goto('http://localhost:8099/' + (opts.search ?? '?demo=1'), { waitUntil: 'domcontentloaded' });
   return { b, p, red, errores };
 }

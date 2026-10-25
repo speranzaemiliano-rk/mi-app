@@ -61,6 +61,13 @@
         catch (e) { console.warn('[demo] no se pudo aislar ' + nombre + ':', e); }
     });
 
+    // ── 1b) No instalable ──────────────────────────────────────────────
+    // El manifest de la app (id y start_url = la raíz de la instalación real) haría que «Agregar a inicio» instalara la app REAL, no la demo.
+    // Sin manifest el navegador no ofrece instalarla, y se marca descartado el cartel «Instalala como app» que sale en iPhone.
+    try { var _mf = document.querySelector('link[rel="manifest"]'); if (_mf) _mf.parentNode.removeChild(_mf); } catch (e) {}
+    try { window.localStorage.setItem('rk_pwa_install_dismiss', '1'); } catch (e) {}
+    window.addEventListener('beforeinstallprompt', function (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }, true);
+
     // ── 2) Red cerrada ─────────────────────────────────────────────────────
     // Sólo lecturas públicas (GET) de estos orígenes, que dan vida al tablero
     // (dólar, inflación, riesgo país…) y no llevan credenciales de nadie.
@@ -89,6 +96,8 @@
         var metodo = (init && init.method) || (input && input.method) || 'GET';
         if (fetchReal && permitido(url, metodo)) return fetchReal(input, init);
         bloqueado(url);
+        // EmailJS: la app muestra el cuerpo de la respuesta tal cual («Error al enviar el mail: …»): va en texto plano, no en JSON.
+        if (/emailjs\.com/.test(String(url))) return Promise.resolve(new Response(MSG_NO_DISP, { status: 503, headers: { 'Content-Type': 'text/plain' } }));
         return Promise.resolve(new Response(JSON.stringify({ ok: false, demo: true, error: MSG_NO_DISP }),
             { status: 503, headers: { 'Content-Type': 'application/json' } }));
     };
@@ -127,6 +136,7 @@
     cfg.adminEmail = 'demo@mess.app';
     cfg.backendUrl = 'https://backend-demo.invalid';
     cfg.msLogin = false; cfg.msTenant = ''; cfg.spotifyClientId = ''; cfg.emailjs = {};
+    try { window.localStorage.setItem('rk_belvo_function_url', cfg.backendUrl); } catch (e) {}
     cfg.brand = Object.assign({}, cfg.brand || {}, { logoEmpresa: '' });   // sólo la marca del producto
 
     // ── 4) Base de datos en memoria con la API de Firebase Realtime Database ──
