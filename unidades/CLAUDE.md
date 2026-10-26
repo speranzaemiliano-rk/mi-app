@@ -99,3 +99,7 @@ Las columnas de importes (Valor USD, Valor $, USD por m², cada concepto, su cob
 ## Conceptos que se cobran sólo en ciertas unidades
 
 `params.sel[<concepto>]` = lista de claves de unidad (sin lista = todas). Botón «👥 En todas las unidades / Sólo N de M» bajo cada concepto de «Valuación» (no aplica a los modos «por unidad», que ya son unidad por unidad) → `abrirAplica(k)`: casillas con buscador. El total del concepto (en %, $ o USD) **se reparte por m² sólo entre las unidades tildadas** (`aplicaA`/`m2Aplica` dentro de `calc`); las demás quedan en 0. En el Excel esas celdas bajan como valor fijo (no fórmula). Si se borra una unidad que estaba en la lista, el reparto sigue entre las que quedan. También se ensanchó la grilla de parámetros (`minmax(250px)`, input numérico ≥ 90 px) porque el selector se comía el campo y no se veía el importe tipeado.
+
+## Cargar a mano los conceptos «por unidad»
+
+Un concepto en modo `unidad`/`unidadusd` no tiene un total para tipear (el campo de «Valuación» es de sólo lectura y muestra la suma): el importe de cada unidad vive en `cv/<concepto>`. Antes sólo se cargaba por Excel o con ✏️ unidad por unidad, y el aviso del campo mandaba a un «Importes por unidad» del menú que nunca existió. Ahora el campo (o el botón «✏️ Cargar importes por unidad») abre `abrirImportesUnidad(k)`: lista de todas las unidades con su importe, buscador, «Poner a las unidades que se ven» (mismo importe a varias) y «Vaciar», con el total en vivo; guarda con un `update()` multi-path de `cv/<k>` (vacío = `null`).

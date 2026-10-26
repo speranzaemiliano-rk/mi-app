@@ -504,6 +504,7 @@ function cotTraer(){
 }
 $('params').addEventListener('click', function(e){
   if (e.target.id === 'cotBtn') cotTraer();
+  if (e.target.dataset && e.target.dataset.cvedit) { abrirImportesUnidad(e.target.dataset.cvedit); return; }
   if (e.target.dataset && e.target.dataset.aplica) { abrirAplica(e.target.dataset.aplica); return; }
   var b = e.target.dataset && e.target.dataset.base; if (!b || !puedeAdmin || b === P.base) return;
   if (b === 'vir' && !U.some(function(r){ return r.vf; }) && !confirm('Todavía ninguna unidad tiene VIR / valuación fiscal cargado: los valores van a dar 0.\n\nCargalo con ✏️ en cada unidad o importando una planilla («VIR / valuación fiscal»). ¿Cambiar igual?')) return;
@@ -520,7 +521,7 @@ function renderParams(){
     var k = c[0];
     var um = esModoUnidad(P.modo[k]);
     h += '<label class="f">' + c[1] + '<span class="dual">' + (um
-      ? '<input type="text" readonly value="' + esc(valorCargadoTexto(k)) + '" title="Cargado unidad por unidad: usá «Importes por unidad» del menú o editá cada unidad">'
+      ? '<input type="text" readonly data-cvedit="' + k + '" style="cursor:pointer" value="' + esc(valorCargadoTexto(k)) + '" title="Cargado unidad por unidad: tocá para cargar los importes">'
       : '<input type="number" step="any" data-k="p_' + k + '" value="' + P.pct[k] + '"' + d + '>') +
       '<select data-m="' + k + '"' + d + '><option value="pct"' + (P.modo[k] === 'pct' ? ' selected' : '') + '>% valor</option>' +
       '<option value="monto"' + (P.modo[k] === 'monto' ? ' selected' : '') + '>$ total</option>' +
@@ -528,7 +529,7 @@ function renderParams(){
       '<option value="unidad"' + (P.modo[k] === 'unidad' ? ' selected' : '') + '>$ por unidad</option>' +
       '<option value="unidadusd"' + (P.modo[k] === 'unidadusd' ? ' selected' : '') + '>USD por unidad</option></select></span>' +
       '<small>' + totalConceptoTexto(k) + '</small>' +
-      (um ? '' : '<button class="btn" type="button" data-aplica="' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + d + '>👥 ' +
+      (um ? '<button class="btn" type="button" data-cvedit="' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + (puedeEditar ? '' : ' disabled') + '>✏️ Cargar importes por unidad</button>' : '<button class="btn" type="button" data-aplica=""' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + d + '>👥 ' +
         (P.sel[k] ? 'Sólo ' + P.sel[k].length + ' de ' + U.length + ' unidades' : 'En todas las unidades') + '</button>') + '</label>';
   });
   $('params').innerHTML = h;
@@ -847,6 +848,35 @@ function cargarSel(){
   } catch(x) {}
 }
 function guardarSel(){ try { localStorage.setItem('unid_sel_' + edId, JSON.stringify(S.sel ? Object.keys(S.sel) : null)); } catch(x) {} }
+/* Carga a mano del importe de un concepto «por unidad» (sin pasar por el Excel) */
+function abrirImportesUnidad(k){
+  if (!puedeEditar) return;
+  var nom = CONC.filter(function(c){ return c[0] === k; })[0][1], mon = monedaConc(k);
+  var lista = U.slice().sort(function(x, y){ return x.o - y.o; });
+  abrirModal('<h2>' + esc(nom) + ' — importe por unidad (' + mon + ')</h2>' +
+    '<input type="search" id="iu_q" placeholder="Buscar unidad o propietario…" style="width:100%">' +
+    '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><input type="number" step="any" id="iu_v" placeholder="Importe" style="width:130px">' +
+    '<button class="btn" id="iu_fill">Poner a las unidades que se ven</button><button class="btn" id="iu_clr">Vaciar las que se ven</button><span class="sm" id="iu_tot" style="margin-left:auto"></span></div>' +
+    '<div class="lista-sel" id="iu_lista">' + lista.map(function(r){
+      var v = (r.cv || {})[k];
+      return '<label data-b="' + esc((r.u + ' ' + r.p).toLowerCase()) + '" style="display:flex;gap:8px;align-items:center"><b style="min-width:54px">' + esc(r.u) + '</b><span style="flex:1">' + esc(r.p) + '</span>' +
+        '<small>' + r.s.toFixed(2) + ' m²</small><input type="number" step="any" data-k="' + esc(r.k) + '" value="' + (v == null ? '' : esc(v)) + '" style="width:130px"></label>'; }).join('') + '</div>' +
+    '<div class="modal-pie"><button class="btn" id="iu_x">Cancelar</button><button class="btn pri" id="iu_ok">Guardar</button></div>');
+  function tot(){ var t = 0; [].forEach.call($('iu_lista').querySelectorAll('input'), function(i){ t += parseFloat(i.value) || 0; }); $('iu_tot').textContent = 'Total: ' + N(t, mon); }
+  tot(); $('iu_lista').addEventListener('input', tot);
+  $('iu_q').oninput = function(){ var q = this.value.toLowerCase().trim();
+    [].forEach.call($('iu_lista').children, function(x){ x.style.display = !q || x.dataset.b.indexOf(q) >= 0 ? 'flex' : 'none'; }); };
+  function aVisibles(v){ [].forEach.call($('iu_lista').children, function(x){ if (x.style.display !== 'none') x.querySelector('input').value = v; }); tot(); }
+  $('iu_fill').onclick = function(){ var v = parseFloat($('iu_v').value); if (isNaN(v)) { toast('Escribí el importe'); return; } aVisibles(v); };
+  $('iu_clr').onclick = function(){ aVisibles(''); };
+  $('iu_x').onclick = cerrarModal;
+  $('iu_ok').onclick = function(){
+    var upd = {}, base = 'global/edificios/' + edId + '/unidades/';
+    [].forEach.call($('iu_lista').querySelectorAll('input'), function(i){
+      var v = parseFloat(i.value); upd[base + i.dataset.k + '/cv/' + k] = isNaN(v) ? null : Math.round(v * 10000) / 10000; });
+    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes guardados'); }, function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+  };
+}
 function abrirAplica(k){
   var nom = CONC.filter(function(c){ return c[0] === k; })[0][1], l = P.sel[k];
   var lista = U.slice().sort(function(x, y){ return x.o - y.o; });
@@ -1541,7 +1571,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v25';
+var UNID_VER = 'unidades-v26';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
