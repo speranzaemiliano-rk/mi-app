@@ -316,7 +316,7 @@ function bloquear(tit, txt, acc){
 }
 function paramsPorDefecto(){
   var i = CFG.inicial || {};
-  return { sel:{}, base:'m2', usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
+  return { sel:{}, nosuma:{}, base:'m2', usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
     pct:  {gan:0, iibb:0, adm:0, res:0, alh:0, rec:0, cdi:0},
     modo: {gan:'pct', iibb:'pct', adm:'pct', res:'pct', alh:'pct', rec:'pct', cdi:'pct'} };
 }
@@ -326,6 +326,7 @@ function normParams(p){
   CONC.forEach(function(c){
     var k = c[0];
     if (p.sel && Array.isArray(p.sel[k])) d.sel[k] = p.sel[k].slice();
+    if (p.nosuma && p.nosuma[k]) d.nosuma[k] = 1;
     d.pct[k] = +((p.pct || {})[k]) || 0;
     var mo = (p.modo || {})[k]; d.modo[k] = (mo === 'monto' || mo === 'montousd' || mo === 'unidad' || mo === 'unidadusd') ? mo : 'pct';
   });
@@ -453,8 +454,8 @@ function calc(r){
   CONC.forEach(function(c){
     var k = c[0], m = P.modo[k], dol = monedaConc(k) === 'USD';
     o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) : (aplicaA(k, r) && m2Aplica(k) ? totNativo(k) * r.s / m2Aplica(k) : 0);     // en la moneda del concepto
-    if (dol) o.totu += o[k]; else o.totp += o[k];
-    o.tot += o[k] * (dol ? P.tc : 1);                                                      // equivalente en pesos (para USD por m²)
+    if (!P.nosuma[k]) { if (dol) o.totu += o[k]; else o.totp += o[k];
+      o.tot += o[k] * (dol ? P.tc : 1); }      // «no sumar»: el concepto se ve pero no entra en los totales                                                      // equivalente en pesos (para USD por m²)
     if (esModoUnidad(m)) { o['cb_' + k] = +r.cb[k] || 0; o['sd_' + k] = o[k] - o['cb_' + k]; }   // cobrado / saldo, también en su moneda
   });
   // USD por m² = (valor de la unidad en USD + sus conceptos pasados a dólares al TC base) / m².
@@ -530,7 +531,8 @@ function renderParams(){
       '<option value="unidadusd"' + (P.modo[k] === 'unidadusd' ? ' selected' : '') + '>USD por unidad</option></select></span>' +
       '<small>' + totalConceptoTexto(k) + '</small>' +
       (um ? '<button class="btn" type="button" data-cvedit="' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + (puedeEditar ? '' : ' disabled') + '>✏️ Cargar importes por unidad</button>' : '<button class="btn" type="button" data-aplica=""' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + d + '>👥 ' +
-        (P.sel[k] ? 'Sólo ' + P.sel[k].length + ' de ' + U.length + ' unidades' : 'En todas las unidades') + '</button>') + '</label>';
+        (P.sel[k] ? 'Sólo ' + P.sel[k].length + ' de ' + U.length + ' unidades' : 'En todas las unidades') + '</button>') +
+      '<span class="chk" style="font-size:11px"><input type="checkbox" data-nosuma="' + k + '"' + (P.nosuma[k] ? ' checked' : '') + d + '> No sumar en el total de conceptos</span></label>';
   });
   $('params').innerHTML = h;
 }
@@ -789,6 +791,7 @@ $('params').addEventListener('input', function(e){
 });
 $('params').addEventListener('change', function(e){
   var u = e.target;
+  if (u.dataset.nosuma && puedeAdmin) { if (u.checked) P.nosuma[u.dataset.nosuma] = 1; else delete P.nosuma[u.dataset.nosuma]; guardarParams(); render(); return; }
   if (u.dataset.k === 'usd' && puedeAdmin) {
     var nv = parseFloat(u.value) || 0;
     if (nv === P.usd) return;
@@ -853,27 +856,49 @@ function abrirImportesUnidad(k){
   if (!puedeEditar) return;
   var nom = CONC.filter(function(c){ return c[0] === k; })[0][1], mon = monedaConc(k);
   var lista = U.slice().sort(function(x, y){ return x.o - y.o; });
+  var hayValores = lista.some(function(r){ return (r.cv || {})[k] != null; });
   abrirModal('<h2>' + esc(nom) + ' — importe por unidad (' + mon + ')</h2>' +
-    '<input type="search" id="iu_q" placeholder="Buscar unidad o propietario…" style="width:100%">' +
-    '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><input type="number" step="any" id="iu_v" placeholder="Importe" style="width:130px">' +
-    '<button class="btn" id="iu_fill">Poner a las unidades que se ven</button><button class="btn" id="iu_clr">Vaciar las que se ven</button><span class="sm" id="iu_tot" style="margin-left:auto"></span></div>' +
+    '<p class="sm">Tildá las unidades que lo pagan, escribí el total y tocá <b>Repartir</b>: el total se divide entre las tildadas y siempre suma exactamente ese monto. Podés cambiar las tildes y repartir de nuevo las veces que quieras, o corregir un importe a mano.</p>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="number" step="any" id="iu_v" placeholder="Total a repartir" style="width:150px">' +
+    '<select id="iu_modo"><option value="igual">En partes iguales</option><option value="m2">Según los m²</option></select>' +
+    '<button class="btn pri" id="iu_rep">Repartir</button><span class="sm" id="iu_tot" style="margin-left:auto"></span></div>' +
+    '<input type="search" id="iu_q" placeholder="Buscar unidad o propietario…" style="width:100%;margin-top:10px">' +
+    '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn" id="iu_all">Tildar las que se ven</button><button class="btn" id="iu_none">Destildar las que se ven</button><span class="sm" id="iu_cnt" style="align-self:center"></span></div>' +
     '<div class="lista-sel" id="iu_lista">' + lista.map(function(r){
-      var v = (r.cv || {})[k];
-      return '<label data-b="' + esc((r.u + ' ' + r.p).toLowerCase()) + '" style="display:flex;gap:8px;align-items:center"><b style="min-width:54px">' + esc(r.u) + '</b><span style="flex:1">' + esc(r.p) + '</span>' +
-        '<small>' + r.s.toFixed(2) + ' m²</small><input type="number" step="any" data-k="' + esc(r.k) + '" value="' + (v == null ? '' : esc(v)) + '" style="width:130px"></label>'; }).join('') + '</div>' +
+      var v = (r.cv || {})[k], on = hayValores ? v != null : true;
+      return '<label data-b="' + esc((r.u + ' ' + r.p).toLowerCase()) + '" style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-t="' + esc(r.k) + '"' + (on ? ' checked' : '') + '><b style="min-width:54px">' + esc(r.u) + '</b><span style="flex:1">' + esc(r.p) + '</span>' +
+        '<small>' + r.s.toFixed(2) + ' m²</small><input type="number" step="any" data-k="' + esc(r.k) + '" data-m2="' + r.s + '" value="' + (v == null ? '' : esc(v)) + '" style="width:130px"></label>'; }).join('') + '</div>' +
     '<div class="modal-pie"><button class="btn" id="iu_x">Cancelar</button><button class="btn pri" id="iu_ok">Guardar</button></div>');
-  function tot(){ var t = 0; [].forEach.call($('iu_lista').querySelectorAll('input'), function(i){ t += parseFloat(i.value) || 0; }); $('iu_tot').textContent = 'Total: ' + N(t, mon); }
-  tot(); $('iu_lista').addEventListener('input', tot);
+  function filas(){ return [].slice.call($('iu_lista').children); }
+  function tot(){
+    var t = 0, n = 0; filas().forEach(function(x){ t += parseFloat(x.querySelector('[data-k]').value) || 0; if (x.querySelector('[data-t]').checked) n++; });
+    $('iu_tot').textContent = 'Suma cargada: ' + N(t, mon); $('iu_cnt').textContent = n + ' de ' + lista.length + ' tildadas';
+  }
+  tot(); $('iu_lista').addEventListener('input', tot); $('iu_lista').addEventListener('change', tot);
   $('iu_q').oninput = function(){ var q = this.value.toLowerCase().trim();
-    [].forEach.call($('iu_lista').children, function(x){ x.style.display = !q || x.dataset.b.indexOf(q) >= 0 ? 'flex' : 'none'; }); };
-  function aVisibles(v){ [].forEach.call($('iu_lista').children, function(x){ if (x.style.display !== 'none') x.querySelector('input').value = v; }); tot(); }
-  $('iu_fill').onclick = function(){ var v = parseFloat($('iu_v').value); if (isNaN(v)) { toast('Escribí el importe'); return; } aVisibles(v); };
-  $('iu_clr').onclick = function(){ aVisibles(''); };
+    filas().forEach(function(x){ x.style.display = !q || x.dataset.b.indexOf(q) >= 0 ? 'flex' : 'none'; }); };
+  function tildar(v){ filas().forEach(function(x){ if (x.style.display !== 'none') x.querySelector('[data-t]').checked = v; }); tot(); }
+  $('iu_all').onclick = function(){ tildar(true); }; $('iu_none').onclick = function(){ tildar(false); };
+  $('iu_rep').onclick = function(){
+    var total = parseFloat($('iu_v').value);
+    if (isNaN(total) || total < 0) { toast('Escribí el total a repartir'); return; }
+    var sel = filas().filter(function(x){ return x.querySelector('[data-t]').checked; });
+    if (!sel.length) { toast('Tildá al menos una unidad'); return; }
+    var porM2 = $('iu_modo').value === 'm2', base = sel.reduce(function(t, x){ return t + (porM2 ? +x.querySelector('[data-k]').dataset.m2 : 1); }, 0);
+    if (!base) { toast('Las unidades tildadas no tienen m² cargados'); return; }
+    var cent = Math.round(total * 100), acum = 0;
+    sel.forEach(function(x, i){
+      var inp = x.querySelector('[data-k]'), c = i === sel.length - 1 ? cent - acum : Math.round(cent * (porM2 ? +inp.dataset.m2 : 1) / base);   // la última absorbe el redondeo: siempre suma el total
+      acum += c; inp.value = (c / 100).toFixed(2);
+    });
+    filas().forEach(function(x){ if (!x.querySelector('[data-t]').checked) x.querySelector('[data-k]').value = ''; });
+    tot();
+  };
   $('iu_x').onclick = cerrarModal;
   $('iu_ok').onclick = function(){
     var upd = {}, base = 'global/edificios/' + edId + '/unidades/';
-    [].forEach.call($('iu_lista').querySelectorAll('input'), function(i){
-      var v = parseFloat(i.value); upd[base + i.dataset.k + '/cv/' + k] = isNaN(v) ? null : Math.round(v * 10000) / 10000; });
+    filas().forEach(function(x){
+      var i = x.querySelector('[data-k]'), v = parseFloat(i.value); upd[base + i.dataset.k + '/cv/' + k] = isNaN(v) ? null : Math.round(v * 10000) / 10000; });
     db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes guardados'); }, function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
   };
 }
@@ -1053,7 +1078,7 @@ function bajarExcel(){
   var sumaConc = function(mon, r){               // suma de las columnas de concepto en esa moneda; null si falta alguna o se ve en la otra moneda
     var t = [];
     for (var q = 0; q < conceptos.length; q++) {
-      var kc = conceptos[q][0]; if (monedaConc(kc) !== mon) continue;
+      var kc = conceptos[q][0]; if (monedaConc(kc) !== mon || P.nosuma[kc]) continue;
       if (!colL[kc] || !natVista(kc)) return null; t.push(colL[kc] + r);
     }
     return t.length ? t.join('+') : '0';
@@ -1571,7 +1596,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v26';
+var UNID_VER = 'unidades-v27';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
