@@ -2665,16 +2665,102 @@
     return /iPad|iPhone|iPod/.test(ua) ||
            (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);   // iPad que se anuncia como Mac
   }
-  function panelImpresionIOS(soltar){
+  /* El informe como SU PROPIA página.
+     En el iPhone del dueño `window.print()` no hace absolutamente nada —ni
+     el del panel, que se llama dentro del toque—, que era la incógnita que
+     quedaba abierta: Safari no documenta qué considera impresión automática
+     y en la app instalada hay reportes de que directamente no existe. Pelear
+     con `print()` ya costó dos vueltas, así que este camino no lo usa: abre
+     una pestaña con el informe solo y de ahí el PDF lo hace iOS con su menú
+     Compartir, que es el que la gente ya sabe usar.
+
+     La página nueva se arma con la MISMA hoja de estilos y con
+     `body.imprimiendo`, así que es exactamente el mismo informe —no una
+     segunda versión que se desincroniza— y al imprimirla desde ahí valen las
+     reglas de `@media print` que ya existen: `body.imprimiendo > *` esconde
+     el cartel de ayuda y deja sólo `#reporte`.
+
+     ⚠️ `window.open("")` deja el documento en about:blank, así que las rutas
+     relativas (el logo, `../assets/mess-logo.svg`) no resolverían: por eso el
+     `<base>`. El título es el nombre con el que iOS ofrece guardar el PDF. */
+  function abrirInformeAparte(clases){
+    var w;
+    try { w = window.open("", "_blank"); } catch(e){ w = null; }
+    if (!w) {
+      // Pasa sobre todo con el tablero abierto desde el ícono de la pantalla
+      // de inicio: ahí no hay pestañas. Un toast suelto no le sirve a nadie.
+      abrirModal('<h2>El teléfono bloqueó la pestaña</h2>' +
+        '<div class="ayuda">Safari no dejó abrir el informe en una pestaña nueva. ' +
+        'Suele pasar cuando el tablero se abre desde el <b>ícono de la pantalla de inicio</b>: ' +
+        'ahí no hay pestañas donde abrirlo.</div>' +
+        '<div class="ayuda" style="margin-top:8px">Abrí el tablero <b>desde Safari</b> ' +
+        '(no desde el ícono) y volvé a sacar el informe. Si entrás por Safari y ' +
+        'tampoco sale, avisame y lo armo de otra manera.</div>' +
+        '<button class="bfull sec" id="apCerrar" style="margin-top:10px">Entendido</button>');
+      $("apCerrar").addEventListener("click", cerrarModal);
+      return false;
+    }
+    var css = Array.prototype.map.call(document.querySelectorAll("style"), function(x){
+      return x.textContent;
+    }).join("\n");
+    var base = location.href.replace(/[^/]*$/, "");
+    var titulo = nombreObra() + " — Final de obra";
+    var cuerpo = (clases || []).concat(["imprimiendo"]).join(" ");
+    var apaisada = (clases || []).indexOf("apaisado") !== -1;
+    var anchoHoja = apaisada ? 1123 : 794;      // A4 a 96 dpi: 297mm y 210mm
+    w.document.write(
+      '<!doctype html><html lang="es"><head><meta charset="utf-8">' +
+      // ⚠️ El viewport va al ancho de la HOJA, no del teléfono. Con
+      // width=device-width el informe se reacomodaba a 390px y el PDF salía
+      // con forma de captura de celular en vez de A4; así el teléfono muestra
+      // la hoja entera achicada (se agranda con dos dedos) y lo que guarde
+      // iOS —por Compartir→PDF o por Imprimir— ya tiene la forma de la hoja.
+      '<meta name="viewport" content="width=' + anchoHoja + ',initial-scale=1">' +
+      '<base href="' + esc(base) + '">' +
+      '<title>' + esc(titulo) + '</title>' +
+      '<style>' + css + '</style>' +
+      // En pantalla el informe se ve como la hoja; al imprimir mandan las
+      // reglas de @media print que ya vinieron en la hoja de estilos.
+      '<style>@media screen{' +
+        'body{background:#E8E8EE;margin:0;padding:0 0 26px}' +
+        '#reporte{display:block;background:#fff;width:' + (apaisada ? "297mm" : "210mm") + ';' +
+          'margin:0 auto;padding:13mm;box-sizing:border-box;' +
+          'box-shadow:0 1px 8px rgba(20,20,40,.16)}' +
+        // El cartel acompaña el ancho de la hoja, si no queda un renglón
+        // suelto a un costado cuando el teléfono achica todo.
+        '.ap-top{width:' + (apaisada ? "297mm" : "210mm") + ';margin:0 auto 14px;box-sizing:border-box;' +
+          'background:var(--card);padding:16px 18px;' +
+          'font-size:19px;line-height:1.55;color:var(--text-2)}' +
+        '.ap-top button{font-size:19px;padding:15px}' +
+        '.ap-top b{color:var(--ink)}' +
+        '.ap-top button{display:block;width:100%;margin-top:12px;font-family:inherit;' +
+          'font-weight:600;border:0;border-radius:var(--radius-pill);' +
+          'background:var(--acento);color:#fff;cursor:pointer}' +
+      '}</style></head><body class="' + esc(cuerpo) + '">' +
+      '<div class="ap-top">Para guardarlo en el teléfono: tocá <b>Compartir</b> ' +
+        '(el cuadradito con la flecha), elegí <b>Opciones</b> arriba de todo y poné ' +
+        '<b>PDF</b>; después <b>Guardar en Archivos</b> o mandalo por WhatsApp.' +
+        '<button type="button" onclick="window.print()">🖨️ O imprimir desde acá</button></div>' +
+      '<div id="reporte">' + $("reporte").innerHTML + '</div>' +
+      '</body></html>');
+    w.document.close();
+    return true;
+  }
+
+  function panelImpresionIOS(soltar, clases){
     abrirModal('<h2>Informe listo</h2>' +
-      '<div class="ayuda">Tocá <b>Imprimir</b> para abrir las opciones de impresión. Para guardarlo como <b>PDF</b>: ' +
-      'separá dos dedos sobre la miniatura de la página para verla en grande, tocá <b>Compartir</b> y elegí <b>Guardar en Archivos</b>.</div>' +
-      (window.navigator.standalone === true
-        ? '<div class="ayuda">Si al tocar Imprimir no se abre nada, probá abrir el tablero desde Safari en vez del ícono de la pantalla de inicio.</div>'
-        : "") +
-      '<button class="bfull" id="iosImprimir">\ud83d\udda8\ufe0f Imprimir / Guardar PDF</button>' +
-      '<button class="bfull sec" id="iosCerrar" style="margin-top:8px">Cerrar</button>');
+      '<div class="ayuda">Se abre en una pestaña aparte. Desde ahí, para guardarlo como <b>PDF</b>: ' +
+      '<b>Compartir</b> → <b>Opciones</b> → <b>PDF</b> → <b>Guardar en Archivos</b>, o mandalo por WhatsApp.</div>' +
+      '<button class="bfull" id="iosAparte">\ud83d\udcc4 Abrir el informe</button>' +
+      // `print()` queda como segunda opción, no como la principal: en el
+      // iPhone del dueño no hace nada. En otro iPhone puede andar, así que
+      // tampoco se saca.
+      '<button class="bfull sec" id="iosImprimir" style="margin-top:8px">\ud83d\udda8\ufe0f Imprimir directo</button>' +
+      '<div class="ayuda" style="margin-top:8px">Si «Abrir el informe» no hace nada, es que Safari bloqueó la pestaña: ' +
+      'probá «Imprimir directo».</div>' +
+      '<button class="bfull sec" id="iosCerrar" style="margin-top:4px">Cerrar</button>');
     alCerrarModal = soltar;      // después de abrirModal, que avisa del cuadro anterior
+    $("iosAparte").addEventListener("click", function(){ abrirInformeAparte(clases); });
     $("iosImprimir").addEventListener("click", function(){
       try { window.print(); }
       catch(e){ toast("No se pudo abrir la impresión en este equipo"); }
@@ -2701,7 +2787,7 @@
     function alTocar(){ if (tPrint && Date.now() - tPrint > 1500) soltar(); }
     soltarImpresion = soltar;
     // iPhone / iPad: otro camino (ver panelImpresionIOS). Ni `afterprint` ni el temporizador sirven.
-    if (esIOS()) { panelImpresionIOS(soltar); return; }
+    if (esIOS()) { panelImpresionIOS(soltar, clases || []); return; }
     window.addEventListener("afterprint", soltar);
     tope = setTimeout(soltar, 5 * 60 * 1000);
     // El navegador necesita un respiro para pintar el informe antes de imprimir.
