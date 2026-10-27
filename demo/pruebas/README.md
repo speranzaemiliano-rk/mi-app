@@ -7,6 +7,7 @@ de `demo/pruebas/cdn/` (se bajan con `bash demo/pruebas/bajar-cdn.sh`) y registr
   Gmail, EmailJS, Spotify, POST aunque sea a una API pública), almacenamiento real intacto, nada persiste, el service worker no se registra y, sin `?demo`, no se carga nada de la demo.
 - `node demo/pruebas/recorrido.mjs [movil]` — recorre las 30 pantallas de las dos empresas buscando `NaN`, `undefined`, `Invalid Date`, `[object Object]` y errores de JS.
 - `node demo/pruebas/revision.mjs` — regresión de lo que encontró la revisión independiente (saldo del Inicio, música/Spotify, mails y IA con aviso, ARCA, apóstrofes, panel de detalle…).
+- `node demo/pruebas/entrega-doc.mjs` — recibo de entrega de documentación (sin dinero): alta desde «Emitir recibo», numeración que no se reutiliza, edición, copia firmada, borrado, buscador y permisos de lector.
 - `node demo/pruebas/capturas.mjs [movil]` — saca capturas de las pantallas principales (`shot-*.png` en la carpeta desde donde se corre).
 
 Variables: `PLAYWRIGHT_MODULE` (ruta al módulo de Playwright), `DEMO_CDN` (carpeta con las librerías), `ROOT` (raíz del repo).

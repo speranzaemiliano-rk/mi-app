@@ -3606,7 +3606,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v562</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v563</div>
         </div>
     </nav>
 
@@ -4572,6 +4572,7 @@
                         <div style="display:flex;gap:8px;flex-wrap:wrap;">
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('ingreso')" title="Reflejar en la caja como INGRESO todos los comprobantes que quedaron sin afectar caja">⬆️💰 Reflejar todos como ingreso</button>
                           <button class="btn btn-outline btn-sm" onclick="reflejarEmitidosEnIngresos('egreso')" title="Reflejar en la caja como EGRESO todos los comprobantes que quedaron sin afectar caja">⬇️💰 …como egreso</button>
+                          <button class="btn btn-outline btn-sm" id="btnEntregaDoc" onclick="abrirEntregaDoc()" title="Recibo SIN dinero: deja firmado que entregaste escrituras, boletos, planos u otra documentación">📑 Recibo de entrega de documentación</button>
                           <button class="btn btn-primary btn-sm" id="btnEmitirComprobante" onclick="abrirModalEmitir(null,'recibo')">＋ Emitir recibo</button>
                         </div>
                     </div>
@@ -4581,6 +4582,7 @@
                             <option value="">Todos los tipos</option>
                             <option value="recibo">Recibos</option>
                             <option value="factura">Documentos tipo factura</option>
+                            <option value="entrega">Entregas de documentación (sin dinero)</option>
                         </select>
                     </div>
                     <div class="table-wrap">
@@ -4599,6 +4601,12 @@
                             <tbody id="emitidosBody"><tr><td colspan="7" class="empty-msg">No hay comprobantes emitidos.</td></tr></tbody>
                         </table>
                     </div>
+                </div>
+                <div class="table-card" id="seccionEntregasDoc" style="margin-top:16px;">
+                    <div class="table-card-head">
+                        <h3>📑 Recibos de entrega de documentación <span id="entDocCont" style="font-weight:400;color:var(--text-3);font-size:12px;"></span> <span style="font-weight:400;color:var(--text-3);font-size:12px;">(sin dinero — no pasan por la caja)</span></h3>
+                    </div>
+                    <div id="entDocLista"><div class="empty-msg" style="padding:14px;">Todavía no hay recibos de entrega de documentación.</div></div>
                 </div>
             </div><!-- /panelDocumentosEmitidos -->
 
@@ -16906,7 +16914,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v562';
+    var APP_VER = 'v563';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17397,10 +17405,11 @@
 
     function aplicarPermisos() {
         const show = puedeEditar ? '' : 'none';
-        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv','btnLeerPresup','btnPresupExcel','fxFormCard'].forEach(id => {
+        ['btnAgregar','btnPagar','btnImportar','btnGuardar','exchangeInputGroup','btnAgregarProv','btnAgregarFact','btnCargarCompProv','btnCargarCompSidebar','btnUnificarProv','btnLeerPresup','btnPresupExcel','fxFormCard','btnEntregaDoc'].forEach(id => {
             const el = document.getElementById(id); if (el) el.style.display = show;
         });
         document.getElementById('badgeSoloLectura').style.display = puedeEditar ? 'none' : 'flex';
+        if (typeof renderEntregasDoc === 'function') renderEntregasDoc();   // los botones de editar/borrar dependen del permiso
         _marcarTemaActivo();
         _temaAplicarAjustes();
         _aplicarRailGuardado();
@@ -24169,6 +24178,11 @@
     let comprobantesEmitidos = [];
     let editandoEmitidoId = null;
     var REF_EMITIDOS = null;
+    // Recibos de entrega de documentación (sin dinero): colección propia, ver el bloque «RECIBO DE ENTREGA DE DOCUMENTACIÓN».
+    let entregasDoc = [];
+    var REF_ENTREGAS_DOC = null;
+    // Sin .catch: quien guarda decide qué avisar (así no salen dos carteles ni queda un rechazo sin atender).
+    function persistirEntregasDoc() { return _colPersist('entregasDoc', REF_ENTREGAS_DOC, entregasDoc); }
     function persistirEmitidos() { return _colPersist('emitidos', REF_EMITIDOS, comprobantesEmitidos).catch(function(e){ console.error(e); alert('Error al guardar el comprobante. Revisá la conexión e intentá de nuevo.'); }); }
 
     var _emitItems = []; // ítems para el documento tipo factura
@@ -24502,6 +24516,9 @@
         }
         // "Emitir recibo" (alta nueva): recibo puro por dinero recibido (sin Comprobante X ni egreso).
         _emitConfigRecibo(contexto === 'recibo' && !e);
+        // Atajo al recibo SIN dinero (entrega de documentación): sólo en altas del lado de ingresos y para quien puede cargar.
+        var _lkEd = document.getElementById('emitLinkEntregaDoc');
+        if (_lkEd) _lkEd.style.display = (!e && (contexto === 'recibo' || contexto === 'ingreso') && _entDocPuede()) ? '' : 'none';
         if (_emitItems.length === 0) _emitItems.push({ desc:'', cant:1, precio:0 });
         emitRenderItems();
         emitToggleTipo();
@@ -24768,6 +24785,12 @@
         if (!tbody) return;
         var busq  = ((document.getElementById('buscadorEmitido')||{}).value || '').toLowerCase();
         var ftipo = (document.getElementById('filtroEmitidoTipo')||{}).value || '';
+        // Los recibos de entrega de documentación (sin dinero) comparten buscador y filtro de tipo: «Entregas de documentación» muestra
+        // sólo ellos, «Recibos» / «Documentos tipo factura» los esconden y «Todos» deja las dos listas.
+        var _tw = tbody.closest ? tbody.closest('.table-wrap') : null, _cardEd = document.getElementById('seccionEntregasDoc');
+        if (_tw) _tw.style.display = (ftipo === 'entrega') ? 'none' : '';
+        if (_cardEd) _cardEd.style.display = (ftipo && ftipo !== 'entrega') ? 'none' : '';
+        if (typeof renderEntregasDoc === 'function') renderEntregasDoc();
         var list = (comprobantesEmitidos || []).filter(function(e){
             if (!e) return false;
             if (ftipo && e.tipoDoc !== ftipo) return false;
@@ -26474,6 +26497,7 @@
         REF_APORTANTES  = db.ref(base + '/aportantes');
         REF_METROS      = db.ref(base + '/metrosCanje');
         REF_EMITIDOS    = db.ref(base + '/comprobantesEmitidos');
+        REF_ENTREGAS_DOC = db.ref(base + '/entregasDoc');
         REF_REMUN       = db.ref(base + '/remuneraciones');
     }
 
@@ -26625,6 +26649,7 @@
         _cargarConListener(REF_APORTANTES,  function(v) { aportantes  = v; if (typeof renderAportantes==='function') renderAportantes(); }, 'aportantes');
         _cargarConListener(REF_METROS,      function(v) { metrosCanje = v; if (typeof renderMetros==='function') renderMetros(); }, 'metrosCanje');
         _cargarConListener(REF_EMITIDOS,    function(v) { comprobantesEmitidos = v; _emitidosCargados = true; if (typeof renderEmitidos==='function') renderEmitidos(); _presupFichaRefrescar(); if (_tabActivo==='Documentos' && typeof renderDocumentos==='function') renderDocumentos(); var _mA=document.getElementById('modalFacturasARCA'); if (_mA && _mA.classList.contains('active') && typeof renderFacturasARCA==='function') renderFacturasARCA(); }, 'emitidos');
+        _cargarConListener(REF_ENTREGAS_DOC, function(v) { entregasDoc = v; if (typeof renderEntregasDoc==='function') renderEntregasDoc(); }, 'entregasDoc');
         _cargarConListener(REF_REMUN,       function(v) { remuneraciones = v; if (typeof renderRemuneraciones==='function') renderRemuneraciones(); }, 'remuneraciones');
         if (REF_PLAN) {
             REF_PLAN.on('value', function(snap) {
@@ -36088,6 +36113,246 @@
         _imprimirDocHTML(html);
     }
 
+    // ═══════════════ RECIBO DE ENTREGA DE DOCUMENTACIÓN (sin dinero) — escrituras, boletos, planos, reglamento… ═══════════════
+    // Deja firmado que se ENTREGÓ documentación a alguien (comprador, inquilino, propietario…). No es un cobro: no pasa por Caja, Bancos ni IVA,
+    // y por eso NO vive en `comprobantesEmitidos` (esa colección tiene ~37 consumidores —caja, libros, cuentas, «Reflejar en ingresos»— que la
+    // tratarían como un recibo de dinero). Colección propia por proyecto, `entregasDoc`:
+    //   { id:'ENTDOC-…', nro:'ED-0001', fecha, destinatario, doc, ref, items:[{desc,cant,formato}], obs, entrega, recibe, adjuntoId/Nombre/Tipo }
+    // Numeración correlativa por proyecto que NO se reutiliza: contador en `<base>/contadorEntregasDoc` (transacción, así dos personas que
+    // emiten a la vez no repiten número). Un papel firmado de un recibo borrado no se confunde con el nuevo. La copia firmada (foto o escaneo)
+    // se adjunta al recibo (REF_DOCS, prefijo `ENTDOC-`) y se borra junto con él.
+    var _entDocItems = [], _entDocEditId = '', _entDocAuto = '', _entDocAdjId = '', _entDocGuardando = false;
+    // [ícono del botón, texto que queda en el recibo]: el ícono es sólo del botón, el papel sale limpio.
+    var ENT_DOC_SUGERIDOS = [
+        ['📜', 'Escritura traslativa de dominio'], ['📝', 'Boleto de compraventa'], ['🏢', 'Reglamento de copropiedad y administración'],
+        ['📐', 'Planos conformes a obra'], ['✅', 'Certificado final de obra'], ['🛡️', 'Garantías y manuales de uso'],
+        ['🧾', 'Libre deuda de expensas y servicios'], ['📄', 'Contrato de locación']
+    ];
+    var ENT_DOC_FORMATOS = ['Original', 'Copia simple', 'Copia certificada', 'Digital (PDF)'];
+    function _entDocPuede() { return typeof puedeEditar === 'undefined' || puedeEditar; }
+    function _entDocBuscar(id) { return id ? (entregasDoc || []).find(function(x) { return x && x.id === id; }) : null; }
+    function abrirEntregaDoc(id) {
+        if (!_entDocPuede()) { alert('No tenés permisos para cargar recibos.'); return; }
+        var e = _entDocBuscar(id);
+        if (id && !e) { alert('Este recibo ya no existe (otra persona pudo haberlo borrado).'); return; }
+        _entDocEditId = e ? e.id : '';
+        document.getElementById('entDocTitulo').textContent = e ? ('✏️ Editar recibo ' + (e.nro || '')) : '📑 Recibo de entrega de documentación';
+        document.getElementById('entDocFecha').value = e ? (e.fecha || _hoyLocalISO()) : _hoyLocalISO();
+        document.getElementById('entDocDest').value = e ? (e.destinatario || '') : '';
+        document.getElementById('entDocDoc').value = e ? (e.doc || '') : '';
+        document.getElementById('entDocRef').value = e ? (e.ref || '') : '';
+        document.getElementById('entDocObs').value = e ? (e.obs || '') : '';
+        _entDocItems = e && (e.items || []).length
+            ? e.items.map(function(it) { return { desc: it.desc || '', cant: it.cant || 1, formato: it.formato || 'Original' }; })
+            : [{ desc: '', cant: 1, formato: 'Original' }];
+        var emp = getEmpresaParaRecibo().nombre;
+        document.getElementById('entDocQuienEntrega').value = e ? (e.entrega || '') : emp;
+        document.getElementById('entDocQuienRecibe').value = e ? (e.recibe || '') : '';
+        _entDocAuto = '';   // en una edición no se pisa nada solo: lo cargado manda
+        // Sugerencias de destinatario: compradores de ventas, inquilinos y clientes de recibos ya emitidos (sin repetir).
+        var vistos = {}, nombres = [];
+        var _add = function(n) { n = String(n || '').trim(); var k = n.toLowerCase(); if (n && !vistos[k]) { vistos[k] = 1; nombres.push(n); } };
+        (ventas || []).forEach(function(v) { if (v) _add(v.comprador); });
+        (alquileres || []).forEach(function(a) { if (a) _add(a.inquilino); });
+        (comprobantesEmitidos || []).forEach(function(c) { if (c && !c.confidencial) _add(c.cliente); });
+        document.getElementById('entDocDestList').innerHTML = nombres.sort().map(function(n) { return '<option value="' + escHtml(n) + '">'; }).join('');
+        document.getElementById('entDocSugeridos').innerHTML = ENT_DOC_SUGERIDOS.map(function(t, i) {
+            return '<button type="button" class="btn btn-outline btn-sm" onclick="entDocAgregarItem(ENT_DOC_SUGERIDOS[' + i + '][1])">' + t[0] + ' ' + escHtml(t[1]) + '</button>';
+        }).join(' ');
+        document.getElementById('entDocGuardarSolo').textContent = e ? 'Guardar cambios' : 'Guardar sin imprimir';
+        _entDocRenderItems();
+        document.getElementById('modalEntregaDoc').classList.add('active');
+    }
+    function cerrarEntregaDoc() { document.getElementById('modalEntregaDoc').classList.remove('active'); _entDocEditId = ''; }
+    // Desde «Emitir recibo» (el de dinero): cierra ese modal y abre este, para quien se equivocó de botón.
+    function emitIrAEntregaDoc() { cerrarModalEmitir(); abrirEntregaDoc(); }
+    // Al elegir un destinatario conocido se completa su DNI/CUIT si lo tenemos (inquilinos) y, si «Recibe» sigue vacío o es el nombre anterior, se lo acompaña.
+    function entDocDestChange() {
+        var el = document.getElementById('entDocDest'), n = el.value.trim();
+        var rec = document.getElementById('entDocQuienRecibe');
+        if (!rec.value || rec.value === _entDocAuto) { rec.value = n; _entDocAuto = n; }
+        if (!document.getElementById('entDocDoc').value && n) {
+            var a = (alquileres || []).find(function(x) { return x && x.inquilino === n && x.inquilinoDoc; });
+            if (a) document.getElementById('entDocDoc').value = a.inquilinoDoc;
+        }
+    }
+    function _entDocRenderItems() {
+        document.getElementById('entDocItems').innerHTML = _entDocItems.map(function(it, i) {
+            return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;align-items:center;">'
+                + '<input type="text" style="flex:1 1 220px;min-width:0;" value="' + escHtml(it.desc) + '" placeholder="Ej: Escritura traslativa de dominio" oninput="_entDocItems[' + i + '].desc=this.value" aria-label="Documento">'
+                + '<select style="flex:0 0 150px;" onchange="_entDocItems[' + i + '].formato=this.value" aria-label="Formato">'
+                + ENT_DOC_FORMATOS.map(function(f) { return '<option' + (f === it.formato ? ' selected' : '') + '>' + escHtml(f) + '</option>'; }).join('') + '</select>'
+                + '<input type="number" min="1" step="1" style="flex:0 0 74px;" value="' + (it.cant || 1) + '" oninput="_entDocItems[' + i + '].cant=parseInt(this.value)||1" aria-label="Cantidad de ejemplares" title="Cantidad de ejemplares">'
+                + '<button type="button" class="btn btn-outline btn-sm" onclick="entDocQuitarItem(' + i + ')" title="Quitar">✕</button></div>';
+        }).join('');
+    }
+    function entDocAgregarItem(desc) {
+        var d = String(desc || '').trim();
+        if (d) {
+            var ya = _entDocItems.find(function(x) { return x.desc.trim() === d; });
+            if (ya) { ya.cant = (ya.cant || 1) + 1; _entDocRenderItems(); return; }   // el mismo documento otra vez = un ejemplar más
+            if (_entDocItems.length === 1 && !_entDocItems[0].desc.trim()) _entDocItems = [];   // la fila vacía del principio se reemplaza
+        }
+        _entDocItems.push({ desc: d, cant: 1, formato: 'Original' });
+        _entDocRenderItems();
+        var inputs = document.querySelectorAll('#entDocItems input[type="text"]');
+        if (!d && inputs.length) inputs[inputs.length - 1].focus();
+    }
+    function entDocQuitarItem(i) {
+        _entDocItems.splice(i, 1);
+        if (!_entDocItems.length) _entDocItems = [{ desc: '', cant: 1, formato: 'Original' }];
+        _entDocRenderItems();
+    }
+    function _entDocResumen(e) {
+        return (e.items || []).map(function(it) { return (it.cant || 1) > 1 ? (it.cant + ' × ' + it.desc) : it.desc; }).join(' · ');
+    }
+    // Próximo número: contador del proyecto en la nube (transacción). El mínimo es lo que ya hay cargado, por si el contador se perdió o es nuevo.
+    function _entDocProximoNro() {
+        var maxLocal = 0;
+        (entregasDoc || []).forEach(function(e) { var n = parseInt(String((e && e.nro) || '').replace(/\D/g, ''), 10); if (n > maxLocal) maxLocal = n; });
+        var fmt = function(n) { return 'ED-' + String(n).padStart(4, '0'); };
+        return new Promise(function(resolve, reject) {
+            if (typeof db === 'undefined' || !db || typeof getBasePath !== 'function') { reject(new Error('Sin conexión a la base.')); return; }
+            db.ref(getBasePath() + '/contadorEntregasDoc').transaction(function(n) { return Math.max(parseInt(n, 10) || 0, maxLocal) + 1; })
+                .then(function(r) { var n = r && r.snapshot ? parseInt(r.snapshot.val(), 10) : 0; if (!n) reject(new Error('No se pudo numerar el recibo.')); else resolve(fmt(n)); })
+                .catch(reject);
+        });
+    }
+    async function entDocGuardar(imprimir) {
+        if (_entDocGuardando) return;
+        if (!_entDocPuede()) { alert('No tenés permisos para cargar recibos.'); return; }
+        var dest = document.getElementById('entDocDest').value.trim();
+        var fecha = document.getElementById('entDocFecha').value;
+        if (!dest) { alert('Poné a quién se le entrega la documentación.'); return; }
+        if (!fecha) { alert('Poné la fecha de la entrega.'); return; }
+        var items = _entDocItems.map(function(it) { return { desc: String(it.desc || '').trim(), cant: Math.max(1, parseInt(it.cant) || 1), formato: it.formato || 'Original' }; })
+            .filter(function(it) { return it.desc; });
+        if (!items.length) { alert('Cargá al menos un documento (por ejemplo «Escritura traslativa de dominio»).'); return; }
+        var datos = {
+            fecha: fecha, destinatario: dest,
+            doc: document.getElementById('entDocDoc').value.trim(),
+            ref: document.getElementById('entDocRef').value.trim(),
+            items: items,
+            obs: document.getElementById('entDocObs').value.trim(),
+            entrega: document.getElementById('entDocQuienEntrega').value.trim(),
+            recibe: document.getElementById('entDocQuienRecibe').value.trim()
+        };
+        var editId = _entDocEditId;
+        _entDocGuardando = true;
+        ['entDocGuardarSolo', 'entDocGuardarImp'].forEach(function(b) { var el = document.getElementById(b); if (el) el.disabled = true; });
+        var idFinal = editId;
+        try {
+            if (editId) {
+                // El listener de Firebase reemplaza los objetos del array: se busca por id justo antes de escribir.
+                var ex = _entDocBuscar(editId);
+                if (!ex) { alert('Este recibo ya no existe (otra persona pudo haberlo borrado). No se guardaron los cambios.'); cerrarEntregaDoc(); return; }
+                Object.keys(datos).forEach(function(k) { ex[k] = datos[k]; });   // conserva nro, id y la copia firmada
+            } else {
+                var nro = await _entDocProximoNro();
+                var nuevo = { id: 'ENTDOC-' + Date.now() + '-' + Math.floor(Math.random() * 1000), nro: nro };
+                Object.keys(datos).forEach(function(k) { nuevo[k] = datos[k]; });
+                entregasDoc = (entregasDoc || []).concat([nuevo]);
+                idFinal = nuevo.id;
+            }
+            await persistirEntregasDoc();
+            renderEntregasDoc();
+            cerrarEntregaDoc();
+            if (imprimir) imprimirEntregaDoc(idFinal);
+        } catch (err) {
+            alert('No se pudo guardar el recibo: ' + (err && err.message ? err.message : err));
+        } finally {
+            _entDocGuardando = false;
+            ['entDocGuardarSolo', 'entDocGuardarImp'].forEach(function(b) { var el = document.getElementById(b); if (el) el.disabled = false; });
+        }
+    }
+    function renderEntregasDoc() {
+        var cont = document.getElementById('entDocLista'); if (!cont) return;
+        var lista = (entregasDoc || []).filter(Boolean);
+        var cnt = document.getElementById('entDocCont'); if (cnt) cnt.textContent = lista.length ? '(' + lista.length + ')' : '';
+        var q = ((document.getElementById('buscadorEmitido') || {}).value || '').trim();
+        if (q) {   // el buscador de la pantalla también filtra estos recibos (destinatario, número, documentos, unidad)
+            var term = (typeof _txtTerminos === 'function') ? _txtTerminos(q) : null;
+            if (term && typeof _txtCoincideTodo === 'function') lista = lista.filter(function(e) { return _txtCoincideTodo(term, [e.destinatario, e.nro, e.ref, e.doc, _entDocResumen(e)]); });
+        }
+        lista.sort(function(x, y) { return String(y.fecha || '').localeCompare(String(x.fecha || '')) || String(y.nro || '').localeCompare(String(x.nro || '')); });
+        if (!lista.length) { cont.innerHTML = '<div class="empty-msg" style="padding:14px;">' + (q ? 'Ningún recibo de entrega coincide con la búsqueda.' : 'Todavía no hay recibos de entrega de documentación.') + '</div>'; return; }
+        var editable = _entDocPuede();
+        cont.innerHTML = lista.map(function(e) {
+            var firmado = !!e.adjuntoId, id = _jsq(e.id);
+            return '<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--border);">'
+                + '<div style="min-width:240px;flex:1;"><div style="font-weight:600;font-size:13px;">' + (e.fecha ? formatearFecha(e.fecha) : '—') + ' · ' + escHtml(e.nro || '') + ' · ' + escHtml(e.destinatario || '') + (e.ref ? ' <span style="font-weight:400;color:var(--text-3);">(' + escHtml(e.ref) + ')</span>' : '') + '</div>'
+                + '<div style="font-size:12px;color:var(--text-2);margin-top:2px;">' + escHtml(_entDocResumen(e)) + '</div></div>'
+                + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+                + (firmado ? '<span class="badge-rol badge-ok" title="Hay una copia firmada adjunta">✓ Firmado</span>' : '<span class="badge-rol badge-warn" title="Todavía no se adjuntó la copia firmada">⏳ Sin copia firmada</span>')
+                + '<button class="btn btn-outline btn-sm" onclick="imprimirEntregaDoc(\'' + id + '\')" title="Imprimir / reimprimir para firmar">🖨️ Imprimir</button>'
+                + (firmado ? '<button class="btn btn-outline btn-sm" onclick="descargarDoc(\'' + _jsq(e.adjuntoId) + '\',\'' + _jsq(e.adjuntoNombre || 'recibo firmado') + '\')" title="Ver la copia firmada">📎 Ver</button>' : '')
+                + (editable ? '<button class="btn btn-outline btn-sm" onclick="entDocAdjuntar(\'' + id + '\')" title="' + (firmado ? 'Reemplazar la copia firmada' : 'Adjuntar la copia firmada (foto o escaneo)') + '">' + (firmado ? '🔄' : '📤 Adjuntar firmado') + '</button>'
+                    + '<button class="btn btn-outline btn-sm" onclick="abrirEntregaDoc(\'' + id + '\')" title="Editar este recibo">✏️</button>'
+                    + '<button class="btn btn-danger-sm" onclick="entDocEliminar(\'' + id + '\')" title="Eliminar este recibo">✕</button>' : '')
+                + '</div></div>';
+        }).join('');
+    }
+    function entDocEliminar(id) {
+        if (!_entDocPuede()) { alert('No tenés permisos para eliminar recibos.'); return; }
+        var e = _entDocBuscar(id); if (!e) return;
+        if (!confirm('¿Eliminar el recibo ' + (e.nro || '') + ' de ' + (e.destinatario || '') + ' (' + _entDocResumen(e) + ')?' + (e.adjuntoId ? '\n\nTambién se borra la copia firmada que tenía adjunta.' : '') + '\n\nEl número no se vuelve a usar. Esta acción no se puede deshacer.')) return;
+        if (e.adjuntoId) REF_DOCS.child(e.adjuntoId).remove();
+        entregasDoc = entregasDoc.filter(function(x) { return x && x.id !== id; });
+        persistirEntregasDoc().catch(function(err) { alert('No se pudo eliminar el recibo: ' + (err.message || err)); });
+        renderEntregasDoc();
+    }
+    function entDocAdjuntar(id) {
+        if (!_entDocPuede()) { alert('No tenés permisos para adjuntar archivos.'); return; }
+        _entDocAdjId = id;
+        var f = document.getElementById('entDocArchivo'); f.value = ''; f.click();
+    }
+    async function entDocAdjuntarElegido() {
+        var f = document.getElementById('entDocArchivo'), id = _entDocAdjId;
+        if (!id || !f.files || !f.files[0]) return;
+        try {
+            var sub = await _cobroAlqSubirAdj('entDocArchivo', 'ENTDOC', 'La copia firmada');
+            if (!sub) return;
+            // La subida tarda (un PDF se comprime) y el listener de Firebase pudo reemplazar el array: se vuelve a buscar el recibo por id.
+            var e = _entDocBuscar(id);
+            if (!e) { REF_DOCS.child(sub.id).remove(); alert('El recibo ya no existe: la copia firmada no se guardó.'); return; }
+            var anterior = e.adjuntoId;
+            e.adjuntoId = sub.id; e.adjuntoNombre = sub.nombre; e.adjuntoTipo = sub.tipo;
+            await persistirEntregasDoc();
+            if (anterior && anterior !== sub.id) REF_DOCS.child(anterior).remove();   // reemplaza la anterior: recién ahora, ya guardada la nueva
+            renderEntregasDoc();
+        } catch (err) { alert('No se pudo adjuntar: ' + (err.message || err)); }
+        f.value = '';
+    }
+    function imprimirEntregaDoc(id) {
+        var e = _entDocBuscar(id); if (!e) { alert('Este recibo ya no existe.'); return; }
+        var emp = getEmpresaParaRecibo();
+        var emision = new Date().toLocaleDateString('es-AR');
+        var entrega = e.entrega || emp.nombre, recibe = e.recibe || e.destinatario || '';
+        var _rh = buildReciboHeader('Recibo de Entrega de Documentación', e.nro || null, emision, {
+            label: 'Destinatario', nombre: e.destinatario || 'Destinatario',
+            detalle: [e.doc ? 'DNI / CUIT: ' + escHtml(e.doc) : '', e.ref ? escHtml(e.ref) : ''].filter(Boolean).join('<br>')
+        });
+        var filas = (e.items || []).map(function(it, i) {
+            return '<tr><td>' + (i + 1) + '</td><td><strong>' + escHtml(it.desc) + '</strong></td><td>' + escHtml(it.formato || 'Original') + '</td><td class="tr">' + (it.cant || 1) + '</td></tr>';
+        }).join('');
+        var lineaDatos = '<div style="font-size:12px;margin:0 0 10px;color:#444;"><strong>Fecha de la entrega:</strong> ' + (e.fecha ? formatearFecha(e.fecha) : '—') + (e.ref ? ' &nbsp;·&nbsp; <strong>Referencia:</strong> ' + escHtml(e.ref) : '') + '</div>';
+        var texto = 'En la fecha indicada <strong>' + escHtml(entrega) + '</strong> <strong>entrega</strong> a <strong>' + escHtml(recibe || 'el destinatario') + '</strong> la documentación detallada, que el destinatario declara <strong>recibir</strong> conforme, en el formato y la cantidad de ejemplares consignados, sin perjuicio de las observaciones anotadas debajo.';
+        var bloqueFirma = function(rol, nombre) {
+            return '<div class="fi">' + rol + ' — ' + escHtml(nombre || '')
+                + '<div style="font-weight:400;letter-spacing:0;text-transform:none;margin-top:16px;text-align:left;font-size:10px;color:#777;line-height:2.4;">Aclaración: ____________________________<br>DNI / CUIT: ____________________________</div></div>';
+        };
+        var html = '<html><head><meta charset="UTF-8"><title>Recibo de Entrega de Documentación — ' + escHtml(e.nro || '') + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh
+            + lineaDatos
+            + '<table class="tbl"><thead><tr><th style="width:36px;">#</th><th>Documento</th><th style="width:130px;">Formato</th><th class="tr" style="width:90px;">Ejemplares</th></tr></thead><tbody>' + filas + '</tbody></table>'
+            + '<div style="margin-top:16px;font-size:12px;line-height:1.7;color:#222;">' + texto + '</div>'
+            + (e.obs ? '<div style="margin-top:12px;font-size:12px;line-height:1.6;"><strong>Observaciones:</strong> ' + escHtml(e.obs) + '</div>' : '')
+            + '<div style="margin-top:12px;font-size:11px;color:#666;page-break-after:avoid;">Este recibo <strong>no es dinerario</strong>: no acredita pago ni cobro alguno. Se firma en dos ejemplares de un mismo tenor.</div>'
+            + '<div class="firmas" style="page-break-inside:avoid;break-inside:avoid;">' + bloqueFirma('Entregó', entrega) + bloqueFirma('Recibió conforme', recibe) + '</div>'
+            + '<div class="pie">Emitido el ' + emision + ' · ' + escHtml(emp.nombre) + '</div>'
+            + '</div></body></html>';
+        _imprimirDocHTML(html);
+    }
+
     function imprimirContratoAlquiler(idx) {
         var a = alquileres[idx]; if (!a) return;
         var cobros = a.cobrosHistorial || [];
@@ -44162,6 +44427,10 @@
             <button class="modal-close" onclick="cerrarModalEmitir()">✕</button>
         </div>
         <div class="modal-body">
+            <div id="emitLinkEntregaDoc" style="display:none;margin-bottom:12px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;font-size:12.5px;color:var(--text-2);">
+                ¿No hubo plata de por medio? Para dejar firmado que entregaste escrituras, boletos, planos u otra documentación:
+                <button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="emitIrAEntregaDoc()">📑 Recibo de entrega de documentación</button>
+            </div>
             <form id="formEmitir">
                 <div class="form-group">
                     <label>Tipo de comprobante</label>
@@ -45860,6 +46129,42 @@
     </div>
   </div>
   <input type="file" id="entAlqArchivo" accept="image/*,application/pdf" style="display:none;" onchange="entAlqAdjuntarElegido()">
+</div>
+
+<!-- ═══════════════ MODAL: RECIBO DE ENTREGA DE DOCUMENTACIÓN (sin dinero) ═══════════════ -->
+<div class="modal" id="modalEntregaDoc">
+  <div class="modal-box modal-box-xl">
+    <div class="modal-head">
+      <h2 id="entDocTitulo">📑 Recibo de entrega de documentación</h2>
+      <button class="modal-close" onclick="cerrarEntregaDoc()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-hint" style="margin-bottom:12px;">Recibo <strong>sin dinero</strong>: deja firmado que entregaste escrituras, boletos, planos, el reglamento u otra documentación. Se imprime para firmar y después podés adjuntar la copia firmada (foto o escaneo) desde la lista. No pasa por la caja ni por los bancos.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px;">
+        <div class="form-group"><label>Fecha *</label><input type="date" id="entDocFecha"></div>
+        <div class="form-group"><label>Destinatario (quien recibe) *</label><input type="text" id="entDocDest" list="entDocDestList" placeholder="Nombre o razón social" onchange="entDocDestChange()" oninput="entDocDestChange()" autocomplete="off"><datalist id="entDocDestList"></datalist></div>
+        <div class="form-group"><label>DNI / CUIT <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label><input type="text" id="entDocDoc" placeholder="Para la aclaración de la firma"></div>
+      </div>
+      <div class="form-group"><label>Unidad / operación <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label><input type="text" id="entDocRef" placeholder="Ej: UF 6A — Edificio Los Álamos"></div>
+      <div class="form-group">
+        <label>¿Qué documentación se entrega?</label>
+        <div id="entDocSugeridos" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+        <div id="entDocItems"></div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="entDocAgregarItem('')">➕ Agregar otro documento</button>
+      </div>
+      <div class="form-group"><label>Observaciones (opcional)</label><textarea id="entDocObs" rows="2" style="width:100%;" placeholder="Ej: Falta la escritura definitiva, se entrega copia del boleto."></textarea></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 12px;">
+        <div class="form-group"><label>Entrega (sale en la firma)</label><input type="text" id="entDocQuienEntrega"></div>
+        <div class="form-group"><label>Recibe (sale en la firma)</label><input type="text" id="entDocQuienRecibe"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline" onclick="cerrarEntregaDoc()">Cancelar</button>
+        <button type="button" class="btn btn-outline" id="entDocGuardarSolo" onclick="entDocGuardar(false)">Guardar sin imprimir</button>
+        <button type="button" class="btn btn-gold" id="entDocGuardarImp" onclick="entDocGuardar(true)">🖨️ Guardar e imprimir</button>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="entDocArchivo" accept="image/*,application/pdf" style="display:none;" onchange="entDocAdjuntarElegido()">
 </div>
 
 <!-- ═══════════════ MODAL: FINALIZAR LOCACIÓN (alquileres) ═══════════════ -->
