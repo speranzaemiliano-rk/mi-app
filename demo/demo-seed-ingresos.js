@@ -412,4 +412,14 @@
     DEMO.set(r, B + '/ventas', DEMO.porId(VENTAS));
     DEMO.set(r, B + '/ingGeneral', DEMO.porId(IG));
     DEMO.set(r, B + '/comprobantesEmitidos', DEMO.porId(EMITIDOS));
+    // Recibos de entrega de documentación (sin dinero): dos de ejemplo y el contador en 2, para que el próximo sea ED-0003.
+    DEMO.set(r, B + '/entregasDoc', DEMO.porId([
+        { id: 'entdoc_1', nro: 'ED-0001', fecha: DEMO.fecha(-12, 10), destinatario: 'Federico Salgado', doc: '20-31245678-4', ref: 'UF 1A — Edificio Los Álamos',
+          items: [{ desc: 'Boleto de compraventa', cant: 1, formato: 'Original' }, { desc: 'Reglamento de copropiedad y administración', cant: 1, formato: 'Copia simple' }],
+          obs: 'Se entrega el boleto firmado. La escritura se coordina con el escribano.', entrega: 'Constructora Los Álamos S.A.', recibe: 'Federico Salgado' },
+        { id: 'entdoc_2', nro: 'ED-0002', fecha: DEMO.fecha(-5, 15), destinatario: 'María Inés Duarte', doc: '27-28901234-6', ref: 'UF 1B — Edificio Los Álamos',
+          items: [{ desc: 'Escritura traslativa de dominio', cant: 1, formato: 'Copia certificada' }, { desc: 'Planos conformes a obra', cant: 2, formato: 'Copia simple' }, { desc: 'Garantías y manuales de uso', cant: 1, formato: 'Original' }],
+          obs: '', entrega: 'Constructora Los Álamos S.A.', recibe: 'María Inés Duarte' }
+    ]));
+    DEMO.set(r, B + '/contadorEntregasDoc', 2);
 });
