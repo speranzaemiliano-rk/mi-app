@@ -437,6 +437,35 @@
   .res-tit h3{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2)}
   .res-tit .cnt{margin-left:auto;font-size:12px;font-weight:700;color:var(--acento);font-variant-numeric:tabular-nums}
   .res-tit .cnt.fin{color:var(--listo)}
+  /* Cerraduras. La clave va monoespaciada y separada para leerla de un
+     vistazo; tapada es un texto y no un campo. */
+  .cerr-top{display:flex;align-items:center;gap:10px;margin:2px 0 12px}
+  .cerr-cuenta{flex:1;min-width:0;font-size:12.5px;color:var(--text-2)}
+  .cerr-tabla{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .cerr-fila{display:flex;align-items:center;gap:12px;padding:10px 12px;border-top:1px solid var(--border-soft)}
+  .cerr-fila:first-child{border-top:0}
+  .cerr-nom{flex:0 0 170px;min-width:0;font-size:14px;font-weight:600;color:var(--ink)}
+  .cerr-piso{display:block;font-size:10.5px;font-weight:500;letter-spacing:.06em;
+             text-transform:uppercase;color:var(--text-3);margin-top:1px}
+  .cerr-campos{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:7px}
+  .cerr-campos input{
+    font-family:inherit;font-size:13.5px;padding:7px 10px;min-width:0;
+    border:1px solid var(--border);border-radius:var(--radius-sm);
+    background:var(--surface);color:var(--ink);outline:none;
+  }
+  .cerr-campos input:focus{border-color:var(--acento);background:var(--card)}
+  .cerr-campos input[data-cerr="cc"]{flex:0 0 130px}
+  .cerr-campos input[data-cerr="ccf"]{flex:0 0 145px}
+  .cerr-campos input[data-cerr="ccq"]{flex:1 1 118px}
+  .cerr-campos input[data-cerr="ccn"]{flex:1 1 118px}
+  .cerr-clave{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.14em}
+  .cerr-tapada{flex:0 0 130px;color:var(--text-3);letter-spacing:.22em;font-size:14px;padding:7px 2px}
+  @media (max-width:560px){
+    .cerr-fila{flex-direction:column;align-items:stretch;gap:7px}
+    .cerr-nom{flex:none}
+    .cerr-campos input[data-cerr="cc"],.cerr-campos input[data-cerr="ccf"]{flex:1 1 44%}
+  }
+
   .res-nota{font-size:12px;color:var(--text-2);margin:-4px 0 10px}
 
   /* Departamentos: sólo el número. Se tacha solo cuando no le queda nada. */
@@ -743,6 +772,7 @@
     <button class="tab" data-vista="rubro">Por rubro</button>
     <button class="tab" data-vista="resumen">Resumen</button>
     <button class="tab" data-vista="entrega">Entrega de posesiones</button>
+    <button class="tab" data-vista="cerraduras">Cerraduras</button>
   </div>
 </nav>
 
@@ -909,6 +939,13 @@
               orden: Number(v.orden) || 0,
               m: Number(v.m) || 0 };
     if (v.del) e.del = 1;
+    // Cerradura inteligente de la puerta: clave vigente, cuándo se cambió,
+    // quién y una nota. Sólo se guardan si hay algo, para que un registro
+    // viejo se lea igual que uno vacío (mismo criterio que `limpieza`).
+    if (v.cc)  e.cc  = String(v.cc);
+    if (v.ccf) e.ccf = String(v.ccf);
+    if (v.ccq) e.ccq = String(v.ccq);
+    if (v.ccn) e.ccn = String(v.ccn);
     // Limpieza final hecha. Sólo se guarda cuando es verdad: así un registro
     // viejo (sin el campo) se lee igual que uno destildado.
     if (v.limpieza) {
@@ -1313,7 +1350,73 @@
     var f = document.querySelector(".filtros");
     // Resumen es una foto de todo; en Entrega de posesiones los filtros son de
     // la obra (estado por cantidad de pendientes, rubros) y no dicen nada.
-    if (f) f.style.display = (filtro.vista === "resumen" || filtro.vista === "entrega") ? "none" : "";
+    if (f) f.style.display =
+      (filtro.vista === "resumen" || filtro.vista === "entrega" || filtro.vista === "cerraduras") ? "none" : "";
+  }
+
+  /* Cerraduras inteligentes: la clave de cada puerta, cuándo se cambió y
+     quién. Vive en la ENTIDAD (`cc`/`ccf`/`ccq`/`ccn`), no en un ítem: no es
+     un pendiente que se tilda, es un dato del lugar.
+
+     ⚠️ Este tablero lo recorren también los contratistas, así que las claves
+     arrancan TAPADAS y el estado no se recuerda: cambiar de solapa las vuelve
+     a tapar. Tapada, la celda es un texto y no un campo — tampoco se edita
+     sin querer. Es una traba de pantalla, no seguridad: quien entra al
+     tablero puede leerlas desde la consola del navegador.
+
+     Ojo: la misma pantalla existe en Planilla posesiones, contra OTRA base de
+     Firebase (la separación es a propósito). Son dos listas independientes:
+     lo cargado acá no aparece allá. */
+  var cerrVer = false;
+
+  function lugaresCerradura(){
+    return ["unidad", "comun"].map(function(t){
+      return { t: t, eids: entidadesDe(t) };
+    }).filter(function(g){ return g.eids.length; });
+  }
+
+  function pintarCerraduras(cont){
+    var grupos = lugaresCerradura();
+    if (!grupos.length) { cont.innerHTML = '<div class="vacio">Todavía no hay lugares cargados.</div>'; return; }
+
+    var todos = grupos.reduce(function(a, g){ return a.concat(g.eids); }, []);
+    var conC = todos.filter(function(e){ return datos.entidades[e].cc; }).length;
+    var quienes = {};
+    todos.forEach(function(e){ var q = datos.entidades[e].ccq; if (q) quienes[q] = 1; });
+
+    var h = ['<div class="cerr-top">' +
+      '<div class="cerr-cuenta">' + conC + ' de ' + todos.length +
+        (todos.length === 1 ? ' lugar con clave' : ' lugares con clave') + '</div>' +
+      '<button class="bt' + (cerrVer ? " pri" : "") + '" data-acc="cerrVer">' +
+        (cerrVer ? "🙈 Tapar las claves" : "👁 Ver las claves") + '</button></div>'];
+
+    grupos.forEach(function(g){
+      h.push('<div class="grupo">' + esc(nombres_[g.t] || g.t) + '</div>');
+      h.push('<div class="cerr-tabla">' + g.eids.map(function(eid){
+        var e = datos.entidades[eid];
+        var clave = cerrVer
+          ? '<input type="text" class="cerr-clave" data-cerr="cc" data-e="' + esc(eid) + '" value="' + esc(e.cc || "") +
+            '" placeholder="— sin clave —" autocomplete="off" spellcheck="false">'
+          : '<span class="cerr-tapada">' + (e.cc ? "••••••" : "—") + '</span>';
+        return '<div class="cerr-fila">' +
+          '<div class="cerr-nom">' + (e.icono ? esc(e.icono) + " " : "") + esc(e.nombre) +
+            (e.piso ? '<span class="cerr-piso">Piso ' + esc(e.piso) + '</span>' : "") + '</div>' +
+          '<div class="cerr-campos">' + clave +
+            '<input type="date" data-cerr="ccf" data-e="' + esc(eid) + '" value="' + esc(e.ccf || "") + '">' +
+            '<input type="text" list="cerrQuienes" data-cerr="ccq" data-e="' + esc(eid) + '" value="' + esc(e.ccq || "") + '" placeholder="Quién la cambió">' +
+            '<input type="text" data-cerr="ccn" data-e="' + esc(eid) + '" value="' + esc(e.ccn || "") + '" placeholder="Nota">' +
+          '</div></div>';
+      }).join("") + '</div>');
+    });
+
+    h.push('<datalist id="cerrQuienes">' + Object.keys(quienes).sort().map(function(n){
+      return '<option value="' + esc(n) + '">';
+    }).join("") + '</datalist>');
+    h.push('<div class="res-nota" style="margin-top:14px">Las claves arrancan tapadas y se vuelven a tapar al cambiar de solapa. ' +
+      'Al escribir una clave, si la fecha está vacía se completa con la de hoy.<br>' +
+      '<b>Ojo con quién las ve:</b> este tablero lo abre todo el que tenga acceso a la obra, contratistas incluidos.<br>' +
+      'Esta lista es aparte de la de <b>Planilla posesiones</b>: son dos bases distintas y no se copian entre sí.</div>');
+    cont.innerHTML = h.join("");
   }
 
   function pintarResumen(cont){
@@ -1329,6 +1432,7 @@
     var cont = $("lista"), html = [];
 
     if (filtro.vista === "resumen") { pintarResumen(cont); return; }
+    if (filtro.vista === "cerraduras") { pintarCerraduras(cont); return; }
 
     if (filtro.vista === "rubro") {
       var rs = rubrosOrdenados().filter(function(rid){
@@ -2858,6 +2962,9 @@
   document.querySelector(".tabs").addEventListener("click", function(e){
     var b = e.target.closest(".tab"); if (!b) return;
     filtro.vista = b.getAttribute("data-vista");
+    // Salir de Cerraduras las vuelve a tapar: si no, quedaban a la vista al
+    // volver, que es lo mismo que no taparlas nunca.
+    if (filtro.vista !== "cerraduras") cerrVer = false;
     Array.prototype.forEach.call(this.querySelectorAll(".tab"), function(x){ x.classList.remove("act"); });
     b.classList.add("act");
     ajustarFiltros();
@@ -2902,7 +3009,28 @@
     tBuscar = setTimeout(function(){ filtro.texto = plano(v).trim(); pintarLista(); }, 180);
   });
 
+  $("lista").addEventListener("change", function(e){
+    var i = e.target, campo = i.getAttribute && i.getAttribute("data-cerr");
+    if (!campo) return;
+    var eid = i.getAttribute("data-e"), ent = datos.entidades[eid];
+    if (!ent) return;
+    var cambios = {};
+    cambios[campo] = i.value.trim();
+    // Al cargar una clave, si la fecha está vacía se pone la de hoy: tener
+    // que completarla a mano en 39 filas es la forma segura de que nadie la
+    // cargue.
+    if (campo === "cc" && i.value.trim() && !ent.ccf) {
+      var d = new Date();
+      cambios.ccf = d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+    }
+    tocarEnt(eid, cambios);
+    // Repintar sólo si cambió algo que se ve fuera del campo (la cuenta de
+    // arriba, la fecha puesta sola); si no, se pierde el foco al tipear.
+    if (campo === "cc") pedirRender();
+  });
+
   $("lista").addEventListener("click", function(e){
+    if (e.target.closest('[data-acc="cerrVer"]')) { cerrVer = !cerrVer; pintarLista(); return; }
     // El botón de cargar el listado vive en el estado vacío de la lista, no en
     // la barra de acciones, así que su click entra por acá.
     if (e.target.closest('[data-acc="cargarEntrega"]')) { cargarListadoEntrega(); return; }
