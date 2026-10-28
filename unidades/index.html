@@ -136,6 +136,10 @@ tfoot td{position:sticky;bottom:0;background:var(--sidebar-bg);font-weight:700}
 .sm{color:var(--text-3);font-size:12px}
 td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 .nota{color:var(--text-3);font-size:12px;margin:10px 2px}
+/* Cerraduras: la clave se lee de un vistazo (monoespaciada y separada) y,
+   tapada, es un texto y no un campo — así tampoco se edita sin querer. */
+.clave{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;letter-spacing:.14em}
+.clave-tapada{display:inline-block;min-width:70px;color:var(--muted,#9A9AA2);letter-spacing:.22em;font-size:14px;cursor:default}
 /* Ventana de edición (unidad / edificio) */
 .modal-fondo{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal-caja{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-lg);width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:20px}
@@ -187,6 +191,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <button class="nav-item active" data-v="planilla"><span class="nav-icon">table_view</span>Planilla</button>
       <button class="nav-item" data-v="valuacion"><span class="nav-icon">calculate</span>Valuación y conceptos</button>
       <button class="nav-item" data-v="posesion"><span class="nav-icon">event_available</span>Posesión y firma</button>
+      <button class="nav-item" data-v="cerraduras"><span class="nav-icon">key</span>Cerraduras</button>
       <div class="nav-label">Datos</div>
       <button class="nav-item" id="btnNuevoEd"><span class="nav-icon">add_business</span>Nuevo edificio</button>
       <button class="nav-item" id="btnImp"><span class="nav-icon">upload_file</span>Importar Excel</button>
@@ -265,6 +270,23 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
         <div class="tw"><table><thead><tr><th class="l">Unidad</th><th class="l">Propietario</th><th class="l">Inquilino/a</th><th>m²</th><th class="l">Fecha de posesión</th><th class="l">Hora de firma</th><th class="l">Estado</th></tr></thead><tbody id="ptb"></tbody></table></div>
         <p class="nota">Cargá la fecha y la hora de cada unidad: se guardan solas. Usá los botones de arriba para ver solo las que todavía no tienen fecha.</p>
       </section>
+
+      <section class="vista" id="v_cerraduras">
+        <div class="kpis" id="ckpis"></div>
+        <div class="bar">
+          <input type="search" id="cq" placeholder="Buscar unidad, propietario o quién la cambió…">
+          <button class="btn on" data-cf="todas">Todas</button>
+          <button class="btn" data-cf="sin">Sin clave</button>
+          <button class="btn" data-cf="con">Con clave</button>
+          <button class="btn" id="cver">👁 Ver las claves</button>
+        </div>
+        <div class="tw"><table><thead><tr><th class="l">Unidad</th><th class="l">Propietario</th><th class="l">Clave</th><th class="l">Fecha del cambio</th><th class="l">Quién la cambió</th><th class="l">Nota</th></tr></thead><tbody id="ctb"></tbody></table></div>
+        <datalist id="cQuienes"></datalist>
+        <p class="nota">Las claves arrancan tapadas. Tocá <b>👁 Ver las claves</b> para cargarlas o leerlas; al salir de la pantalla —o al recargar— se vuelven a tapar solas.
+        Al escribir una clave, si la fecha está vacía se completa con la de hoy.</p>
+        <p class="nota" style="color:var(--danger,#D70015)"><b>Ojo con quién las ve.</b> Esta planilla la abre cualquiera que tenga cuenta en el sistema, también los de rol «lector».
+        Las claves no salen en el Excel salvo que las tengas a la vista al bajarlo.</p>
+      </section>
     </div>
   </main>
 </div>
@@ -298,7 +320,11 @@ var edId = '';                // edificio activo
 var U = [];                   // unidades del edificio activo (array, con c = cálculo)
 var TOTS = 0;                 // m² totales del edificio
 var P = null;                 // parámetros del edificio activo (copia de trabajo)
-var S = {sel:null, selEd:'', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:''};
+// `cver` (ver las claves de las cerraduras) arranca SIEMPRE tapado y no se
+// recuerda en el equipo a propósito: una clave que quedó a la vista en una
+// pantalla compartida es justo lo que hay que evitar.
+var S = {sel:null, selEd:'', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:'',
+         cq:'', cf:'todas', cver:false};
 var CONC = [['gan','Retención Ganancias'],['iibb','Ingresos Brutos'],['adm','Fondo de Administración'],
             ['res','Reserva'],['alh','Fondo de Alhajamiento'],['rec','Recupero Bs. Personales (acciones y part.)'],
             ['cdi','Recupero CDI Edenor']];
@@ -402,7 +428,8 @@ function cargarEdificio(){
   var us = e.unidades || {};
   U = Object.keys(us).map(function(k){ var u = us[k]; return {
     k:k, u:String(u.n == null ? k : u.n), o:+u.o || 0, p:u.p || '', rk:!!u.rk, i:u.i || '', t:u.t || '',
-    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0, vf:+u.vf || 0 }; });
+    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '',
+    cc:u.cc || '', ccf:u.ccf || '', ccq:u.ccq || '', ccn:u.ccn || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0, vf:+u.vf || 0 }; });
   TOTS = U.reduce(function(s, r){ return s + r.s; }, 0);
   if (!enfocado) renderParams();
   render();
@@ -718,14 +745,15 @@ function render(){
     ['Valor total $ (TC ' + P.tc + ')', N(valorTotArs())], ['Con fecha de posesión', conF + ' de ' + U.length]]
     .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
   $('kpis').innerHTML = kpiHtml; $('kpis2').innerHTML = kpiHtml;
-  renderResumen(); renderCobros(); renderPosesion(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
+  renderResumen(); renderCobros(); renderPosesion(); renderCerraduras(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
 }
 
 /* ── Pantallas (menú lateral) ──────────────────────────────────────── */
 var VISTAS = {
   planilla:  ['Planilla', 'Unidades, propietarios, valuación y conceptos por unidad'],
   valuacion: ['Valuación y conceptos', 'Valor por m², tipo de cambio y conceptos del edificio'],
-  posesion:  ['Posesión y firma', 'Fecha de posesión y hora de firma de cada unidad']
+  posesion:  ['Posesión y firma', 'Fecha de posesión y hora de firma de cada unidad'],
+  cerraduras:['Cerraduras', 'Clave de la cerradura inteligente de cada unidad, con la fecha y quién la cambió']
 };
 function setVista(v, sinGuardar){
   if (!VISTAS[v]) v = 'planilla';
@@ -736,6 +764,14 @@ function setVista(v, sinGuardar){
   $('pTitulo').textContent = VISTAS[v][0];
   $('pSub').textContent = (e ? (e.nombre || edId) + ' · ' : '') + VISTAS[v][1];
   if (!sinGuardar) { try { localStorage.setItem('unid_vista', v); } catch(x) {} }
+  // Salir de Cerraduras vuelve a taparlas: si no, quedaban a la vista al
+  // volver, que es lo mismo que no taparlas nunca.
+  if (v !== 'cerraduras' && S.cver) {
+    S.cver = false;
+    var bv = $('cver');
+    if (bv) { bv.classList.remove('on'); bv.textContent = '👁 Ver las claves'; }
+    if ($('ctb')) renderCerraduras();
+  }
   document.body.classList.remove('menu-abierto');
 }
 // Resumen de cobros de los conceptos cargados «por unidad» (en la moneda en que se cargaron).
@@ -782,6 +818,50 @@ function renderPosesion(){
   }).join('') || '<tr><td class="l sm" colspan="7">No hay unidades para mostrar.</td></tr>';
 }
 
+/* Cerraduras inteligentes: la clave de cada puerta, cuándo se cambió y quién.
+   Las claves van TAPADAS salvo que se toque «Ver las claves» (`S.cver`): con
+   la pantalla tapada la celda es un texto, no un campo, así que además no se
+   edita sin querer. */
+function renderCerraduras(){
+  var q = S.cq.toLowerCase(), dis = puedeEditar ? '' : ' disabled';
+  var a = U.filter(function(r){
+    if (S.cf === 'sin' && r.cc) return false;
+    if (S.cf === 'con' && !r.cc) return false;
+    return !q || [r.u, r.p, r.ccq].join(' ').toLowerCase().indexOf(q) >= 0;
+  });
+  a.sort(function(x, y){ return x.o - y.o; });   // el orden de la planilla, como en Posesión
+
+  var conC = U.filter(function(r){ return r.cc; }).length;
+  var ult = U.reduce(function(m, r){ return r.ccf && r.ccf > m ? r.ccf : m; }, '');
+  $('ckpis').innerHTML = [['Unidades', U.length], ['Con clave cargada', conC + ' de ' + U.length],
+                          ['Sin clave', (U.length - conC)], ['Último cambio', ult ? fechaCorta(ult) : '—']]
+    .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
+
+  // Los nombres ya usados, para no tener que tipear el mismo en 39 filas.
+  var vistos = {};
+  U.forEach(function(r){ if (r.ccq) vistos[r.ccq] = 1; });
+  $('cQuienes').innerHTML = Object.keys(vistos).sort().map(function(n){
+    return '<option value="' + esc(n) + '">';
+  }).join('');
+
+  $('ctb').innerHTML = a.map(function(r){
+    var clave = S.cver
+      ? '<input type="text" class="clave" data-k="' + esc(r.k) + '" data-f="cc" value="' + esc(r.cc) +
+        '" placeholder="— sin clave —" autocomplete="off" spellcheck="false"' + dis + '>'
+      : '<span class="clave-tapada" title="Tocá «Ver las claves» para verla">' + (r.cc ? '••••••' : '—') + '</span>';
+    return '<tr><td class="l"><b>' + esc(r.u) + '</b></td>' +
+      '<td class="l">' + esc(r.p) + (r.rk ? ' <span class="tag rk">RK</span>' : '') + '</td>' +
+      '<td class="l">' + clave + '</td>' +
+      '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="ccf" value="' + esc(r.ccf) + '"' + dis + '></td>' +
+      '<td class="l"><input type="text" list="cQuienes" data-k="' + esc(r.k) + '" data-f="ccq" value="' + esc(r.ccq) + '" placeholder="Nombre"' + dis + '></td>' +
+      '<td class="l"><input type="text" data-k="' + esc(r.k) + '" data-f="ccn" value="' + esc(r.ccn) + '" placeholder="Observación"' + dis + '></td></tr>';
+  }).join('') || '<tr><td class="l sm" colspan="6">No hay unidades para mostrar.</td></tr>';
+}
+function fechaCorta(iso){
+  var p = String(iso).split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : iso;
+}
+
 /* ── Eventos ───────────────────────────────────────────────────────── */
 $('params').addEventListener('input', function(e){
   var i = e.target; if (!i.dataset.k || !puedeAdmin || i.dataset.k === 'usd') return;   // el valor del m² se aplica en 'change', con confirmación
@@ -821,6 +901,36 @@ $('tb').addEventListener('click', function(e){
   cambiarMon(td.dataset.mk);
 });
 $('ptb').addEventListener('change', guardarCampo);
+
+$('ctb').addEventListener('change', function(e){
+  var i = e.target; if (!i.dataset.f || !puedeEditar) return;
+  guardarCampo(e);
+  // Al cargar una clave, si la fecha está vacía se pone la de hoy: tener que
+  // completarla a mano en 39 filas es la forma segura de que nadie la cargue.
+  if (i.dataset.f === 'cc' && i.value) {
+    var fila = U.filter(function(r){ return r.k === i.dataset.k; })[0];
+    if (fila && !fila.ccf) {
+      var d = new Date(), hoy = d.getFullYear() + '-' +
+        ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+      fila.ccf = hoy;
+      db.ref('global/edificios/' + edId + '/unidades/' + i.dataset.k + '/ccf').set(hoy)
+        .then(function(){ renderCerraduras(); })
+        .catch(function(){ toast('⚠️ No se pudo guardar la fecha'); });
+    }
+  }
+});
+$('cq').oninput = function(e){ S.cq = e.target.value; renderCerraduras(); };
+[].forEach.call(document.querySelectorAll('button[data-cf]'), function(b){
+  b.onclick = function(){ S.cf = b.dataset.cf;
+    [].forEach.call(document.querySelectorAll('button[data-cf]'), function(x){ x.classList.toggle('on', x === b); });
+    renderCerraduras(); };
+});
+$('cver').onclick = function(){
+  S.cver = !S.cver;
+  this.classList.toggle('on', S.cver);
+  this.textContent = S.cver ? '🙈 Tapar las claves' : '👁 Ver las claves';
+  renderCerraduras();
+};
 [].forEach.call(document.querySelectorAll('.nav-item[data-v]'), function(b){ b.onclick = function(){ setVista(b.dataset.v); }; });
 $('hamb').onclick = function(){ document.body.classList.toggle('menu-abierto'); };
 $('btnImp2').onclick = function(){ if (puedeAdmin) $('fileImp').click(); };
@@ -1226,6 +1336,38 @@ function bajarExcel(){
   wp.autoFilter = {from:{row:4, column:1}, to:{row:4 + lista.length, column:PC.length}};
   wp.pageSetup = {orientation:'portrait', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0, printTitlesRow:'4:4'};
 
+  /* Hoja de cerraduras: SÓLO si las claves están a la vista (`S.cver`), igual
+     que los teléfonos y los mails con 👁 Datos personales. Un Excel con las
+     claves de 39 puertas se reenvía por mail sin pensarlo; que haya que
+     destaparlas a propósito antes de bajarlo es la única traba que queda,
+     porque el archivo ya sale del sistema. */
+  if (S.cver) {
+    var wc = wb.addWorksheet('Cerraduras', {properties:{tabColor:{argb:XL.g4}}});
+    var CC = [['Unidad',9,'center'],['Propietario',30,'left'],['Clave',18,'center'],
+              ['Fecha del cambio',17,'center'],['Quién la cambió',24,'left'],['Nota',34,'left']];
+    wc.columns = CC.map(function(c){ return {width:c[1]}; });
+    var conC = U.filter(function(r){ return r.cc; }).length;
+    xlTitulo(wc, 'Cerraduras inteligentes', (e.nombre || edId) + ' · ' + hoy + ' · con clave ' + conC + ' de ' + U.length +
+      ' · CONFIDENCIAL: son las claves de las puertas', CC.length);
+    CC.forEach(function(c, j){ var h = wc.getCell(4, j + 1); h.value = c[0]; xlEncabezado(h, XL.g4); });
+    wc.getRow(4).height = 24;
+    var lc = U.slice().sort(function(x, y){ return x.o - y.o; });
+    lc.forEach(function(r, k){
+      var vals = [r.u, r.p, r.cc, xlFecha(r.ccf), r.ccq, r.ccn], row = wc.getRow(5 + k); row.height = 18;
+      vals.forEach(function(v, j){
+        var cell = row.getCell(j + 1); cell.value = v === '' ? null : v;
+        cell.numFmt = j === 3 ? 'dd/mm/yyyy' : '@';
+        cell.alignment = {horizontal:CC[j][2], vertical:'middle'};
+        cell.font = {name:j === 2 ? 'Consolas' : 'Calibri', size:10, bold:j === 0 || j === 2, color:{argb:XL.ink}};
+        if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
+        xlBorde(cell);
+      });
+    });
+    wc.views = [{state:'frozen', ySplit:4, showGridLines:false}];
+    wc.autoFilter = {from:{row:4, column:1}, to:{row:4 + lc.length, column:CC.length}};
+    wc.pageSetup = {orientation:'portrait', paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0, printTitlesRow:'4:4'};
+  }
+
   var nombre = String(e.nombre || 'unidades').replace(/[\\\/:*?"<>|]+/g, '-') + '.xlsx';
   xlDescargar(wb, nombre).then(function(){ toast('✔ Excel generado (' + a.length + ' unidades)'); })
     .catch(function(err){ toast('⚠️ No se pudo generar el Excel: ' + (err && err.message || err)); });
@@ -1596,7 +1738,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v27';
+var UNID_VER = 'unidades-v28';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){

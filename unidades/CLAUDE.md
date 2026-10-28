@@ -12,9 +12,21 @@ Nació de la planilla `KASA Núñez I` (Congreso 1698 / KASA I): se importa ese 
 
 El módulo **no vive dentro del `index.html` del Sistema**, pero se ve como él: menú lateral (`.sidebar`, `.nav-item`, marca «Mess»), mismas variables de color (`--gold`, `--card`, `--sidebar-bg`…) copiadas de la raíz, y **el mismo tema** (claro / medio / oscuro): el módulo lee `localStorage rk_tema` y `rk_tema_css`, que comparten origen con el Sistema, así que si se cambia el tema allá, acá sale igual. Si se cambia la paleta del sistema, hay que copiarla acá a mano (son dos copias).
 
-Tres pantallas en el menú (`VISTAS`/`setVista`, la última queda en `localStorage unid_vista`): **Planilla** (tabla completa), **Valuación y conceptos** (valor por m², TC y los siete conceptos, con resumen del total del edificio) y **Posesión y firma** (fecha y hora de cada unidad). Importar Excel y Eliminar edificio están en el menú, bajo «Datos». En pantallas angostas el menú se esconde y se abre con ☰.
+Cuatro pantallas en el menú (`VISTAS`/`setVista`, la última queda en `localStorage unid_vista`): **Planilla** (tabla completa), **Valuación y conceptos** (valor por m², TC y los siete conceptos, con resumen del total del edificio), **Posesión y firma** (fecha y hora de cada unidad) y **Cerraduras** (ver abajo). Importar Excel y Eliminar edificio están en el menú, bajo «Datos». En pantallas angostas el menú se esconde y se abre con ☰.
 
 ⚠️ La tabla de **Posesión y firma** se ordena **siempre con el orden de la planilla** (`o`), no por fecha: si se ordenara por fecha, la fila saltaría de lugar apenas se carga la fecha y no se podría cargar la hora de esa misma unidad.
+
+## Cerraduras inteligentes
+
+Pantalla **Cerraduras**: la clave de la cerradura de cada puerta, cuándo se cambió y quién. Campos nuevos por unidad —`cc` (clave), `ccf` (fecha), `ccq` (quién), `ccn` (nota)— que, como todo lo demás, **hay que sumar a la normalización de `unidades`** o se pierden al releer.
+
+⚠️ **Son claves de puerta de 39 departamentos, y `global/edificios` lo lee cualquiera que tenga rol en el sistema** —`lector` incluido—, no sólo `posesiones`: las reglas abren ese nodo con «tiene rol». La app no puede arreglar eso (restringirlo en el hijo no se puede si el padre ya lo abrió), así que lo que hay son trabas de pantalla, y conviene no aflojarlas:
+
+- `S.cver` («👁 Ver las claves») arranca **siempre** tapado y **no se recuerda en el equipo a propósito**: una clave que quedó a la vista en una pantalla compartida es justo lo que hay que evitar. Con la pantalla tapada la celda es un `<span>`, no un `<input>`: además de no leerse, no se edita sin querer.
+- **Salir de la pantalla las vuelve a tapar** (`setVista`). Sin eso, volver mostraba lo destapado de antes.
+- La hoja **Cerraduras del Excel sale sólo con `S.cver` prendido**, igual que los teléfonos y mails con 👁 Datos personales. Un Excel con las claves se reenvía por mail sin pensarlo; que haya que destaparlas a propósito antes de bajarlo es la única traba que queda, porque el archivo ya sale del sistema.
+
+Al escribir una clave, si `ccf` está vacía se completa con la fecha de hoy (escribirla a mano en 39 filas es la forma segura de que nadie la cargue). «Quién la cambió» tiene un `<datalist>` con los nombres ya usados. No hay **historial**: se guarda la clave vigente y quién la puso; si hace falta saber cuáles fueron las anteriores, es una colección aparte y hay que decidir antes quién puede leerla.
 
 ## Es una app, no sólo una planilla
 
