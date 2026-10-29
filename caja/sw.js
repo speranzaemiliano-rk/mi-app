@@ -1,4 +1,4 @@
-const CACHE = 'caja-diaria-v129';
+const CACHE = 'caja-diaria-v130';
 const ASSETS = ['./', './index.html', './app.html', './manifest.json', './icon-192.png', './icon-512.png', './biletes.avif', './logo.svg'];
 
 // El SDK de Firebase se precachea aparte. Desde que el candado exige la cuenta
