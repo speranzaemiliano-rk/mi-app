@@ -3606,7 +3606,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v565</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v566</div>
         </div>
     </nav>
 
@@ -16916,7 +16916,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v565';
+    var APP_VER = 'v566';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -23564,7 +23564,7 @@
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
         }); });
         servicios.forEach(function(s, sIdx){ (s.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
@@ -23784,7 +23784,7 @@
             (a.cobrosHistorial||[]).forEach((c, cIdx) => {
                 if (c.tipoAB === 'A') return;
                 if (_alqCobroMoneda(a, c) !== 'ARS') return;   // se agrupa por la moneda en que entró
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
             });
         });
         // Cobros Servicios ARS (ídem)
@@ -23925,7 +23925,7 @@
             (a.cobrosHistorial||[]).forEach((c, cIdx) => {
                 if (c.tipoAB === 'A') return;
                 if (_alqCobroMoneda(a, c) !== 'USD') return;   // se agrupa por la moneda en que entró
-                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: (a.unidad||'—')+(c.periodo?' — '+c.periodo:''), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
+                movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c), origen: a.inquilino||'—', ingreso: _alqCobroImporte(a,c), egreso: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
             });
         });
         facturas.filter(f => f.moneda === 'USD').forEach(f => {
@@ -33231,6 +33231,47 @@
         var sp = _alqSaldoPeriodo(a, periodo);
         return sp.parcial ? sp.saldo : (sp.esperado || 0);
     }
+    // ── Depósito de garantía en el plan de pagos ──
+    // El monto pactado (`a.deposito`, en `a.depMoneda`) figura como una fila más del plan de pagos para cobrarlo —en una o varias veces— como los alquileres.
+    // El cobro es un registro más de `cobrosHistorial` con `concepto:'deposito'` y sin período. ⚠️ El depósito se mide en SU moneda, que puede no ser la del
+    // contrato (contrato en pesos, depósito en dólares): `monto` queda entonces en la moneda del depósito y el cobro lo dice con `montoMoneda`; además lleva
+    // siempre `monedaCobro`/`montoCobrado`, que son los que leen Caja y Bancos (`_alqCobroMoneda`/`_alqCobroImporte`) para saber a qué caja va la plata.
+    // Sin `montoMoneda` (todo cobro anterior y los depósitos en la moneda del contrato) `monto` está en la moneda del contrato, como siempre.
+    function _alqDepMoneda(a) { return (a && a.depMoneda) || (a && a.moneda) || 'ARS'; }
+    function _alqMonedaMonto(a, c) { return (c && c.montoMoneda) || (a && a.moneda) || 'ARS'; }   // en qué moneda está `monto` de ESTE cobro
+    function _alqSimMon(mon) { return mon === 'USD' ? 'USD ' : '$ '; }
+    function _alqFmtN2(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function _alqFmtCobro(a, c) { return _alqSimMon(_alqMonedaMonto(a, c)) + _alqFmtN2(c && c.monto); }
+    // `hastaISO` (opcional): sólo cuenta los cobros hasta esa fecha, para que un recibo reimpreso diga lo que se llevaba cobrado ese día.
+    function _alqDepositoEstado(a, hastaISO) {
+        var mon = _alqDepMoneda(a), pactado = _r2(parseFloat(a && a.deposito) || 0), cobrado = 0, ambiguo = false, idxs = [];
+        ((a && a.cobrosHistorial) || []).forEach(function(c, ci) {
+            if (!c || c.concepto !== 'deposito') return;
+            if (hastaISO && String(c.fecha || '') > hastaISO) return;
+            idxs.push(ci);
+            var base = _alqMonedaMonto(a, c), v;
+            if (base === mon) v = c.monto || 0;
+            else if (c.monedaCobro === mon && c.montoCobrado > 0) v = c.montoCobrado;       // la plata entró en la moneda del depósito
+            else if (c.tc > 0) v = _cobroAlqConvertir(c.monto || 0, base, mon, c.tc);
+            else { v = c.monto || 0; ambiguo = true; }                                        // cobro anterior en otra moneda y sin tipo de cambio: no se puede convertir
+            cobrado += v;
+        });
+        cobrado = _r2(cobrado);
+        var saldo = Math.max(0, _r2(pactado - cobrado));
+        return { hay: pactado > 0 || idxs.length > 0, pactado: pactado, moneda: mon, cobrado: cobrado, saldo: saldo, idxs: idxs, ambiguo: ambiguo,
+                 pagado: pactado > 0 ? saldo <= 0 : idxs.length > 0, parcial: pactado > 0 && cobrado > 0 && saldo > 0 };
+    }
+    function _alqDepositoTexto(a) {
+        var di = _alqDepositoEstado(a), f = function(n) { return _alqSimMon(di.moneda) + _alqFmtN2(n); };
+        return f(di.pactado) + (di.pagado ? ' · cobrado completo' : di.cobrado > 0 ? ' · cobrado ' + f(di.cobrado) : ' · sin cobrar');
+    }
+    // Línea para el aviso de «cobro registrado» cuando el cobro es del depósito.
+    function _alqAvisoDeposito(a, concepto) {
+        if (concepto !== 'deposito') return '';
+        var di = _alqDepositoEstado(a); if (di.pactado <= 0) return '';
+        var f = function(n) { return _alqSimMon(di.moneda) + _alqFmtN2(n); };
+        return di.saldo > 0 ? '\n\nDepósito: cobrado ' + f(di.cobrado) + ' de ' + f(di.pactado) + ' · quedan ' + f(di.saldo) + ' por cobrar.' : '\n\nDepósito de garantía cobrado completo (' + f(di.pactado) + ').';
+    }
     function _alqTextoFraccion(f, periodo) {
         var mm = periodo.substring(5, 7) + '/' + periodo.substring(0, 4), d2 = function(n) { return String(n).padStart(2, '0'); };
         return f.dias + ' de ' + f.diasMes + ' días (' + d2(f.desde) + ' al ' + d2(f.hasta) + '/' + mm + ')';
@@ -34837,7 +34878,8 @@
         persistirAlquileres();
     }
 
-    function abrirModalCobroAlquiler(idx, periodoPrefill) {
+    // `conceptoPrefill`: 'deposito' abre el cobro ya como depósito de garantía (lo usa la fila del depósito del plan de pagos).
+    function abrirModalCobroAlquiler(idx, periodoPrefill, conceptoPrefill) {
         editandoAlqIdx = idx;
         var a = alquileres[idx];
         document.getElementById('cobroAlqIdx').value   = idx;
@@ -34858,6 +34900,8 @@
         var tcEl = document.getElementById('cobroAlqTc'); if (tcEl) tcEl.value = (typeof exchangeRate !== 'undefined' && exchangeRate) ? exchangeRate : '';
         _cobroAlqSetupDesglose(a, periodo);
         _cobroAlqRefrescarMoneda();
+        _cobroAlqConceptoPrev = 'alquiler';   // el formulario acaba de quedar como alquiler del mes
+        if (conceptoPrefill === 'deposito') document.getElementById('cobroAlqConcepto').value = 'deposito';
         _cobroAlqConceptoChange();
         var modalCobro = document.getElementById('modalCobroAlquiler');
         modalCobro.style.zIndex = 600; // por encima del modal de Plan de pagos, si está abierto
@@ -34872,6 +34916,22 @@
         var a = alquileres[parseInt((document.getElementById('cobroAlqIdx') || {}).value)];
         var periodo = (document.getElementById('cobroAlqPeriodo') || {}).value || '';
         var concepto = (document.getElementById('cobroAlqConcepto') || {}).value || 'alquiler';
+        if (a && concepto === 'deposito') {   // depósito de garantía: cuánto se pactó, cuánto se lleva cobrado y cuánto queda con este cobro
+            var di = _alqDepositoEstado(a), fd = function(n) { return _alqSimMon(di.moneda) + _alqFmtN2(n); };
+            if (di.pactado <= 0) { box.style.display = 'none'; return; }
+            var estaD = parseFloat(document.getElementById('cobroAlqMonto').value) || 0, quedaD = _r2(di.saldo - estaD), msgD = '', clsD = '';
+            msgD += 'Depósito pactado <strong>' + fd(di.pactado) + '</strong>' + (di.cobrado > 0 ? ' · ya cobrado ' + fd(di.cobrado) : '') + '. ';
+            if (di.pagado) { clsD = 'warn'; msgD += 'Ya está cobrado completo: lo que cargues se suma.'; }
+            else if (estaD > 0) {
+                if (quedaD > 0.005) { clsD = 'warn'; msgD += '<strong>Con este cobro quedan ' + fd(quedaD) + ' a cobrar</strong> — el depósito queda con saldo.'; }
+                else if (quedaD < -0.005) { clsD = 'warn'; msgD += 'Con este monto se pasa del depósito en ' + fd(-quedaD) + '.'; }
+                else msgD += 'Con este cobro el depósito queda cobrado completo.';
+            }
+            box.innerHTML = msgD; box.style.display = '';
+            box.style.background = clsD === 'warn' ? 'var(--warn-bg)' : 'var(--surface)';
+            box.style.color = clsD === 'warn' ? 'var(--warn)' : '';
+            return;
+        }
         if (!a || concepto !== 'alquiler' || !/^\d{4}-\d{2}$/.test(periodo) || (a.mesesBonificados || []).indexOf(periodo) !== -1) { box.style.display = 'none'; return; }
         var sp = _alqSaldoPeriodo(a, periodo);
         if (sp.esperado <= 0) { box.style.display = 'none'; return; }
@@ -34919,16 +34979,42 @@
         _cobroAlqSaldoHint();
     }
 
-    // El depósito de garantía NO corresponde a un mes: al elegirlo se oculta el período.
+    // El depósito de garantía NO corresponde a un mes: al elegirlo se oculta el período, se cobra en SU moneda (puede no ser la del contrato), propone el
+    // saldo pendiente del depósito y no se desglosa IVA (no es un canon). Al volver a otro concepto se restaura todo; sólo se tocan el monto y las demás
+    // cosas cuando CAMBIA entre depósito y no-depósito, para no pisar nada de lo que ya está cargado al abrir el modal.
+    var _cobroAlqConceptoPrev = 'alquiler';
+    function _cobroAlqMonedaBase(a, concepto) { return concepto === 'deposito' ? _alqDepMoneda(a) : ((a && a.moneda) || 'ARS'); }
     function _cobroAlqConceptoChange() {
-        _cobroAlqSaldoHint();
+        var a = alquileres[parseInt((document.getElementById('cobroAlqIdx') || {}).value)];
         var concepto = (document.getElementById('cobroAlqConcepto') || {}).value;
         var per = document.getElementById('cobroAlqPeriodo');
         var grp = per && per.closest ? per.closest('.form-group') : null;
-        var esDeposito = (concepto === 'deposito');
+        var esDeposito = (concepto === 'deposito'), eraDeposito = (_cobroAlqConceptoPrev === 'deposito');
+        _cobroAlqConceptoPrev = concepto;
         if (esDeposito) { var _hp = document.getElementById('cobroAlqProrrata'); if (_hp) _hp.style.display = 'none'; }   // el aviso del proporcional es sólo del alquiler del mes
         if (grp) grp.style.visibility = esDeposito ? 'hidden' : '';
-        if (esDeposito && per) per.value = '';
+        if (esDeposito && per && per.value) { per.dataset.prev = per.value; per.value = ''; }
+        if (a && esDeposito !== eraDeposito) {
+            var monto = document.getElementById('cobroAlqMonto'), wrapIva = document.getElementById('cobroAlqIvaWrap'), chk = document.getElementById('cobroAlqDesglose');
+            var selMon = document.getElementById('cobroAlqMonedaCobro');
+            if (selMon) selMon.value = _cobroAlqMonedaBase(a, concepto);   // arranca en la moneda en que se mide (la del depósito o la del contrato)
+            if (esDeposito) {
+                if (wrapIva && wrapIva.style.display !== 'none') { wrapIva.dataset.porDep = '1'; wrapIva.style.display = 'none'; }
+                if (chk) chk.checked = false;
+                _cobroAlqToggleDesglose();   // el depósito no lleva desglose de IVA: el monto vuelve a ser un solo campo
+                if (!_cobroAlqMontoAMano) { var di = _alqDepositoEstado(a); monto.value = di.pactado > 0 && di.saldo > 0 ? di.saldo : ''; }
+            } else {
+                if (per && !per.value) per.value = per.dataset.prev || new Date().toISOString().substring(0, 7);
+                var periodoR = per ? per.value : '';
+                if (wrapIva && wrapIva.dataset.porDep === '1' && a.ivaActivo) { wrapIva.style.display = ''; if (chk) chk.checked = true; _cobroAlqCalcDesglose(a, (concepto === 'alquiler' ? _alqMontoSugerido(a, periodoR) : parseFloat(monto.value)) || 0); }
+                if (wrapIva) delete wrapIva.dataset.porDep;
+                if (!_cobroAlqMontoAMano && concepto === 'alquiler') monto.value = _alqMontoSugerido(a, periodoR) || '';
+                _cobroAlqHintProrrata(a, periodoR);
+                _cobroAlqToggleDesglose();
+            }
+            _cobroAlqRefrescarMoneda();
+        }
+        _cobroAlqSaldoHint();
     }
 
     function cerrarModalCobroAlquiler() { document.getElementById('modalCobroAlquiler').classList.remove('active'); }
@@ -34938,6 +35024,8 @@
     // y el estado del período siguen cuadrando). Si la plata entra en otra moneda, se
     // pide el tipo de cambio y se guarda además el importe realmente recibido.
     function _alqCobroMoneda(a, c) { return (c && c.monedaCobro) || (a && a.moneda) || 'ARS'; }
+    // Descripción de un cobro de alquiler en Caja/Efectivo/Bancos/Resumen: «unidad — período», o «unidad — Depósito de garantía» (no tiene período).
+    function _alqCobroDesc(a, c) { return (a.unidad || '—') + (c.periodo ? ' — ' + c.periodo : (c.concepto === 'deposito' ? ' — Depósito de garantía' : '')); }
     function _alqCobroImporte(a, c) {
         if (!c) return 0;
         return (c.montoCobrado != null && c.montoCobrado > 0) ? c.montoCobrado : (c.monto || 0);
@@ -34946,11 +35034,12 @@
     window._cobroAlqRefrescarMoneda = function() {
         var idx = parseInt(document.getElementById('cobroAlqIdx').value);
         var a = alquileres[idx]; if (!a) return;
-        var monContrato = a.moneda || 'ARS';
+        var _concR = (document.getElementById('cobroAlqConcepto') || {}).value || 'alquiler', esDepR = (_concR === 'deposito');
+        var monContrato = _cobroAlqMonedaBase(a, _concR);   // en un depósito, la moneda del depósito
         var monCobro = (document.getElementById('cobroAlqMonedaCobro') || {}).value || monContrato;
         var difiere = monCobro !== monContrato;
         var lbl = document.getElementById('cobroAlqMonedaContrato');
-        if (lbl) lbl.textContent = '(en ' + (monContrato === 'USD' ? 'USD' : 'pesos') + ', la moneda del contrato)';
+        if (lbl) lbl.textContent = '(en ' + (monContrato === 'USD' ? 'USD' : 'pesos') + ', la moneda ' + (esDepR ? 'del depósito' : 'del contrato') + ')';
         var tcWrap = document.getElementById('cobroAlqTcWrap');
         if (tcWrap) tcWrap.style.display = difiere ? '' : 'none';
         var box = document.getElementById('cobroAlqConversion');
@@ -34965,13 +35054,13 @@
         if (!tc) {
             box.innerHTML = '⚠️ Cargá el tipo de cambio para convertir.';
         } else if (monContrato === 'USD') {
-            box.innerHTML = 'Alquiler de <strong>' + fUSD(monto) + '</strong> × TC <strong>$' + tc.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
+            box.innerHTML = (esDepR ? 'Depósito' : 'Alquiler') + ' de <strong>' + fUSD(monto) + '</strong> × TC <strong>$' + tc.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
                 '</strong> → entran <strong style="color:var(--gold);">' + fARS(conv) + '</strong> en pesos. ' +
-                'El período se registra igual por ' + fUSD(monto) + '.';
+                (esDepR ? 'El depósito' : 'El período') + ' se registra igual por ' + fUSD(monto) + '.';
         } else {
-            box.innerHTML = 'Alquiler de <strong>' + fARS(monto) + '</strong> ÷ TC <strong>$' + tc.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
+            box.innerHTML = (esDepR ? 'Depósito' : 'Alquiler') + ' de <strong>' + fARS(monto) + '</strong> ÷ TC <strong>$' + tc.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
                 '</strong> → entran <strong style="color:var(--gold);">' + fUSD(conv) + '</strong> en dólares. ' +
-                'El período se registra igual por ' + fARS(monto) + '.';
+                (esDepR ? 'El depósito' : 'El período') + ' se registra igual por ' + fARS(monto) + '.';
         }
     };
     // Convierte el monto del contrato a la moneda en que efectivamente entra la plata.
@@ -35169,7 +35258,8 @@
         var tipoAB = ((document.getElementById('cobroAlqModalidad')||{}).value) === 'A' ? 'A' : 'B';
 
         // Moneda en la que entra la plata (puede diferir de la del contrato) + tipo de cambio.
-        var monContrato = a.moneda || 'ARS';
+        var monContratoReal = a.moneda || 'ARS';
+        var monContrato = _cobroAlqMonedaBase(a, concepto);   // un depósito se mide en SU moneda, que puede no ser la del contrato
         var monCobro = ((document.getElementById('cobroAlqMonedaCobro')||{}).value) || monContrato;
         var tcCobro = parseFloat((document.getElementById('cobroAlqTc')||{}).value) || 0;
         if (monCobro !== monContrato && tcCobro <= 0) { alert('Cargá el tipo de cambio para convertir el cobro.'); return; }
@@ -35179,6 +35269,12 @@
                 reg.monedaCobro = monCobro;
                 reg.tc = tcCobro;
                 reg.montoCobrado = _r2(_cobroAlqConvertir(reg.monto || 0, monContrato, monCobro, tcCobro));
+            }
+            // Depósito en otra moneda que el contrato: `monto` NO está en la moneda del contrato, así que el cobro lo dice y, aunque la plata entre en la
+            // moneda del depósito, lleva moneda e importe de cobro propios (es lo que lee Caja; sin eso lo contaría en la moneda del contrato).
+            if (monContrato !== monContratoReal) {
+                reg.montoMoneda = monContrato;
+                if (reg.monedaCobro == null) { reg.monedaCobro = monCobro; reg.montoCobrado = reg.monto; }
             }
             return reg;
         };
@@ -35241,6 +35337,11 @@
         // ── Camino normal: un solo cobro ──
         var montoC = parseFloat(document.getElementById('cobroAlqMonto').value) || 0;
         if (!montoC || montoC <= 0) { alert('Ingresá un monto válido.'); return; }
+        if (concepto === 'deposito') {   // no cobrar de más sin querer: el depósito tiene un monto pactado
+            var _diC = _alqDepositoEstado(a);
+            if (_diC.pactado > 0 && _r2(montoC - _diC.saldo) > 0.005 &&
+                !confirm('El depósito pactado es ' + _alqSimMon(_diC.moneda) + _alqFmtN2(_diC.pactado) + (_diC.cobrado > 0 ? ' y ya se cobró ' + _alqSimMon(_diC.moneda) + _alqFmtN2(_diC.cobrado) : '') + ': con este cobro se pasa por ' + _alqSimMon(_diC.moneda) + _alqFmtN2(_r2(montoC - _diC.saldo)) + '.\n\n¿Registrarlo igual?')) return;
+        }
         var nroReciboAlq = await obtenerProximoComprobante(tipoAB);
         var regCobro = _conMoneda({ fecha: fechaC, periodo, monto: montoC, concepto, ref: refC, nroRecibo: nroReciboAlq, tipoAB: tipoAB });
         if (tipoAB === 'A') {
@@ -35254,12 +35355,12 @@
         persistirAlquileres();
         _refrescarPlanAlquilerSiAbierto(idx);
         // Ningún cobro sin recibo: el comprobante se emite siempre (antes preguntaba).
-        var _avisoMon = (regCobro.monedaCobro)
+        var _avisoMon = (regCobro.monedaCobro && regCobro.tc > 0)
             ? ('\n\nEntró en ' + (regCobro.monedaCobro === 'USD' ? 'dólares' : 'pesos') + ': ' +
                (regCobro.monedaCobro === 'USD' ? 'USD ' : '$') + (regCobro.montoCobrado).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) +
                ' (TC $' + tcCobro.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ').')
             : '';
-        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.' + _avisoMon + _alqAvisoSaldo(a, periodo, concepto));
+        alert('Cobro registrado ('+nroReciboAlq+'). Se emite el comprobante.' + _avisoMon + _alqAvisoSaldo(a, periodo, concepto) + _alqAvisoDeposito(a, concepto));
         imprimirComprobanteAlquiler(alqSnap, montoC, fechaC, periodo, concepto, refC, nroReciboAlq, regCobro);
     }
 
@@ -35316,7 +35417,9 @@
             c.iva = _r2(monto - _gn);
         }
         // Cobro que entró en otra moneda: el importe realmente recibido sale del monto del contrato y del TC con el que se cargó.
-        if (c.monedaCobro && c.tc > 0) c.montoCobrado = _r2(_cobroAlqConvertir(monto, a.moneda || 'ARS', c.monedaCobro, c.tc));
+        var _bm = _alqMonedaMonto(a, c);   // un depósito en otra moneda que el contrato tiene el monto en la moneda del depósito
+        if (c.monedaCobro && c.tc > 0) c.montoCobrado = _r2(_cobroAlqConvertir(monto, _bm, c.monedaCobro, c.tc));
+        else if (c.montoMoneda && c.monedaCobro === c.montoMoneda) c.montoCobrado = monto;   // entró en la misma moneda: el importe de Caja sigue al monto
         var idxEditado = _editCobroAlqIdx;
         cerrarEditarCobroAlquiler();
         persistirAlquileres();
@@ -35384,6 +35487,50 @@
         persistirAlquileres();
         _renderPlanAlquiler();
     }
+    // Fila del depósito de garantía al principio del plan: pactado, cobrado y estado, con sus acciones (cobrar/completar, editar cada cobro, desaplicar).
+    function _planAlqFilaDeposito(a, idx) {
+        var di = _alqDepositoEstado(a); if (!di.hay) return '';
+        var f = function(n) { return _alqSimMon(di.moneda) + _alqFmtN2(n); };
+        var badge = function(bg, fg, txt, w) { return '<span style="display:inline-flex;align-items:center;gap:4px;background:' + bg + ';color:' + fg + ';padding:2px 8px;border-radius:10px;font-size:10px;font-weight:' + (w || 600) + ';">' + txt + '</span>'; };
+        var estadoHtml = di.pagado ? badge('#E6F4EA', '#1E8E3E', '✓ Cobrado')
+            : di.parcial ? badge('#FEF9EE', '#B7791F', '◐ Parcial · falta ' + f(di.saldo))
+            : badge('#F1F3F4', '#5F6368', '⏳ Pendiente', 500);
+        var acc = '';
+        di.idxs.forEach(function(ci, k) {
+            var c = a.cobrosHistorial[ci];
+            acc += '<button type="button" class="btn btn-outline btn-sm" onclick="abrirEditarCobroAlquiler(' + idx + ',' + ci + ')" title="Editar el cobro del ' + (c.fecha ? formatearFecha(c.fecha) : 's/f') + ' por ' + escHtml(_alqFmtCobro(a, c)) + '">✏️' + (di.idxs.length > 1 ? (k + 1) : '') + '</button> ';
+        });
+        if (di.idxs.length) acc += '<button type="button" class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="desaplicarDepositoAlquiler(' + idx + ')" title="Desaplicar' + (di.idxs.length > 1 ? ' los ' + di.idxs.length + ' cobros del depósito' : ' el cobro del depósito') + ': vuelve a impago y se libera el recibo (si al final no te lo pagaron)">↩️' + (di.idxs.length > 1 ? ' (' + di.idxs.length + ')' : '') + '</button> ';
+        if (!di.pagado && di.pactado > 0) acc += '<button type="button" class="btn btn-gold btn-sm" onclick="abrirModalCobroAlquiler(' + idx + ',\'\',\'deposito\')">💵 ' + (di.parcial ? 'Completar' : 'Cobrar') + '</button> ';
+        var equiv = (a.depMeses > 0 && di.pactado > 0) ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);">equivale a ' + a.depMeses + (a.depMeses == 1 ? ' mes' : ' meses') + '</div>' : '';
+        var aviso = di.ambiguo ? '<div style="font-size:10px;font-weight:400;color:var(--warn);" title="Hay un cobro anterior del depósito en otra moneda que la del depósito y sin tipo de cambio: se sumó tal cual. Editalo con ✏️ si hace falta.">⚠ revisar un cobro en otra moneda</div>' : '';
+        return '<tr style="background:#FFF9EC;border-bottom:2px solid var(--border);">'
+            + '<td style="padding:7px 10px;font-weight:600;white-space:nowrap;">🛡️ Depósito de garantía' + equiv + aviso + '</td>'
+            + '<td style="padding:7px 10px;text-align:right;">' + (di.pactado > 0 ? f(di.pactado) : '<span style="color:var(--text-3);" title="El contrato no tiene monto de depósito cargado">—</span>') + '</td>'
+            + '<td style="padding:7px 10px;text-align:right;' + (di.cobrado > 0 ? 'color:var(--success);font-weight:600;' : 'color:var(--text-3);') + '">' + (di.cobrado > 0 ? f(di.cobrado) : '—') + '</td>'
+            + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + estadoHtml + '</td>'
+            + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + acc + '</td>'
+            + '</tr>';
+    }
+    // Desaplica el cobro del depósito: lo vuelve a dejar IMPAGO. Quita TODOS sus cobros, libera sus recibos y borra los archivos adjuntos (igual que un mes).
+    window.desaplicarDepositoAlquiler = function(idx) {
+        var a = alquileres[idx]; if (!a || !a.cobrosHistorial) return;
+        var delc = a.cobrosHistorial.filter(function(c) { return c && c.concepto === 'deposito'; });
+        if (!delc.length) return;
+        var di = _alqDepositoEstado(a);
+        if (!confirm('¿Desaplicar el cobro del depósito de garantía (cobrado ' + _alqSimMon(di.moneda) + _alqFmtN2(di.cobrado) + ')?\n\n' +
+            'El depósito vuelve a quedar como IMPAGO' + (delc.length > 1 ? ' y se quitan sus ' + delc.length + ' recibos' : '') + '. Se libera' + (delc.length > 1 ? 'n los números' : ' el número') + ' de recibo para reutilizarlo' + (delc.length > 1 ? 's' : '') + '.\n\n' +
+            '(Usalo si al final no te lo pagaron y ya habías emitido el recibo.)')) return;
+        delc.forEach(function(c) {
+            if (c.nroRecibo) _liberarNroComprobante(c.nroRecibo, c.tipoAB);
+            if (c.facturaId) REF_DOCS.child(c.facturaId).remove();
+            if (c.transfId)  REF_DOCS.child(c.transfId).remove();
+        });
+        a.cobrosHistorial = a.cobrosHistorial.filter(function(c) { return !(c && c.concepto === 'deposito'); });
+        persistirAlquileres();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+        _refrescarPlanAlquilerSiAbierto(idx);
+    };
     function _renderPlanAlquiler() {
         var idx = _planAlqIdx;
         var a = alquileres[idx]; if (!a) return;
@@ -35394,7 +35541,8 @@
         var monSym = a.moneda === 'USD' ? 'USD ' : '$';
         var hoy = new Date(); hoy.setHours(0,0,0,0);
         var hoyPeriodo = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
-        if (!a.inicio) { tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Este contrato no tiene fecha de inicio cargada.</td></tr>'; if (hint) hint.textContent = ''; return; }
+        var _filaDep = _planAlqFilaDeposito(a, idx);   // el depósito de garantía va primero, antes de los meses
+        if (!a.inicio) { tbody.innerHTML = _filaDep + '<tr><td colspan="5" class="empty-msg">Este contrato no tiene fecha de inicio cargada.</td></tr>'; if (hint) hint.textContent = ''; return; }
         var inicioD = new Date(a.inicio+'T00:00:00');
         var finD = a.fin ? new Date(a.fin+'T00:00:00') : null;
         var sinFin = !finD;
@@ -35471,7 +35619,7 @@
             cursor.setMonth(cursor.getMonth() + 1);
             n++;
         }
-        tbody.innerHTML = filas.join('');
+        tbody.innerHTML = _filaDep + filas.join('');
     }
 
     // Dispara la revisión de cuotas de alquiler en el backend (manda los mails de las que vencen).
@@ -35695,6 +35843,7 @@
         var fmtN = function(n,mon){ return (mon==='USD'?'USD ':'$ ')+Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
+        var _monM = _alqMonedaMonto(a, reg);   // moneda del `monto` de ESTE cobro (un depósito puede estar en otra que el contrato)
         var cLabel = {alquiler:'Alquiler mensual',deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'}[concepto]||concepto;
         var _frRec = (concepto === 'alquiler' || !concepto) ? _alqFraccionPeriodo(a, periodo) : null;
         if (_frRec) cLabel += ' — proporcional: ' + _alqTextoFraccion(_frRec, periodo);
@@ -35708,13 +35857,19 @@
               + '<tr><td>IVA</td><td></td><td class="tr">'+fmtN(reg.iva,a.moneda)+'</td></tr>'
             : '';
         // Si la plata entró en otra moneda que la del contrato, se deja constancia del TC usado.
-        if (reg && reg.monedaCobro && reg.monedaCobro !== (a.moneda || 'ARS')) {
+        if (reg && reg.monedaCobro && reg.monedaCobro !== _monM && reg.tc > 0) {
             _filasDesglose += '<tr><td>Cobrado en ' + (reg.monedaCobro === 'USD' ? 'dólares' : 'pesos') +
                 ' · TC $' + Number(reg.tc || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td><td></td><td class="tr"><strong>' +
                 fmtN(reg.montoCobrado, reg.monedaCobro) + '</strong></td></tr>';
         }
         // Pago parcial: el recibo dice cuánto se lleva cobrado del período y cuánto falta (a la fecha del recibo, para que una reimpresión no cambie).
         var _parcialRec = '';
+        if (concepto === 'deposito') {   // el recibo del depósito dice cuánto se lleva cobrado a la fecha del recibo y cuánto queda
+            var _diR = _alqDepositoEstado(a, String((reg && reg.fecha) || fecha || '')), _fdR = function(n) { return fmtN(n, _diR.moneda); };
+            if (_diR.pactado > 0) _parcialRec = _diR.saldo > 0
+                ? '<br><strong>Depósito de garantía</strong>: cobrado a la fecha ' + _fdR(_diR.cobrado) + ' de ' + _fdR(_diR.pactado) + ' · <strong>saldo pendiente ' + _fdR(_diR.saldo) + '</strong>'
+                : '<br><strong>Depósito de garantía cobrado completo</strong> (' + _fdR(_diR.pactado) + ')';
+        }
         if ((concepto === 'alquiler' || !concepto) && /^\d{4}-\d{2}$/.test(periodo || '')) {
             var _espR = _alqCanonEsperado(a, periodo) || 0, _fR = String((reg && reg.fecha) || fecha || '');
             var _acumR = _r2((a.cobrosHistorial || []).filter(function(c) { return c && c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto) && String(c.fecha || '') <= _fR; })
@@ -35724,14 +35879,14 @@
         }
         var html = '<html><head><meta charset="UTF-8"><title>Orden de Recibo — Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl"><thead><tr><th>Concepto</th><th>Período</th><th class="tr">Monto</th></tr></thead>' +
-        '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,a.moneda) + '</strong></td></tr>' + _filasDesglose + '</tbody>' +
-        '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+escHtml(ref):'') + '</td><td class="tr">' + fmtN(monto,a.moneda) + '</td></tr></tfoot></table>' +
+        '<tbody><tr><td><strong>' + escHtml(cLabel) + '</strong></td><td>' + escHtml(periodo||'—') + '</td><td class="tr"><strong>' + fmtN(monto,_monM) + '</strong></td></tr>' + _filasDesglose + '</tbody>' +
+        '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+escHtml(ref):'') + '</td><td class="tr">' + fmtN(monto,_monM) + '</td></tr></tfoot></table>' +
         '<div class="bottom"><div class="instrucciones"><div class="instr-titulo">Datos del contrato</div><div class="instr-body">' +
         'Vigencia: ' + (a.inicio?formatearFecha(a.inicio):'—') + ' al ' + (a.fin?formatearFecha(a.fin):'sin vto.') +
         '<br>Canon: ' + fmtN(a.canonActual||a.canon,a.moneda) +
         (reg && reg.facturaNro ? '<br>Factura emitida: ' + escHtml(reg.facturaNro) : '') +
         (a.deposito?'<br>Depósito: ' + fmtN(a.deposito,a.depMoneda):'') + _parcialRec + '</div></div>' +
-        '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmtN(monto,a.moneda) + '</span></div></div></div>' +
+        '<div class="totales"><div class="tot-final"><span>Total cobrado</span><span>' + fmtN(monto,_monM) + '</span></div></div></div>' +
         '<div class="firmas"><div class="fi">Recibí conforme — ' + escHtml(a.inquilino||'Inquilino') + '</div><div class="fi">Entregó — Locador / ' + escHtml(emp.nombre) + '</div></div>' +
         '<div class="pie">Emitido el ' + emision + ' · ' + escHtml(emp.nombre) + '</div>' +
         '</div><scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
@@ -35829,7 +35984,7 @@
             kv('Vigencia', (a.inicio ? formatearFecha(a.inicio) : '—') + ' al ' + (a.fin ? formatearFecha(a.fin) : 'sin vto.')) +
             kv('Canon actual', _alqFmtMon(a, a.canonActual || a.canon)) +
             kv('Cobrado en alquileres', _alqFmtMon(a, _alqTotalCobradoAlquiler(a))) +
-            (a.deposito > 0 ? kv('Depósito en garantía', (a.depMoneda === 'USD' ? 'USD ' : '$ ') + Number(a.deposito).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : '') +
+            (a.deposito > 0 ? kv('Depósito en garantía', escHtml(_alqDepositoTexto(a))) : '') +
             kv('Recibos de entrega', (a.entregas || []).length ? (a.entregas || []).length + ' · la devolución de llaves se carga en 🔑 Entregas (también desde el Historial)' : 'ninguno');
         _finAlqAvisos();
         document.getElementById('modalFinAlq').classList.add('active');
@@ -35996,7 +36151,7 @@
             a.ajustesCanon.slice().sort(function(x, y) { return String(x.periodo).localeCompare(String(y.periodo)); }).map(function(j) { return '<tr><td>' + e(j.periodo || '') + '</td><td class="tr">' + f(j.monto) + '</td></tr>'; }).join('') + '</tbody></table>' : '';
         var cobros = (a.cobrosHistorial || []).slice().sort(function(x, y) { return String(x.fecha || '').localeCompare(String(y.fecha || '')); });
         var tCob = cobros.length ? '<table class="tbl" style="margin-bottom:6px;"><thead><tr><th>Fecha</th><th>Concepto</th><th>Período</th><th>Medio</th><th class="tr">Monto</th></tr></thead><tbody>' +
-            cobros.map(function(c) { return '<tr><td>' + fecha(c.fecha) + '</td><td>' + e(c.concepto || 'alquiler') + '</td><td>' + e(c.periodo || '—') + '</td><td>' + (c.tipoAB === 'A' ? 'Banco' : 'Efectivo') + '</td><td class="tr">' + f(c.monto) + '</td></tr>'; }).join('') +
+            cobros.map(function(c) { return '<tr><td>' + fecha(c.fecha) + '</td><td>' + e(c.concepto || 'alquiler') + '</td><td>' + e(c.periodo || '—') + '</td><td>' + (c.tipoAB === 'A' ? 'Banco' : 'Efectivo') + '</td><td class="tr">' + e(_alqFmtCobro(a, c)) + '</td></tr>'; }).join('') +
             '<tr><td colspan="4"><strong>Total cobrado en alquileres</strong></td><td class="tr"><strong>' + f(_alqTotalCobradoAlquiler(a)) + '</strong></td></tr></tbody></table>' : '';
         var tEnt = (a.entregas || []).length ? '<table class="tbl" style="margin-bottom:6px;"><thead><tr><th>N°</th><th>Fecha</th><th>Tipo</th><th>Elementos</th></tr></thead><tbody>' +
             a.entregas.map(function(x) { return '<tr><td>' + e(x.nro || '') + '</td><td>' + fecha(x.fecha) + '</td><td>' + (x.tipo === 'devolucion' ? 'Devolución' : 'Entrega') + '</td><td>' + e((x.items || []).map(function(i) { return (i.cant > 1 ? i.cant + ' × ' : '') + i.desc; }).join(', ')) + '</td></tr>'; }).join('') + '</tbody></table>' : '';
@@ -36461,7 +36616,8 @@
     function imprimirContratoAlquiler(idx) {
         var a = alquileres[idx]; if (!a) return;
         var cobros = a.cobrosHistorial || [];
-        var totalCob = cobros.reduce(function(s,c){ return s+(c.monto||0); },0);
+        // El total suma sólo lo que está en la moneda del contrato: un depósito en otra moneda se lista con su moneda pero no se mezcla en el total.
+        var totalCob = cobros.reduce(function(s,c){ return _alqMonedaMonto(a, c) === (a.moneda || 'ARS') ? s+(c.monto||0) : s; },0);
         var fmtN = function(n,mon){ return (mon==='USD'?'USD ':'$ ')+Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var emision = new Date().toLocaleDateString('es-AR');
         var emp = getEmpresaParaRecibo();
@@ -36480,7 +36636,7 @@
               + (a.garanteContacto ? '<tr><td>Contacto garante</td><td></td><td class="tr">'+escHtml(a.garanteContacto)+'</td></tr>' : '')
             : '';
         var filaCobros = cobros.length
-            ? cobros.map(function(c){ return '<tr><td>'+(c.fecha?formatearFecha(c.fecha):'—')+'</td><td>'+(c.periodo||'—')+'</td><td class="tr">'+fmtN(c.monto,a.moneda)+'</td></tr>'; }).join('')
+            ? cobros.map(function(c){ return '<tr><td>'+(c.fecha?formatearFecha(c.fecha):'—')+'</td><td>'+(c.periodo||'—')+'</td><td class="tr">'+fmtN(c.monto,_alqMonedaMonto(a,c))+'</td></tr>'; }).join('')
             : '<tr><td colspan="3" style="color:#aaa;font-size:12px;padding:12px;">Sin cobros registrados</td></tr>';
         var html = '<html><head><meta charset="UTF-8"><title>Contrato Alquiler</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl"><thead><tr><th>Datos del contrato</th><th></th><th class="tr">Valor</th></tr></thead><tbody>' +
@@ -38110,7 +38266,7 @@
             row.style.cssText = 'padding:10px 20px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:10px;';
             var parteTxt = c.parteIva === 'gravada' ? ' · Parte A (con IVA)' : c.parteIva === 'nograv' ? ' · Parte B (sin IVA)' : '';
             var txt = document.createElement('div');
-            txt.innerHTML = '<div style="font-weight:600;font-size:13px;color:#1a1a2e;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + monSym + Number(c.monto||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>'
+            txt.innerHTML = '<div style="font-weight:600;font-size:13px;color:#1a1a2e;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + ' — ' + _alqFmtCobro(a, c) + '</div>'
                 + '<div style="font-size:11px;color:#777;margin-top:2px;">' + (({deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'})[c.concepto] || (c.periodo||'')) + parteTxt + (c.facturaNro ? ' · Fac: ' + escHtml(c.facturaNro) : '') + (c.ref ? ' · Ref: ' + escHtml(c.ref) : '') + '</div>';
             var btns = document.createElement('div');
             btns.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
@@ -38524,7 +38680,7 @@
                 // Moneda e importe con que ENTRÓ la plata (un contrato en USD cobrado en pesos es plata en pesos), igual que Efectivo $/USD y Bancos.
                 movs.push({
                     fecha: c.fecha, moneda: _alqCobroMoneda(a, c),
-                    tipo: 'Cobro Alquiler', desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''),
+                    tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c),
                     origen: a.inquilino||'—',
                     medio: (c.tipoAB==='A' ? 'Banco' : 'Efectivo'), monto: _alqCobroImporte(a, c), esIngreso: true,
                     srcTipo: 'alquiler', srcRef: aIdx
@@ -38903,7 +39059,7 @@
         alquileres.forEach(function(a, aIdx) {
             (a.cobrosHistorial||[]).forEach(function(c) {
                 movs.push({ fecha: c.fecha, moneda: _alqCobroMoneda(a, c), tipo: 'Alquiler',
-                    desc: (a.unidad||'—') + (c.periodo?' — '+c.periodo:''), cliente: a.inquilino || '—', monto: _alqCobroImporte(a, c),
+                    desc: _alqCobroDesc(a,c), cliente: a.inquilino || '—', monto: _alqCobroImporte(a, c),
                     srcTipo: 'alquiler', srcRef: aIdx });
             });
         });
@@ -46727,6 +46883,7 @@
             <input type="number" id="alqDepMeses" min="0" step="0.5" placeholder="Ej: 1,5" value="1">
           </div>
         </div>
+        <div class="form-hint" style="margin-top:6px;">Con un monto cargado, el depósito aparece en el <strong>📅 Plan de pagos</strong> del contrato para cobrarlo (en una o varias veces) y queda registrado en la caja o el banco como cualquier cobro.</div>
       </div>
 
       <!-- Garante -->
@@ -46921,7 +47078,7 @@
 
 <!-- ═══════════════ MODAL: PLAN DE PAGOS DE ALQUILER ═══════════════ -->
 <div class="modal" id="modalPlanAlquiler">
-  <div class="modal-box modal-box-wide" style="max-width:680px;">
+  <div class="modal-box modal-box-wide" style="max-width:780px;">
     <div class="modal-head">
       <h2>📅 Plan de pagos — <span id="planAlqTitulo" style="color:var(--gold);"></span></h2>
       <button class="modal-close" onclick="cerrarPlanAlquiler()">✕</button>
