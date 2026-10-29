@@ -3606,7 +3606,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v564</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v565</div>
         </div>
     </nav>
 
@@ -6473,7 +6473,7 @@
                     </select>
                     <button class="btn-clear-filters" onclick="efpLimpiarFiltros()">✕ Limpiar</button>
                     <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-outline btn-sm" id="btnEfpImprimir" onclick="efImprimir('ARS')" title="Imprimir (o guardar como PDF) los movimientos que estás viendo: respeta las fechas y los filtros, e incluye los saldos">🖨️ Imprimir</button>
+                        <button class="btn btn-outline btn-sm" id="btnEfpImprimir" onclick="efImprimir('ARS')" title="Imprimir (o guardar como PDF) los movimientos que estás viendo: respeta las fechas y los filtros, en el orden de «Orden», e incluye los saldos">🖨️ Imprimir</button>
                         <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso')">＋ Ingreso</button>
                         <button class="btn-mov-egr" onclick="abrirMovCaja('egreso')">− Egreso</button>
                     </div>
@@ -6543,7 +6543,7 @@
                     </select>
                     <button class="btn-clear-filters" onclick="efuLimpiarFiltros()">✕ Limpiar</button>
                     <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-outline btn-sm" id="btnEfuImprimir" onclick="efImprimir('USD')" title="Imprimir (o guardar como PDF) los movimientos que estás viendo: respeta las fechas y los filtros, e incluye los saldos">🖨️ Imprimir</button>
+                        <button class="btn btn-outline btn-sm" id="btnEfuImprimir" onclick="efImprimir('USD')" title="Imprimir (o guardar como PDF) los movimientos que estás viendo: respeta las fechas y los filtros, en el orden de «Orden», e incluye los saldos">🖨️ Imprimir</button>
                         <button class="btn-mov-ing" onclick="abrirMovCaja('ingreso','USD')">＋ Ingreso USD</button>
                         <button class="btn-mov-egr" onclick="abrirMovCaja('egreso','USD')">− Egreso USD</button>
                     </div>
@@ -16916,7 +16916,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v564';
+    var APP_VER = 'v565';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -23664,18 +23664,33 @@
         var ant = 0, cierre = 0;
         movs.forEach(function(m) {
             var neto = (m.ingreso || 0) - (m.egreso || 0);
-            if (fDesde && m.fecha && m.fecha < fDesde) ant += neto;      // lo anterior al «Desde» (un movimiento sin fecha cuenta como del período)
+            // La pantalla ordena los movimientos SIN fecha primero de toda la caja (como si fueran los más antiguos) y su «Saldo acum.» arranca de ahí:
+            // para que la cadena de saldos del papel cierre, con «Desde» cuentan como anteriores a él (efImprimir los lista aparte).
+            if (fDesde && (!m.fecha || m.fecha < fDesde)) ant += neto;
             if (!(fHasta && m.fecha && m.fecha > fHasta)) cierre += neto; // todo lo que llega hasta el «Hasta»
         });
         var el = document.getElementById(ordenId);
         return { filas: filtrados, anterior: ant, cierre: cierre, asc: !!(el && el.value === 'asc') };
     }
+    // El render repinta la tabla por fecha (según «Orden») pero NO toca el encabezado: la flecha de la columna ordenada y `_sortState` quedaban
+    // diciendo un orden que ya no está, y el próximo clic ordenaba «al revés» sobre filas sin ordenar.
+    function _efResetSort(pre) {
+        var tbl = document.getElementById(pre + 'Table');
+        if (tbl) tbl.querySelectorAll('th.sortable').forEach(function(t) { t.classList.remove('asc', 'desc'); var ic = t.querySelector('.si'); if (ic) ic.textContent = '⇅'; });
+        Object.keys(_sortState).forEach(function(k) { if (k.indexOf(pre + 'Body:') === 0) delete _sortState[k]; });
+    }
     function efImprimir(mon) {
         var usd = mon === 'USD';
+        var pre = usd ? 'efu' : 'efp';
+        // Los pagos de documentos son el nodo pesado, que llega al final del arranque: un papel impreso antes saldría sin esos renglones ni su saldo,
+        // y a diferencia de la pantalla no se corrige solo. (Efectivo en dólares no usa documentos.)
+        if (!usd && typeof _docsCargados !== 'undefined' && !_docsCargados) { alert('Todavía se están cargando los comprobantes recibidos: esperá unos segundos y volvé a imprimir (si no, el papel saldría sin los pagos de documentos).'); return; }
+        var fd = (document.getElementById(pre + 'FiltroDesde') || {}).value || '', fh = (document.getElementById(pre + 'FiltroHasta') || {}).value || '';
+        if (fd && fh && fd > fh) { alert('El «Desde» es posterior al «Hasta»: corregí las fechas para imprimir.'); return; }
         if (usd) renderEfectivoUSD(); else renderEfectivoPesos();   // vuelve a calcular con los filtros de este instante
+        _efResetSort(pre);   // ese render deja la tabla por fecha según «Orden»: las flechas de orden por columna y su estado tienen que volver a cero
         var u = _efUltimo[usd ? 'USD' : 'ARS'];
         if (!u || !u.filas || !u.filas.length) { alert('No hay movimientos para imprimir con los filtros actuales.'); return; }
-        var pre = usd ? 'efu' : 'efp';
         var e = escHtml;
         var val = function(id) { return ((document.getElementById(id) || {}).value || '').trim(); };
         var money = function(n) { n = Math.round((Number(n) || 0) * 100) / 100; if (!n) n = 0; return (n < 0 ? '-' : '') + (usd ? 'USD ' : '$') + Math.abs(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
@@ -23689,7 +23704,10 @@
         var periodo = (desde || hasta)
             ? ((desde ? 'desde el ' + formatearFecha(desde) : 'hasta el ' + formatearFecha(hasta)) + (desde && hasta ? ' hasta el ' + formatearFecha(hasta) : ''))
             : 'todos los movimientos';
-        var filas = u.filas, asc = u.asc;
+        var asc = u.asc;
+        // Con «Desde», los movimientos sin fecha ya están dentro del saldo anterior (ver _efResumir): van en un bloque aparte, no en la cadena de saldos.
+        var sinFecha = desde ? u.filas.filter(function(m) { return !m.fecha; }) : [];
+        var filas = desde ? u.filas.filter(function(m) { return m.fecha; }) : u.filas;
         var ing = 0, egr = 0;
         filas.forEach(function(m) { ing += m.ingreso || 0; egr += m.egreso || 0; });
         var vacio = '<td class="n mu">—</td>';
@@ -23698,15 +23716,20 @@
             ? '<tr class="ap"><td colspan="4">Saldo anterior al ' + e(formatearFecha(desde)) + '</td>' + vacio + vacio + '<td class="n b">' + e(money(u.anterior)) + '</td></tr>'
             : '';
         var ordenadas = asc ? filas : filas.slice().reverse();
-        var cuerpo = ordenadas.map(function(m) {
+        var filaMov = function(m, conSaldo) {
             return '<tr><td class="f">' + (m.fecha ? e(formatearFecha(m.fecha)) : '—') + '</td>' +
                 '<td class="t">' + e(m.tipo || '') + '</td>' +
                 '<td>' + e(m.desc || '') + '</td>' +
                 '<td>' + e(m.origen || '') + '</td>' +
                 (m.ingreso > 0 ? '<td class="n ing">' + e(money(m.ingreso)) + '</td>' : vacio) +
                 (m.egreso > 0 ? '<td class="n egr">' + e(money(m.egreso)) + '</td>' : vacio) +
-                '<td class="n b">' + e(money(m.saldoAcum)) + '</td></tr>';
-        }).join('');
+                (conSaldo ? '<td class="n b">' + e(money(m.saldoAcum)) + '</td></tr>' : vacio + '</tr>');
+        };
+        var cuerpo = ordenadas.map(function(m) { return filaMov(m, true); }).join('');
+        var bloqueSinFecha = sinFecha.length
+            ? '<div style="font-size:11px;font-weight:700;margin:2px 0 6px;">Movimientos sin fecha <span style="font-weight:400;color:#777;">— cuentan como anteriores al «Desde»: ya están dentro del saldo anterior</span></div>' +
+              '<table class="cg"><thead>' + cab + '</thead><tbody>' + sinFecha.map(function(m) { return filaMov(m, false); }).join('') + '</tbody></table>'
+            : '';
         var resFila = function(rot, v, cls) { return '<tr class="' + (cls || '') + '"><td>' + rot + '</td><td class="n">' + e(v) + '</td></tr>'; };
         var resumen = '<table class="res"><thead><tr><th></th><th class="n">' + (usd ? 'Dólares (USD)' : 'Pesos (ARS)') + '</th></tr></thead><tbody>' +
             (desde ? resFila('Saldo anterior', money(u.anterior)) : '') +
@@ -23721,9 +23744,10 @@
             buildReciboHeader(titulo) +
             '<div class="info"><div><b>Período:</b> ' + e(periodo) + '</div>' +
             (filtros.length ? '<div><b>Filtros:</b> ' + e(filtros.join(' · ')) + '</div>' : '') +
-            '<div><b>Movimientos:</b> ' + filas.length + '</div>' +
-            '<div><b>Orden:</b> ' + (asc ? 'del más antiguo al más reciente' : 'del más reciente al más antiguo') + '</div></div>' +
+            '<div><b>Movimientos:</b> ' + u.filas.length + '</div>' +
+            '<div><b>Orden:</b> ' + (asc ? 'del más antiguo al más reciente' : 'del más reciente al más antiguo') + ' (según «Orden»)</div></div>' +
             '<table class="cg"><thead>' + cab + '</thead><tbody>' + (asc ? filaApertura : '') + cuerpo + (asc ? '' : filaApertura) + '</tbody></table>' +
+            bloqueSinFecha +
             resumen +
             '<div class="pie">Emitido el ' + e(ahora.toLocaleDateString('es-AR') + ' ' + ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })) + ' · ' + e(emp.nombre) + (emp.proyecto ? ' · ' + e(emp.proyecto) : '') + '</div>' +
             '</div></body></html>';
@@ -38740,7 +38764,7 @@
             'table.cg{width:100%;border-collapse:collapse;font-size:9.5px;margin-bottom:14px;}' +
             'table.cg thead{display:table-header-group;}' +
             'table.cg th{background:var(--ink);color:#fff;font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:6px 6px;text-align:left;white-space:nowrap;}' +
-            'table.cg td{padding:4px 6px;border-bottom:1px solid #e9e9e9;vertical-align:top;}' +
+            'table.cg td{padding:4px 6px;border-bottom:1px solid #e9e9e9;vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}' +
             'table.cg tr{page-break-inside:avoid;}' +
             'table.cg .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}' +
             'table.cg .f{white-space:nowrap;}' +
