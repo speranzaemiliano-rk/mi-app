@@ -3299,6 +3299,10 @@ function openEditor(existing){
       <div class="ed-sub">Movimientos <div class="ln2"></div></div>
       <div class="mvhead"><div>Tipo</div><div>Concepto / Descripción</div><div>Referencia</div><div style="text-align:right">Importe</div><div></div></div>
       <div id="mvList"></div>
+      <div id="ed_fxHint" class="errline" style="display:none;margin-top:8px;background:rgba(240,176,48,.12);border:1px solid rgba(240,176,48,.4);border-radius:9px;padding:9px 12px;color:var(--ink,inherit)">
+        ${ic('exchange',14)} <b>¿Vendiste o compraste dólares?</b> Cargado acá a mano, <b>la otra caja no se entera</b> (los pesos no pasan solos). Usá <b>«Cambio de divisa»</b> (más abajo): carga las dos patas juntas, una en cada caja.
+        <button type="button" class="btn-ghost" style="margin-left:6px;padding:3px 10px" onclick="document.getElementById('ed_fxUsd').scrollIntoView({block:'center'});document.getElementById('ed_fxUsd').focus()">Ir a Cambio de divisa ↓</button>
+      </div>
       <button class="addrow" id="addRow">＋ Agregar movimiento (opcional)</button>
       <div class="ed-summary">
         <div><b>Ingresos</b><span class="pos" id="s_in">${symLabel} 0</span></div>
@@ -3338,7 +3342,7 @@ function openEditor(existing){
       </div>
       <div class="ed-sub" style="margin-top:20px">${ic('exchange',16)} Cambio de divisa <div class="ln2"></div></div>
       <div class="loanbox" style="background:var(--panel2,rgba(127,127,127,.05));border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:10px">
-        <div class="es" style="margin:0 0 12px">Opcional. Compra/venta de dólares — genera un movimiento en la caja $ y otro en la caja US$ de ${esc(ctxLabel(activeContext()))}, con la fecha de este día.</div>
+        <div class="es" style="margin:0 0 12px">Opcional. Compra/venta de dólares — genera <b>un movimiento en la caja $ y otro en la caja US$</b> de ${esc(ctxLabel(activeContext()))}, con la fecha de este día: los pesos entran solos a la caja en pesos. No lo cargues además como movimiento común.</div>
         <div class="fgrid" style="grid-template-columns:1.3fr .8fr .9fr 1fr;align-items:end;gap:10px">
           <div class="field"><label>Tipo</label><select class="sel" id="ed_fxType"><option value="venta">Venta de divisa (doy US$, recibo $)</option><option value="compra">Compra de divisa (doy $, recibo US$)</option></select></div>
           <div class="field"><label>Importe (US$)</label><input class="amt" id="ed_fxUsd" placeholder="0"></div>
@@ -3370,34 +3374,66 @@ function openEditor(existing){
   document.getElementById('fisAddRow').onclick=()=>{edState.fisMovs.push(blankFisMov());renderFisMovRows();recalcFis()};
   renderEdLoanSelect();renderEdLoans();
   const elAdd=document.getElementById('ed_loanAdd');
-  if(elAdd)elAdd.onclick=()=>{
-    const errEl=document.getElementById('ed_loanErr');errEl.textContent='';
-    const to=document.getElementById('ed_loanTo').value;
-    const amt=num(document.getElementById('ed_loanAmt').value);
-    const note=document.getElementById('ed_loanNote').value.trim();
-    if(!to){errEl.textContent='Elegí una empresa/proyecto destino.';return}
-    if(amt==null||amt<=0){errEl.textContent='Ingresá un importe válido.';return}
-    edState.loans.push({to,amt,note});
-    document.getElementById('ed_loanAmt').value='';document.getElementById('ed_loanNote').value='';
-    renderEdLoans();recalcEditor();
-  };
+  if(elAdd)elAdd.onclick=()=>{_edLoanSumar()};
   renderEdFx();
   document.getElementById('ed_fxUsd').addEventListener('input',recalcFxPreview);
   document.getElementById('ed_fxRate').addEventListener('input',recalcFxPreview);
-  document.getElementById('ed_fxAdd').onclick=()=>{
-    const errEl=document.getElementById('ed_fxErr');errEl.textContent='';
-    const type=document.getElementById('ed_fxType').value;
-    const usd=num(document.getElementById('ed_fxUsd').value);
-    const rate=num(document.getElementById('ed_fxRate').value);
-    const note=document.getElementById('ed_fxNote').value.trim();
-    if(usd==null||usd<=0){errEl.textContent='Ingresá el importe en dólares.';return}
-    if(rate==null||rate<=0){errEl.textContent='Ingresá la cotización.';return}
-    const ars=Math.round(usd*rate*100)/100;
-    edState.fx.push({type,usd,ars,note});
-    document.getElementById('ed_fxUsd').value='';document.getElementById('ed_fxRate').value='';document.getElementById('ed_fxNote').value='';
-    recalcFxPreview();renderEdFx();recalcEditor();
-  };
+  document.getElementById('ed_fxAdd').onclick=()=>{_edFxSumar()};
   document.getElementById('edOverlay').classList.add('on');document.body.style.overflow='hidden';
+}
+// Suma el cambio de divisa escrito en su cuadro a la lista del día. Devuelve true si lo sumó (o false con el motivo en el cuadro).
+function _edFxSumar(){
+  const errEl=document.getElementById('ed_fxErr');errEl.textContent='';
+  const type=document.getElementById('ed_fxType').value;
+  const usd=num(document.getElementById('ed_fxUsd').value);
+  const rate=num(document.getElementById('ed_fxRate').value);
+  const note=document.getElementById('ed_fxNote').value.trim();
+  if(usd==null||usd<=0){errEl.textContent='Ingresá el importe en dólares.';return false}
+  if(rate==null||rate<=0){errEl.textContent='Ingresá la cotización.';return false}
+  const ars=Math.round(usd*rate*100)/100;
+  edState.fx.push({type,usd,ars,note});
+  document.getElementById('ed_fxUsd').value='';document.getElementById('ed_fxRate').value='';document.getElementById('ed_fxNote').value='';
+  recalcFxPreview();renderEdFx();recalcEditor();
+  return true;
+}
+function _edLoanSumar(){
+  const errEl=document.getElementById('ed_loanErr');errEl.textContent='';
+  const to=document.getElementById('ed_loanTo').value;
+  const amt=num(document.getElementById('ed_loanAmt').value);
+  const note=document.getElementById('ed_loanNote').value.trim();
+  if(!to){errEl.textContent='Elegí una empresa/proyecto destino.';return false}
+  if(amt==null||amt<=0){errEl.textContent='Ingresá un importe válido.';return false}
+  edState.loans.push({to,amt,note});
+  document.getElementById('ed_loanAmt').value='';document.getElementById('ed_loanNote').value='';
+  renderEdLoans();recalcEditor();
+  return true;
+}
+// Un cambio de divisa (o un préstamo) escrito en su cuadro pero SIN tocar «＋ Sumar» no se registraba: al guardar el día se perdía en silencio y los
+// pesos nunca llegaban a la otra caja (vendí dólares y «los pesos no pasaron a la caja de pesos»). Si está completo se suma solo; si está a medio
+// cargar se frena el guardado y se dice qué falta, para no dejar la operación por la mitad. Devuelve false si hay que cortar el guardado.
+function _edSumarPendientes(err){
+  const hay=id=>{const el=document.getElementById(id);return !!(el&&el.value.trim())};
+  if(hay('ed_fxUsd')||hay('ed_fxRate')){
+    if(!_edFxSumar()){
+      err.textContent='Tenés un cambio de divisa a medio cargar (más abajo): completalo y se suma solo al guardar, o vaciá los campos.';
+      const el=document.getElementById('ed_fxErr');if(el&&el.scrollIntoView)el.scrollIntoView({block:'center'});
+      return false;
+    }
+  }
+  if(hay('ed_loanAmt')&&document.getElementById('ed_loanAdd')){
+    if(!_edLoanSumar()){
+      err.textContent='Tenés un préstamo a medio cargar (más abajo): completalo y se suma solo al guardar, o vaciá el importe.';
+      const el=document.getElementById('ed_loanErr');if(el&&el.scrollIntoView)el.scrollIntoView({block:'center'});
+      return false;
+    }
+  }
+  return true;
+}
+// Aviso al cargar a mano la venta o compra de dólares como un movimiento común: la otra caja no se entera. Se muestra mientras algún concepto lo diga.
+const _FX_CPT_RE=/(vent|vend|compr).{0,28}(d[oó]lar|usd|u\$s|divisa)|(d[oó]lar|usd|u\$s|divisa).{0,28}(vent|vend|compr)|cambio de (d[oó]lar|divisa)/i;
+function _edFxHint(){
+  const el=document.getElementById('ed_fxHint');if(!el)return;
+  el.style.display=(edState.movs||[]).some(m=>_FX_CPT_RE.test(m.cpt||''))?'':'none';
 }
 function recalcFxPreview(){
   const usd=num(document.getElementById('ed_fxUsd').value);
@@ -3470,7 +3506,7 @@ function renderMovRows(){
   list.querySelectorAll('.mvrow').forEach(row=>{
     const i=+row.dataset.i;
     row.querySelectorAll('.tgl button').forEach(b=>b.onclick=()=>{edState.movs[i].type=b.dataset.t;row.querySelectorAll('.tgl button').forEach(x=>x.classList.remove('on'));b.classList.add('on');recalcEditor()});
-    row.querySelector('.cpt').oninput=e=>edState.movs[i].cpt=e.target.value;
+    row.querySelector('.cpt').oninput=e=>{edState.movs[i].cpt=e.target.value;_edFxHint()};
     row.querySelector('.ref').oninput=e=>edState.movs[i].ref=e.target.value;
     row.querySelector('.amount').oninput=e=>{edState.movs[i].amt=e.target.value;recalcEditor()};
     row.querySelector('.rmrow').onclick=()=>{
@@ -3479,6 +3515,7 @@ function renderMovRows(){
       if(!_confirmarQuitarFila(desc))return;
       edState.movs.splice(i,1);if(!edState.movs.length)edState.movs.push(blankMov());renderMovRows();recalcEditor()};
   });
+  _edFxHint();
 }
 // Parsea un importe tipeado a mano respetando el formato argentino: el punto es
 // separador de MILES y la coma de decimales ("1.500,50" = mil quinientos con
@@ -3689,6 +3726,7 @@ function saveDay(){
   if(!iso){err.textContent='Elegí una fecha.';return}
   const clash=days.find(d=>d.iso===iso&&!d.empty&&!(editIso&&d.iso===editIso));
   if(clash){err.textContent='Ya existe un día registrado con esa fecha ('+clash.date+').';return}
+  if(!_edSumarPendientes(err))return;
   // El nombre del crédito es OBLIGATORIO (pedido explícito: "que tengan un
   // nombre cada vez que entro o devuelven para poder agruparlo por persona").
   // Sin nombre el ajuste caía en "(sin nombre)" y se mezclaba con el de
