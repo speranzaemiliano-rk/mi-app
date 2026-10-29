@@ -1626,8 +1626,10 @@ function saveQuickMov(iso){
   const cpt=(document.getElementById('qaCpt').value||'').trim();
   const amt=num(document.getElementById('qaAmt').value);
   if(amt==null||amt<=0){err.textContent='Ingresá un importe válido.';return}
-  const d=userDays.find(x=>x.iso===iso);
+  const d=[...userDays].reverse().find(x=>x.iso===iso&&!x.empty);   // la última entrada de esa fecha (la que muestra la pantalla), no una lápida
   if(!d){err.textContent='Este día no se puede editar acá.';return}
+  // Venta o compra de dólares cargada como movimiento común: la otra caja no se entera (los pesos no pasan solos). «Cambio de divisa», en el editor del día, carga las dos patas.
+  if(_fxEsConcepto(cpt)&&!confirm('«'+cpt+'» parece una venta o compra de dólares.\n\nCargada como movimiento común, la OTRA caja no se entera: los pesos (o los dólares) no pasan solos.\nPara que entre en las dos cajas, editá el día y usá «Cambio de divisa».\n\n¿Cargarla igual como movimiento común?'))return;
   const imp=Math.round((_qaType==='out'?-1:1)*Math.abs(amt)*100)/100;
   d.movs.push({imp,cpt,ref:''});
   d.ing=Math.round(d.movs.filter(mv=>mv.imp>0).reduce((s,mv)=>s+mv.imp,0)*100)/100;
@@ -2992,7 +2994,7 @@ function applyLoanMovement(ctxId,cur,iso,imp,cpt,ref){
   day.nmov=day.movs.length;
   day.sf=Math.round((day.si+day.ing+day.egr)*100)/100;
   day.dif=day.fis!=null?Math.round((day.sf-day.fis)*100)/100:null;
-  const idx=ud.findIndex(d=>d.iso===iso);
+  let idx=-1;ud.forEach((d,k)=>{if(d.iso===iso)idx=k});   // la ÚLTIMA entrada de esa fecha: es la que leyó `map` arriba y la que muestra la pantalla
   if(idx>=0)ud[idx]=day;else ud.push(day);
   cascadeChain(ctxId,cur,ud);
   saveUserDaysFor(ctxId,cur,ud);
@@ -3429,11 +3431,23 @@ function _edSumarPendientes(err){
   }
   return true;
 }
+// ¿El concepto suena a venta/compra de dólares? Se normaliza (minúsculas, sin tildes) y se miran PALABRAS enteras: un verbo (vendí, venta, compré, compra,
+// cambio…) seguido —a lo sumo con «de/en/los…» o una cifra en el medio— de la moneda (dólares, USD, U$S, US$, divisa), o al revés («USD vendidos»). Sin esa
+// precisión «Compra de insumos USD», «Ventilador USD» o «Inventario USD» disparaban el aviso. Los movimientos que ya generó «Cambio de divisa» (ref «Cambio») no cuentan.
+const _FX_VERBOS=new Set(['vendi','vendimos','vendo','vender','venta','ventas','vendido','vendidos','vendida','vendidas','compre','compramos','compra','compras','comprado','comprados','comprada','compradas','cambio','cambie','cambiamos','canje']);
+const _FX_MONEDAS=new Set(['dolar','dolares','usd','u$s','us$','divisa','divisas']);
+const _FX_PARTICIPIOS=new Set(['vendido','vendidos','vendida','vendidas','comprado','comprados','comprada','compradas','cambiado','cambiados']);   // «USD vendidos» sí; «USD compra» es sólo una palabra suelta
+const _FX_RELLENO=new Set(['de','en','los','las','mis','unos','unas','x','por','a','el','la']);
+function _fxEsConcepto(cpt){
+  const w=String(cpt||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z0-9$]+/).filter(Boolean);
+  const salto=t=>_FX_RELLENO.has(t)||/^\d[\d.,]*$/.test(t);
+  const sigue=(i,conj)=>{for(let k=i+1;k<w.length&&k<=i+4;k++){if(conj.has(w[k]))return true;if(!salto(w[k]))return false}return false};
+  return w.some((t,i)=>(_FX_VERBOS.has(t)&&sigue(i,_FX_MONEDAS))||(_FX_MONEDAS.has(t)&&sigue(i,_FX_PARTICIPIOS)));
+}
 // Aviso al cargar a mano la venta o compra de dólares como un movimiento común: la otra caja no se entera. Se muestra mientras algún concepto lo diga.
-const _FX_CPT_RE=/(vent|vend|compr).{0,28}(d[oó]lar|usd|u\$s|divisa)|(d[oó]lar|usd|u\$s|divisa).{0,28}(vent|vend|compr)|cambio de (d[oó]lar|divisa)/i;
 function _edFxHint(){
   const el=document.getElementById('ed_fxHint');if(!el)return;
-  el.style.display=(edState.movs||[]).some(m=>_FX_CPT_RE.test(m.cpt||''))?'':'none';
+  el.style.display=(edState.movs||[]).some(m=>m.ref!=='Cambio'&&_fxEsConcepto(m.cpt))?'':'none';
 }
 function recalcFxPreview(){
   const usd=num(document.getElementById('ed_fxUsd').value);
@@ -3816,6 +3830,9 @@ function saveDay(){
   const rec={src:'user',sheet:'USER-'+iso,y,m:mo,d:dd,date:`${String(dd).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${y}`,iso,wd:wdOf(iso),
     si:c.si,sf:c.sf,ing:c.ing,egr:c.egr,nmov:c.movs.length,dif,fis,chq,credAdj,credMovs,credSi:0,cred:0,empty:false,caja:cajaParts,
     movs:c.movs.map(m=>({imp:m.imp,cpt:m.cpt,ref:m.ref}))};
+  // Una lápida (día borrado) de la MISMA fecha se reemplaza por el día nuevo: si quedaba al lado, dos entradas con la misma fecha hacían que recompute() se
+  // quedara con la última y que un cambio de divisa/préstamo se escribiera sobre la otra, y el día mostraba otra cosa que lo guardado.
+  userDays=userDays.filter(d=>!(d&&d.empty&&d.iso===iso));
   if(editIso){const idx=userDays.findIndex(d=>d.iso===editIso);if(idx>=0)userDays[idx]=rec;else userDays.push(rec)}
   else userDays.push(rec);
   cascadeChain(activeContextId,CUR,userDays);

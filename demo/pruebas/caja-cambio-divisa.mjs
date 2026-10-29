@@ -111,6 +111,71 @@ for (const cur of ['USD', 'ARS']) {
   ok('«Pago ABL» no lo muestra', !(await vis()));
   await ctx.close();
 }
+// 6) el aviso no confunde: ni las patas que ya generó «Cambio de divisa», ni conceptos comunes con USD; sí «US$» y «cambio dólares»
+{
+  const { p, ctx } = await abrir('USD');
+  await p.evaluate(() => openEditor(null)); await p.waitForTimeout(250);
+  const prueba = (t, ref) => p.evaluate(([t, ref]) => { edState.movs[0].cpt = t; edState.movs[0].ref = ref || ''; _edFxHint(); return getComputedStyle(document.getElementById('ed_fxHint')).display !== 'none'; }, [t, ref]);
+  const positivos = ['Venta de dólares', 'Vendí US$ 100', 'Venta US$ 1000', 'Compré US$ 200', 'cambio dólares', 'Cambio USD 300', 'Vendí 1000 USD', 'USD vendidos', 'dólares comprados', 'Venta de divisa', 'venta u$s', 'Compra de dolares'];
+  const negativos = ['Compra de insumos USD 50', 'Ventilador USD', 'Inventario USD', 'Evento USD', 'Comprobante dólar', 'Compromiso USD', 'Cobro venta depto USD', 'Pago a proveedor USD compra', 'cobro dólares alquiler', 'pago expensas', 'Cobro alquiler', 'Venta mostrador'];
+  const falsos = []; for (const x of positivos) if (!(await prueba(x))) falsos.push('no avisa: ' + x); for (const x of negativos) if (await prueba(x)) falsos.push('avisa de más: ' + x);
+  ok('el aviso distingue ventas/compras de dólares de conceptos comunes con USD', falsos.length === 0, JSON.stringify(falsos));
+  ok('una pata ya generada por «Cambio de divisa» (ref «Cambio») no dispara el aviso', !(await prueba('Venta de divisa', 'Cambio')));
+  // reabrir un día con un cambio bien cargado: sin aviso
+  await p.evaluate(() => closeEditor());
+  await p.evaluate(() => registerExchange(activeContext(), 'venta', 1000, 1200000, '', '2026-10-01'));
+  await p.waitForTimeout(200);
+  await p.evaluate(() => editDay('2026-10-01')); await p.waitForTimeout(250);
+  ok('«Editar día» de un día con cambio de divisa bien cargado no muestra el aviso', await p.evaluate(() => getComputedStyle(document.getElementById('ed_fxHint')).display === 'none'));
+  await ctx.close();
+}
+// 7) alta rápida del Resumen: «Venta de dólares» como movimiento común pide confirmar
+{
+  const { p, ctx } = await abrir('ARS');
+  const rapida = (cpt, conf) => p.evaluate(async ([iso, cpt, conf]) => { window.__conf = []; window.confirm = m => { window.__conf.push(m); return conf; }; openDayIso(iso); await new Promise(r => setTimeout(r, 200)); { const bx = document.getElementById('dayQuickAdd'); bx.style.display = 'none'; bx.innerHTML = ''; } openQuickAdd(iso); document.getElementById('qaCpt').value = cpt; document.getElementById('qaAmt').value = '1000'; saveQuickMov(iso); return { conf: window.__conf.length, movs: JSON.parse(localStorage.getItem('caja_user_days_v2::fk::ARS')).find(d => d.iso === iso).movs.length }; }, ['2026-10-01', cpt, conf]);
+  const a = await rapida('Venta de dólares', false);
+  ok('alta rápida «Venta de dólares»: pregunta y, si se dice que no, no carga nada', a.conf === 1 && a.movs === 1, JSON.stringify(a));
+  const b2 = await rapida('Venta de dólares', true);
+  ok('alta rápida «Venta de dólares» confirmando: se carga como movimiento común', b2.conf === 1 && b2.movs === 2, JSON.stringify(b2));
+  const c2 = await rapida('Cobro alquiler local 3', false);
+  ok('alta rápida de un concepto común: no pregunta nada', c2.conf === 0 && c2.movs === 3, JSON.stringify(c2));
+  await ctx.close();
+}
+// 8) fechas con lápida (día borrado): recrear o mover un día a esa fecha no deja dos entradas con la misma fecha, y el cambio de divisa queda donde se ve
+{
+  const lapida = (iso) => { const p = iso.split('-').map(Number); return { src: 'user', iso, y: p[0], m: p[1], d: p[2], date: p[2] + '/' + p[1] + '/' + p[0], wd: 'lun', empty: true, movs: [], credMovs: [], fisMovs: [], caja: [], ing: 0, egr: 0, nmov: 0, si: 0, sf: 0, dif: null, fis: null, chq: null, cred: 0, credSi: 0, credAdj: 0 }; };
+  // recrear una fecha borrada con un cobro y un cambio de divisa
+  {
+    const { p, errores, ctx } = await abrir('ARS');
+    await p.evaluate(([iso, l]) => { ['ARS', 'USD'].forEach(c => { const k = 'caja_user_days_v2::fk::' + c, a = JSON.parse(localStorage.getItem(k)); a.push(l); localStorage.setItem(k, JSON.stringify(a)); }); location.reload(); }, [ISO, lapida(ISO)]);
+    await p.waitForLoadState('load'); await p.waitForTimeout(900);
+    await p.evaluate(() => { window.__al = []; window.alert = m => window.__al.push(m); window.confirm = () => true; });
+    await p.evaluate(() => openEditor(null)); await p.waitForTimeout(250);
+    await p.evaluate(iso => { document.getElementById('f_date').value = iso; edState.iso = iso; edState.movs[0] = { type: 'in', amt: '500', cpt: 'Cobro', ref: '' }; renderMovRows(); }, ISO);
+    await llenarFx(p, '1000', '1200'); await guardar(p);
+    const ars = await p.evaluate(iso => JSON.parse(localStorage.getItem('caja_user_days_v2::fk::ARS')).filter(d => d.iso === iso), ISO);
+    const usd = await p.evaluate(iso => JSON.parse(localStorage.getItem('caja_user_days_v2::fk::USD')).filter(d => d.iso === iso), ISO);
+    ok('fecha borrada y recreada: queda UNA sola entrada por caja (la lápida se reemplaza)', ars.length === 1 && usd.length === 1 && !ars[0].empty, JSON.stringify({ ars: ars.length, usd: usd.length }));
+    ok('fecha borrada y recreada: en la caja en pesos figuran el cobro y los $ 1.200.000 del cambio, y la pantalla los suma', ars[0].movs.length === 2 && ars[0].movs.some(m => m.imp === 1200000) && (await p.evaluate(iso => days.find(d => d.iso === iso).sf, ISO)) === 800000 + 500 + 1200000, JSON.stringify(ars));
+    ok('sin errores de JS', errores.length === 0, JSON.stringify(errores));
+    await ctx.close();
+  }
+  // mover un día existente a una fecha con lápida, con cambio de divisa
+  {
+    const { p, ctx } = await abrir('ARS');
+    const F = '2026-10-05';
+    await p.evaluate(([f, l]) => { ['ARS', 'USD'].forEach(c => { const k = 'caja_user_days_v2::fk::' + c, a = JSON.parse(localStorage.getItem(k)); a.push(l); localStorage.setItem(k, JSON.stringify(a)); }); location.reload(); }, [F, lapida(F)]);
+    await p.waitForLoadState('load'); await p.waitForTimeout(900);
+    await p.evaluate(() => { window.__al = []; window.alert = m => window.__al.push(m); window.confirm = () => true; });
+    await p.evaluate(() => editDay('2026-10-01')); await p.waitForTimeout(250);
+    await p.evaluate(f => { document.getElementById('f_date').value = f; edState.iso = f; }, F);
+    await llenarFx(p, '1000', '1200'); await guardar(p);
+    const ars = await p.evaluate(f => JSON.parse(localStorage.getItem('caja_user_days_v2::fk::ARS')).filter(d => d.iso === f || d.iso === '2026-10-01'), F);
+    const visible = await p.evaluate(() => days.filter(d => !d.empty).map(d => d.iso + ':' + d.sf));
+    ok('mover un día a una fecha con lápida + cambio de divisa: el día no desaparece y tiene el cobro y los pesos', ars.length === 1 && ars[0].iso === F && ars[0].movs.some(m => m.imp === 800000) && ars[0].movs.some(m => m.imp === 1200000) && visible.some(x => x.startsWith(F)), JSON.stringify({ ars, visible }));
+    await ctx.close();
+  }
+}
 console.log(res.map(x => x.join(' ')).join('\n'));
 console.log(res.filter(x => x[0] !== 'OK ').length ? '\n❌ HAY FALLAS' : '\n✅ todo OK (' + res.length + ')');
 await browser.close();
