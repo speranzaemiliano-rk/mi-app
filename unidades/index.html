@@ -157,6 +157,24 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 #dropZona div{background:var(--card);color:var(--text-1);border-radius:var(--radius);padding:22px 32px;font-size:18px;font-weight:600;box-shadow:var(--shadow-lg)}
 #verBanner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:960;background:var(--ink);color:var(--surface);border-radius:var(--radius-pill);padding:9px 14px 9px 18px;display:flex;gap:12px;align-items:center;box-shadow:var(--shadow-lg);font-weight:500}
 #verBanner button{background:var(--gold);border:0;color:#fff;border-radius:var(--radius-pill);padding:5px 14px;font-weight:600}
+/* ⚠️ Un guardado RECHAZADO no puede pasar como un toast de dos segundos.
+   Pasó de verdad: a un usuario Firebase le negaba la escritura y veía el
+   toast irse, seguía cargando toda la planilla convencido de que guardaba, y
+   el otro usuario nunca veía nada. Este cartel queda hasta que lo cierren. */
+#errBanner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:980;
+  background:#B42318;color:#fff;border-radius:var(--radius);padding:12px 14px 12px 16px;
+  display:flex;gap:14px;align-items:flex-start;box-shadow:var(--shadow-lg);
+  max-width:min(620px,calc(100vw - 24px));font-size:13.5px;line-height:1.5}
+#errBanner b{display:block;margin-bottom:3px;font-size:14px}
+.diag{margin:10px 0 4px}
+.diag-f{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-top:1px solid var(--border);font-size:13.5px}
+.diag-f:first-child{border-top:0}
+.diag-f span{color:var(--muted,#9A9AA2)}
+.diag-f b{text-align:right}
+.diag-ok{color:#137A38}
+.diag-mal{color:#B42318}
+#errBanner button{flex:0 0 auto;background:rgba(255,255,255,.18);border:0;color:#fff;
+  border-radius:var(--radius-pill);padding:6px 14px;font-weight:600;cursor:pointer}
 .vista{display:none}.vista.on{display:block}
 @media(max-width:900px){
   .sidebar{transform:translateX(-100%);transition:transform .2s}
@@ -199,6 +217,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <input type="file" id="fileCV" accept=".xlsx,.xls,.csv" class="hid">
       <button class="nav-item" id="btnXls0"><span class="nav-icon">download</span>Bajar a Excel</button>
       <button class="nav-item" id="btnDel"><span class="nav-icon">delete</span>Eliminar edificio</button>
+      <button class="nav-item" id="btnDiag"><span class="nav-icon">build</span>Diagnóstico</button>
       <input type="file" id="fileImp" accept=".xlsx,.xls,.csv" class="hid">
     </div>
     <div class="sidebar-footer">
@@ -293,6 +312,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
 <div id="modal" class="modal-fondo hid"><div class="modal-caja" id="modalCaja"></div></div>
 <div id="dropZona" class="hid"><div>📥 Soltá la planilla acá para cargar sus datos</div></div>
 <div id="verBanner" class="hid"><span>🔄 Hay una versión nueva de la planilla</span><button id="verRecargar">Actualizar</button></div>
+<div id="errBanner" class="hid"><div><b id="errTit"></b><span id="errTxt"></span></div><button id="errCerrar">Entendido</button></div>
 <div id="toast" class="hid"></div>
 
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -334,6 +354,29 @@ function esc(s){ return (s == null ? '' : String(s)).replace(/[&<>"']/g, functio
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function N(v, m){ return (m || '$') + ' ' + v.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function $(id){ return document.getElementById(id); }
+/* Qué pasó de verdad. Los siete guardados tiraban el error a la basura
+   (`.catch(function(){…})` sin mirarlo), así que «no se pudo guardar» tapaba
+   por igual un problema de permisos —que no se arregla reintentando— y una
+   caída de red —que sí—. */
+function motivoFirebase(err){
+  var c = String((err && (err.code || err.message)) || '').toLowerCase();
+  if (c.indexOf('permission') >= 0)
+    return 'Firebase le negó el permiso a tu cuenta. Lo que cargaste NO quedó guardado ' +
+           'y las demás personas no lo van a ver. Suele ser que falten publicar las reglas ' +
+           'en Firebase → Realtime Database → Reglas, o que tu rol no pueda escribir acá.';
+  if (c.indexOf('network') >= 0 || c.indexOf('disconnect') >= 0 || c.indexOf('unavailable') >= 0)
+    return 'Se cortó la conexión. Lo que cargaste NO quedó guardado: revisá la señal y volvé a cargarlo.';
+  return 'No se pudo guardar y el motivo que devolvió Firebase es «' + ((err && (err.code || err.message)) || 'desconocido') +
+         '». Lo que cargaste NO quedó guardado.';
+}
+function fallaGuardar(err, que){
+  var b = $('errBanner');
+  $('errTit').textContent = '⚠️ No se guardó' + (que ? ': ' + que : '');
+  $('errTxt').textContent = ' ' + motivoFirebase(err);
+  b.classList.remove('hid');
+  try { console.error('[unidades] falló el guardado', que || '', err); } catch(e) {}
+}
+
 function toast(t){ var e = $('toast'); e.textContent = t; e.classList.remove('hid');
   clearTimeout(toast._t); toast._t = setTimeout(function(){ e.classList.add('hid'); }, 3500); }
 function bloquear(tit, txt, acc){
@@ -494,7 +537,7 @@ function guardarParams(){
   clearTimeout(_tGuardar); _pend = true;
   _tGuardar = setTimeout(function(){
     db.ref('global/edificios/' + edId + '/params').set(P)
-      .then(function(){ _pend = false; }, function(){ _pend = false; toast('⚠️ No se pudo guardar (¿permiso?)'); });
+      .then(function(){ _pend = false; }, function(e){ _pend = false; fallaGuardar(e, 'los parámetros de valuación'); });
   }, 600);
 }
 
@@ -893,7 +936,7 @@ $('th').addEventListener('click', function(e){
 function guardarCampo(e){
   var i = e.target; if (!i.dataset.f || !puedeEditar) return;
   db.ref('global/edificios/' + edId + '/unidades/' + i.dataset.k + '/' + i.dataset.f).set(i.value || null)
-    .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+    .catch(function(e){ fallaGuardar(e, 'el dato que acabás de cargar'); });
 }
 $('tb').addEventListener('change', guardarCampo);
 $('tb').addEventListener('click', function(e){
@@ -915,7 +958,7 @@ $('ctb').addEventListener('change', function(e){
       fila.ccf = hoy;
       db.ref('global/edificios/' + edId + '/unidades/' + i.dataset.k + '/ccf').set(hoy)
         .then(function(){ renderCerraduras(); })
-        .catch(function(){ toast('⚠️ No se pudo guardar la fecha'); });
+        .catch(function(e){ fallaGuardar(e, 'la fecha del cambio de cerradura'); });
     }
   }
 });
@@ -1009,7 +1052,7 @@ function abrirImportesUnidad(k){
     var upd = {}, base = 'global/edificios/' + edId + '/unidades/';
     filas().forEach(function(x){
       var i = x.querySelector('[data-k]'), v = parseFloat(i.value); upd[base + i.dataset.k + '/cv/' + k] = isNaN(v) ? null : Math.round(v * 10000) / 10000; });
-    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes guardados'); }, function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+    db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Importes guardados'); }, function(e){ fallaGuardar(e, 'los importes por unidad'); });
   };
 }
 function abrirAplica(k){
@@ -1378,6 +1421,58 @@ $('xls').onclick = bajarExcel; $('xls2').onclick = bajarExcel; $('btnXls0').oncl
 function abrirModal(html){ $('modalCaja').innerHTML = html; $('modal').classList.remove('hid'); }
 function cerrarModal(){ $('modal').classList.add('hid'); $('modalCaja').innerHTML = ''; }
 $('modal').addEventListener('mousedown', function(e){ if (e.target === $('modal')) cerrarModal(); });
+$('btnDiag').onclick = abrirDiagnostico;
+/* 🔧 Diagnóstico. Dos personas cargando la misma planilla y cada una viendo
+   sólo lo suyo es casi siempre ESTO: a una Firebase le niega la escritura y
+   el aviso pasaba como un toast. Acá la prueba es REAL —se escribe y se
+   borra una marca en la ruta exacta que usa la planilla— porque leer las
+   reglas del repo no sirve: `database.rules.json` no se aplica solo y lo
+   que vale es lo publicado en la consola. */
+function abrirDiagnostico(){
+  var e = EDS[edId], us = (e && e.unidades) || {}, claves = Object.keys(us);
+  function fila(t, v, ok){
+    return '<div class="diag-f"><span>' + esc(t) + '</span><b class="' +
+      (ok === true ? 'diag-ok' : ok === false ? 'diag-mal' : '') + '">' + esc(v) + '</b></div>';
+  }
+  abrirModal('<h3>🔧 Diagnóstico</h3>' +
+    '<div class="diag">' +
+      fila('Tu cuenta', mail || '(sin sesión)') +
+      fila('Tu rol', rol || '(sin rol)') +
+      fila('Puede editar según la app', puedeEditar ? 'sí' : 'no', puedeEditar) +
+      fila('Edificio', (e && e.nombre) || edId || '(ninguno)') +
+      fila('Unidades que llegaron', String(claves.length), claves.length > 0) +
+      '<div class="diag-f"><span>Escritura en la nube</span><b id="diagW">probando…</b></div>' +
+    '</div>' +
+    '<div class="ayuda" id="diagMsg">Se escribe y se borra una marca de prueba en la misma ruta ' +
+      'que usa la planilla. No toca ningún dato.</div>' +
+    '<button class="btn" onclick="cerrarModal()" style="margin-top:12px">Cerrar</button>');
+
+  if (!edId) { $('diagW').textContent = 'no hay edificio'; return; }
+  // La marca va DENTRO de una unidad: es la ruta que las reglas tratan
+  // distinto (ahí es donde el rol `posesiones` tiene permiso propio). Un nodo
+  // colgado del edificio daría un «no podés» falso para ese rol.
+  var ruta = claves.length
+    ? 'global/edificios/' + edId + '/unidades/' + claves[0] + '/_diag'
+    : 'global/edificios/' + edId + '/_diag';
+  var exacta = !!claves.length;
+  db.ref(ruta).set(Date.now()).then(function(){
+    return db.ref(ruta).remove();
+  }).then(function(){
+    $('diagW').textContent = 'sí, podés guardar ✓';
+    $('diagW').className = 'diag-ok';
+    $('diagMsg').innerHTML = exacta
+      ? 'Tu equipo guarda bien. Si aun así no ves lo que carga la otra persona, el problema está ' +
+        'del lado de ella: pedile que abra este mismo diagnóstico y te diga qué le figura acá.'
+      : 'Se probó sobre el edificio porque todavía no hay unidades cargadas; con unidades la prueba es más exacta.';
+  }).catch(function(err){
+    $('diagW').textContent = 'NO podés guardar';
+    $('diagW').className = 'diag-mal';
+    $('diagMsg').textContent = motivoFirebase(err) +
+      ' Mientras esto no se arregle, todo lo que cargues en este equipo se pierde al recargar ' +
+      'y las demás personas no lo ven.';
+  });
+}
+
 function formUnidad(r){
   var nueva = !r; r = r || {u:'', p:'', rk:false, i:'', t:'', m:[], s:''};
   abrirModal('<h2>' + (nueva ? 'Nueva unidad' : 'Editar unidad ' + esc(r.u)) + '</h2><div class="form-grid">' +
@@ -1426,7 +1521,7 @@ function guardarUnidad(r, nueva){
     var ep = $('fu_pr_' + c[0]); upd[base + 'pr/' + c[0]] = ep && ep.checked ? 1 : null; });
   upd[base + 'm'] = mails.length ? mails : null; var im = mailsDe(i); upd[base + 'im'] = im.length ? im : null;
   db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Unidad guardada'); })
-    .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+    .catch(function(e){ fallaGuardar(e, 'la unidad'); });
 }
 function borrarUnidad(k){
   var r = U.filter(function(x){ return x.k === k; })[0]; if (!r) return;
@@ -1642,7 +1737,7 @@ function abrirCargaPlanilla(wb, nombreArch){
       });
     }
     db.ref().update(upd).then(function(){ cerrarModal(); toast('✔ Datos cargados en ' + n + ' unidades'); })
-      .catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+      .catch(function(e){ fallaGuardar(e, 'los datos de la planilla'); });
   };
 }
 
@@ -1722,7 +1817,7 @@ function importarLibro(wb){
   db.ref().update(upd).then(function(){
     edId = id; try { localStorage.setItem('unid_ed', id); } catch(e) {}
     toast('✔ ' + (existe ? 'Actualizado' : 'Creado') + ': ' + nombre + ' · ' + n + ' unidades' + (sinM2 ? ' · ⚠️ ' + sinM2 + ' sin m²' : ''));
-  }).catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+  }).catch(function(e){ fallaGuardar(e, 'lo importado del Excel'); });
 }
 
 /* ── Eliminar edificio ─────────────────────────────────────────────── */
@@ -1738,7 +1833,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v28';
+var UNID_VER = 'unidades-v29';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
