@@ -106,3 +106,7 @@ Un concepto en modo `unidad`/`unidadusd` no tiene un total para tipear (el campo
 
 
 **No sumar en el total de conceptos:** casilla bajo cada concepto (`params.nosuma[k] = 1`). El concepto se sigue viendo y calculando, pero `calc` no lo suma a `totp`/`totu`/`tot` (ni al USD por m²); en el Excel `sumaConc` lo saltea, así las fórmulas siguen cerrando.
+
+## TC propio por concepto (sólo para VER en la otra moneda)
+
+`params.tcc[<concepto>]` = `'alt'` (TC alternativo) o un número (TC propio); sin valor = TC base. Selector «Pasar de $ a USD al…» bajo cada concepto en «Valuación y conceptos» (`data-tcm`/`data-tcv`). `tcConc(k)` lo resuelve y lo usan `Nv(v, nat, k)` y `convMon` (vía `tcColumna`) para los conceptos y sus columnas de cobrado/saldo, así un % calculado en pesos se puede ver en dólares al TC actual. ⚠️ **El valor de costo no se toca**: valor de las unidades, `calc()` (`tot`, `tusd`, USD por m²) y los Total conceptos siguen anclados al TC base (el del primer boleto, a efectos contables). En el Excel, la celda de un concepto con TC propio visto en la otra moneda baja como valor fijo (no fórmula).

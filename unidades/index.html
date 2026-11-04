@@ -316,7 +316,7 @@ function bloquear(tit, txt, acc){
 }
 function paramsPorDefecto(){
   var i = CFG.inicial || {};
-  return { sel:{}, nosuma:{}, base:'m2', usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
+  return { sel:{}, nosuma:{}, tcc:{}, base:'m2', usd: i.usd || 1000, tc: i.tc || 215, tc2: i.tc2 || 0,
     pct:  {gan:0, iibb:0, adm:0, res:0, alh:0, rec:0, cdi:0},
     modo: {gan:'pct', iibb:'pct', adm:'pct', res:'pct', alh:'pct', rec:'pct', cdi:'pct'} };
 }
@@ -327,6 +327,7 @@ function normParams(p){
     var k = c[0];
     if (p.sel && Array.isArray(p.sel[k])) d.sel[k] = p.sel[k].slice();
     if (p.nosuma && p.nosuma[k]) d.nosuma[k] = 1;
+    var tq = (p.tcc || {})[k]; if (tq === 'alt') d.tcc[k] = 'alt'; else if (+tq > 0) d.tcc[k] = +tq;   // TC con el que se ve el concepto en la otra moneda
     d.pct[k] = +((p.pct || {})[k]) || 0;
     var mo = (p.modo || {})[k]; d.modo[k] = (mo === 'monto' || mo === 'montousd' || mo === 'unidad' || mo === 'unidadusd') ? mo : 'pct';
   });
@@ -441,13 +442,17 @@ function totConcepto(k){ return totNativo(k) * (monedaConc(k) === 'USD' ? P.tc :
 /* ── Pantalla «Valuación y conceptos»: ver todos los importes en dólares, en pesos o como se cargaron ── */
 var VMON = 'nat';
 try { VMON = localStorage.getItem('unid_vmon') || 'nat'; } catch(x) {}
-function Nv(v, nat){                     // formatea un importe cargado en `nat` ('USD' | '$') según el botón de la pantalla
-  var m = VMON === 'nat' ? nat : VMON, x = m === nat ? v : (nat === 'USD' ? v * P.tc : (P.tc ? v / P.tc : v));
+/* TC con el que se pasa UN concepto de una moneda a la otra (sólo para VERLO): por defecto el TC base; también el alternativo o uno propio
+   (P.tcc[k] = 'alt' | número). El valor de costo (valor de las unidades y USD por m²) queda siempre anclado al TC base. */
+function tcConc(k){ var t = P.tcc && P.tcc[k]; if (t === 'alt') return P.tc2 || P.tc; return +t > 0 ? +t : P.tc; }
+function Nv(v, nat, k){                  // formatea un importe cargado en `nat` ('USD' | '$') según el botón de la pantalla (k: concepto, para su TC)
+  var tc = k ? tcConc(k) : P.tc;
+  var m = VMON === 'nat' ? nat : VMON, x = m === nat ? v : (nat === 'USD' ? v * tc : (tc ? v / tc : v));
   return N(x, m);
 }
 function modoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return 'Importe por unidad ($)'; if (m === 'unidadusd') return 'Importe por unidad (USD)'; return m === 'monto' ? '$ total del edificio' : m === 'montousd' ? 'USD total del edificio' : '% del valor total'; }
-function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return Nv(sumaCV(k), '$'); if (m === 'unidadusd') return Nv(sumaCV(k), 'USD'); return m === 'monto' ? Nv(P.pct[k], '$') : m === 'montousd' ? Nv(P.pct[k], 'USD') : P.pct[k] + ' %'; }
-function totalConceptoTexto(k){ return 'Total edificio: ' + Nv(totNativo(k), monedaConc(k)); }
+function valorCargadoTexto(k){ var m = P.modo[k]; if (m === 'unidad') return Nv(sumaCV(k), '$', k); if (m === 'unidadusd') return Nv(sumaCV(k), 'USD', k); return m === 'monto' ? Nv(P.pct[k], '$', k) : m === 'montousd' ? Nv(P.pct[k], 'USD', k) : P.pct[k] + ' %'; }
+function totalConceptoTexto(k){ return 'Total edificio: ' + Nv(totNativo(k), monedaConc(k), k); }
 function calc(r){
   var vir = P.base === 'vir', usd = vir ? (P.tc ? r.vf / P.tc : 0) : r.s * P.usd, ars = vir ? r.vf : usd * P.tc;
   var o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, vf:r.vf || 0, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
@@ -530,6 +535,10 @@ function renderParams(){
       '<option value="unidad"' + (P.modo[k] === 'unidad' ? ' selected' : '') + '>$ por unidad</option>' +
       '<option value="unidadusd"' + (P.modo[k] === 'unidadusd' ? ' selected' : '') + '>USD por unidad</option></select></span>' +
       '<small>' + totalConceptoTexto(k) + '</small>' +
+      '<span class="dual" style="font-size:11px;align-items:center" title="Con qué tipo de cambio se pasa este concepto de pesos a dólares (o al revés) al verlo en la otra moneda. No cambia el valor de costo de las unidades.">Pasar de $ a USD al ' +
+        '<select data-tcm="' + k + '"' + d + '><option value="base"' + (!P.tcc[k] ? ' selected' : '') + '>TC base</option><option value="alt"' + (P.tcc[k] === 'alt' ? ' selected' : '') + '>TC alternativo</option>' +
+        '<option value="otro"' + (+P.tcc[k] > 0 ? ' selected' : '') + '>Otro TC…</option></select>' +
+        (+P.tcc[k] > 0 ? '<input type="number" step="any" min="0" data-tcv="' + k + '" value="' + P.tcc[k] + '"' + d + '>' : '') + '</span>' +
       (um ? '<button class="btn" type="button" data-cvedit="' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + (puedeEditar ? '' : ' disabled') + '>✏️ Cargar importes por unidad</button>' : '<button class="btn" type="button" data-aplica=""' + k + '" style="font-size:11px;padding:2px 8px;align-self:flex-start"' + d + '>👥 ' +
         (P.sel[k] ? 'Sólo ' + P.sel[k].length + ' de ' + U.length + ' unidades' : 'En todas las unidades') + '</button>') +
       '<span class="chk" style="font-size:11px"><input type="checkbox" data-nosuma="' + k + '"' + (P.nosuma[k] ? ' checked' : '') + d + '> No sumar en el total de conceptos</span></label>';
@@ -609,9 +618,10 @@ function monNativa(k){
   return CONC.some(function(c){ return c[0] === b; }) ? monedaConc(b) : null;
 }
 function monVista(k){ var n = monNativa(k); return n && MON[k] ? MON[k] : n; }
+function tcColumna(k){ var b = k.replace(/^(cb|sd)_/, ''); return CONC.some(function(c){ return c[0] === b; }) ? tcConc(b) : P.tc; }   // columnas de concepto: el TC del concepto
 function convMon(k, v){
   var n = monNativa(k), d = monVista(k); if (!n || n === d) return v;
-  var tc = k === 'alt' ? P.tc2 : P.tc; if (!tc) return v;
+  var tc = k === 'alt' ? P.tc2 : tcColumna(k); if (!tc) return v;
   return n === 'USD' ? v * tc : v / tc;
 }
 function fm(k, v){ return N(convMon(k, v), monVista(k)); }
@@ -749,8 +759,8 @@ function renderCobros(){
       if (r.pr[k]) { prop += imp - cb; nProp++; } else if (cb < imp - 0.005) { adeu += imp - cb; nAdeu++; }
     });
     h += '<div class="card" style="margin-top:14px"><h3 style="margin:0 0 10px;font-size:15px">' + esc(c[1]) + ' · cobros</h3><div class="kpis" style="margin:0">' +
-      [['Total del fondo', Nv(tot, mon), nTot + ' unidades'], ['Cobrado', Nv(cob, mon), nCob + ' unidades al día'], ['Faltante', Nv(prop + adeu, mon), 'Propios + Adeudan'],
-       ['Propios (del desarrollador)', Nv(prop, mon), nProp + ' unidades'], ['Adeudan', Nv(adeu, mon), nAdeu + ' unidades']]
+      [['Total del fondo', Nv(tot, mon, k), nTot + ' unidades'], ['Cobrado', Nv(cob, mon, k), nCob + ' unidades al día'], ['Faltante', Nv(prop + adeu, mon, k), 'Propios + Adeudan'],
+       ['Propios (del desarrollador)', Nv(prop, mon, k), nProp + ' unidades'], ['Adeudan', Nv(adeu, mon, k), nAdeu + ' unidades']]
       .map(function(x){ return '<div class="card kpi"><small>' + x[0] + '</small><b>' + esc(x[1]) + '</b><small>' + esc(x[2]) + '</small></div>'; }).join('') + '</div></div>';
   });
   $('cobrosBox').innerHTML = h;
@@ -759,7 +769,7 @@ function renderResumen(){
   $('resBody').innerHTML = CONC.map(function(c){
     var k = c[0];
     return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + modoTexto(k) + '</td><td>' +
-      valorCargadoTexto(k) + '</td><td><b>' + Nv(totNativo(k), monedaConc(k)) + '</b></td></tr>';
+      valorCargadoTexto(k) + '</td><td><b>' + Nv(totNativo(k), monedaConc(k), k) + '</b></td></tr>';
   }).join('');
 }
 function renderPosesion(){
@@ -791,6 +801,12 @@ $('params').addEventListener('input', function(e){
 });
 $('params').addEventListener('change', function(e){
   var u = e.target;
+  if ((u.dataset.tcm || u.dataset.tcv) && puedeAdmin) {
+    var kc = u.dataset.tcm || u.dataset.tcv;
+    if (u.dataset.tcm) { var o = u.value; if (o === 'base') delete P.tcc[kc]; else if (o === 'alt') P.tcc[kc] = 'alt'; else P.tcc[kc] = +P.tcc[kc] > 0 ? P.tcc[kc] : (P.tc2 || P.tc); }
+    else { var nv2 = parseFloat(u.value); if (nv2 > 0) P.tcc[kc] = nv2; else delete P.tcc[kc]; }
+    guardarParams(); renderParams(); render(); return;
+  }
   if (u.dataset.nosuma && puedeAdmin) { if (u.checked) P.nosuma[u.dataset.nosuma] = 1; else delete P.nosuma[u.dataset.nosuma]; guardarParams(); render(); return; }
   if (u.dataset.k === 'usd' && puedeAdmin) {
     var nv = parseFloat(u.value) || 0;
@@ -973,7 +989,7 @@ $('btnCols').onclick = abrirColumnas;
 });
 function pintarVmBar(){
   [].forEach.call(document.querySelectorAll('#vmBar [data-vm]'), function(b){ b.classList.toggle('on', b.dataset.vm === VMON); });
-  $('vmTc').textContent = VMON === 'nat' ? '' : 'al tipo de cambio base ($ ' + P.tc + ' por USD)';
+  $('vmTc').textContent = VMON === 'nat' ? '' : 'al tipo de cambio base ($ ' + P.tc + ' por USD), salvo los conceptos con otro TC elegido';
 }
 
 /* ── Cambiar el ancho de una columna arrastrando el borde del título ── */
@@ -1073,6 +1089,7 @@ function bajarExcel(){
   var natVista = function(k){ return !monNativa(k) || monNativa(k) === monVista(k); };
   var conv = function(k, f){                     // la fórmula calcula en la moneda nativa; si la columna se ve en la otra, se convierte
     var n = monNativa(k), d = monVista(k); if (!n || n === d) return f;
+    if (k !== 'alt' && tcColumna(k) !== P.tc) return null;     // concepto con TC propio: la celda baja como valor fijo (ya convertido)
     var tc = k === 'alt' ? VAL.tc2 : VAL.tc; return n === 'USD' ? '(' + f + ')*' + tc : '(' + f + ')/' + tc;
   };
   var sumaConc = function(mon, r){               // suma de las columnas de concepto en esa moneda; null si falta alguna o se ve en la otra moneda
@@ -1596,7 +1613,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v27';
+var UNID_VER = 'unidades-v28';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
