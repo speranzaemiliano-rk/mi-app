@@ -3633,7 +3633,8 @@
                 </div>
                 <div class="tc-edit-group" id="exchangeInputGroup">
                     <input type="number" id="exchangeRateInput" placeholder="Tipo de cambio" step="0.01" min="0" style="width:110px;">
-                    <button class="btn btn-outline btn-sm" onclick="actualizarTipoCambio()">✓</button>
+                    <button class="btn btn-outline btn-sm" onclick="actualizarTipoCambio()" title="Usar el tipo de cambio escrito">✓</button>
+                    <button class="btn btn-outline btn-sm" onclick="usarDolarBlueActual()" title="Traer el dólar blue de hoy">🔄 Blue</button>
                 </div>
                 <div class="readonly-badge" id="badgeSoloLectura">🔒 Solo lectura</div>
             </div>
@@ -8446,6 +8447,21 @@
                 renderizar();
             }
         } catch (e) { console.log('No se pudo obtener el dólar blue.'); }
+    }
+
+    // Trae el blue de hoy a pedido y lo deja como tipo de cambio vigente (pisa el guardado).
+    async function usarDolarBlueActual() {
+        try {
+            const response = await fetch('https://dolarapi.com/v1/dolares/blue');
+            const data = await response.json();
+            const venta = data.venta || data.compra;
+            if (!(venta > 0)) throw new Error('sin cotización');
+            exchangeRate = venta;
+            if (puedeEditar) REF_TC.set(venta);
+            actualizarDisplayTipoCambio();
+            renderizar();
+            alert('✓ Dólar blue actualizado: $' + venta.toFixed(2));
+        } catch (e) { alert('No se pudo obtener el dólar blue. Probá de nuevo o escribilo a mano.'); }
     }
 
     function actualizarTipoCambio() {
@@ -28636,11 +28652,12 @@
         return Math.round(base * factor);
     }
 
-    // Valor en USD de una cuota: al dólar del pago (si está pagada y quedó registrado)
-    // o al dólar de hoy (si todavía no se pagó). Las cuotas ya en USD se devuelven igual.
+    // Valor en USD de una cuota: siempre al tipo de cambio vigente (el blue de hoy o el que
+    // el usuario haya fijado arriba), NO al dólar del día en que se pagó. Las cuotas ya en USD
+    // se devuelven igual. (Los parámetros pagada/cobroReg se conservan por compatibilidad.)
     function _cuotaUsdValor(montoMoneda, esUSD, pagada, cobroReg) {
         if (esUSD) return montoMoneda;
-        var tc = (pagada && cobroReg && cobroReg.tc > 0) ? cobroReg.tc : (exchangeRate || 0);
+        var tc = exchangeRate || 0;
         return tc > 0 ? (montoMoneda / tc) : 0;
     }
 
@@ -28662,17 +28679,14 @@
         return { terrenoUsd: terrenoUsd, cuotasUsd: cuotasUsd, totalUsd: terrenoUsd + cuotasUsd };
     }
 
-    // Celda "USD" de una cuota en ARS: la convierte al dólar del día en que se pagó
-    // (registro.tc) si está pagada, o al dólar de hoy (exchangeRate) si todavía no venció/pagó.
-    // Si la cuota ya está en USD, no hay conversión (devuelve '—').
+    // Celda "USD" de una cuota en ARS: la convierte siempre al tipo de cambio vigente
+    // (exchangeRate: blue de hoy o el fijado a mano). Si la cuota ya está en USD, no hay
+    // conversión (devuelve '—').
     function _cuotaUsdCell(montoMoneda, esUSD, pagada, cobroReg) {
         if (esUSD) return '—';
-        var usadoTC = (pagada && cobroReg && cobroReg.tc > 0) ? cobroReg.tc : (exchangeRate || 0);
-        if (!usadoTC) return '—';
+        if (!(exchangeRate > 0)) return '—';
         var usd = _cuotaUsdValor(montoMoneda, esUSD, pagada, cobroReg);
-        var nota = (pagada && cobroReg && cobroReg.tc > 0)
-            ? ('TC pago ' + Math.round(cobroReg.tc))
-            : ('TC hoy ' + Math.round(exchangeRate || 0));
+        var nota = 'TC ' + Math.round(exchangeRate);
         return 'USD ' + usd.toLocaleString('es-AR', { maximumFractionDigits: 2 }) +
             '<br><span style="font-size:9px;color:var(--text-3);">' + nota + '</span>';
     }
