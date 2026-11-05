@@ -5986,9 +5986,9 @@
                                     <tr>
                                         <th>Empresa</th>
                                         <th>Proyecto</th>
-                                        <th style="text-align:right">Caja ARS</th>
-                                        <th style="text-align:right">Caja USD</th>
-                                        <th style="text-align:right">Banco</th>
+                                        <th style="text-align:right" title="Saldo de la Caja General del proyecto, en pesos (efectivo y banco)">Caja ARS</th>
+                                        <th style="text-align:right" title="Saldo de la Caja General del proyecto, en dólares (efectivo y banco)">Caja USD</th>
+                                        <th style="text-align:right" title="Saldo neto de Cuentas Bancarias del proyecto, en pesos (ya está incluido en la caja)">Banco</th>
                                     </tr>
                                 </thead>
                                 <tbody id="tesSaldosBody">
@@ -5997,6 +5997,7 @@
                                 <tfoot id="tesSaldosFoot" style="font-weight:600;background:var(--surface);"></tfoot>
                             </table>
                         </div>
+                        <div id="tesSaldosNota"></div>
                     </div>
 
                     <!-- Préstamos entre empresas -->
@@ -23654,9 +23655,9 @@
     // valga para todos los movimientos). La moneda de un movimiento es la de SU CUENTA; si no tiene cuenta (cobro «A — Banco» sin elegir cuenta,
     // pago viejo) vale la propia que traiga (factura/documento en USD, cobro de venta en dólares, alquiler cobrado en otra moneda); sin dato, pesos.
     // Elegir a propósito la cuenta y no la moneda del comprobante hace que la suma de los saldos de las cuentas de una moneda cierre con el total.
-    function _cbMapaMonedas() {
+    function _cbMapaMonedas(cuentas) {
         var m = Object.create(null);
-        (cuentasBancarias || []).forEach(function(cb) { m[cb.id || cb.banco] = cb.moneda === 'USD' ? 'USD' : 'ARS'; });
+        (cuentas || []).forEach(function(cb) { m[cb.id || cb.banco] = cb.moneda === 'USD' ? 'USD' : 'ARS'; });
         return m;
     }
     function _cbMonedaMov(mapa, cuentaId, monedaPropia) {
@@ -23669,14 +23670,17 @@
         return (mon === 'USD' ? 'USD ' : '$') + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    function renderCuentasBancarias() {
-        if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs();
-        var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
-        sel('cbCuentasTotal',cuentasBancarias.length);
-        // Entradas/salidas en UNA sola pasada (antes se recorrían todos los pagos, cobros y movimientos una vez para los totales y otra vez por cada
-        // cuenta: con muchos movimientos el panel tardaba en aparecer). Se acumula por cuenta (cuentaId → {ent,sal}, la fila de cada cuenta) y por
-        // moneda (los totales de arriba, que cuentan también lo que no tiene cuenta).
-        var _mapaMon=_cbMapaMonedas();
+    // ── Totales de las cuentas bancarias de UN proyecto, POR MONEDA ───────────────
+    // Lo usan «Cuentas Bancarias» y la Tesorería interempresa (que lo corre sobre las colecciones de otros proyectos): así el «Banco» de la
+    // Tesorería es el saldo de Cuentas Bancarias y no un cálculo aparte. Sin argumentos usa las del proyecto activo.
+    // ⚠️ Mismo truco que _cgRecolectarMovs: las variables locales se llaman como las globales (las tapan) para que el cuerpo no cambie.
+    // Devuelve {ARS:{ini,ent,sal}, USD:{…}, porCta, mapaMon} y, por compatibilidad con la Tesorería, los totales en pesos: entradas/salidas/saldoIni/saldo.
+    function _bancoTotales(cols) {
+        cols = cols || _colsProyectoActivo();
+        var ingGeneral = cols.ingGeneral || [], ventas = cols.ventas || [], alquileres = cols.alquileres || [],
+            servicios = cols.servicios || [], datos = cols.datos || [], facturas = cols.facturas || [],
+            documentos = cols.documentos || [], cuentasBancarias = cols.cuentasBancarias || [];
+        var _mapaMon=_cbMapaMonedas(cuentasBancarias);
         var _porCta={};
         var _tot={ARS:{ini:0,ent:0,sal:0},USD:{ini:0,ent:0,sal:0}};
         cuentasBancarias.forEach(function(cb){ _tot[_mapaMon[cb.id||cb.banco]].ini+=cb.saldo||0; });
@@ -23698,6 +23702,15 @@
         // Alquileres: la moneda y el importe con que ENTRÓ la plata (un contrato en USD cobrado en pesos suma pesos, no «USD 1.000» en una cuenta en pesos).
         alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,_alqCobroMoneda(a,c),_alqCobroImporte(a,c),0);});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,'ARS',c.monto||0,0);});});
+        return { ARS: _tot.ARS, USD: _tot.USD, porCta: _porCta, mapaMon: _mapaMon,
+                 entradas: _tot.ARS.ent, salidas: _tot.ARS.sal, saldoIni: _tot.ARS.ini, saldo: _tot.ARS.ini + _tot.ARS.ent - _tot.ARS.sal };
+    }
+
+    function renderCuentasBancarias() {
+        if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs();
+        var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
+        sel('cbCuentasTotal',cuentasBancarias.length);
+        var _bt=_bancoTotales(), _tot={ARS:_bt.ARS,USD:_bt.USD}, _porCta=_bt.porCta;
         // Tarjetas: pesos arriba y, si hay cuentas o movimientos en dólares, su total en un renglón aparte debajo (sin convertir ni sumar).
         var hayUsd=cuentasBancarias.some(function(cb){return cb.moneda==='USD';})||_tot.USD.ent!==0||_tot.USD.sal!==0;
         var tarj=function(id,vArs,vUsd){
@@ -39408,19 +39421,23 @@
         }).join('');
     }
 
-    function renderCajaGeneral() {
-        var tipoFiltro   = (document.getElementById('cgFiltroTipo')    || {}).value || '';
-        var desde        = (document.getElementById('cgFiltroDesde')   || {}).value || '';
-        var hasta        = (document.getElementById('cgFiltroHasta')   || {}).value || '';
-        var busqDesc     = ((document.getElementById('cgFiltroBusq')   || {}).value || '').toLowerCase().trim();
-        var busqOrigen   = ((document.getElementById('cgFiltroOrigen') || {}).value || '').toLowerCase().trim();
-        var filtroMovTipo = (document.getElementById('cgFiltroMovTipo') || {}).value || '';
-        var filtroMedio   = (document.getElementById('cgFiltroMedio')   || {}).value || '';
-        // Un saldo que da cero con un residuo de punto flotante (-2.8e-17) no se muestra como «$-0,00».
-        var _cero = function(n) { n = Number(n) || 0; return Math.abs(n) < 0.005 ? 0 : n; };
-        var fmtA  = function(n) { return '$' + _cero(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
-        var fmtU  = function(n) { return 'USD ' + _cero(n).toLocaleString(undefined,{maximumFractionDigits:2}); };
-
+    // ── Movimientos de la Caja General de UN proyecto ─────────────────────────────
+    // Colecciones del proyecto ACTIVO (las que tiene en memoria la app). La Caja General, Cuentas
+    // Bancarias y la Tesorería interempresa parten de acá, para que los tres hablen de los mismos números.
+    function _colsProyectoActivo() {
+        return { ingGeneral: ingGeneral, ventas: ventas, alquileres: alquileres, servicios: servicios,
+                 datos: datos, facturas: facturas, documentos: documentos, cuentasBancarias: cuentasBancarias };
+    }
+    // Arma la lista de movimientos de caja (cobros, pagos y movimientos manuales, ya con la moneda y el
+    // importe con que ENTRÓ o SALIÓ la plata) a partir de las colecciones que se le pasan; sin argumentos
+    // usa las del proyecto activo. Es la ÚNICA lógica de recolección: la pantalla de Caja General le agrega
+    // filtros y saldos corridos, y la Tesorería la corre sobre las colecciones de OTROS proyectos.
+    // ⚠️ Las variables de abajo se llaman igual que las globales A PROPÓSITO (las tapan): el cuerpo es el
+    // mismo de siempre, sólo que lee lo que se le pasó y no el proyecto activo.
+    function _cgRecolectarMovs(cols) {
+        cols = cols || _colsProyectoActivo();
+        var ingGeneral = cols.ingGeneral || [], ventas = cols.ventas || [], alquileres = cols.alquileres || [],
+            servicios = cols.servicios || [], datos = cols.datos || [], facturas = cols.facturas || [], documentos = cols.documentos || [];
         // ── Recolectar TODOS los movimientos ──────────────────
         var movs = [];
 
@@ -39565,13 +39582,39 @@
         });
         movsCG.forEach(function(m){ if (m._n > 1) { m.tipo = 'Pago Facturas'; m.desc = m._n + ' facturas: ' + m._descs.join(', '); } });
         movs = movsCG;
+        return movs;
+    }
+    // Totales de una lista de movimientos (sin filtros), por moneda.
+    function _cgTotalesMovs(movs) {
+        var t = { ingARS: 0, egrARS: 0, ingUSD: 0, egrUSD: 0 };
+        movs.forEach(function(m) {
+            if (m.moneda==='USD') { if (m.esIngreso) t.ingUSD+=m.monto; else t.egrUSD+=m.monto; }
+            else                  { if (m.esIngreso) t.ingARS+=m.monto; else t.egrARS+=m.monto; }
+        });
+        t.saldoARS = t.ingARS - t.egrARS;
+        t.saldoUSD = t.ingUSD - t.egrUSD;
+        return t;
+    }
+
+    function renderCajaGeneral() {
+        var tipoFiltro   = (document.getElementById('cgFiltroTipo')    || {}).value || '';
+        var desde        = (document.getElementById('cgFiltroDesde')   || {}).value || '';
+        var hasta        = (document.getElementById('cgFiltroHasta')   || {}).value || '';
+        var busqDesc     = ((document.getElementById('cgFiltroBusq')   || {}).value || '').toLowerCase().trim();
+        var busqOrigen   = ((document.getElementById('cgFiltroOrigen') || {}).value || '').toLowerCase().trim();
+        var filtroMovTipo = (document.getElementById('cgFiltroMovTipo') || {}).value || '';
+        var filtroMedio   = (document.getElementById('cgFiltroMedio')   || {}).value || '';
+        // Un saldo que da cero con un residuo de punto flotante (-2.8e-17) no se muestra como «$-0,00».
+        var _cero = function(n) { n = Number(n) || 0; return Math.abs(n) < 0.005 ? 0 : n; };
+        var fmtA  = function(n) { return '$' + _cero(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var fmtU  = function(n) { return 'USD ' + _cero(n).toLocaleString(undefined,{maximumFractionDigits:2}); };
+
+        // ── Recolectar TODOS los movimientos (la lógica vive en _cgRecolectarMovs) ──────────────
+        var movs = _cgRecolectarMovs();
 
         // ── Totales globales (siempre sobre todos los movimientos) ──
-        var totIngARS=0, totEgrARS=0, totIngUSD=0, totEgrUSD=0;
-        movs.forEach(function(m) {
-            if (m.moneda==='USD') { if (m.esIngreso) totIngUSD+=m.monto; else totEgrUSD+=m.monto; }
-            else                  { if (m.esIngreso) totIngARS+=m.monto; else totEgrARS+=m.monto; }
-        });
+        var _cgTot = _cgTotalesMovs(movs);
+        var totIngARS = _cgTot.ingARS, totEgrARS = _cgTot.egrARS, totIngUSD = _cgTot.ingUSD, totEgrUSD = _cgTot.egrUSD;
         var s = function(id,v){ var el=document.getElementById(id); if(el) el.textContent=v; };
         s('cgSaldoARS',    fmtA(totIngARS-totEgrARS));
         s('cgSaldoUSD',    fmtU(totIngUSD-totEgrUSD));
@@ -43572,59 +43615,88 @@
         }).catch(function(){ cb([]); });
     }
 
+    // ── Saldos de Tesorería: las MISMAS cuentas que Caja General y Cuentas Bancarias ─────────────────
+    // ⚠️ Antes esta tabla tenía su propio cálculo: sumaba sólo la rama `ingGeneral` (sin los cobros de ventas,
+    // alquileres y servicios, ni los pagos de presupuestos, facturas y documentos), tomaba como ingreso un
+    // `mov_banco_salida` (el signo sólo miraba que el tipo dijera «egreso») y el «Banco» salía de
+    // `global/banco/movimientos`, una rama que no escribe nadie (siempre $0). Ahora cada fila lee las
+    // colecciones de su proyecto y las pasa por la lógica de las pantallas de siempre:
+    //   · Caja ARS / USD = saldo de la Caja General (`_cgRecolectarMovs` + `_cgTotalesMovs`: efectivo y banco juntos,
+    //     cada moneda por separado y con el importe/moneda con que ENTRÓ la plata, `_alqCobroMoneda`/`_alqCobroImporte`);
+    //   · Banco = «Saldo neto» de Cuentas Bancarias (`_bancoTotales`, en pesos, con el saldo inicial de cada cuenta).
+    // Los movimientos confidenciales cuentan en el saldo igual que en la Caja General (de ellos sólo se enmascara
+    // el detalle, y esta tabla no muestra detalle).
+    var _tesSeq = 0;   // si se toca 🔄 dos veces seguidas, la lectura vieja no pisa a la nueva
+
+    // Una colección de Firebase (arreglo u objeto indexado por id) → arreglo sin huecos. NO pasa por
+    // _colProcesarCarga: esa función guarda el «estado conocido» de la colección del proyecto ACTIVO (para el
+    // guardado por diferencia) y migra arreglos viejos en la nube; usarla con otro proyecto pisaría ese estado.
+    function _tesNormColeccion(val){
+        if(!val || typeof val !== 'object') return [];
+        var arr = Array.isArray(val) ? val : Object.keys(val).map(function(k){
+            var it = val[k];
+            if(it && typeof it === 'object' && !it.id) it.id = k;
+            return it;
+        });
+        return arr.filter(Boolean);
+    }
+
+    // Lee de la nube las colecciones de UN proyecto (cualquiera, sin cambiar el proyecto activo). Para el
+    // proyecto activo —que ya tiene todo escuchado— Firebase contesta desde su caché, sin volver a bajar nada.
+    // Los comprobantes recibidos se piden con la misma consulta que usa el arranque (sólo los que tienen
+    // `proveedor`): los adjuntos en base64 no viajan, siempre que esté publicado el índice (ver CLAUDE.md).
+    function _tesLeerColsProyecto(eid, pid){
+        var base = 'empresas/' + eid + '/proyectos/' + pid;
+        var leer = function(rama){ return db.ref(base + '/' + rama).once('value').then(function(s){ return _tesNormColeccion(s.val()); }); };
+        var docs = db.ref(base + '/documentos').orderByChild('proveedor').startAt('').once('value').then(function(s){
+            var v = s.val(), out = [];
+            if(v && typeof v === 'object') Object.keys(v).forEach(function(k){
+                var e = v[k];
+                if(e && e.proveedor && !e.contenido){ if(!e.id) e.id = k; out.push(e); }
+            });
+            return out;
+        });
+        return Promise.all([leer('ingGeneral'), leer('ventas'), leer('alquileres'), leer('servicios'),
+                            leer('datos'), leer('facturas'), docs, leer('banco')]).then(function(r){
+            return { ingGeneral: r[0], ventas: r[1], alquileres: r[2], servicios: r[3],
+                     datos: r[4], facturas: r[5], documentos: r[6], cuentasBancarias: r[7] };
+        });
+    }
+
+    // Saldos de un proyecto a partir de sus colecciones: es lo mismo que muestran Caja General y Cuentas Bancarias.
+    // (Un saldo que da cero con un residuo de coma flotante no se muestra como «$-0,00», igual que en Caja General.)
+    function _tesCero(n){ n = Number(n) || 0; return Math.abs(n) < 0.005 ? 0 : n; }
+    function _tesSaldosDeCols(cols){
+        var t = _cgTotalesMovs(_cgRecolectarMovs(cols));
+        return { ars: _tesCero(t.saldoARS), usd: _tesCero(t.saldoUSD), banco: _tesCero(_bancoTotales(cols).saldo) };
+    }
+
     function renderTesoreria(){
-        if(!REF_EMPRESAS){return;}
-        REF_EMPRESAS.once('value').then(function(snap){
-            var val=snap.val(); if(!val) return;
-            var filas=[];
-            var promesas=[];
-            Object.keys(val).forEach(function(eid){
-                var empNombre=val[eid].nombre||eid;
-                var proys=val[eid].proyectos||{};
-                Object.keys(proys).forEach(function(pid){
-                    var proyNombre=(proys[pid]&&proys[pid].nombre)||pid;
-                    var basePath='empresas/'+eid+'/proyectos/'+pid;
-                    var fila={emp:empNombre,proy:proyNombre,ars:0,usd:0,banco:0};
-                    filas.push(fila);
-                    // Lee '/ingGeneral' —la rama real de movimientos de caja, la misma
-                    // que Caja General/Efectivo/Banco— y NO '/ingresosGenerales', que
-                    // era una rama huérfana donde sólo caían los préstamos y hacía que
-                    // esta tabla mostrara números que no eran los saldos reales.
-                    var p=db.ref(basePath+'/ingGeneral').once('value').then(function(cs){
-                        var cv=cs.val();
-                        if(cv){
-                            var arr=Array.isArray(cv)?cv:Object.values(cv);
-                            arr.forEach(function(m){
-                                if(!m)return;
-                                var monto=m.monto||0;
-                                var esEgreso=(m.tipo||'').indexOf('egreso')!==-1||(m.esEgreso===true);
-                                if(m.moneda==='USD'){
-                                    fila.usd+=(esEgreso?-monto:monto);
-                                } else {
-                                    fila.ars+=(esEgreso?-monto:monto);
-                                }
-                            });
-                        }
-                    }).catch(function(){});
-                    promesas.push(p);
-                    var p2=db.ref('global/banco/movimientos').once('value').then(function(bs){
-                        var bv=bs.val();
-                        if(bv){
-                            var arr=Array.isArray(bv)?bv:Object.values(bv);
-                            arr.forEach(function(m){
-                                if(!m)return;
-                                if(m.empresa===empNombre||m.empresaId===eid){
-                                    fila.banco+=(m.tipo==='entrada'?(m.monto||0):-(m.monto||0));
-                                }
-                            });
-                        }
-                    }).catch(function(){});
-                    promesas.push(p2);
-                });
+        if(!db){return;}
+        var seq = ++_tesSeq;
+        var filas = [];
+        var promesas = [];
+        // Las empresas visibles para esta persona (`empresas` ya viene filtrada por `_empresaVisiblePara`): antes
+        // se bajaba TODO el árbol `empresas` (con los PDF de cada proyecto) y la tabla mostraba también las
+        // empresas donde la persona no está autorizada.
+        (empresas || []).forEach(function(e){
+            (e.proyectos || []).forEach(function(pr){
+                var fila = { emp: e.nombre || e.id, proy: pr.nombre || pr.id, ars: 0, usd: 0, banco: 0, error: false,
+                             activo: !!(empresaActual && proyectoActual && empresaActual.id === e.id && proyectoActual.id === pr.id) };
+                filas.push(fila);
+                promesas.push(_tesLeerColsProyecto(e.id, pr.id).then(function(cols){
+                    var s = _tesSaldosDeCols(cols);
+                    fila.ars = s.ars; fila.usd = s.usd; fila.banco = s.banco;
+                }).catch(function(err){
+                    // Antes un error de lectura dejaba la fila en cero sin avisar: parecía un saldo real.
+                    console.warn('Tesorería: no se pudo leer ' + fila.emp + ' / ' + fila.proy, err);
+                    fila.error = true;
+                }));
             });
-            Promise.all(promesas).then(function(){
-                _renderSaldosTabla(filas);
-            });
+        });
+        Promise.all(promesas).then(function(){
+            if(seq !== _tesSeq) return;
+            _renderSaldosTabla(filas);
         });
         _cargarPrestamos(function(){ _renderPrestamosTabla(); });
     }
@@ -43632,18 +43704,29 @@
     function _renderSaldosTabla(filas){
         var tbody=document.getElementById('tesSaldosBody');
         var tfoot=document.getElementById('tesSaldosFoot');
+        var nota=document.getElementById('tesSaldosNota');
         if(!tbody)return;
         tbody.innerHTML='';
         var totARS=0,totUSD=0,totBanco=0;
         if(!filas.length){
             tbody.innerHTML='<tr><td colspan="5" class="empty-msg">No hay datos.</td></tr>';
             if(tfoot)tfoot.innerHTML='';
+            if(nota)nota.innerHTML='';
             return;
         }
+        var fallidas=[];
         filas.forEach(function(f){
-            totARS+=f.ars; totUSD+=f.usd; totBanco+=f.banco;
             var tr=document.createElement('tr');
-            tr.innerHTML='<td><strong>'+f.emp+'</strong></td><td>'+f.proy+'</td>'+
+            var activo=f.activo?' <span style="font-size:10px;color:var(--text-3);font-weight:400;">· proyecto activo</span>':'';
+            if(f.error){
+                fallidas.push(f.emp+' / '+f.proy);
+                tr.innerHTML='<td><strong>'+escHtml(f.emp)+'</strong></td><td>'+escHtml(f.proy)+activo+'</td>'+
+                    '<td colspan="3" style="text-align:right;color:var(--danger);font-size:12px;">⚠️ No se pudo leer este proyecto</td>';
+                tbody.appendChild(tr);
+                return;
+            }
+            totARS+=f.ars; totUSD+=f.usd; totBanco+=f.banco;
+            tr.innerHTML='<td><strong>'+escHtml(f.emp)+'</strong></td><td>'+escHtml(f.proy)+activo+'</td>'+
                 '<td style="text-align:right;font-family:monospace;color:'+(f.ars>=0?'var(--success)':'var(--danger)')+';">'+fmt(f.ars)+'</td>'+
                 '<td style="text-align:right;font-family:monospace;color:'+(f.usd>=0?'var(--success)':'var(--danger)')+';">'+fmtUSD(f.usd)+'</td>'+
                 '<td style="text-align:right;font-family:monospace;color:'+(f.banco>=0?'var(--success)':'var(--danger)')+';">'+fmt(f.banco)+'</td>';
@@ -43653,6 +43736,15 @@
             '<td style="padding:8px 12px;text-align:right;font-family:monospace;">'+fmt(totARS)+'</td>'+
             '<td style="padding:8px 12px;text-align:right;font-family:monospace;">'+fmtUSD(totUSD)+'</td>'+
             '<td style="padding:8px 12px;text-align:right;font-family:monospace;">'+fmt(totBanco)+'</td></tr>';
+        if(nota){
+            nota.innerHTML='<div style="padding:10px 14px;font-size:12px;color:var(--text-3);line-height:1.5;">'+
+                '<strong>Cómo se calcula.</strong> Son los mismos saldos que muestran las pantallas de cada proyecto: '+
+                '<strong>Caja ARS / USD</strong> = el saldo de <em>Caja General</em> (cobros y pagos, en efectivo y por banco, cada moneda por separado) y '+
+                '<strong>Banco</strong> = el <em>Saldo neto</em> de <em>Cuentas Bancarias</em> (en pesos, con el saldo inicial de las cuentas). '+
+                'El banco ya está dentro de la caja: no se suman entre sí.'+
+                (fallidas.length?'<div style="margin-top:6px;color:var(--danger);">⚠️ No se pudo leer: '+escHtml(fallidas.join(', '))+'. Quedó afuera de los totales; probá con 🔄 Actualizar.</div>':'')+
+                '</div>';
+        }
     }
 
     function _renderPrestamosTabla(){
