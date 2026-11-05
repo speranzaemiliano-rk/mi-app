@@ -6241,12 +6241,12 @@
                     <div class="stat-card" style="border-left:4px solid var(--danger);">
                         <div class="stat-label">Total Egresos (ARS)</div>
                         <div class="stat-value" id="egresosTotalARS">$0</div>
-                        <div class="stat-sub">Suma de todos los pagos realizados</div>
+                        <div class="stat-sub" id="egresosSubARS">Suma de todos los pagos realizados</div>
                     </div>
                     <div class="stat-card" style="border-left:4px solid var(--danger);">
                         <div class="stat-label">Total Egresos (USD)</div>
                         <div class="stat-value" id="egresosTotalUSD">USD 0</div>
-                        <div class="stat-sub">Al tipo de cambio actual</div>
+                        <div class="stat-sub" id="egresosSubUSD">Al tipo de cambio actual</div>
                     </div>
                 </div>
 
@@ -11515,7 +11515,10 @@
         var desde=(document.getElementById('pagDesde')||{}).value||'';
         var hasta=(document.getElementById('pagHasta')||{}).value||'';
         var fmt=function(n){return '$'+(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});};
-        var rows=[],tP=0,tB=0,tE=0,tR=0,tN=0;
+        // Totales por moneda (pesos / dólares): los pagos de comprobantes en USD no se suman a los pesos.
+        // Los pagos de presupuestos van siempre en pesos (los presupuestos no tienen moneda).
+        var rows=[],T={P:_tmNuevo(),B:_tmNuevo(),E:_tmNuevo(),R:_tmNuevo(),N:_tmNuevo()};
+        var acum=function(mon,m,r,n,mod){ _tmSumar(T.P,mon,m);_tmSumar(T.R,mon,r);_tmSumar(T.N,mon,n); _tmSumar(mod==='A'?T.B:T.E,mon,m); };
         datos.forEach(function(d,di){
             (d.pagosHistorial||[]).forEach(function(p,pi){
                 // El «pago espejo» (origenFacturaId) refleja en el presupuesto un pago que YA sale como pago de la factura:
@@ -11528,8 +11531,8 @@
                 var txt=((d.proveedor||'')+' '+(d.concepto||'')).toLowerCase();
                 if(q&&!txt.includes(q)) return;
                 var r=p.totalRet||0,n=m-r;
-                tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:d.concepto||'—',tipo:'Presupuesto',mod:p.modalidad,medio:p.medioBancario||'',capital:p.capital||p.montoPagado||0,mayores:p.mayores||0,total:m,ret:r,neto:n,di:di,pi:pi,esFact:false,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
+                acum('ARS',m,r,n,p.modalidad);
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:d.concepto||'—',tipo:'Presupuesto',mon:'ARS',mod:p.modalidad,medio:p.medioBancario||'',capital:p.capital||p.montoPagado||0,mayores:p.mayores||0,total:m,ret:r,neto:n,di:di,pi:pi,esFact:false,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre});
             });
         });
         facturas.forEach(function(f,fi){
@@ -11540,8 +11543,8 @@
                 var txt=((f.proveedor||'')+' '+(f.numero||'')+' '+(f.descripcion||'')).toLowerCase();
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
-                tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:(f.esVEP?'VEP ':'Fact.')+(f.numero||f.descripcion||'—'),tipo:(f.esVEP?'VEP':'Factura'),esVEP:!!f.esVEP,mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||'',vepDocs:_vepDocsAplica(f),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
+                acum(_monDe(f),m,r,n,p.modalidad);
+                rows.push({fecha:p.fecha,prov:f.proveedor||'—',concepto:(f.esVEP?'VEP ':'Fact.')+(f.numero||f.descripcion||'—'),tipo:(f.esVEP?'VEP':'Factura'),esVEP:!!f.esVEP,mon:_monDe(f),mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:fi,pi:pi,esFact:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,grupoPagoId:p.grupoPagoId||'',vepDocs:_vepDocsAplica(f),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
             });
         });
         documentos.forEach(function(d){
@@ -11552,8 +11555,8 @@
                 var txt=((d.proveedor||'')+' '+(d.numero||'')+' '+(d.descripcion||'')).toLowerCase();
                 if(q&&!txt.includes(q)) return;
                 var m=p.monto||0,r=p.totalRet||0,n=m-r;
-                tP+=m;tR+=r;tN+=n; if(p.modalidad==='A') tB+=m; else tE+=m;
-                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,vepDocs:_vepDocsAplica(d),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
+                acum(_monDe(d),m,r,n,p.modalidad);
+                rows.push({fecha:p.fecha,prov:d.proveedor||'—',concepto:'Doc.'+(d.numero||d.descripcion||'—'),tipo:'Documento',mon:_monDe(d),mod:p.modalidad,medio:p.medioBancario||'',capital:m,mayores:0,total:m,ret:r,neto:n,di:d.id,pi:pi,esDoc:true,retenciones:p.retenciones||[],comprobanteId:p.comprobanteId,comprobanteNombre:p.comprobanteNombre,vepDocs:_vepDocsAplica(d),ddjjId:p.ddjjId,ddjjNombre:p.ddjjNombre,acuseId:p.acuseId,acuseNombre:p.acuseNombre});
             });
         });
         (comprobantesEmitidos||[]).forEach(function(e){
@@ -11571,18 +11574,20 @@
             var txt=(provNomE+' '+(e.nro||'')+' '+conceptoE).toLowerCase();
             if(q&&!txt.includes(q)) return;
             var m=e.total||0;
-            tP+=m;tN+=m; if(e.tipoAB==='A') tB+=m; else tE+=m;
-            rows.push({fecha:e.fecha,prov:provNomE||'—',concepto:(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—'),tipo:'Comprobante emitido',mod:e.tipoAB,capital:m,mayores:0,total:m,ret:0,neto:m,di:e.id,pi:0,esEmit:true,retenciones:[]});
+            acum(_monDe(e),m,0,m,e.tipoAB);
+            rows.push({fecha:e.fecha,prov:provNomE||'—',concepto:(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—'),tipo:'Comprobante emitido',mon:_monDe(e),mod:e.tipoAB,capital:m,mayores:0,total:m,ret:0,neto:m,di:e.id,pi:0,esEmit:true,retenciones:[]});
         });
         // Agrupar los pagos de varias facturas hechos en un mismo pago (mismo grupoPagoId) en un
         // solo renglón, con una sola Orden de Pago combinada (antes salía un renglón por factura).
         var _grpMap = {}, rowsAgr = [];
         rows.forEach(function(r){
             if (r.esFact && r.grupoPagoId) {
-                var g = _grpMap[r.grupoPagoId];
+                // La moneda entra en la clave: un pago grupal que mezclara pesos y dólares no puede sumarse en un solo renglón.
+                var _kG = r.grupoPagoId + '|' + r.mon;
+                var g = _grpMap[_kG];
                 if (!g) {
                     g = Object.assign({}, r, { _facturas:[r.concepto.replace(/^Fact\./,'')], _nGrupo:1 });
-                    _grpMap[r.grupoPagoId] = g; rowsAgr.push(g);
+                    _grpMap[_kG] = g; rowsAgr.push(g);
                 } else {
                     g.capital += r.capital; g.total += r.total; g.ret += r.ret; g.neto += r.neto;
                     g._facturas.push(r.concepto.replace(/^Fact\./,'')); g._nGrupo++;
@@ -11598,8 +11603,9 @@
         rowsAgr.forEach(function(r){ if (r._nGrupo > 1) r.concepto = r._nGrupo + ' facturas: ' + r._facturas.join(', '); });
         rows = rowsAgr;
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
-        sel('pagTotalPagado',fmt(tP));sel('pagTotalBanco',fmt(tB));sel('pagTotalEfectivo',fmt(tE));
-        sel('pagTotalRet',fmt(tR));sel('pagTotalNeto',fmt(tN));
+        var selT=function(id,t){var e=document.getElementById(id);if(e)e.innerHTML=_htmlTM(t);};
+        selT('pagTotalPagado',T.P);selT('pagTotalBanco',T.B);selT('pagTotalEfectivo',T.E);
+        selT('pagTotalRet',T.R);selT('pagTotalNeto',T.N);
         var cnt=document.getElementById('pagContador');if(cnt) cnt.textContent=rows.length+' pago'+(rows.length!==1?'s':'');
         rows.sort(function(a,b){return (b.fecha||'').localeCompare(a.fecha||'');});
         _pagosRows = [];
@@ -11642,7 +11648,7 @@
                 if (ev.target && ev.target.closest && ev.target.closest('button,a,input,select,textarea')) return;
                 pagosSeleccionar(_i);
             });
-            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+fmt(r.capital)+'</td><td style="text-align:right;color:var(--warn);">'+fmt(r.mayores)+'</td><td style="text-align:right;font-weight:600;">'+fmt(r.total)+'</td><td style="text-align:right;color:var(--danger);">'+fmt(r.ret)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+fmt(r.neto)+'</td><td><div class="action-btns">'+btnI+btnR+btnV+btnE+'</div></td>';
+            tr.innerHTML='<td>'+(r.fecha?formatearFecha(r.fecha):'—')+'</td><td><strong>'+r.prov+'</strong></td><td>'+r.concepto+'</td><td>'+tipB+'</td><td>'+modB+'</td><td style="text-align:right;">'+_fmtMonto(r.capital,r.mon)+'</td><td style="text-align:right;color:var(--warn);">'+_fmtMonto(r.mayores,r.mon)+'</td><td style="text-align:right;font-weight:600;">'+_fmtMonto(r.total,r.mon)+'</td><td style="text-align:right;color:var(--danger);">'+_fmtMonto(r.ret,r.mon)+'</td><td style="text-align:right;color:var(--success);font-weight:700;">'+_fmtMonto(r.neto,r.mon)+'</td><td><div class="action-btns">'+btnI+btnR+btnV+btnE+'</div></td>';
             tbody.appendChild(tr);
         });
         if (_pagosSel >= _pagosRows.length) _pagosSel = _pagosRows.length - 1;
@@ -11668,7 +11674,7 @@
                           + '<br><br>Con <b>↑</b> <b>↓</b> te movés y con <b>Enter</b> imprimís su orden de pago.</div>';
             return;
         }
-        var f = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+        var f = function(n){ return _fmtMonto(n, r.mon); };
         var kv = function(k, v, col){ return '<div class="c-kv"><span>' + k + '</span><span' + (col ? ' style="color:' + col + ';"' : '') + '>' + v + '</span></div>'; };
         var tipo = r.esEmit ? 'Comprobante emitido' : r.esDoc ? 'Comprobante X' : r.esFact ? (r.esVEP ? 'VEP' : 'Factura') : 'Presupuesto';
         box.innerHTML =
@@ -11838,6 +11844,26 @@
     function _estadoFactDoc(item) {
         if (_estaSaldada(item)) return 'pagada';
         return ((item.pagado||0) > 0 || _totalRetenidoHist(item.pagosHistorial) > 0) ? 'parcial' : 'pendiente';
+    }
+
+    // ── Totales por moneda ────────────────────────────────────────────────────
+    // Un comprobante recibido está en pesos o en dólares (`moneda`: 'ARS' | 'USD'; sin dato = pesos) y NO hay
+    // un tipo de cambio confiable por comprobante, así que sus importes NO se suman entre sí: cada total se
+    // lleva en un acumulador { ARS, USD } y se muestra rotulado, los pesos primero y los dólares aparte.
+    // Antes los resúmenes (Facturas, Pagos, Documentos, Egresos, cuenta corriente, Libro de Compras) sumaban
+    // los USD como si fueran pesos —y Egresos además los volvía a convertir con el tipo de cambio del proyecto.
+    function _monDe(x) { return (x && x.moneda === 'USD') ? 'USD' : 'ARS'; }
+    function _tmNuevo() { return { ARS: 0, USD: 0 }; }
+    function _tmSumar(t, mon, n) { t[mon === 'USD' ? 'USD' : 'ARS'] += (Number(n) || 0); return t; }
+    function _tmHayUSD(t) { return !!t && Math.abs(t.USD || 0) >= 0.005; }
+    function _fmtNum2(n) { return (Number(n) || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    // Importe con su moneda: «$1.234,00» / «USD 1.234,00» (los cero de residuo de coma flotante no salen como «-0,00»).
+    function _fmtMonto(n, mon) { n = Number(n) || 0; if (Math.abs(n) < 0.005) n = 0; return (mon === 'USD' ? 'USD ' : '$') + _fmtNum2(n); }
+    // Total por moneda en una sola línea de texto: «$1.234,00 · USD 50,00» (los USD sólo si hay).
+    function _fmtTM(t) { return _fmtMonto(t.ARS, 'ARS') + (_tmHayUSD(t) ? ' · ' + _fmtMonto(t.USD, 'USD') : ''); }
+    // Idem para una tarjeta/celda: los pesos arriba y los dólares abajo, más chicos (sólo si hay).
+    function _htmlTM(t) {
+        return _fmtMonto(t.ARS, 'ARS') + (_tmHayUSD(t) ? '<br><span style="font-size:.62em;font-weight:600;opacity:.85;">' + _fmtMonto(t.USD, 'USD') + '</span>' : '');
     }
 
     function _esRetSUSS(codigo) { return (codigo||'').indexOf('SUSS') === 0; }
@@ -14714,26 +14740,33 @@
         if (!body) return;
         var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
         if (!items.length) { body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
-        var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false;
+        var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false, nIncl=0, nUSD=0;
         body.innerHTML = items.map(function(v) {
             var d = _rptIvaCompra(v);
             if (d.estimado) hayEstimado = true;
-            totNeto += d.neto; totIVA += d.iva; totTotal += d.total;
+            // El libro es en PESOS y no hay tipo de cambio por comprobante: un comprobante en USD se lista (con su moneda a la
+            // vista) pero NO entra en los totales ni en el IVA del período; el pie avisa cuántos quedaron afuera.
+            var usd = d.moneda === 'USD';
+            if (usd) nUSD++; else { nIncl++; totNeto += d.neto; totIVA += d.iva; totTotal += d.total; }
+            var fm = usd ? function(n){ return _fmtMonto(n, 'USD'); } : _fmtM;
             var estado = v.estado==='pagada' ? '<span style="color:var(--success);">✔ Pagada</span>' : v.estado==='parcial' ? '<span style="color:var(--gold);">◑ Parcial</span>' : '<span style="color:var(--danger);">○ Pendiente</span>';
-            return '<tr style="border-bottom:1px solid var(--border);">' +
+            var tagNC = v.esNotaCredito ? ' <span title="Nota de crédito: resta de las compras del período" style="color:#1e8e3e;font-size:10px;font-weight:700;">NC</span>' : '';
+            return '<tr style="border-bottom:1px solid var(--border);'+(usd?'opacity:.7;':'')+'"'+(usd?' title="En dólares: no entra en los totales (el libro es en pesos)"':'')+'>' +
                 '<td style="padding:5px 8px;white-space:nowrap;">'+_rptFechaDMY(v.fecha)+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.proveedor||'—')+'</td>' +
-                '<td style="padding:5px 8px;">'+(v.numero||'—')+'</td>' +
+                '<td style="padding:5px 8px;">'+(v.numero||'—')+tagNC+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.descripcion||'—')+'</td>' +
-                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(d.neto)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;">'+fm(d.neto)+'</td>' +
                 '<td style="padding:5px 8px;text-align:center;">'+(d.alicPct ? d.alicPct+'%' : '0%')+(d.estimado?'<span title="IVA estimado: la factura no tiene neto gravado cargado" style="color:var(--gold);">~</span>':'')+'</td>' +
-                '<td style="padding:5px 8px;text-align:right;">'+_fmtM(d.iva)+'</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-weight:600;">'+_fmtM(d.total)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;">'+fm(d.iva)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-weight:600;">'+fm(d.total)+'</td>' +
                 '<td style="padding:5px 8px;text-align:center;">'+estado+'</td>' +
                 '</tr>';
         }).join('');
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--bg);">' +
-            '<td colspan="4" style="padding:6px 8px;">TOTAL ('+items.length+' facturas)'+(hayEstimado?' · <span style="font-weight:400;color:var(--text-3);font-size:10px;">~ IVA estimado al 21% en facturas sin neto cargado</span>':'')+'</td>' +
+            '<td colspan="4" style="padding:6px 8px;">TOTAL ('+nIncl+' comprobante'+(nIncl===1?'':'s')+')'+
+              (hayEstimado?' · <span style="font-weight:400;color:var(--text-3);font-size:10px;">~ IVA estimado al 21% en facturas sin neto cargado</span>':'')+
+              (nUSD?' · <span style="font-weight:400;color:var(--warn);font-size:11px;">'+_rptAvisoUSD(nUSD)+'</span>':'')+'</td>' +
             '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totNeto)+'</td>' +
             '<td></td>' +
             '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totIVA)+'</td>' +
@@ -14741,19 +14774,30 @@
             '<td></td></tr>';
     }
 
+    // Aviso del Libro de Compras (en pesos) cuando hay comprobantes en dólares: se listan pero no se suman.
+    function _rptAvisoUSD(n) {
+        return n+' comprobante'+(n===1?'':'s')+' en USD no incluido'+(n===1?'':'s')+' en los totales (el libro es en pesos)';
+    }
+
     // Discrimina el IVA de una factura de proveedor (compra). Usa el neto gravado
     // cargado; si no está, lo estima al 21% (marca estimado=true). total = importe.
+    // Una NOTA DE CRÉDITO recibida RESTA: neto, IVA y total salen en negativo, así el libro, el resumen
+    // de IVA, la impresión y el Excel (que leen todos de acá) la descuentan sin tocar cada uno. Se toma el
+    // valor absoluto del importe por si alguna NC quedó cargada con signo. `moneda` = 'ARS' | 'USD': los
+    // comprobantes en USD no se suman a los totales en pesos (ver rptRenderCompras / rptRenderStats).
     function _rptIvaCompra(v) {
-        var total = v.importe||0;
+        var signo = v.esNotaCredito ? -1 : 1;
+        var mon = _monDe(v);
+        var total = v.esNotaCredito ? Math.abs(v.importe||0) : (v.importe||0);
         // Un VEP / comprobante no fiscal (tipoComprobante 'X') es un comprobante ARCA registrable,
         // pero NO genera crédito fiscal de IVA: su IVA es 0 (no se estima). Sí cuenta su total.
-        if (!_facComputaArca(v)) return { neto: total, iva: 0, total: total, alicPct: 0, estimado: false };
+        if (!_facComputaArca(v)) return { neto: signo*total, iva: 0, total: signo*total, alicPct: 0, estimado: false, moneda: mon, signo: signo };
         var neto, estimado = false;
         if ((v.netoGravado||0) > 0) { neto = v.netoGravado; }
         else { neto = total>0 ? total/1.21 : 0; estimado = total>0; }
         var iva = total - neto;
         var alicPct = neto>0 ? Math.round((iva/neto)*100) : 0;
-        return { neto: neto, iva: iva, total: total, alicPct: alicPct, estimado: estimado };
+        return { neto: signo*neto, iva: signo*iva, total: signo*total, alicPct: alicPct, estimado: estimado, moneda: mon, signo: signo };
     }
 
     // Tipo elegido en el selector "Todas/Solo Ganancias/Solo SUSS" de la tarjeta de Retenciones.
@@ -14921,10 +14965,14 @@
         var el = document.getElementById('rptStats');
         if (!el) return;
         var ventas = (facturasARCA||[]).filter(function(v){ return rptEnPeriodo(v.fecha.length===8 ? v.fecha.slice(0,4)+'-'+v.fecha.slice(4,6)+'-'+v.fecha.slice(6,8) : v.fecha, f); });
-        var compras = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
+        var comprasTodas = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
+        // Fiscal en pesos: los comprobantes en USD no entran en el crédito fiscal (no hay tipo de cambio por comprobante); se avisa cuántos quedaron afuera.
+        var compras = comprasTodas.filter(function(v){ return _monDe(v) !== 'USD'; });
+        var nComprasUSD = comprasTodas.length - compras.length;
         var totVentas = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impTotal||0); },0);
         var totIVAV   = ventas.reduce(function(s,v){ return s+_rptSignoVenta(v.tipoComp)*(v.impIVA||0); },0);
-        var totCompras = compras.reduce(function(s,v){ return s+(v.importe||0); },0);
+        // Las notas de crédito restan (_rptIvaCompra las devuelve en negativo).
+        var totCompras = compras.reduce(function(s,v){ return s+_rptIvaCompra(v).total; },0);
         var totIVAC    = compras.reduce(function(s,v){ return s+_rptIvaCompra(v).iva; },0);
         var posIVA     = totIVAV - totIVAC; // débito fiscal (ventas) − crédito fiscal (compras)
         // retenciones
@@ -14950,7 +14998,8 @@
             '<div class="stat-card" style="border-left:4px solid var(--blue);">' +
               '<div class="stat-label">IVA Compras (crédito fiscal)</div>' +
               '<div class="stat-value" style="font-size:18px;color:var(--blue);">'+_fmtM(totIVAC)+'</div>' +
-              '<div class="stat-sub">'+compras.length+' facturas · Total '+_fmtM(totCompras)+'</div>' +
+              '<div class="stat-sub">'+compras.length+' comprobante'+(compras.length===1?'':'s')+' · Total '+_fmtM(totCompras)+
+                (nComprasUSD ? '<br><span style="color:var(--warn);">'+nComprasUSD+' en USD no incluido'+(nComprasUSD===1?'':'s')+'</span>' : '')+'</div>' +
             '</div>' +
             '<div class="stat-card" style="border-left:4px solid '+posColor+';">' +
               '<div class="stat-label">Posición IVA del período</div>' +
@@ -14988,16 +15037,20 @@
                 }).join('')+'</tbody><tfoot><tr><td colspan="5">TOTAL ('+items.length+' comprobantes)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totT)+'</td></tr></tfoot></table>';
         } else if (tipo === 'compras') {
             var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
-            var totN=0,totIV=0,totT=0,hayEst=false;
+            var totN=0,totIV=0,totT=0,hayEst=false,nIncl=0,nUSDp=0;
             content = '<h1>📥 Libro IVA Compras — Facturas de Proveedores</h1><h2>'+empresa+' — '+periodo+'</h2>' +
                 '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
                 items.map(function(v){
                     var d = _rptIvaCompra(v); if (d.estimado) hayEst=true;
-                    totN+=d.neto;totIV+=d.iva;totT+=d.total;
+                    // Mismo criterio que la pantalla: las NC restan y los USD se listan pero no se suman (el libro es en pesos).
+                    var usd = d.moneda === 'USD';
+                    if (usd) nUSDp++; else { nIncl++; totN+=d.neto;totIV+=d.iva;totT+=d.total; }
+                    var fm = usd ? function(n){ return _fmtMonto(n,'USD'); } : _fmtM;
                     var est = v.estado==='pagada'?'<span class="ok">Pagada</span>':v.estado==='parcial'?'<span class="pend">Parcial</span>':'<span class="ret">Pendiente</span>';
-                    return '<tr><td>'+_rptFechaDMY(v.fecha)+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+_fmtM(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+_fmtM(d.iva)+'</td><td class="r">'+_fmtM(d.total)+'</td><td class="c">'+est+'</td></tr>';
-                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+items.length+' facturas)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
-                (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'');
+                    return '<tr'+(usd?' style="color:#777;"':'')+'><td>'+_rptFechaDMY(v.fecha)+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+(v.esNotaCredito?' (NC)':'')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+fm(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+fm(d.iva)+'</td><td class="r">'+fm(d.total)+'</td><td class="c">'+est+'</td></tr>';
+                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+nIncl+' comprobante'+(nIncl===1?'':'s')+')</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
+                (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'') +
+                (nUSDp?'<p style="font-size:11px;color:#777;margin-top:-16px;">'+_rptAvisoUSD(nUSDp)+'. Las notas de crédito (NC) restan.</p>':'');
         } else {
             var tipoRetSel = _rptTipoRetSel();
             var rows = _rptFilasRetenciones(f, tipoRetSel);
@@ -15036,13 +15089,18 @@
         }
 
         function _sheetCompras() {
-            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f); });
+            // Mismo universo que la pantalla del libro: los que no computan para ARCA (Comprobante X, VEP…) no van.
+            var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
             return items.map(function(v) {
                 var d = _rptIvaCompra(v);
+                // Pesos: enteros, como siempre. Dólares: con centavos (redondearlos a entero perdería plata) y la columna Moneda lo dice.
+                var usd = d.moneda === 'USD';
+                var rd = function(n) { return usd ? Math.round(n * 100) / 100 : Math.round(n); };
                 return { 'Fecha': _rptFechaDMY(v.fecha), 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
-                         'Concepto': v.descripcion||'', 'Neto Gravado': Math.round(d.neto),
-                         'IVA %': d.alicPct, 'IVA $': Math.round(d.iva), 'Total': Math.round(d.total),
-                         'IVA estimado': d.estimado ? 'Sí (21%)' : '', 'Pagado': v.pagado||0, 'Estado': v.estado||'' };
+                         'Concepto': v.descripcion||'', 'Neto Gravado': rd(d.neto),
+                         'IVA %': d.alicPct, 'IVA $': rd(d.iva), 'Total': rd(d.total),
+                         'IVA estimado': d.estimado ? 'Sí (21%)' : '', 'Pagado': v.pagado||0, 'Estado': v.estado||'',
+                         'Moneda': d.moneda, 'Tipo': _facTipoLabel(v) };
             });
         }
 
@@ -16881,7 +16939,9 @@
             return;
         }
         if (_provPendSel >= rows.length) _provPendSel = rows.length - 1;
-        var totalSaldo = rows.reduce(function(s, r) { return s + (r.mon === '$' ? r.saldo : 0); }, 0);
+        // Saldo por moneda: pesos y dólares van en renglones separados del total (antes los USD quedaban afuera sin decirlo).
+        var totalSaldo = _tmNuevo();
+        rows.forEach(function(r) { _tmSumar(totalSaldo, r.mon === 'USD ' ? 'USD' : 'ARS', r.saldo); });
         var html = rows.map(function(r, i) {
             var pill = r.tipo === 'ARCA'
                 ? '<span class="pill" style="background:#e6f4ea;color:#137333;">ARCA</span>'
@@ -16898,8 +16958,8 @@
                 + '<td><button class="btn btn-gold btn-sm" onclick="' + r.pagar + '">💵 Pagar</button></td>'
                 + '</tr>';
         }).join('');
-        html += '<tr class="c-total"><td colspan="7" style="text-align:right;font-weight:700;">Saldo pendiente total (ARS)</td>'
-             + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">$' + (totalSaldo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td><td></td></tr>';
+        html += '<tr class="c-total"><td colspan="7" style="text-align:right;font-weight:700;">Saldo pendiente total' + (_tmHayUSD(totalSaldo) ? ' (pesos y dólares por separado)' : ' (ARS)') + '</td>'
+             + '<td style="text-align:right;font-weight:800;color:var(--danger,#c0392b);">' + _htmlTM(totalSaldo) + '</td><td></td></tr>';
         tbody.innerHTML = html;
         _provPendPintarPanel();
     }
@@ -17169,7 +17229,9 @@
         // El saldo del proveedor sale del maestro: sirve para decidir si conviene pagar todo junto.
         var pv = (typeof buscarProveedorPorNombre === 'function') ? buscarProveedorPorNombre(r.prov) : null;
         var otros = _provPendRows.filter(function(x){ return x !== r && (x.prov || '') === (r.prov || ''); });
-        var otrosTot = otros.reduce(function(t, x){ return t + (x.saldo || 0); }, 0);
+        // Por moneda: los otros comprobantes del proveedor pueden estar en pesos y en dólares.
+        var otrosTot = _tmNuevo();
+        otros.forEach(function(x){ _tmSumar(otrosTot, x.mon === 'USD ' ? 'USD' : 'ARS', x.saldo || 0); });
         box.innerHTML =
             '<div class="c-titulo">SELECCIONADO</div>'
             + '<div style="font-size:16px;font-weight:700;margin-top:5px;line-height:1.25;">' + escHtml(r.prov || '—') + '</div>'
@@ -17191,7 +17253,7 @@
             + (otros.length
                 ? '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);">'
                   + '<div class="c-titulo" style="margin-bottom:6px;">MISMO PROVEEDOR</div>'
-                  + kv(otros.length + ' comprobante(s) más', f(otrosTot), 'var(--danger)')
+                  + kv(otros.length + ' comprobante(s) más', _fmtTM(otrosTot), 'var(--danger)')
                   + '<div style="font-size:11px;color:var(--text-3);margin-top:6px;line-height:1.45;">Se pueden pagar todos juntos con una sola orden de pago.</div></div>'
                 : '');
     }
@@ -22752,7 +22814,7 @@
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
                     <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></td>
-                    <td style="text-align:right;">$${(f.pagado||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                    <td style="text-align:right;">${_fmtMonto(f.pagado||0, _monDe(f))}</td>
                     <td>${estadoBadge}</td>
                     <td>${docBtn}</td>
                     <td><div class="action-btns">${acciones}</div></td>`;
@@ -22766,8 +22828,10 @@
         if (el1) el1.textContent = facturas.length;
         if (el2) el2.textContent = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').length;
         if (el3) {
-            const total = facturas.filter(f => (f.estado||'pendiente') !== 'pagada').reduce((s,f) => s + _saldoFactDoc(f), 0);
-            el3.textContent = '$' + (total).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+            // Saldo a pagar por moneda: los dólares no se suman a los pesos (ver _tmNuevo).
+            const total = _tmNuevo();
+            facturas.filter(f => (f.estado||'pendiente') !== 'pagada').forEach(f => _tmSumar(total, _monDe(f), _saldoFactDoc(f)));
+            el3.innerHTML = _htmlTM(total);
         }
         if (typeof renderProvPendientes === 'function') renderProvPendientes();
         _presupFichaRefrescar();   // si la ficha de un presupuesto está abierta, sus facturas y pagos se repintan
@@ -23370,22 +23434,37 @@
     function renderEgresos() {
         // Sólo pagos PROPIOS del presupuesto (sin los espejos de facturas/docs, que se cuentan
         // aparte más abajo) para no duplicar el egreso cuando un comprobante se aplica a un presupuesto.
+        // Los presupuestos no tienen moneda: van en pesos.
         const totalPagadoPres = datos.reduce((s, i) => s + _presupPagadoPropio(i), 0);
-        const totalPagadoFact = facturas.reduce((s, f) => s + (f.pagado || 0), 0);
-        const totalPagadoDocs = (documentos||[]).reduce((s, d) => s + (d.pagado || 0), 0);
+        // Todo lo demás se lleva POR MONEDA: lo pagado de un comprobante en USD está en dólares y no puede sumarse a los
+        // pesos (antes el total en pesos lo incluía y el total en USD lo volvía a convertir con el tipo de cambio).
+        const pagFact = _tmNuevo(), pagDocs = _tmNuevo(), egrCaja = _tmNuevo();
+        facturas.forEach(f => _tmSumar(pagFact, _monDe(f), f.pagado || 0));
+        (documentos||[]).forEach(d => _tmSumar(pagDocs, _monDe(d), d.pagado || 0));
         // Egresos de Caja/Banco: manuales + los que genera "Emitir Comprobante" con Afecta caja = Sí / Egreso
-        const totalEgresosCaja = ingGeneral.reduce((s, ig) => {
+        ingGeneral.forEach(ig => {
             const esEgr = ig.esEgreso || ig.tipo === 'mov_egreso_caja' || ig.tipo === 'mov_banco_salida';
-            return s + (esEgr ? (ig.monto || 0) : 0);
-        }, 0);
-        const totalEgresos = totalPagadoPres + totalPagadoFact + totalPagadoDocs + totalEgresosCaja;
+            if (esEgr) _tmSumar(egrCaja, _monDe(ig), ig.monto || 0);
+        });
+        const totalEgresos = _tmNuevo();
+        totalEgresos.ARS = totalPagadoPres + pagFact.ARS + pagDocs.ARS + egrCaja.ARS;
+        totalEgresos.USD = pagFact.USD + pagDocs.USD + egrCaja.USD;
 
         const el1 = document.getElementById('egresosTotalARS');
         const el2 = document.getElementById('egresosTotalUSD');
         const el3 = document.getElementById('egresosConPagos');
         const el4 = document.getElementById('egresosFactPagadas');
-        if (el1) el1.textContent = '$' + (totalEgresos).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
-        if (el2) el2.textContent = 'USD ' + (totalEgresos/exchangeRate).toLocaleString(undefined,{maximumFractionDigits:2});
+        if (el1) el1.textContent = _fmtMonto(totalEgresos.ARS, 'ARS');
+        // El equivalente en USD es el del total EN PESOS al tipo de cambio actual (como siempre); lo pagado en dólares va aparte.
+        if (el2) el2.textContent = 'USD ' + (totalEgresos.ARS/exchangeRate).toLocaleString(undefined,{maximumFractionDigits:2});
+        const elS1 = document.getElementById('egresosSubARS');
+        const elS2 = document.getElementById('egresosSubUSD');
+        if (elS1) elS1.textContent = _tmHayUSD(totalEgresos)
+            ? 'Suma de los pagos en pesos · además se pagaron ' + _fmtMonto(totalEgresos.USD, 'USD') + ' en comprobantes en dólares (aparte, no se suman)'
+            : 'Suma de todos los pagos realizados';
+        if (elS2) elS2.textContent = _tmHayUSD(totalEgresos)
+            ? 'Total en pesos al tipo de cambio actual · sin los ' + _fmtMonto(totalEgresos.USD, 'USD') + ' pagados en dólares'
+            : 'Al tipo de cambio actual';
         if (el3) el3.textContent = datos.filter(d => (d.pagado||0) > 0).length;
         if (el4) el4.textContent = facturas.filter(f => (f.pagado||0) > 0).length;
 
@@ -23393,28 +23472,30 @@
         const tbody = document.getElementById('egresosBody');
         if (!tbody) return;
         const provMap = {};
+        const nuevoProv = () => ({ presup: 0, fact: 0, otros: 0, usdFact: 0, usdOtros: 0 });
         datos.forEach(d => {
             const _propio = _presupPagadoPropio(d);
             if (_propio <= 0) return;
-            if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0, otros: 0 };
+            if (!provMap[d.proveedor]) provMap[d.proveedor] = nuevoProv();
             provMap[d.proveedor].presup += _propio;
         });
         facturas.forEach(f => {
             if ((f.pagado||0) <= 0) return;
-            if (!provMap[f.proveedor]) provMap[f.proveedor] = { presup: 0, fact: 0, otros: 0 };
-            provMap[f.proveedor].fact += f.pagado || 0;
+            if (!provMap[f.proveedor]) provMap[f.proveedor] = nuevoProv();
+            if (_monDe(f) === 'USD') provMap[f.proveedor].usdFact += f.pagado || 0; else provMap[f.proveedor].fact += f.pagado || 0;
         });
         (documentos||[]).forEach(d => {
             if ((d.pagado||0) <= 0) return;
-            if (!provMap[d.proveedor]) provMap[d.proveedor] = { presup: 0, fact: 0, otros: 0 };
-            provMap[d.proveedor].otros += d.pagado || 0;
+            if (!provMap[d.proveedor]) provMap[d.proveedor] = nuevoProv();
+            if (_monDe(d) === 'USD') provMap[d.proveedor].usdOtros += d.pagado || 0; else provMap[d.proveedor].otros += d.pagado || 0;
         });
         // Los egresos de Caja/Banco no siempre tienen un "proveedor" prolijo (pueden ser
         // movimientos manuales o comprobantes emitidos a un cliente) — se agrupan aparte.
-        if (totalEgresosCaja > 0) {
+        if (egrCaja.ARS > 0 || egrCaja.USD > 0) {
             const key = 'Movimientos de Caja / Banco';
-            if (!provMap[key]) provMap[key] = { presup: 0, fact: 0, otros: 0 };
-            provMap[key].otros += totalEgresosCaja;
+            if (!provMap[key]) provMap[key] = nuevoProv();
+            provMap[key].otros += egrCaja.ARS;
+            provMap[key].usdOtros += egrCaja.USD;
         }
         tbody.innerHTML = '';
         const provs = Object.keys(provMap).sort();
@@ -23422,16 +23503,19 @@
             tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No hay egresos registrados.</td></tr>';
             return;
         }
+        // Cada celda lleva los pesos y, abajo, los dólares (sólo si hay): nunca los dos juntos en un solo número.
+        const celda = (ars, usd) => _htmlTM({ ARS: ars, USD: usd });
         provs.forEach(nombre => {
             const v = provMap[nombre];
             const total = v.presup + v.fact + v.otros;
+            const totalUsd = v.usdFact + v.usdOtros;
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><strong>${escHtml(nombre)}</strong></td>
-                <td style="text-align:right;">$${(v.presup).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-                <td style="text-align:right;">$${(v.fact).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-                <td style="text-align:right;">$${(v.otros).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-                <td style="text-align:right;"><strong>$${(total).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></td>`;
+                <td style="text-align:right;">${celda(v.presup, 0)}</td>
+                <td style="text-align:right;">${celda(v.fact, v.usdFact)}</td>
+                <td style="text-align:right;">${celda(v.otros, v.usdOtros)}</td>
+                <td style="text-align:right;"><strong>${celda(total, totalUsd)}</strong></td>`;
             tbody.appendChild(tr);
         });
         renderDetalleEgresos();
@@ -25612,11 +25696,15 @@
         const nDocs = documentos.length, nFacs = (facturas||[]).length;
         const nArca = (compRecibidos||[]).length;
         const nEmit = (comprobantesEmitidos||[]).filter(e => e && e.movTipo === 'egreso').length;
-        const totalAmt = documentos.reduce((s,d) => s + (d.importe||0), 0) + (facturas||[]).reduce((s,f) => s + (f.esNotaCredito ? 0 : (f.importe||0)), 0);
+        // Total por moneda (pesos / dólares sin mezclar). Las notas de crédito RESTAN: antes no sumaban (la tarjeta) o sumaban
+        // como si fueran una factura más (el pie de la lista), y la tarjeta y el pie daban números distintos para lo mismo.
+        const totalAmt = _tmNuevo();
+        documentos.forEach(d => _tmSumar(totalAmt, _monDe(d), d.importe||0));
+        (facturas||[]).forEach(f => _tmSumar(totalAmt, _monDe(f), f.esNotaCredito ? -Math.abs(f.importe||0) : (f.importe||0)));
         const pendientes = documentos.filter(d => _saldoFactDoc(d) > 0).length + (facturas||[]).filter(f => _saldoFactDoc(f) > 0).length;
         const el = id => document.getElementById(id);
         if (el('totalDocs')) el('totalDocs').textContent = nDocs + nFacs + nArca + nEmit;
-        if (el('docsTotal')) el('docsTotal').textContent = '$' + (totalAmt).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+        if (el('docsTotal')) el('docsTotal').innerHTML = _htmlTM(totalAmt);
         if (el('docsPendientes')) el('docsPendientes').textContent = pendientes;
 
         if (list.length === 0) {
@@ -25779,6 +25867,7 @@
             var imp = (row._o === 'arcaimp') ? (Number(it.total) || 0)
                     : (row._o === 'emitx')   ? (Number(it.total != null ? it.total : it.importe) || 0)
                     : (it.importe || 0);
+            if (it.esNotaCredito) imp = -Math.abs(imp);   // una nota de crédito resta del total del listado
             var pag = (row._o === 'x' || row._o === 'arca' || row._o === 'factx') ? (it.pagado || 0) : 0;
             if (esUSD) { _tImpUSD += imp; _tPagUSD += pag; } else { _tImpARS += imp; _tPagARS += pag; }
         });
@@ -39817,7 +39906,7 @@
                 if (_esPagoEspejo(p)) return; // espejo de factura/doc: se lista como su propia factura/doc, no dos veces
                 var capital = (p.capital||0)+(p.mayores||0)||p.montoPagado||0;
                 filas.push({
-                    src: 'presup', datoIdx: di, pagoIdx: pi,
+                    src: 'presup', datoIdx: di, pagoIdx: pi, mon: 'ARS',
                     fecha: p.fecha, proveedor: d.proveedor||'—',
                     concepto: d.concepto||'—',
                     modalidad: p.modalidad||'B',
@@ -39830,7 +39919,7 @@
             // Pagos legacy sin historial
             if (!hist.length && (d.pagado||0) > 0) {
                 filas.push({
-                    src: 'presup_legacy', datoIdx: di, pagoIdx: -1,
+                    src: 'presup_legacy', datoIdx: di, pagoIdx: -1, mon: 'ARS',
                     fecha: d.fecha, proveedor: d.proveedor||'—',
                     concepto: d.concepto||'—',
                     modalidad: d.modalidad||'B',
@@ -39845,7 +39934,7 @@
         facturas.forEach(function(f, fi) {
             (f.pagosHistorial||[]).forEach(function(p, pi) {
                 filas.push({
-                    src: 'factura', datoIdx: fi, pagoIdx: pi,
+                    src: 'factura', datoIdx: fi, pagoIdx: pi, mon: _monDe(f),
                     fecha: p.fecha, proveedor: f.proveedor||'—',
                     concepto: (f.numero?'N°'+f.numero+' — ':'')+( f.descripcion||'—'),
                     modalidad: p.modalidad||'B',
@@ -39862,7 +39951,7 @@
             var hist = d.pagosHistorial || [];
             hist.forEach(function(p, pi) {
                 filas.push({
-                    src: 'documento', datoIdx: di, pagoIdx: pi,
+                    src: 'documento', datoIdx: di, pagoIdx: pi, mon: _monDe(d),
                     fecha: p.fecha, proveedor: d.proveedor||'—',
                     concepto: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'),
                     modalidad: p.modalidad||'B',
@@ -39873,7 +39962,7 @@
             });
             if (!hist.length && (d.pagado||0) > 0) {
                 filas.push({
-                    src: 'documento_legacy', datoIdx: di, pagoIdx: -1,
+                    src: 'documento_legacy', datoIdx: di, pagoIdx: -1, mon: _monDe(d),
                     fecha: d.fecha, proveedor: d.proveedor||'—',
                     concepto: (d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'),
                     modalidad: d.modalidad||'B',
@@ -39891,7 +39980,7 @@
             var esEgr = ig.esEgreso || ig.tipo === 'mov_egreso_caja' || ig.tipo === 'mov_banco_salida';
             if (!esEgr) return;
             filas.push({
-                src: 'movcaja_legacy', datoIdx: igIdx, pagoIdx: -1,
+                src: 'movcaja_legacy', datoIdx: igIdx, pagoIdx: -1, mon: _monDe(ig),
                 fecha: ig.fecha,
                 proveedor: tLegE[ig.tipo] || (ig.esBancario ? 'Movimiento bancario' : 'Movimiento de caja'),
                 concepto: _cajaDescMask(ig, ig.origen || ig.referencia || '—'),
@@ -39931,6 +40020,7 @@
                 ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">🏦 Banco</span>'
                 : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">💵 Efectivo</span>';
             var neto = f.total - f.totalRet;
+            var fmtA = function(n){ return _fmtMonto(n, f.mon); };   // cada pago con la moneda de su comprobante (no todo en «$»)
             // abrirEditarPago solo sabe editar pagos de 'presup' y 'factura' (con su propio
             // pagosHistorial). Documentos y movimientos de caja/banco se editan desde su pestaña.
             var editBtn = (puedeEditar && (f.src === 'presup' || f.src === 'factura'))
@@ -40254,7 +40344,8 @@
     function buildProvPagosHTML(nombre, omitirFacturas) {
         var fmtA = function(n){ return '$'+(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var filas = [];
-        var totalPagado = 0;
+        // Total pagado POR MONEDA: los pagos de comprobantes en dólares no se suman a los de pesos.
+        var totalPagado = _tmNuevo();
 
         // Facturas del proveedor (para no tener que ir a la pestaña Facturas a buscarlas)
         var facturasHtml = '';
@@ -40272,9 +40363,9 @@
                     '<td>'+(f.numero||'—')+'</td>'+
                     '<td>'+(f.descripcion||'—')+'</td>'+
                     '<td>'+(f.moneda||'ARS')+'</td>'+
-                    '<td style="text-align:right;">'+fmtA(f.importe)+'</td>'+
-                    '<td style="text-align:right;color:var(--success);">'+fmtA(f.pagado)+'</td>'+
-                    '<td style="text-align:right;font-weight:600;">'+fmtA(saldo)+'</td>'+
+                    '<td style="text-align:right;">'+_fmtMonto(f.importe,_monDe(f))+'</td>'+
+                    '<td style="text-align:right;color:var(--success);">'+_fmtMonto(f.pagado,_monDe(f))+'</td>'+
+                    '<td style="text-align:right;font-weight:600;">'+_fmtMonto(saldo,_monDe(f))+'</td>'+
                     '<td style="text-align:center;">'+estadoBadge+'</td>'+
                 '</tr>';
             });
@@ -40296,7 +40387,7 @@
             (d.pagosHistorial||[]).forEach(function(p, pi) {
                 if (_esPagoEspejo(p)) return;   // el pago de la factura ya figura abajo; el espejo duplicaba filas y el total
                 var monto = (p.capital||0)+(p.mayores||0)||p.montoPagado||0;
-                totalPagado += monto;
+                totalPagado.ARS += monto;   // los presupuestos no tienen moneda: van en pesos
                 var modBadge = p.modalidad==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
@@ -40316,7 +40407,7 @@
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
-                totalPagado += d.pagado;
+                totalPagado.ARS += d.pagado;
                 filas.push('<tr>'+
                     '<td>'+(d.fecha?formatearFecha(d.fecha):'—')+'</td>'+
                     '<td>Presup.</td>'+
@@ -40335,8 +40426,9 @@
         // Pagos de facturas
         facturas.forEach(function(f, fi) {
             if (f.proveedor !== nombre) return;
+            var fmtA = function(n){ return _fmtMonto(n, _monDe(f)); };   // cada pago con la moneda de su factura
             (f.pagosHistorial||[]).forEach(function(p, pi) {
-                totalPagado += p.monto||0;
+                _tmSumar(totalPagado, _monDe(f), p.monto||0);
                 var modBadge = p.modalidad==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
@@ -40360,8 +40452,9 @@
         // Pagos de documentos (comprobantes proveedor)
         documentos.forEach(function(d) {
             if (d.proveedor !== nombre) return;
+            var fmtA = function(n){ return _fmtMonto(n, _monDe(d)); };   // cada pago con la moneda de su comprobante
             (d.pagosHistorial||[]).forEach(function(p, pi) {
-                totalPagado += p.monto||0;
+                _tmSumar(totalPagado, _monDe(d), p.monto||0);
                 var modBadge = (p.tipoAB||p.modalidad||'B')==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
@@ -40381,7 +40474,7 @@
                 '</tr>');
             });
             if (!(d.pagosHistorial||[]).length && (d.pagado||0)>0) {
-                totalPagado += d.pagado;
+                _tmSumar(totalPagado, _monDe(d), d.pagado);
                 filas.push('<tr>'+
                     '<td>'+(d.fecha?formatearFecha(d.fecha):'—')+'</td>'+
                     '<td>Documento</td>'+
@@ -40403,7 +40496,8 @@
         // proveedorId (fuente de verdad) con fallback a proveedorNombre/cliente por si
         // el registro es viejo y le falta ese campo.
         _emitidosEgresoDeProv(nombre).forEach(function(e) {
-            totalPagado += e.total||0;
+            var fmtA = function(n){ return _fmtMonto(n, _monDe(e)); };
+            _tmSumar(totalPagado, _monDe(e), e.total||0);
             var modBadge = e.tipoAB==='A'
                 ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                 : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
@@ -40430,7 +40524,7 @@
         } else {
             filas.push('<tr style="font-weight:700;border-top:2px solid var(--border);">'+
                 '<td colspan="6" style="text-align:right;color:var(--text-2);">Total pagado al proveedor:</td>'+
-                '<td style="text-align:right;color:var(--danger);">'+fmtA(totalPagado)+'</td>'+
+                '<td style="text-align:right;color:var(--danger);">'+_htmlTM(totalPagado)+'</td>'+
                 '<td colspan="3"></td>'+
             '</tr>');
         }
@@ -40873,6 +40967,16 @@
         if ((it.pagado || 0) > 0 || _totalRetenidoHist(it.pagosHistorial) > 0) return 'parcial';
         return 'pendiente';
     }
+    // KPIs de la cuenta corriente de UNA moneda (`c` = cc para pesos, cc.usd para dólares). Los dólares no se suman a los pesos.
+    function _ccKpisMon(c, mon) {
+        var fm = function(n){ return _fmtMonto(n, mon); };
+        return _ccKpiHTML('Adeudado', fm(Math.max(0, c.saldoComprob)), 'var(--danger)')
+            + _ccKpiHTML('Pagado (neto)', fm(c.totalPagado), 'var(--success)')
+            + _ccKpiHTML('Retenciones', fm(c.totalRet), 'var(--gold)')
+            + (c.totalFR > 0.5 ? _ccKpiHTML('Fondo de reparo retenido', fm(c.totalFR), 'var(--blue)') : '')
+            + (c.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fm(c.creditos), 'var(--blue)') : '')
+            + _ccKpiHTML('Saldo neto', fm(c.saldoNeto), c.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)');
+    }
     function _ccPanelHTML(nombre) {
         var cc = _ctaCteProvMovs(nombre);
         var fmtA = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
@@ -40882,10 +40986,10 @@
         // Comprobantes del proveedor (facturas + comprobantes X)
         var comps = [];
         (facturas || []).forEach(function(f){ if (f.proveedor !== nombre) return;
-            if (f.esNotaCredito) { comps.push({ o:'nc', id: f.id, tipo: 'Nota de Créd. ' + (f.tipoComprobante||''), num: (f.numero || '—'), fecha: f.fecha, imp: -(f.importe || 0), pag: 0, est: 'nc', saldo: 0, esNC: true }); return; }
-            comps.push({ o:'fact', ref: facturas.indexOf(f), tipo: _facTipoLabel(f), num: (f.numero || _fmtNroProv(f.nroProv) || '—'), fecha: f.fecha, imp: f.importe || 0, pag: f.pagado || 0, est: _ccEstadoItem(f), saldo: _saldoFactDoc(f) }); });
+            if (f.esNotaCredito) { comps.push({ o:'nc', id: f.id, mon: _monDe(f), tipo: 'Nota de Créd. ' + (f.tipoComprobante||''), num: (f.numero || '—'), fecha: f.fecha, imp: -(f.importe || 0), pag: 0, est: 'nc', saldo: 0, esNC: true }); return; }
+            comps.push({ o:'fact', ref: facturas.indexOf(f), mon: _monDe(f), tipo: _facTipoLabel(f), num: (f.numero || _fmtNroProv(f.nroProv) || '—'), fecha: f.fecha, imp: f.importe || 0, pag: f.pagado || 0, est: _ccEstadoItem(f), saldo: _saldoFactDoc(f) }); });
         (documentos || []).forEach(function(d){ if (d.proveedor !== nombre) return;
-            comps.push({ o:'doc', ref: d.id, tipo: 'Comprobante X', num: (d.numero || _fmtNroProv(d.nroProv) || d.nro || '—'), fecha: d.fecha, imp: d.importe || 0, pag: d.pagado || 0, est: _ccEstadoItem(d), saldo: _saldoFactDoc(d) }); });
+            comps.push({ o:'doc', ref: d.id, mon: _monDe(d), tipo: 'Comprobante X', num: (d.numero || _fmtNroProv(d.nroProv) || d.nro || '—'), fecha: d.fecha, imp: d.importe || 0, pag: d.pagado || 0, est: _ccEstadoItem(d), saldo: _saldoFactDoc(d) }); });
         comps.sort(function(a,b){ return String(b.fecha || '').localeCompare(String(a.fecha || '')); });
         var compsF = comps.filter(function(c){ if (filtro === 'pend') return c.saldo > 0.5; if (filtro === 'pag') return c.saldo <= 0.5; return true; });
         var puedeEd = (typeof puedeEditar !== 'undefined' && puedeEditar);
@@ -40900,14 +41004,14 @@
             + '</div>'
             + '<button class="btn btn-outline btn-sm" onclick="_ccImprimir(\'' + _nEsc + '\')" title="Imprimir la cuenta corriente">🖨️ Imprimir</button>'
             + '</div>'
+            + (cc.hayUSD ? '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin:0 0 6px;">En pesos</div>' : '')
             + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">'
-            + _ccKpiHTML('Adeudado', fmtA(Math.max(0, cc.saldoComprob)), 'var(--danger)')
-            + _ccKpiHTML('Pagado (neto)', fmtA(cc.totalPagado), 'var(--success)')
-            + _ccKpiHTML('Retenciones', fmtA(cc.totalRet), 'var(--gold)')
-            + (cc.totalFR > 0.5 ? _ccKpiHTML('Fondo de reparo retenido', fmtA(cc.totalFR), 'var(--blue)') : '')
-            + (cc.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(cc.creditos), 'var(--blue)') : '')
-            + _ccKpiHTML('Saldo neto', fmtA(cc.saldoNeto), cc.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
-            + '</div></div>';
+            + _ccKpisMon(cc, 'ARS')
+            + '</div>'
+            // Comprobantes en dólares: su propia fila de totales, nunca sumados a los de pesos.
+            + (cc.hayUSD ? '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin:14px 0 6px;">En dólares (USD) · no se suma a los pesos</div>'
+                + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">' + _ccKpisMon(cc.usd, 'USD') + '</div>' : '')
+            + '</div>';
         // Comprobantes (facturas / comprobantes X)
         h += '<div class="table-card" style="margin-bottom:14px;"><div class="table-card-head"><h3>Facturas y comprobantes X'
             + (filtro === 'pend' ? ' — a pagar' : filtro === 'pag' ? ' — pagados' : '') + '</h3>'
@@ -40931,7 +41035,7 @@
                         + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                         + '<td><span style="color:#1e8e3e;font-weight:600;">🧾 ' + escHtml(c.tipo) + '</span></td>'
                         + '<td>' + escHtml(String(c.num)) + '</td>'
-                        + '<td style="text-align:right;color:#1e8e3e;font-weight:600;">' + fmtA(c.imp) + '</td>'
+                        + '<td style="text-align:right;color:#1e8e3e;font-weight:600;">' + _fmtMonto(c.imp, c.mon) + '</td>'
                         + '<td style="text-align:right;">—</td>'
                         + '<td style="text-align:right;">—</td>'
                         + '<td><span class="pill badge-ok">Crédito</span></td>'
@@ -40953,9 +41057,9 @@
                     + '<td style="white-space:nowrap;">' + (c.fecha ? formatearFecha(c.fecha) : '—') + '</td>'
                     + '<td>' + escHtml(c.tipo) + '</td>'
                     + '<td>' + escHtml(String(c.num)) + '</td>'
-                    + '<td style="text-align:right;">' + fmtA(c.imp) + '</td>'
-                    + '<td style="text-align:right;color:var(--success);">' + (c.pag ? fmtA(c.pag) : '—') + '</td>'
-                    + '<td style="text-align:right;font-weight:600;' + (c.saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(c.saldo) + '</td>'
+                    + '<td style="text-align:right;">' + _fmtMonto(c.imp, c.mon) + '</td>'
+                    + '<td style="text-align:right;color:var(--success);">' + (c.pag ? _fmtMonto(c.pag, c.mon) : '—') + '</td>'
+                    + '<td style="text-align:right;font-weight:600;' + (c.saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + _fmtMonto(c.saldo, c.mon) + '</td>'
                     + '<td><span class="pill ' + badge[c.est] + '">' + lbl[c.est] + '</span></td>'
                     + '<td style="text-align:right;white-space:nowrap;"><div class="action-btns" style="justify-content:flex-end;">' + pagar + imprimir + op + desap + (puedeEd ? '<button class="btn btn-outline btn-sm" onclick="editarNroComprobante(\'' + c.o + '\',' + refA + ')" title="Cambiar sólo el N° del comprobante">N°</button>'
                                                   + (c.o === 'fact' && c.saldo > 0.5 && _regimenesDeProv(buscarProveedorPorNombre(nombre)).length >= 2
@@ -40973,9 +41077,12 @@
         if (!cc.movs.length) {
             h += '<div style="padding:22px;text-align:center;color:var(--text-3);">Sin movimientos.</div>';
         } else {
-            var saldo = 0;
+            // Saldo corrido POR MONEDA: cada fila acumula sólo contra su propia moneda.
+            var saldos = { ARS: 0, USD: 0 };
             var rows = cc.movs.map(function(m){
-                saldo += (m.debe || 0) - (m.haber || 0);
+                var mm = m.mon === 'USD' ? 'USD' : 'ARS';
+                saldos[mm] += (m.debe || 0) - (m.haber || 0);
+                var saldo = saldos[mm];
                 var col = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
                 // Toda la fila muestra lo que tenga detras: comprobante, Orden de Pago o retencion.
                 // El boton hace lo mismo que la fila; solo la nota de credito suma editar/eliminar.
@@ -41005,19 +41112,25 @@
                 return '<tr' + _trMov + '>'
                     + '<td style="white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
                     + '<td><span style="font-size:11px;font-weight:600;color:' + col + ';">' + m.tipo + '</span><br><span style="font-size:12px;">' + escHtml(m.detalle || '') + '</span></td>'
-                    + '<td style="text-align:right;color:var(--danger);">' + (m.debe ? fmtA(m.debe) : '') + '</td>'
-                    + '<td style="text-align:right;color:var(--success);">' + (m.haber ? fmtA(m.haber) : '') + '</td>'
-                    + '<td style="text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(saldo) + '</td>'
+                    + '<td style="text-align:right;color:var(--danger);">' + (m.debe ? _fmtMonto(m.debe, mm) : '') + '</td>'
+                    + '<td style="text-align:right;color:var(--success);">' + (m.haber ? _fmtMonto(m.haber, mm) : '') + '</td>'
+                    + '<td style="text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + _fmtMonto(saldo, mm) + '</td>'
                     + '<td style="text-align:right;white-space:nowrap;">' + acc + '</td>'
                     + '</tr>';
             }).join('');
             h += '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th style="text-align:right;">Debe</th><th style="text-align:right;">Haber</th><th style="text-align:right;">Saldo</th><th></th></tr></thead>'
                 + '<tbody>' + rows + '</tbody>'
                 + '<tfoot><tr style="font-weight:700;background:var(--surface-2);border-top:2px solid var(--border);">'
-                + '<td colspan="2" style="text-align:right;">Totales</td>'
+                + '<td colspan="2" style="text-align:right;">Totales' + (cc.hayUSD ? ' en pesos' : '') + '</td>'
                 + '<td style="text-align:right;color:var(--danger);">' + fmtA(cc.totalDebe) + '</td>'
                 + '<td style="text-align:right;color:var(--success);">' + fmtA(cc.totalHaber) + '</td>'
-                + '<td style="text-align:right;">' + fmtA(cc.saldoComprob) + '</td><td></td></tr></tfoot>'
+                + '<td style="text-align:right;">' + fmtA(cc.saldoComprob) + '</td><td></td></tr>'
+                + (cc.hayUSD ? '<tr style="font-weight:700;background:var(--surface-2);">'
+                    + '<td colspan="2" style="text-align:right;">Totales en dólares</td>'
+                    + '<td style="text-align:right;color:var(--danger);">' + _fmtMonto(cc.usd.totalDebe, 'USD') + '</td>'
+                    + '<td style="text-align:right;color:var(--success);">' + _fmtMonto(cc.usd.totalHaber, 'USD') + '</td>'
+                    + '<td style="text-align:right;">' + _fmtMonto(cc.usd.saldoComprob, 'USD') + '</td><td></td></tr>' : '')
+                + '</tfoot>'
                 + '</table></div>';
         }
         h += '</div>';
@@ -41028,11 +41141,12 @@
         var cc = _ctaCteProvMovs(nombre);
         var fmtA = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var emp = (typeof getEmpresaParaRecibo === 'function') ? getEmpresaParaRecibo() : { nombre:'' };
-        var saldo = 0;
-        var filas = cc.movs.map(function(m){ saldo += (m.debe||0)-(m.haber||0);
+        // Saldo corrido por moneda (los dólares no se suman a los pesos).
+        var saldos = { ARS: 0, USD: 0 };
+        var filas = cc.movs.map(function(m){ var mm = m.mon === 'USD' ? 'USD' : 'ARS'; saldos[mm] += (m.debe||0)-(m.haber||0);
             return '<tr><td>' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td><td>' + m.tipo + ' — ' + escHtml(m.detalle||'') + '</td>'
-                + '<td style="text-align:right;">' + (m.debe?fmtA(m.debe):'') + '</td><td style="text-align:right;">' + (m.haber?fmtA(m.haber):'') + '</td>'
-                + '<td style="text-align:right;">' + fmtA(saldo) + '</td></tr>'; }).join('');
+                + '<td style="text-align:right;">' + (m.debe?_fmtMonto(m.debe,mm):'') + '</td><td style="text-align:right;">' + (m.haber?_fmtMonto(m.haber,mm):'') + '</td>'
+                + '<td style="text-align:right;">' + _fmtMonto(saldos[mm],mm) + '</td></tr>'; }).join('');
         var html = '<html><head><meta charset="UTF-8"><title>Cuenta Corriente ' + escHtml(nombre) + '</title>'
             + '<style>body{font-family:Arial,sans-serif;padding:24px;color:#111;}h1{font-size:18px;margin:0 0 2px;}h2{font-size:13px;color:#555;font-weight:400;margin:0 0 16px;}'
             + 'table{width:100%;border-collapse:collapse;font-size:12px;}th,td{padding:6px 8px;border-bottom:1px solid #eee;text-align:left;}'
@@ -41041,7 +41155,12 @@
             + '<div style="margin-bottom:14px;"><span class="k">Adeudado: <b>' + fmtA(Math.max(0,cc.saldoComprob)) + '</b></span>'
             + '<span class="k">Pagado (neto): <b>' + fmtA(cc.totalPagado) + '</b></span>'
             + '<span class="k">Retenciones: <b>' + fmtA(cc.totalRet) + '</b></span>'
-            + '<span class="k">Saldo neto: <b>' + fmtA(cc.saldoNeto) + '</b></span></div>'
+            + '<span class="k">Saldo neto: <b>' + fmtA(cc.saldoNeto) + '</b></span>'
+            + (cc.hayUSD ? '<br><span class="k">En dólares (aparte, no se suma a los pesos) — Adeudado: <b>' + _fmtMonto(Math.max(0,cc.usd.saldoComprob),'USD') + '</b></span>'
+                + '<span class="k">Pagado (neto): <b>' + _fmtMonto(cc.usd.totalPagado,'USD') + '</b></span>'
+                + '<span class="k">Retenciones: <b>' + _fmtMonto(cc.usd.totalRet,'USD') + '</b></span>'
+                + '<span class="k">Saldo neto: <b>' + _fmtMonto(cc.usd.saldoNeto,'USD') + '</b></span>' : '')
+            + '</div>'
             + '<table><thead><tr><th>Fecha</th><th>Movimiento</th><th style="text-align:right;">Debe</th><th style="text-align:right;">Haber</th><th style="text-align:right;">Saldo</th></tr></thead>'
             + '<tbody>' + filas + '</tbody></table>'
             + (function(){
@@ -41088,11 +41207,15 @@
         var notasCred = factsTodas.filter(function(f){ return f.esNotaCredito; }); // haberes
         var docs  = (typeof documentos !== 'undefined' ? documentos : []).filter(function(d){ return d.proveedor === nombre; });
         var movs = [];
-        facts.forEach(function(f){ movs.push({ fecha: f.fecha || '', tipo: 'Factura', clase: 'debe', detalle: (f.numero || f.descripcion || 'Factura'), debe: (f.importe || 0), haber: 0, ref: { t: 'factura', id: facturas.indexOf(f) } }); });
-        docs.forEach(function(d){ movs.push({ fecha: d.fecha || '', tipo: 'Comprob. X', clase: 'debe', detalle: (d.numero || d.descripcion || d.concepto || 'Comprobante'), debe: (d.importe || 0), haber: 0, ref: { t: 'documento', id: d.id } }); });
-        var totalPagado = 0, totalRet = 0, totalNC = 0, totalFR = 0;
+        // Cada movimiento lleva su moneda (`mon`): una cuenta corriente puede tener comprobantes en pesos y en dólares y
+        // NO se suman entre sí —no hay tipo de cambio por comprobante—. Los totales se llevan por moneda (T) y el saldo
+        // corrido del extracto también (ver _ccPanelHTML). Los campos de siempre (totalDebe, saldoComprob…) son los de PESOS;
+        // lo de dólares va en `usd`.
+        var T = { ARS: { pagado: 0, ret: 0, nc: 0, fr: 0, debe: 0 }, USD: { pagado: 0, ret: 0, nc: 0, fr: 0, debe: 0 } };
+        facts.forEach(function(f){ var m = _monDe(f); T[m].debe += (f.importe || 0); movs.push({ fecha: f.fecha || '', tipo: 'Factura', clase: 'debe', mon: m, detalle: (f.numero || f.descripcion || 'Factura'), debe: (f.importe || 0), haber: 0, ref: { t: 'factura', id: facturas.indexOf(f) } }); });
+        docs.forEach(function(d){ var m = _monDe(d); T[m].debe += (d.importe || 0); movs.push({ fecha: d.fecha || '', tipo: 'Comprob. X', clase: 'debe', mon: m, detalle: (d.numero || d.descripcion || d.concepto || 'Comprobante'), debe: (d.importe || 0), haber: 0, ref: { t: 'documento', id: d.id } }); });
         // Notas de crédito: son HABER (bajan la deuda del proveedor, como un pago).
-        notasCred.forEach(function(n){ movs.push({ fecha: n.fecha || '', tipo: 'Nota de Créd.', clase: 'haber', detalle: ('NC ' + (n.tipoComprobante || '') + ' ' + (n.numero || '')).trim(), debe: 0, haber: (n.importe || 0), ref: { t: 'factura', id: facturas.indexOf(n) }, _nc: n.id }); totalNC += (n.importe || 0); });
+        notasCred.forEach(function(n){ var m = _monDe(n); movs.push({ fecha: n.fecha || '', tipo: 'Nota de Créd.', clase: 'haber', mon: m, detalle: ('NC ' + (n.tipoComprobante || '') + ' ' + (n.numero || '')).trim(), debe: 0, haber: (n.importe || 0), ref: { t: 'factura', id: facturas.indexOf(n) }, _nc: n.id }); T[m].nc += (n.importe || 0); });
         // Recolectar TODOS los pagos (entries) de facturas + documentos. Se agrupan por grupoPagoId
         // (un pago de varias facturas), porque la retención se hace POR PAGO, no por factura: el Pago
         // y cada retención tienen que salir UNA sola vez, no una por factura.
@@ -41108,21 +41231,23 @@
                 // no ofrece 🧾 OP). La fecha es la del comprobante porque no hay fecha de pago
                 // guardada. Se marca con _sinOP para poder decirlo en pantalla en vez de mostrar
                 // un "Pago" suelto que parece un pago normal al que le faltan los botones.
-                movs.push({ fecha: item.fecha || '', tipo: 'Pago', clase: 'haber',
+                movs.push({ fecha: item.fecha || '', tipo: 'Pago', clase: 'haber', mon: _monDe(item),
                     detalle: 'Pago sin OP — importe cargado a mano en el comprobante',
                     debe: 0, haber: item.pagado, _sinOP: { t: srcTipo, ref: srcRef } });
-                totalPagado += item.pagado;
+                T[_monDe(item)].pagado += item.pagado;
             }
         };
         facts.forEach(function(it){ _collect(it, 'fact'); }); docs.forEach(function(it){ _collect(it, 'doc'); });
         var grupos = {}, ordenGrupos = [];
         pagoEntries.forEach(function(e, i){
-            var key = e.p.grupoPagoId ? ('G:' + e.p.grupoPagoId) : ('U:' + (e.p.pagoId || (e.srcRef + '-' + e.pi + '-' + i)));
+            // La moneda entra en la clave: un pago de varias facturas que mezclara pesos y dólares no se puede juntar en un movimiento.
+            var key = e.p.grupoPagoId ? ('G:' + e.p.grupoPagoId + '|' + _monDe(e.item)) : ('U:' + (e.p.pagoId || (e.srcRef + '-' + e.pi + '-' + i)));
             if (!grupos[key]) { grupos[key] = []; ordenGrupos.push(key); }
             grupos[key].push(e);
         });
         ordenGrupos.forEach(function(key){
             var es = grupos[key], first = es[0], p0 = first.p;
+            var mon = _monDe(first.item), tm = T[mon];
             var fecha = p0.fecha || first.item.fecha || '';
             // Pago neto combinado (efectivo neto = monto − retenciones, sumado en todo el grupo).
             var netoTotal = 0;
@@ -41130,20 +41255,20 @@
             var esNCviejo = !!p0.esNC;
             var grupoId = p0.grupoPagoId || '';
             if (netoTotal > 0) {
-                movs.push({ fecha: fecha, tipo: esNCviejo ? 'Nota de Créd.' : 'Pago', clase: 'haber',
+                movs.push({ fecha: fecha, tipo: esNCviejo ? 'Nota de Créd.' : 'Pago', clase: 'haber', mon: mon,
                     detalle: esNCviejo ? (('NC ' + (p0.ncLetra || '') + ' ' + (p0.ncNumero || '')).trim()) : ((p0.nroCorrelativo ? ('OP ' + p0.nroCorrelativo) : 'Pago') + ' (neto)'),
                     debe: 0, haber: netoTotal, _op: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, grupo: grupoId } });
-                totalPagado += netoTotal;
+                tm.pagado += netoTotal;
             }
             // Fondo de reparo del grupo: cancela deuda del comprobante igual que el pago,
             // pero no salió de la caja. Va en su propia fila para que se vea cuánto se retuvo.
             var frTotal = 0;
             es.forEach(function(e){ frTotal += (e.p.fondoReparo || 0); });
             if (frTotal > 0) {
-                movs.push({ fecha: fecha, tipo: 'Fondo de reparo', clase: 'haber',
+                movs.push({ fecha: fecha, tipo: 'Fondo de reparo', clase: 'haber', mon: mon,
                     detalle: 'Retenido en garantía' + (p0.fondoReparoPct ? (' (' + p0.fondoReparoPct + '%)') : '') + (p0.nroCorrelativo ? (' · OP ' + p0.nroCorrelativo) : ''),
                     debe: 0, haber: frTotal, _fr: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, grupo: grupoId } });
-                totalFR += frTotal;
+                tm.fr += frTotal;
             }
             // Retenciones combinadas por régimen (mismo código sumado): una fila por régimen, no por factura.
             //
@@ -41184,12 +41309,12 @@
                     var monto = rr.monto + (j === ordenRet.length - 1 ? ajuste : 0);
                     monto = Math.round(monto * 100) / 100;
                     if (monto <= 0) return;
-                    movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: 'Retención ' + (rr.desc || rr.codigo || ''), debe: 0, haber: monto, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: (_esRetSUSS(cod) ? 'suss' : 'ganancias'), grupo: grupoId } });
-                    totalRet += monto;
+                    movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', mon: mon, detalle: 'Retención ' + (rr.desc || rr.codigo || ''), debe: 0, haber: monto, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: (_esRetSUSS(cod) ? 'suss' : 'ganancias'), grupo: grupoId } });
+                    tm.ret += monto;
                 });
             } else if (retTotalGrupo > 0) {
-                movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', detalle: _retDetalleCta(p0), debe: 0, haber: retTotalGrupo, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: '', grupo: grupoId } });
-                totalRet += retTotalGrupo;
+                movs.push({ fecha: fecha, tipo: 'Retención', clase: 'haber', mon: mon, detalle: _retDetalleCta(p0), debe: 0, haber: retTotalGrupo, _ret: { t: first.srcTipo, ref: first.srcRef, pi: first.pi, tipo: '', grupo: grupoId } });
+                tm.ret += retTotalGrupo;
             }
         });
         // Orden: por fecha y, a igual fecha, Debe (comprobantes) → Nota de Crédito → Pago → Ret. Ganancias → Ret. SUSS.
@@ -41201,14 +41326,18 @@
             return 2.5;
         };
         movs.sort(function(a,b){ var c = String(a.fecha).localeCompare(String(b.fecha)); if (c) return c; return _rank(a) - _rank(b); });
-        var totalDebe = facts.reduce(function(s,f){ return s + (f.importe || 0); }, 0) + docs.reduce(function(s,d){ return s + (d.importe || 0); }, 0);
-        // El fondo de reparo cancela el comprobante igual que el pago (aunque no haya salido
-        // de la caja): si no entrara acá, la cuenta corriente mostraría una deuda que la
-        // factura ya da por saldada.
-        var totalHaber = totalPagado + totalRet + totalNC + totalFR;   // las notas de crédito bajan la deuda como un pago
-        var saldoComprob = totalDebe - totalHaber;
-        var creditos = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre) || 0) : 0;
-        return { movs: movs, totalDebe: totalDebe, totalHaber: totalHaber, totalPagado: totalPagado, totalRet: totalRet, totalFR: totalFR, creditos: creditos, saldoComprob: saldoComprob, saldoNeto: saldoComprob - creditos, nFact: facts.length, nDoc: docs.length };
+        // Cierre de cada moneda. El fondo de reparo cancela el comprobante igual que el pago (aunque no haya salido
+        // de la caja): si no entrara acá, la cuenta corriente mostraría una deuda que la factura ya da por saldada.
+        var cierre = function(m) {
+            var t = T[m];
+            var totalHaber = t.pagado + t.ret + t.nc + t.fr;   // las notas de crédito bajan la deuda como un pago
+            var saldoComprob = t.debe - totalHaber;
+            var creditos = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre, m) || 0) : 0;
+            return { totalDebe: t.debe, totalHaber: totalHaber, totalPagado: t.pagado, totalRet: t.ret, totalFR: t.fr, creditos: creditos, saldoComprob: saldoComprob, saldoNeto: saldoComprob - creditos };
+        };
+        var ars = cierre('ARS'), usd = cierre('USD');
+        var hayUSD = movs.some(function(m){ return m.mon === 'USD'; }) || usd.creditos > 0.005;
+        return { movs: movs, totalDebe: ars.totalDebe, totalHaber: ars.totalHaber, totalPagado: ars.totalPagado, totalRet: ars.totalRet, totalFR: ars.totalFR, creditos: ars.creditos, saldoComprob: ars.saldoComprob, saldoNeto: ars.saldoNeto, nFact: facts.length, nDoc: docs.length, usd: usd, hayUSD: hayUSD };
     }
     function _ccKpiHTML(label, val, color) {
         return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + (color || 'var(--border)') + ';border-radius:8px;padding:10px 12px;text-align:center;">'
@@ -41292,23 +41421,29 @@
             + '<button class="btn btn-outline btn-sm" onclick="verFichaProveedor(\'' + _nombreEsc + '\')">← Volver a los datos</button>'
             + '<button class="btn btn-outline btn-sm" onclick="diagRetenciones(\'' + _nombreEsc + '\')" title="Ver los números guardados de cada pago y por qué queda saldo">🔧 Por qué queda saldo</button>'
             + '</div>';
-        h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px;">'
+        h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:' + (cc.hayUSD ? '8' : '18') + 'px;">'
             + _ccKpiHTML('Adeudado', fmtA(Math.max(0, cc.saldoComprob)), 'var(--danger)')
             + _ccKpiHTML('Total pagado', fmtA(cc.totalPagado), 'var(--success)')
             + _ccKpiHTML('Retenciones', fmtA(cc.totalRet), 'var(--gold)')
             + (cc.totalFR > 0.5 ? _ccKpiHTML('Fondo de reparo retenido', fmtA(cc.totalFR), 'var(--blue)') : '')
             + (cc.creditos > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(cc.creditos), 'var(--blue)') : '')
             + _ccKpiHTML('Saldo neto', fmtA(cc.saldoNeto), cc.saldoNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
-            + '</div>';
+            + '</div>'
+            // Comprobantes en dólares: sus propios totales, nunca sumados a los de pesos.
+            + (cc.hayUSD ? '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin:0 0 6px;">En dólares (USD) · no se suma a los pesos</div>'
+                + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px;">' + _ccKpisMon(cc.usd, 'USD') + '</div>' : '');
         // Presupuestos del proveedor: van aunque no tenga facturas (informativo, no entra en el saldo)
         h += _ccPresupHTML(nombre);
         if (!cc.movs.length) {
             h += '<div style="padding:24px;text-align:center;color:var(--text-3);">Este proveedor no tiene facturas ni comprobantes cargados.</div>';
         } else {
             var puedeEd = (typeof puedeEditar !== 'undefined' && puedeEditar);
-            var saldo = 0;
+            // Saldo corrido POR MONEDA (los dólares no se acumulan sobre los pesos).
+            var saldos = { ARS: 0, USD: 0 };
             var rows = cc.movs.map(function(m){
-                saldo += (m.debe || 0) - (m.haber || 0);
+                var mm = m.mon === 'USD' ? 'USD' : 'ARS';
+                saldos[mm] += (m.debe || 0) - (m.haber || 0);
+                var saldo = saldos[mm];
                 var tipoColor = m.clase === 'debe' ? 'var(--danger)' : (m.tipo === 'Retención' ? 'var(--gold)' : 'var(--success)');
                 // Toda la fila MUESTRA lo que tenga detras: el comprobante (con su PDF adjunto si lo
                 // tiene), la Orden de Pago o el certificado de retencion. Mirar o imprimir una copia
@@ -41348,9 +41483,9 @@
                 return '<tr style="border-bottom:1px solid var(--border);"' + _trAbrir + '>'
                     + '<td style="padding:7px 10px;white-space:nowrap;">' + (m.fecha ? formatearFecha(m.fecha) : '—') + '</td>'
                     + '<td style="padding:7px 10px;"><span style="font-size:11px;font-weight:600;color:' + tipoColor + ';">' + m.tipo + '</span><br><span style="font-size:12px;">' + escHtml(m.detalle || '') + '</span></td>'
-                    + '<td style="padding:7px 10px;text-align:right;color:var(--danger);">' + (m.debe ? fmtA(m.debe) : '') + '</td>'
-                    + '<td style="padding:7px 10px;text-align:right;color:var(--success);">' + (m.haber ? fmtA(m.haber) : '') + '</td>'
-                    + '<td style="padding:7px 10px;text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + fmtA(saldo) + '</td>'
+                    + '<td style="padding:7px 10px;text-align:right;color:var(--danger);">' + (m.debe ? _fmtMonto(m.debe, mm) : '') + '</td>'
+                    + '<td style="padding:7px 10px;text-align:right;color:var(--success);">' + (m.haber ? _fmtMonto(m.haber, mm) : '') + '</td>'
+                    + '<td style="padding:7px 10px;text-align:right;font-weight:600;' + (saldo > 0.5 ? 'color:var(--danger);' : '') + '">' + _fmtMonto(saldo, mm) + '</td>'
                     + '<td style="padding:7px 10px;text-align:center;">' + acc + '</td></tr>';
             }).join('');
             h += '<div style="font-size:12px;color:var(--blue);font-weight:600;margin-bottom:8px;">👆 Tocá una fila para ver el comprobante, la Orden de Pago o la retención' + (puedeEd ? ' · ✏ para editar' : '') + '</div>';
@@ -41360,10 +41495,14 @@
                 + '<th style="padding:8px 10px;text-align:right;">Debe</th><th style="padding:8px 10px;text-align:right;">Haber</th>'
                 + '<th style="padding:8px 10px;text-align:right;">Saldo</th><th></th></tr></thead><tbody>' + rows + '</tbody>'
                 + '<tfoot><tr style="background:var(--surface-2);font-weight:700;border-top:2px solid var(--border);">'
-                + '<td colspan="2" style="padding:8px 10px;text-align:right;">Totales</td>'
+                + '<td colspan="2" style="padding:8px 10px;text-align:right;">Totales' + (cc.hayUSD ? ' en pesos' : '') + '</td>'
                 + '<td style="padding:8px 10px;text-align:right;color:var(--danger);">' + fmtA(cc.totalDebe) + '</td>'
                 + '<td style="padding:8px 10px;text-align:right;color:var(--success);">' + fmtA(cc.totalHaber) + '</td>'
                 + '<td style="padding:8px 10px;text-align:right;">' + fmtA(cc.saldoComprob) + '</td><td></td></tr>'
+                + (cc.hayUSD ? '<tr style="background:var(--surface-2);font-weight:700;"><td colspan="2" style="padding:8px 10px;text-align:right;">Totales en dólares</td>'
+                    + '<td style="padding:8px 10px;text-align:right;color:var(--danger);">' + _fmtMonto(cc.usd.totalDebe, 'USD') + '</td>'
+                    + '<td style="padding:8px 10px;text-align:right;color:var(--success);">' + _fmtMonto(cc.usd.totalHaber, 'USD') + '</td>'
+                    + '<td style="padding:8px 10px;text-align:right;">' + _fmtMonto(cc.usd.saldoComprob, 'USD') + '</td><td></td></tr>' : '')
                 + (cc.creditos > 0.5
                     ? '<tr style="font-weight:700;"><td colspan="4" style="padding:6px 10px;text-align:right;color:var(--blue);">− Créditos a favor</td><td style="padding:6px 10px;text-align:right;color:var(--blue);">' + fmtA(cc.creditos) + '</td><td></td></tr>'
                       + '<tr style="font-weight:800;background:var(--surface-2);"><td colspan="4" style="padding:8px 10px;text-align:right;">Saldo neto</td><td style="padding:8px 10px;text-align:right;">' + fmtA(cc.saldoNeto) + '</td><td></td></tr>'
@@ -41431,20 +41570,23 @@
             totalAjustado += c.totalAjustado;
             totalPagadoPresup += _presupPagadoPropio(d);   // sin los espejos: las facturas se suman aparte (si no, cuenta doble)
         });
-        var totalFacturado = 0, totalPagadoFact = 0, totalPendienteFact = 0, totalNCSinFactura = 0;
+        // Facturado / pagado / pendiente POR MONEDA (acumuladores { ARS, USD }): los dólares no se suman a los pesos.
+        var totalFacturado = _tmNuevo(), totalPagadoFact = _tmNuevo(), totalPendienteFact = _tmNuevo(), totalNCSinFactura = _tmNuevo();
         factsDelProv.forEach(function(f) {
-            if (f.esNotaCredito) { if (!f.notaCreditoDe) totalNCSinFactura += (f.importe||0); return; } // NC linkeada ya baja el saldo de su factura; la sin-factura se resta abajo
-            totalFacturado += (f.importe||0);
-            totalPagadoFact += (f.pagado||0);
-            if (f.estado !== 'pagada') totalPendienteFact += _saldoFactDoc(f);
+            var _m = _monDe(f);
+            if (f.esNotaCredito) { if (!f.notaCreditoDe) _tmSumar(totalNCSinFactura, _m, f.importe||0); return; } // NC linkeada ya baja el saldo de su factura; la sin-factura se resta abajo
+            _tmSumar(totalFacturado, _m, f.importe||0);
+            _tmSumar(totalPagadoFact, _m, f.pagado||0);
+            if (f.estado !== 'pagada') _tmSumar(totalPendienteFact, _m, _saldoFactDoc(f));
         });
         var factsPagadas = factsDelProv.filter(function(f){ return f.estado === 'pagada' && !f.esNotaCredito; });
         var factsPendientes = factsDelProv.filter(function(f){ return f.estado !== 'pagada' && !f.esNotaCredito; });
         var docsDelProv = (typeof documentos !== 'undefined' ? documentos : []).filter(function(d){ return d.proveedor === nombre; });
-        var totalDocs = 0, totalPagadoDoc = 0, totalPendienteDoc = 0;
+        var totalDocs = _tmNuevo(), totalPagadoDoc = _tmNuevo(), totalPendienteDoc = _tmNuevo();
         // Pagos por comprobante emitido (egreso): antes entraban en la tarjeta sólo por el espejo del presupuesto, que ya no se suma.
-        var totalPagadoEmit = _emitidosEgresoDeProv(nombre).reduce(function(s, e) { return s + (e.total || 0); }, 0);
-        docsDelProv.forEach(function(d){ totalDocs += (d.importe||0); totalPagadoDoc += (d.pagado||0); if (d.estado !== 'pagada') totalPendienteDoc += _saldoFactDoc(d); });
+        var totalPagadoEmit = _tmNuevo();
+        _emitidosEgresoDeProv(nombre).forEach(function(e) { _tmSumar(totalPagadoEmit, _monDe(e), e.total || 0); });
+        docsDelProv.forEach(function(d){ var _m = _monDe(d); _tmSumar(totalDocs, _m, d.importe||0); _tmSumar(totalPagadoDoc, _m, d.pagado||0); if (d.estado !== 'pagada') _tmSumar(totalPendienteDoc, _m, _saldoFactDoc(d)); });
         var puedeEd = (typeof puedeEditar !== 'undefined' && puedeEditar);
         // Botón ✏ que abre el modal de edición real del comprobante (navega a su pestaña).
         var _btnEd = function(tipo, ref){
@@ -41471,9 +41613,9 @@
                     + '<td style="padding:8px 12px;">' + (o.numero||'—') + '</td>'
                     + '<td style="padding:8px 12px;">' + (o.descripcion||o.concepto||'—') + '</td>'
                     + '<td style="padding:8px 12px;">' + (o.moneda||'ARS') + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(o.importe) + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + fmtA(o.pagado) + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;font-weight:600;' + (saldo>0.5?'color:var(--danger);':'') + '">' + fmtA(saldo) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + _fmtMonto(o.importe, _monDe(o)) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + _fmtMonto(o.pagado, _monDe(o)) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;font-weight:600;' + (saldo>0.5?'color:var(--danger);':'') + '">' + _fmtMonto(saldo, _monDe(o)) + '</td>'
                     + '<td style="padding:8px 12px;text-align:center;">' + estado + '</td>'
                     + '<td style="padding:8px 12px;text-align:center;">' + _btnEd(tipo, ref) + '</td>'
                     + '</tr>';
@@ -41503,17 +41645,27 @@
         };
 
         // --- Saldo de cuenta corriente + acceso al extracto (lo primero después de los datos) ---
-        var _ccRet = 0; factsDelProv.concat(docsDelProv).forEach(function(x){ _ccRet += _totalRetenidoHist(x.pagosHistorial); });
-        var _ccCred = (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre) || 0) : 0;
-        var _ccDeuda = totalPendienteFact + totalPendienteDoc - totalNCSinFactura;
-        var _ccNeto = _ccDeuda - _ccCred;
-        h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;">'
-            + _ccKpiHTML('Adeudado (deuda)', fmtA(_ccDeuda), 'var(--danger)')
-            + _ccKpiHTML('Total pagado', fmtA(totalPagadoFact + totalPagadoDoc), 'var(--success)')
-            + _ccKpiHTML('Retenciones', fmtA(_ccRet), 'var(--gold)')
-            + (_ccCred > 0.5 ? _ccKpiHTML('Créditos a favor', fmtA(_ccCred), 'var(--blue)') : '')
-            + _ccKpiHTML('Saldo neto', fmtA(_ccNeto), _ccNeto > 0.5 ? 'var(--danger)' : 'var(--success)')
-            + '</div>';
+        // Todo por moneda: _ccX.ARS = pesos, _ccX.USD = dólares (nunca se suman entre sí).
+        var _ccRet = _tmNuevo(); factsDelProv.concat(docsDelProv).forEach(function(x){ _tmSumar(_ccRet, _monDe(x), _totalRetenidoHist(x.pagosHistorial)); });
+        var _ccCred = { ARS: (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre, 'ARS') || 0) : 0,
+                        USD: (typeof saldoCreditoProveedor === 'function') ? (saldoCreditoProveedor(nombre, 'USD') || 0) : 0 };
+        var _ccDeuda = { ARS: totalPendienteFact.ARS + totalPendienteDoc.ARS - totalNCSinFactura.ARS,
+                         USD: totalPendienteFact.USD + totalPendienteDoc.USD - totalNCSinFactura.USD };
+        var _ccNeto = { ARS: _ccDeuda.ARS - _ccCred.ARS, USD: _ccDeuda.USD - _ccCred.USD };
+        var _ccKpiBloque = function(m) {
+            return _ccKpiHTML('Adeudado (deuda)', _fmtMonto(_ccDeuda[m], m), 'var(--danger)')
+                + _ccKpiHTML('Total pagado', _fmtMonto(totalPagadoFact[m] + totalPagadoDoc[m], m), 'var(--success)')
+                + _ccKpiHTML('Retenciones', _fmtMonto(_ccRet[m], m), 'var(--gold)')
+                + (_ccCred[m] > 0.5 ? _ccKpiHTML('Créditos a favor', _fmtMonto(_ccCred[m], m), 'var(--blue)') : '')
+                + _ccKpiHTML('Saldo neto', _fmtMonto(_ccNeto[m], m), _ccNeto[m] > 0.5 ? 'var(--danger)' : 'var(--success)');
+        };
+        // ¿Hay algo en dólares (comprobantes, pagos o créditos)? Entonces se agrega un bloque aparte.
+        var _ccHayUSD = factsDelProv.concat(docsDelProv).some(function(x){ return _monDe(x) === 'USD'; }) || _ccCred.USD > 0.005 || _tmHayUSD(totalPagadoEmit);
+        h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:' + (_ccHayUSD ? '8' : '14') + 'px;">'
+            + _ccKpiBloque('ARS')
+            + '</div>'
+            + (_ccHayUSD ? '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin:0 0 6px;">En dólares (USD) · no se suma a los pesos</div>'
+                + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;">' + _ccKpiBloque('USD') + '</div>' : '');
         h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px;">'
             + '<button class="btn btn-gold" onclick="verCtaCteProv(\'' + _nombreEsc + '\')">💳 Ver Cuenta Corriente</button>'
             + '<button class="btn btn-outline btn-sm" onclick="_toggleFichaLegacy()">▾ Presupuestos / detalle por solapas</button>'
@@ -41533,10 +41685,10 @@
             + '<div style="font-size:20px;font-weight:700;color:var(--blue);">' + docsDelProv.length + '</div></div>'
             + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--success);border-radius:8px;padding:12px;text-align:center;">'
             + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Total pagado</div>'
-            + '<div style="font-size:15px;font-weight:700;color:var(--success);">' + fmtA(totalPagadoPresup + totalPagadoFact + totalPagadoDoc + totalPagadoEmit) + '</div></div>'
+            + '<div style="font-size:15px;font-weight:700;color:var(--success);">' + _htmlTM({ ARS: totalPagadoPresup + totalPagadoFact.ARS + totalPagadoDoc.ARS + totalPagadoEmit.ARS, USD: totalPagadoFact.USD + totalPagadoDoc.USD + totalPagadoEmit.USD }) + '</div></div>'
             + '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:8px;padding:12px;text-align:center;">'
             + '<div style="font-size:10px;text-transform:uppercase;color:var(--text-3);margin-bottom:4px;">Pendiente</div>'
-            + '<div style="font-size:15px;font-weight:700;color:var(--danger);">' + fmtA(_ccDeuda) + '</div></div>'
+            + '<div style="font-size:15px;font-weight:700;color:var(--danger);">' + _htmlTM(_ccDeuda) + '</div></div>'
             + '</div>';
 
         // Solapas internas de la ficha: separan Presupuestos / Facturas / Documentos / Pagos.
@@ -41633,9 +41785,9 @@
                     + '<td style="padding:8px 12px;">' + (f.descripcion||'—') + '</td>'
                     + '<td style="padding:8px 12px;">' + (f.moneda||'ARS') + '</td>'
                     + '<td style="padding:8px 12px;' + (vencida ? 'color:var(--danger);font-weight:600;' : '') + '">' + (f.vencimiento ? formatearFecha(f.vencimiento) : '—') + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(f.importe) + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + fmtA(f.pagado) + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--danger);">' + fmtA(saldo) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + _fmtMonto(f.importe, _monDe(f)) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;color:var(--success);">' + _fmtMonto(f.pagado, _monDe(f)) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--danger);">' + _fmtMonto(saldo, _monDe(f)) + '</td>'
                     + '<td style="padding:8px 12px;text-align:center;">' + estadoBadge + '</td>'
                     + _accFactCell(f)
                     + '</tr>';
@@ -41667,7 +41819,7 @@
                     + '<td style="padding:8px 12px;">' + (f.numero||'—') + '</td>'
                     + '<td style="padding:8px 12px;">' + (f.descripcion||'—') + '</td>'
                     + '<td style="padding:8px 12px;">' + (f.moneda||'ARS') + '</td>'
-                    + '<td style="padding:8px 12px;text-align:right;">' + fmtA(f.importe) + '</td>'
+                    + '<td style="padding:8px 12px;text-align:right;">' + _fmtMonto(f.importe, _monDe(f)) + '</td>'
                     + _accFactCell(f)
                     + '</tr>';
             });
@@ -41802,30 +41954,40 @@
             + '<div class="kpi"><div class="kl">Retenciones</div><div class="kv" style="color:#c0392b;">' + fmtA(cc.totalRet) + '</div></div>'
             + (cc.totalFR > 0.5 ? '<div class="kpi"><div class="kl">Fondo de reparo</div><div class="kv">' + fmtA(cc.totalFR) + '</div></div>' : '')
             + '<div class="kpi"><div class="kl">Saldo</div><div class="kv" style="color:' + (cc.saldoNeto > 0.5 ? '#c0392b' : '#0f7e5e') + ';">' + fmtA(cc.saldoNeto) + '</div></div>'
-            + '</div>';
+            + '</div>'
+            // Comprobantes en dólares: sus propios totales, nunca sumados a los de pesos.
+            + (cc.hayUSD ? '<div class="nada" style="margin-top:6px;">Comprobantes en dólares (USD): no se suman a los pesos de arriba.</div>'
+                + '<div class="kpis">'
+                + '<div class="kpi"><div class="kl">Total facturado (USD)</div><div class="kv">' + _fmtMonto(cc.usd.totalDebe, 'USD') + '</div></div>'
+                + '<div class="kpi"><div class="kl">Total pagado (USD)</div><div class="kv" style="color:#0f7e5e;">' + _fmtMonto(cc.usd.totalPagado, 'USD') + '</div></div>'
+                + '<div class="kpi"><div class="kl">Retenciones (USD)</div><div class="kv" style="color:#c0392b;">' + _fmtMonto(cc.usd.totalRet, 'USD') + '</div></div>'
+                + (cc.usd.totalFR > 0.5 ? '<div class="kpi"><div class="kl">Fondo de reparo (USD)</div><div class="kv">' + _fmtMonto(cc.usd.totalFR, 'USD') + '</div></div>' : '')
+                + '<div class="kpi"><div class="kl">Saldo (USD)</div><div class="kv" style="color:' + (cc.usd.saldoNeto > 0.5 ? '#c0392b' : '#0f7e5e') + ';">' + _fmtMonto(cc.usd.saldoNeto, 'USD') + '</div></div>'
+                + '</div>' : '');
 
         // ── Tabla genérica de comprobantes ──
         var tablaComp = function(titulo, arr, getNum) {
             var s = '<div class="sec">' + titulo + ' (' + arr.length + ')</div>';
             if (!arr.length) return s + '<div class="nada">Sin registros.</div>';
-            var tImp = 0, tPag = 0, tSal = 0;
+            // Totales por moneda (pesos / dólares sin mezclar).
+            var tImp = _tmNuevo(), tPag = _tmNuevo(), tSal = _tmNuevo();
             var filas = arr.map(function(o){
-                var saldo = _saldoFactDoc(o);
-                tImp += (o.importe || 0); tPag += (o.pagado || 0); tSal += saldo;
+                var saldo = _saldoFactDoc(o), mo = _monDe(o);
+                _tmSumar(tImp, mo, o.importe || 0); _tmSumar(tPag, mo, o.pagado || 0); _tmSumar(tSal, mo, saldo);
                 var est = o.estado === 'pagada' ? 'Pagada' : o.estado === 'parcial' ? 'Parcial' : 'Pendiente';
                 return '<tr><td>' + (o.fecha ? esc(formatearFecha(o.fecha)) : '—') + '</td>'
                     + '<td>' + val(getNum(o)) + '</td>'
                     + '<td>' + val(o.descripcion || o.concepto) + '</td>'
-                    + '<td class="r">' + fmtA(o.importe) + '</td>'
-                    + '<td class="r">' + fmtA(o.pagado) + '</td>'
-                    + '<td class="r">' + fmtA(saldo) + '</td>'
+                    + '<td class="r">' + _fmtMonto(o.importe, mo) + '</td>'
+                    + '<td class="r">' + _fmtMonto(o.pagado, mo) + '</td>'
+                    + '<td class="r">' + _fmtMonto(saldo, mo) + '</td>'
                     + '<td>' + est + '</td></tr>';
             }).join('');
             return s + '<table class="tbl"><thead><tr><th>Fecha</th><th>Número</th><th>Detalle</th>'
                 + '<th class="r">Importe</th><th class="r">Pagado</th><th class="r">Saldo</th><th>Estado</th></tr></thead>'
                 + '<tbody>' + filas + '</tbody>'
-                + '<tfoot><tr><td colspan="3">Totales</td><td class="r">' + fmtA(tImp) + '</td>'
-                + '<td class="r">' + fmtA(tPag) + '</td><td class="r">' + fmtA(tSal) + '</td><td></td></tr></tfoot></table>';
+                + '<tfoot><tr><td colspan="3">Totales</td><td class="r">' + _htmlTM(tImp) + '</td>'
+                + '<td class="r">' + _htmlTM(tPag) + '</td><td class="r">' + _htmlTM(tSal) + '</td><td></td></tr></tfoot></table>';
         };
 
         h += tablaComp('Facturas', facts, function(o){ return o.numero; });
@@ -51271,16 +51433,17 @@
 
     // Totales financieros (egresos pagados y cobros recibidos) para que pueda responder "¿cuánto pagué/cobré?"
     try {
-      var pagadoProv = 0;
+      var pagadoProv = 0, pagadoProvUSD = 0;   // lo pagado de comprobantes en dólares va aparte: no se suma a los pesos
       if (typeof datos !== 'undefined') datos.forEach(function(d){ pagadoProv += (typeof _presupPagadoPropio==='function' ? _presupPagadoPropio(d) : (d.pagado||0)); });
-      if (typeof facturas !== 'undefined') facturas.forEach(function(f){ pagadoProv += f.pagado||0; });
+      if (typeof facturas !== 'undefined') facturas.forEach(function(f){ if (f.moneda==='USD') pagadoProvUSD += f.pagado||0; else pagadoProv += f.pagado||0; });
       var cobradoARS = 0, cobradoUSD = 0;
       var sumCobros = function(arr, filtroUSD){ (arr||[]).forEach(function(x){ (x.cobrosHistorial||[]).forEach(function(c){ if (filtroUSD && filtroUSD(c)) cobradoUSD += c.monto||0; else cobradoARS += c.monto||0; }); }); };
       if (typeof ventas !== 'undefined') sumCobros(ventas, function(c){ return c.comp==='usd'||c.comp==='cuota_usd_simple'; });
       if (typeof alquileres !== 'undefined') (alquileres||[]).forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (_alqCobroMoneda(a,c)==='USD') cobradoUSD += _alqCobroImporte(a,c); else cobradoARS += _alqCobroImporte(a,c); }); });
       if (typeof servicios !== 'undefined') sumCobros(servicios, null);
       var finLins = [];
-      if (pagadoProv) finLins.push('- Total pagado a proveedores (egresos): ' + monFmt(pagadoProv, 'ARS'));
+      if (pagadoProv) finLins.push('- Total pagado a proveedores (egresos) en pesos: ' + monFmt(pagadoProv, 'ARS'));
+      if (pagadoProvUSD) finLins.push('- Total pagado a proveedores en dólares (aparte, no suma a los pesos): ' + monFmt(pagadoProvUSD, 'USD'));
       if (cobradoARS) finLins.push('- Total cobrado en pesos (ventas/alquileres/servicios): ' + monFmt(cobradoARS, 'ARS'));
       if (cobradoUSD) finLins.push('- Total cobrado en dólares: ' + monFmt(cobradoUSD, 'USD'));
       if (finLins.length) bloques.push('SITUACIÓN FINANCIERA (aproximada):\n' + finLins.join('\n'));
