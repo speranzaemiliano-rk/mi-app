@@ -3615,7 +3615,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v571</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v572</div>
         </div>
     </nav>
 
@@ -16927,7 +16927,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v571';
+    var APP_VER = 'v572';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -35352,7 +35352,8 @@
         var periodo = document.getElementById('cobroAlqPeriodo').value;
         var concepto = (document.getElementById('cobroAlqConcepto') || {}).value || 'alquiler';
         _cobroAlqHintProrrata(a, periodo);
-        if (!periodo || concepto !== 'alquiler' || _cobroAlqMontoAMano) { _cobroAlqSaldoHint(); return; }
+        // Con el desglose prendido el monto sale de las partes (campo trabado): una bandera «a mano» que quedó de antes de prenderlo no tiene que congelar el recálculo.
+        if (!periodo || concepto !== 'alquiler' || (_cobroAlqMontoAMano && !_cobroAlqDesgloseActivo())) { _cobroAlqSaldoHint(); return; }
         var monto = _alqMontoSugerido(a, periodo) || 0;
         if (a.ivaActivo) _cobroAlqCalcDesglose(a, monto);
         // con el desglose prendido el monto sale de sus partes (neto + IVA); si no, es el canon del período
@@ -35383,7 +35384,7 @@
                 // restaura TAL CUAL, no el estado por defecto. Un monto tipeado para el alquiler no es del depósito: el depósito arranca con su saldo.
                 _cobroAlqSaved = { per: per ? per.value : '', monto: monto.value, amano: _cobroAlqMontoAMano, chk: !!(chk && chk.checked), ivaWrap: wrapIva ? wrapIva.style.display : 'none',
                     medioA: (g('cobroAlqMedioA') || {}).value, medioB: (g('cobroAlqMedioB') || {}).value, grav: g('cobroAlqGravado').value, iva: g('cobroAlqIvaMonto').value,
-                    nog: g('cobroAlqNoGravado').value, ivaAMano: _cobroAlqIvaAMano };
+                    nog: g('cobroAlqNoGravado').value, ivaAMano: _cobroAlqIvaAMano, nogAMano: _cobroAlqNogAMano, totalDes: _cobroAlqTotalDes };
                 if (per) per.value = '';
                 if (wrapIva) wrapIva.style.display = 'none';
                 if (chk) chk.checked = false;
@@ -35401,7 +35402,7 @@
                     if (sv.chk) {
                         ['cobroAlqMedioA', 'cobroAlqMedioB'].forEach(function(id, k) { var el = g(id), v = k ? sv.medioB : sv.medioA; if (el && v) el.value = v; });
                         g('cobroAlqGravado').value = sv.grav; g('cobroAlqIvaMonto').value = sv.iva; g('cobroAlqNoGravado').value = sv.nog;
-                        _cobroAlqIvaAMano = sv.ivaAMano;
+                        _cobroAlqIvaAMano = sv.ivaAMano; _cobroAlqNogAMano = !!sv.nogAMano; _cobroAlqTotalDes = sv.totalDes || 0;
                         _cobroAlqPreview();   // el monto sale de las partes (neto + IVA + no gravado)
                         _cobroAlqAdjuntosToggle();
                     } else {
@@ -35496,12 +35497,17 @@
         document.getElementById('cobroAlqIvaMonto').value  = _alqIvaDeBruto(_gr, brk.alicuota).iva;
         document.getElementById('cobroAlqNoGravado').value = _r2(_r2(canon) - _gr);
         _cobroAlqIvaAMano = false;
+        _cobroAlqTotalDes = _r2(canon); _cobroAlqNogAMano = false;
     }
     // Si el IVA se tipeó a mano, no se vuelve a pisar: a veces hay que copiar el
     // importe exacto de la factura y no es centavo por centavo el 21%. Mientras no
     // se toque, sigue al neto gravado — que es lo que fallaba: se cambiaba el neto
     // y el IVA quedaba con el valor del canon viejo, sin corresponderse con nada.
     var _cobroAlqIvaAMano = false;
+    // El TOTAL que se reparte en el desglose (canon o saldo del período) y si la «parte sin IVA» se tipeó a mano. Mientras NO se tipeó,
+    // elegir otra «parte con IVA incluido» deja la parte sin IVA en lo que falta para el total («el resto»); tipearla a mano la suelta,
+    // y entonces las partes mandan (así se carga un pago parcial: cada casillero con lo que se cobra).
+    var _cobroAlqTotalDes = 0, _cobroAlqNogAMano = false;
     function _cobroAlqAlicuota() {
         var a = alquileres[parseInt(document.getElementById('cobroAlqIdx').value)];
         return (a && a.ivaAlicuota != null) ? a.ivaAlicuota : 21;
@@ -35511,6 +35517,7 @@
             var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
             document.getElementById('cobroAlqIvaMonto').value = _alqIvaDeBruto(g, _cobroAlqAlicuota()).iva;
         }
+        if (!_cobroAlqNogAMano && _cobroAlqTotalDes > 0) document.getElementById('cobroAlqNoGravado').value = _r2(Math.max(0, _cobroAlqTotalDes - g));   // el total no se recarga: el resto es sin IVA
         _cobroAlqPreview();
     }
     // El bloque de papeles del banco aparece si ALGO va por banco. Y con el desglose
@@ -35604,7 +35611,7 @@
             + ' → <strong>' + _dst(mB) + '</strong>'
             + ' &nbsp;·&nbsp; Total a cobrar: <strong>' + f(totalA + nog) + '</strong>' + _aviso;
         var montoInput = document.getElementById('cobroAlqMonto');
-        if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
+        if (montoInput.disabled) { montoInput.value = _r2(totalA + nog); _cobroAlqRefrescarMoneda(); }   // asignar por código no dispara el oninput del monto: el cuadro «entran $X» se pone al día acá
         _cobroAlqAdjuntosToggle();   // cambiar el destino de una parte prende/apaga los papeles
         _cobroAlqSaldoHint();
     }
@@ -47428,7 +47435,7 @@
           </div>
           <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — sin IVA</div>
           <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
-            <div class="form-group" style="margin:0;"><label>Parte sin IVA</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>Parte sin IVA</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqNogAMano=true;_cobroAlqPreview()"></div>
             <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
               <select id="cobroAlqMedioB" onchange="_cobroAlqPreview()">
                 <option value="A">A — Banco</option>
