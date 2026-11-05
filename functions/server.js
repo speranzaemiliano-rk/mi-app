@@ -1745,10 +1745,10 @@ async function revisarAlquileres() {
                     const cobrosRaw = a.cobrosHistorial || [];
                     const cobros = Array.isArray(cobrosRaw) ? cobrosRaw : Object.values(cobrosRaw);
                     // Un pago PARCIAL no deja la cuota cobrada: se sigue avisando, por el SALDO. Todo en unidades de canon (el IVA de un cobro con
-                    // desglose viene aparte en `iva`), igual que `_alqSaldoPeriodo` del frontend. Un mes bonificado (plazo de gracia) no se avisa.
+                    // desglose ANTERIOR viene aparte en `iva`; el nuevo, con `ivaIncluido`, lo trae adentro), igual que `_alqCobroCanon` del frontend. Un mes bonificado (plazo de gracia) no se avisa.
                     if (Array.isArray(a.mesesBonificados) && a.mesesBonificados.includes(periodo)) continue;
                     const delPeriodo = cobros.filter((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
-                    const cobradoCanon = delPeriodo.reduce((s, c) => s + (Number(c.monto) || 0) - (Number(c.iva) || 0), 0);
+                    const cobradoCanon = delPeriodo.reduce((s, c) => s + (Number(c.monto) || 0) - (c.ivaIncluido ? 0 : (Number(c.iva) || 0)), 0);   // un recibo con `ivaIncluido` trae el IVA adentro del canon; uno anterior lo cobraba aparte
                     const frEsp = _alqFraccionPeriodo(a, periodo);
                     const esperadoCanon = _alqCanonVigenteEnPeriodo(a, periodo) * (frEsp ? frEsp.factor : 1);   // con los ajustes de canon: el esperado de ESE mes
                     if (delPeriodo.length && (esperadoCanon <= 0 || cobradoCanon >= esperadoCanon * 0.98)) continue;   // cobrada completa
