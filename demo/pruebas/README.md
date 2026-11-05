@@ -10,6 +10,7 @@ de `demo/pruebas/cdn/` (se bajan con `bash demo/pruebas/bajar-cdn.sh`) y registr
 - `node demo/pruebas/entrega-doc.mjs` — recibo de entrega de documentación (sin dinero): alta desde «Emitir recibo», numeración que no se reutiliza, edición, copia firmada, borrado, buscador y permisos de lector.
 - `node demo/pruebas/efectivo-imprimir.mjs` — 🖨️ Imprimir en Efectivo en pesos / en dólares: el papel tiene que coincidir fila por fila con la tabla (filtros, orden, saldos acumulados, saldo anterior con «Desde»).
 - `node demo/pruebas/alquiler-deposito.mjs` — el depósito de garantía en el plan de pagos de un alquiler: fila propia, cobro parcial/completo, depósito en dólares de un contrato en pesos (Caja lo cuenta en la moneda en que entró), sin desglose de IVA, recibo, editar y desaplicar.
+- `node demo/pruebas/remun-papeles.mjs` — Remuneraciones → «Liquidar y pagar»: facturas y comprobantes de la Parte A y de la Parte B (borrador si el recibo no existe, guardado en el acto si ya existe, se ven en las listas de recibos, se quitan, se borran con el recibo, aviso antes de descartar lo no guardado, tope de peso).
 - `node demo/pruebas/caja-cambio-divisa.mjs` — Caja diaria (`caja/app.html`, no la demo): el «Cambio de divisa» deja las dos patas (US$ y $) aunque no se toque «＋ Sumar», frena si quedó a medio cargar, y el aviso de la venta de dólares cargada como movimiento común.
 - `node demo/pruebas/capturas.mjs [movil]` — saca capturas de las pantallas principales (`shot-*.png` en la carpeta desde donde se corre).
 
