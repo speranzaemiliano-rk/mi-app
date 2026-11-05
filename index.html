@@ -9732,8 +9732,98 @@
         if (dlS) dlS.innerHTML = [...subrubros].map(s => `<option value="${s}">`).join('');
     }
 
+    // ── Borrar un presupuesto sin descolocar a los que quedan ─────────────────────────────────────────────
+    // El vínculo comprobante → presupuesto es POSICIONAL: `presupuestoIdx` es el índice de datos[] (facturas, comprobantes X, comprobantes
+    // emitidos) e `idx` en los ítems `src:'presup'` del Plan de Trabajo. Sacar uno de la lista corre los de abajo una posición: sin
+    // reacomodar, los comprobantes del presupuesto siguiente pasaban a figurar en el equivocado y los del borrado quedaban colgados del
+    // que ocupó su lugar. TODO camino que borre un presupuesto tiene que pasar por `_presupBorrar` (hoy: eliminarFila y aprobarSolicitud).
+    // Índice (número) al que apunta el comprobante, si es un vínculo de ESTE proyecto; null si no tiene o no vale. Una copia compartida
+    // (`_compartidoDe`) trae el índice del proyecto de ORIGEN y no se toca, salvo que alguien la vinculó acá (`presupuestoLocal`).
+    function _presupIdxLocal(x) {
+        if (!x || !_vinculoLocal(x) || x.presupuestoIdx == null || x.presupuestoIdx === '') return null;
+        var n = Number(x.presupuestoIdx);
+        return isFinite(n) ? n : null;
+    }
+    // Cuántas cosas cuelgan del presupuesto datos[idx] (para avisar antes de borrarlo). Cuenta TODO, también los emitidos confidenciales.
+    function _presupContarVinculos(idx) {
+        var es = function(x) { return _presupIdxLocal(x) === idx; };
+        var r = { facturas: (facturas || []).filter(es).length, documentos: (documentos || []).filter(es).length, emitidos: (comprobantesEmitidos || []).filter(es).length, plan: 0 };
+        (planTrabajo || []).forEach(function(et) { (et.items || []).forEach(function(it) { if (it.src === 'presup' && Number(it.idx) === idx) r.plan++; }); });
+        r.total = r.facturas + r.documentos + r.emitidos + r.plan;
+        return r;
+    }
+    // Facturas y documentos recibidos (la lista de comprobantes X) y emitidos se cargan "por detrás" del arranque: si todavía no llegaron
+    // no se pueden reacomodar, y borrar igual los dejaría apuntando al presupuesto equivocado. Se pide esperar en vez de arriesgarlo.
+    function _presupPuedeBorrar() {
+        if (_docsCargados && _emitidosCargados) return true;
+        alert('Todavía se están cargando los comprobantes del proyecto.\n\nEsperá unos segundos y volvé a intentar: antes de borrar un presupuesto hay que reacomodar los comprobantes que están aplicados a los demás.');
+        return false;
+    }
+    // Reacomoda en MEMORIA todo lo que apunta por posición al presupuesto `borrado` (que todavía está en datos[]): lo que apuntaba a él
+    // queda sin vínculo (se quita también el % y el comentario del vínculo, y el ítem se sale del Plan de Trabajo) y lo que apuntaba a uno
+    // de más abajo baja una posición. Devuelve qué hay que persistir. El pago-espejo no necesita nada: vive DENTRO del presupuesto y viaja
+    // con él (el del borrado se va con él; los de los demás siguen en su presupuesto, que ahora está una posición más arriba).
+    function _presupReindexarAlBorrar(borrado) {
+        var out = { facturas: false, emitidos: false, plan: false, docs: {} };
+        var mover = function(x) {
+            var n = _presupIdxLocal(x);
+            if (n == null || n < borrado) return null;
+            if (n === borrado) {
+                delete x.presupuestoIdx; delete x.presupuestoPorcentaje; delete x.presupuestoComentario; delete x.presupuestoLocal;
+                return { presupuestoIdx: null, presupuestoPorcentaje: null, presupuestoComentario: null, presupuestoLocal: null };
+            }
+            x.presupuestoIdx = n - 1;
+            return { presupuestoIdx: n - 1 };
+        };
+        (facturas || []).forEach(function(f) { if (mover(f)) out.facturas = true; });
+        (comprobantesEmitidos || []).forEach(function(e) { if (mover(e)) out.emitidos = true; });
+        (documentos || []).forEach(function(d) {
+            var u = mover(d); if (!u || !d.id) return;
+            Object.keys(u).forEach(function(k) { out.docs[d.id + '/' + k] = u[k]; });   // multi-path: lo mueve todo junto, sin reescribir el archivo
+        });
+        (planTrabajo || []).forEach(function(et) {
+            if (!et.items || !et.items.length) return;
+            var quedan = [], cambio = false;
+            et.items.forEach(function(it) {
+                var n = (it && it.src === 'presup') ? Number(it.idx) : NaN;
+                if (isNaN(n) || n < borrado) { quedan.push(it); return; }
+                cambio = true;
+                if (n === borrado) return;         // el presupuesto ya no existe: su ítem se va del plan (se sacaba a mano con ✕)
+                it.idx = n - 1; quedan.push(it);
+            });
+            if (cambio) { et.items = quedan; out.plan = true; }
+        });
+        return out;
+    }
+    // Borra datos[index] y reacomoda los vínculos de los demás; persiste cada colección que tocó. Devuelve false si no pudo (no hizo nada).
+    function _presupBorrar(index) {
+        if (!datos[index] || !_presupPuedeBorrar()) return false;
+        var cambios = _presupReindexarAlBorrar(index);
+        datos.splice(index, 1);
+        // Los vínculos primero y el presupuesto al final: si algo se corta en el medio, queda un presupuesto de más y no vínculos al equivocado.
+        if (cambios.facturas) persistirFacturas();
+        if (cambios.emitidos) persistirEmitidos();
+        if (cambios.plan) persistirPlan();
+        if (Object.keys(cambios.docs).length && REF_DOCS) {
+            try { REF_DOCS.update(cambios.docs).catch(function(e) { console.error('No se pudieron reacomodar los comprobantes recibidos:', e); }); }
+            catch (e) { console.error('No se pudieron reacomodar los comprobantes recibidos:', e); }
+        }
+        persistir();
+        return true;
+    }
+
     function eliminarFila(index) {
-        if (confirm('¿Eliminar este presupuesto?')) { datos.splice(index, 1); persistir(); }
+        if (!datos[index] || !_presupPuedeBorrar()) return;
+        var v = _presupContarVinculos(index), msg = '¿Eliminar este presupuesto?';
+        if (v.total) {
+            var partes = [];
+            if (v.facturas) partes.push(v.facturas + ' factura' + (v.facturas === 1 ? '' : 's'));
+            if (v.documentos) partes.push(v.documentos + ' comprobante' + (v.documentos === 1 ? '' : 's') + ' X recibido' + (v.documentos === 1 ? '' : 's'));
+            if (v.emitidos) partes.push(v.emitidos + ' comprobante' + (v.emitidos === 1 ? '' : 's') + ' emitido' + (v.emitidos === 1 ? '' : 's'));
+            if (v.plan) partes.push(v.plan + ' ítem' + (v.plan === 1 ? '' : 's') + ' del Plan de Trabajo');
+            msg += '\n\nEstá aplicado a ' + partes.join(', ') + '.\nLos comprobantes quedan sin presupuesto (se guardan igual) y los ítems se sacan del Plan de Trabajo.';
+        }
+        if (confirm(msg)) _presupBorrar(index);
     }
 
     function cerrarModal() { var m=document.getElementById('modal'); m.classList.remove('active'); m.style.zIndex=''; _fichaRefrescarSiAbierta(); }
@@ -17833,6 +17923,8 @@
             alert('Este ítem pertenece al proyecto "' + (s.proyectoNombre||s.proyecto) + '".\nCambiá de proyecto para ejecutar este borrado.');
             return;
         }
+        // Borrar un presupuesto reacomoda los comprobantes de los demás: si todavía no llegaron, se espera ANTES de dar la solicitud por aprobada.
+        if (s.tipo === 'presupuesto' && !_presupPuedeBorrar()) return;
         if (!confirm('¿APROBAR y EJECUTAR el borrado de:\n"' + s.descripcion + '"?\n\nEsta acción no se puede deshacer.')) return;
         var deleted = false;
         var D = s.itemData || {};
@@ -17840,7 +17932,7 @@
             switch (s.tipo) {
                 case 'presupuesto': {
                     var i = datos.findIndex(function(d){ return d.proveedor===D.proveedor && d.concepto===D.concepto && d.fecha===D.fecha && d.presupuesto===D.presupuesto; });
-                    if (i !== -1) { datos.splice(i, 1); persistir(); deleted = true; } break;
+                    if (i !== -1) { deleted = _presupBorrar(i); } break;   // reacomoda los vínculos posicionales de los demás (ver _presupBorrar)
                 }
                 case 'factura': {
                     var i = facturas.findIndex(function(f){ return f.proveedor===D.proveedor && f.numero===D.numero && f.fecha===D.fecha && f.importe===D.importe; });
