@@ -4,8 +4,9 @@ window.addEventListener('load', function () {
     var NO_DISP = 'Esta función no está disponible en la versión de prueba.';
     var aviso = function (que) { return function () { alert((que ? que + ': ' : '') + NO_DISP); }; };
 
-    // La app borra usuarios/<uid>/modulos al ingresar (REF_USUARIOS.child(uid).set({email, ultimoAcceso})), así que en la demo el
-    // módulo habilitado no puede salir de la base: se fija acá. Un solo módulo = se entra derecho al Sistema.
+    // Antes la app borraba usuarios/<uid>/modulos al ingresar (hacía REF_USUARIOS.child(uid).set({email, ultimoAcceso})); ahora usa update()
+    // y los conserva (ver pruebas/usuarios-no-pisar.mjs). Igual se deja fijado acá, por si acaso: la demo no depende de lo que haya en la
+    // base para decidir el módulo. Un solo módulo = se entra derecho al Sistema.
     window._modulosDeUsuario = function () { return Promise.resolve(['sistema']); };
 
     // La pantalla «¿Con qué empresa y proyecto trabajamos hoy?» arranca con la empresa y el proyecto principales ya elegidos.
