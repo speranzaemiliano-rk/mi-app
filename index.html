@@ -2290,6 +2290,8 @@
         .cb-sel-bar select,.cb-sel-bar input[type=date]{padding:6px 10px;border-radius:6px;border:1px solid var(--border);background: var(--card);font-size:12px;font-family:inherit;}
         .cb-saldo-pill{padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;background:#E6F9F1;color:var(--success);border:1px solid #B4EAD8;white-space:nowrap;}
         .cb-saldo-pill.neg{background:#FEF2F2;color:var(--danger);border-color:#F5C0BB;}
+        /* Bancos: el total en dólares va en su propio renglón, debajo del de pesos (nunca sumados) */
+        .stat-sub.cb-usd{font-family:inherit;font-size:16px;font-weight:600;color:var(--text-2);margin-top:6px;font-variant-numeric:tabular-nums;}
 
                 /* -- COMPARTIDO BADGE -- */
         .badge-compartido {
@@ -6833,9 +6835,9 @@
             <div class="tab-panel" id="panelCuentasBancarias">
                 <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));">
                     <div class="stat-card" style="border-left:4px solid var(--gold);"><div class="stat-label">Cuentas registradas</div><div class="stat-value" id="cbCuentasTotal">0</div></div>
-                    <div class="stat-card" style="border-left:4px solid var(--success);"><div class="stat-label">Total entradas</div><div class="stat-value" id="cbIngresosBancarios">$0</div></div>
-                    <div class="stat-card" style="border-left:4px solid var(--danger);"><div class="stat-label">Total salidas</div><div class="stat-value" id="cbEgresosBancarios">$0</div></div>
-                    <div class="stat-card" style="border-left:4px solid var(--blue);"><div class="stat-label">Saldo neto</div><div class="stat-value" id="cbSaldoTotal">$0</div></div>
+                    <div class="stat-card" style="border-left:4px solid var(--success);"><div class="stat-label">Total entradas</div><div class="stat-value" id="cbIngresosBancarios">$0</div><div class="stat-sub cb-usd" id="cbIngresosBancariosUSD" style="display:none;"></div></div>
+                    <div class="stat-card" style="border-left:4px solid var(--danger);"><div class="stat-label">Total salidas</div><div class="stat-value" id="cbEgresosBancarios">$0</div><div class="stat-sub cb-usd" id="cbEgresosBancariosUSD" style="display:none;"></div></div>
+                    <div class="stat-card" style="border-left:4px solid var(--blue);"><div class="stat-label">Saldo neto</div><div class="stat-value" id="cbSaldoTotal">$0</div><div class="stat-sub cb-usd" id="cbSaldoTotalUSD" style="display:none;"></div></div>
                 </div>
                 <div class="table-card">
                     <div class="table-card-head">
@@ -6907,7 +6909,7 @@
                             <th class="sortable" onclick="sortTable('cbExtBody',5,this)">Medio<i class="si">⇅</i></th>
                             <th class="sortable" onclick="sortTable('cbExtBody',6,this)" style="text-align:right;color:var(--success);">Entrada<i class="si">⇅</i></th>
                             <th class="sortable" onclick="sortTable('cbExtBody',7,this)" style="text-align:right;color:var(--danger);">Salida<i class="si">⇅</i></th>
-                            <th style="text-align:right;font-weight:700;">Saldo acum.</th>
+                            <th id="cbExtThSaldo" style="text-align:right;font-weight:700;">Saldo acum.</th>
                             <th style="width:70px;"></th>
                         </tr></thead>
                         <tbody id="cbExtBody"></tbody>
@@ -23646,42 +23648,71 @@
     });
 
     // ===================== RENDER: CUENTAS BANCARIAS =====================
+    // ── Bancos POR MONEDA ──
+    // El saldo de una cuenta está en la moneda de la cuenta, y todo lo que pasa por ella es de esa moneda. Por eso las tarjetas de arriba, el saldo
+    // corrido del extracto y el cartelito se llevan por moneda y NUNCA suman pesos con dólares (tampoco se convierte: no hay un tipo de cambio que
+    // valga para todos los movimientos). La moneda de un movimiento es la de SU CUENTA; si no tiene cuenta (cobro «A — Banco» sin elegir cuenta,
+    // pago viejo) vale la propia que traiga (factura/documento en USD, cobro de venta en dólares, alquiler cobrado en otra moneda); sin dato, pesos.
+    // Elegir a propósito la cuenta y no la moneda del comprobante hace que la suma de los saldos de las cuentas de una moneda cierre con el total.
+    function _cbMapaMonedas() {
+        var m = Object.create(null);
+        (cuentasBancarias || []).forEach(function(cb) { m[cb.id || cb.banco] = cb.moneda === 'USD' ? 'USD' : 'ARS'; });
+        return m;
+    }
+    function _cbMonedaMov(mapa, cuentaId, monedaPropia) {
+        if (cuentaId && mapa[cuentaId]) return mapa[cuentaId];
+        return String(monedaPropia || '').toUpperCase() === 'USD' ? 'USD' : 'ARS';
+    }
+    // Importe con su símbolo; un residuo de coma flotante (-2.8e-17) no se muestra como «$-0,00».
+    function _cbFmt(mon, n) {
+        n = Number(n) || 0; if (Math.abs(n) < 0.005) n = 0;
+        return (mon === 'USD' ? 'USD ' : '$') + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
     function renderCuentasBancarias() {
         if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs();
-        var fmt=function(n){return '$'+(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});};
         var sel=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
         sel('cbCuentasTotal',cuentasBancarias.length);
-        var entradas=0,salidas=0;
-        datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(_esPagoEspejo(p))return;if(p.modalidad==='A')salidas+=(p.capital||0)+(p.mayores||0)||p.montoPagado||0;});});
-        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')salidas+=_netoPagado(p);});});
-        ingGeneral.forEach(function(ig){if(!ig.esBancario)return;if(ig.esEgreso||ig.tipo==='mov_banco_salida')salidas+=ig.monto||0;else entradas+=ig.monto||0;});
+        // Entradas/salidas en UNA sola pasada (antes se recorrían todos los pagos, cobros y movimientos una vez para los totales y otra vez por cada
+        // cuenta: con muchos movimientos el panel tardaba en aparecer). Se acumula por cuenta (cuentaId → {ent,sal}, la fila de cada cuenta) y por
+        // moneda (los totales de arriba, que cuentan también lo que no tiene cuenta).
+        var _mapaMon=_cbMapaMonedas();
+        var _porCta={};
+        var _tot={ARS:{ini:0,ent:0,sal:0},USD:{ini:0,ent:0,sal:0}};
+        cuentasBancarias.forEach(function(cb){ _tot[_mapaMon[cb.id||cb.banco]].ini+=cb.saldo||0; });
+        var _acu=function(cId,monPropia,ent,sal){
+            var t=_tot[_cbMonedaMov(_mapaMon,cId,monPropia)]; t.ent+=ent||0; t.sal+=sal||0;
+            if(!cId)return; var a=_porCta[cId]||(_porCta[cId]={ent:0,sal:0}); a.ent+=ent||0; a.sal+=sal||0;
+        };
+        // Pagos de presupuestos (no tienen moneda: pesos). El pago-espejo de una factura se saltea: esa plata ya sale como pago de la factura.
+        datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(_esPagoEspejo(p))return;if(p.modalidad==='A')_acu(p.cuentaId,'ARS',0,(p.capital||0)+(p.mayores||0)||p.montoPagado||0);});});
+        facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,f.moneda,0,_netoPagado(p));});});
+        (documentos||[]).forEach(function(d){
+            var hist=d.pagosHistorial||[];
+            if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,d.moneda,0,_netoPagado(p));});}
+            else if((d.pagado||0)>0&&d.modalidad==='A'){_acu('',d.moneda,0,d.pagado);}   // pago viejo sin historial: no sabe de qué cuenta salió
+        });
+        ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,ig.moneda,esS?0:ig.monto||0,esS?ig.monto||0:0);});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
-        ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&c.comp!=='usd')entradas+=c.monto||0;});});
-        // Se agrupa por la moneda en que ENTRÓ la plata (un alquiler en USD cobrado en pesos suma acá).
-        alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A'&&_alqCobroMoneda(a,c)!=='USD')entradas+=_alqCobroImporte(a,c);});});
-        servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')entradas+=c.monto||0;});});
-        (documentos||[]).forEach(function(d){var hist=d.pagosHistorial||[];if(hist.length){hist.forEach(function(p){if(p.modalidad==='A')salidas+=_netoPagado(p);});}else if((d.pagado||0)>0&&d.modalidad==='A'){salidas+=d.pagado;}});
-        var saldoIni=cuentasBancarias.filter(function(cb){return cb.moneda!=='USD';}).reduce(function(s,cb){return s+(cb.saldo||0);},0);
-        var saldoNeto=saldoIni+entradas-salidas;
-        if(document.getElementById('cbIngresosBancarios'))document.getElementById('cbIngresosBancarios').textContent=fmt(entradas);
-        sel('cbEgresosBancarios',fmt(salidas));sel('cbSaldoTotal',fmt(saldoNeto));
+        ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.comp==='usd'?'USD':'ARS',c.monto||0,0);});});
+        // Alquileres: la moneda y el importe con que ENTRÓ la plata (un contrato en USD cobrado en pesos suma pesos, no «USD 1.000» en una cuenta en pesos).
+        alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,_alqCobroMoneda(a,c),_alqCobroImporte(a,c),0);});});
+        servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,'ARS',c.monto||0,0);});});
+        // Tarjetas: pesos arriba y, si hay cuentas o movimientos en dólares, su total en un renglón aparte debajo (sin convertir ni sumar).
+        var hayUsd=cuentasBancarias.some(function(cb){return cb.moneda==='USD';})||_tot.USD.ent!==0||_tot.USD.sal!==0;
+        var tarj=function(id,vArs,vUsd){
+            sel(id,_cbFmt('ARS',vArs));
+            var u=document.getElementById(id+'USD'); if(!u)return;
+            u.style.display=hayUsd?'':'none'; u.textContent=hayUsd?_cbFmt('USD',vUsd):'';
+        };
+        tarj('cbIngresosBancarios',_tot.ARS.ent,_tot.USD.ent);
+        tarj('cbEgresosBancarios',_tot.ARS.sal,_tot.USD.sal);
+        tarj('cbSaldoTotal',_tot.ARS.ini+_tot.ARS.ent-_tot.ARS.sal,_tot.USD.ini+_tot.USD.ent-_tot.USD.sal);
         var tbody=document.getElementById('cbBody');
         if(tbody){
             tbody.innerHTML='';
             if(!cuentasBancarias.length){tbody.innerHTML='<tr><td colspan="8" class="empty-msg">No hay cuentas. Agregá una con el botón.</td></tr>';}
             else{
-            // Entradas/salidas por cuenta en UNA sola pasada. Antes se recorrían todos los
-            // pagos, cobros y movimientos una vez POR CADA cuenta: con muchos movimientos
-            // el panel tardaba en aparecer. Ahora se acumula en un mapa cuentaId → {ent,sal}.
-            var _porCta={};
-            var _acu=function(cId,ent,sal){ if(!cId)return; var a=_porCta[cId]||(_porCta[cId]={ent:0,sal:0}); a.ent+=ent||0; a.sal+=sal||0; };
-            datos.forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,(p.capital||0)+(p.mayores||0)||p.montoPagado||0);});});
-            facturas.forEach(function(f){(f.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,_netoPagado(p));});});
-            (documentos||[]).forEach(function(d){(d.pagosHistorial||[]).forEach(function(p){if(p.modalidad==='A')_acu(p.cuentaId,0,_netoPagado(p));});});
-            ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,esS?0:ig.monto||0,esS?ig.monto||0:0);});
-            ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
-            alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
-            servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.monto||0,0);});});
             var _filasCb=[];
             cuentasBancarias.forEach(function(cb,i){
                 var _a=_porCta[cb.id||cb.banco]||{ent:0,sal:0};
@@ -23712,19 +23743,21 @@
         var filtOrigen = ((document.getElementById('cbFiltroOrigen')||{}).value||'').toLowerCase().trim();
 
         // ── Recolectar TODOS los movimientos (sin filtros) ─────
+        // Cada movimiento lleva su `moneda` (la de su cuenta; ver _cbMonedaMov): el saldo corrido se lleva por moneda, nunca mezclado.
+        var mapaMon = _cbMapaMonedas();
         var movs = [];
         datos.forEach(function(d, dIdx){ (d.pagosHistorial||[]).forEach(function(p){
             if (_esPagoEspejo(p)) return; // espejo de factura/doc: ya aparece como su propio "Pago Factura"
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||'—', entrada: 0, salida: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Presup.', desc: d.concepto||'—', origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, 'ARS'), medio: p.medioBancario||'—', entrada: 0, salida: (p.capital||0)+(p.mayores||0)||p.montoPagado||0, srcTipo:'presupuesto', srcRef:dIdx });
         }); });
         facturas.forEach(function(f, fIdx){ (f.pagosHistorial||[]).forEach(function(p, pIdx){
             if (p.modalidad !== 'A') return;
             var cId = p.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'', desapT:'fact', desapRef:fIdx, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
+            movs.push({ fecha: p.fecha, tipo: 'Pago Factura', desc: (f.numero?'N°'+f.numero:(f.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: f.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, f.moneda), medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'factura', srcRef:fIdx, grupoPagoId:p.grupoPagoId||'', desapT:'fact', desapRef:fIdx, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
         }); });
         (documentos||[]).forEach(function(d){ var hist = d.pagosHistorial||[];
             if (hist.length) {
@@ -23732,10 +23765,10 @@
                     if (p.modalidad !== 'A') return;
                     var cId = p.cuentaId||'';
                     var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
+                    movs.push({ fecha: p.fecha, tipo: 'Pago Documento', desc: (d.numero?'N°'+d.numero:(d.descripcion||'—')) + ((p.totalRet||0)>0 ? ' · neto (ret. $'+(p.totalRet).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+')' : ''), origen: d.proveedor||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, d.moneda), medio: p.medioBancario||p.medio||'—', entrada: 0, salida: _netoPagado(p), srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:pIdx, desapGrupo:p.grupoPagoId||'' });
                 });
             } else if ((d.pagado||0) > 0 && d.modalidad === 'A') {
-                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:null, desapGrupo:'' });
+                movs.push({ fecha: d.fecha, tipo: 'Pago Documento', desc: d.numero?'N°'+d.numero:(d.descripcion||'—'), origen: d.proveedor||'—', cuenta: '—', cuentaId: '', moneda: _cbMonedaMov(mapaMon, '', d.moneda), medio: '—', entrada: 0, salida: d.pagado, srcTipo:'documento', srcRef:d.id, desapT:'doc', desapRef:d.id, desapPi:null, desapGrupo:'' });
             }
         });
         ingGeneral.forEach(function(ig, igIdx){
@@ -23745,26 +23778,26 @@
             var esS = ig.esEgreso || ig.tipo === 'mov_banco_salida';
             var srcTipo = ig.origenEmitidoId ? 'emitido' : 'movbanco';
             var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
-            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx, srcTipo:srcTipo, srcRef:srcRef });
+            movs.push({ fecha: ig.fecha, tipo: esS?'Salida manual':'Entrada manual', desc: _cajaDescMask(ig,ig.origen||'—'), origen: _cajaOculto(ig)?'—':(ig.origenDest||'—'), cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, ig.moneda), medio: ig.medio||'—', entrada: esS?0:ig.monto||0, salida: esS?ig.monto||0:0, igIdx: igIdx, srcTipo:srcTipo, srcRef:srcRef });
         });
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (todavía sin selector de cuenta puntual: quedan "sin especificar")
         ventas.forEach(function(v, vIdx){ (v.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'venta', srcRef:vIdx });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, c.comp === 'usd' ? 'USD' : 'ARS'), medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'venta', srcRef:vIdx });
         }); });
         alquileres.forEach(function(a, aIdx){ (a.cobrosHistorial||[]).forEach(function(c, cIdx){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: _alqCobroImporte(a,c), salida: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Alquiler', desc: _alqCobroDesc(a,c), origen: a.inquilino||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, _alqCobroMoneda(a,c)), medio: 'Cobro', entrada: _alqCobroImporte(a,c), salida: 0, srcTipo:'alquiler', srcRef:aIdx, srcCobroIdx:cIdx });
         }); });
         servicios.forEach(function(s, sIdx){ (s.cobrosHistorial||[]).forEach(function(c){
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'servicio', srcRef:sIdx });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Servicio', desc: s.descripcion||'—', origen: s.cliente||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, 'ARS'), medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'servicio', srcRef:sIdx });
         }); });
 
         // Un pago de varias facturas del mismo proveedor (mismo grupoPagoId) es UN solo movimiento
@@ -23782,19 +23815,32 @@
 
         movs.sort(function(a,b){ return (a.fecha||'').localeCompare(b.fecha||''); });
 
-        // ── Saldo acumulado sobre todos los movimientos ────────
-        var saldoBase = filtCuenta
-            ? ((cuentasBancarias.find(function(x){ return (x.id||x.banco) === filtCuenta; })||{}).saldo||0)
-            : cuentasBancarias.filter(function(x){ return x.moneda !== 'USD'; }).reduce(function(s,x){ return s+(x.saldo||0); }, 0);
-        var saldoAcum = saldoBase;
-        movs.forEach(function(m){ saldoAcum += m.entrada - m.salida; m.saldoAcum = saldoAcum; });
+        // ── Saldo acumulado, POR MONEDA ────────────────────────
+        // El «universo» es lo que el saldo suma: la cuenta elegida, o todas. Cada moneda arranca de los saldos de apertura de SUS cuentas y corre
+        // sólo con sus propios movimientos, así un renglón en dólares nunca se lleva los pesos (ni al revés). Antes había UN solo saldo: con
+        // «Todas» arrancaba de las cuentas en pesos y le sumaba los dólares tal cual, y con una cuenta elegida arrancaba de ESA cuenta pero
+        // seguía sumando los movimientos de todas las demás. El saldo es el acumulado real: un «Desde» recorta la lista, no el saldo.
+        var universo = filtCuenta ? movs.filter(function(m){ return m.cuentaId === filtCuenta; }) : movs;
+        var corr = { ARS: 0, USD: 0 }, hay = { ARS: false, USD: false };
+        cuentasBancarias.forEach(function(x){
+            var k = x.id||x.banco;
+            if (filtCuenta && k !== filtCuenta) return;
+            corr[mapaMon[k]] += x.saldo||0; hay[mapaMon[k]] = true;
+        });
+        universo.forEach(function(m){ hay[m.moneda] = true; corr[m.moneda] += m.entrada - m.salida; m.saldoAcum = corr[m.moneda]; });
 
         var pill = document.getElementById('cbSaldoPill');
-        if (pill) { pill.textContent = 'Saldo: $'+(saldoAcum).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); pill.className = 'cb-saldo-pill'+(saldoAcum<0?' neg':''); }
+        if (pill) {
+            var mons = ['ARS','USD'].filter(function(k){ return hay[k]; }); if (!mons.length) mons = ['ARS'];
+            pill.textContent = 'Saldo: ' + mons.map(function(k){ return _cbFmt(k, corr[k]); }).join(' · ');
+            pill.className = 'cb-saldo-pill' + (mons.some(function(k){ return corr[k] < -0.005; }) ? ' neg' : '');
+        }
+        // Con las dos monedas a la vista, la columna avisa que cada renglón lleva el saldo de SU moneda.
+        var thS = document.getElementById('cbExtThSaldo');
+        if (thS) thS.textContent = (hay.ARS && hay.USD) ? 'Saldo acum. (por moneda)' : 'Saldo acum.';
 
         // ── Filtrar para la tabla ──────────────────────────────
-        var filtrados = movs.filter(function(m){
-            if (filtCuenta && m.cuentaId !== filtCuenta) return false;
+        var filtrados = universo.filter(function(m){
             if (filtDesde  && m.fecha && m.fecha < filtDesde) return false;
             if (filtHasta  && m.fecha && m.fecha > filtHasta) return false;
             if (filtTipo   && m.tipo !== filtTipo) return false;
@@ -23816,7 +23862,7 @@
         }
         var _cbFilas = [];
         _ordenarParaPintar(filtrados, 'cbOrden').forEach(function(m){
-            var s = m.saldoAcum;
+            var s = m.saldoAcum, mon = m.moneda;
             var tipoBadge = m.entrada>0 ? '<span class="badge-rol badge-ok" style="font-size:10px;">Entrada</span>' : '<span class="badge-rol badge-err" style="font-size:10px;">Salida</span>';
             var tr = document.createElement('tr');
             var acciones = '<div class="action-btns" style="justify-content:flex-end;">'+_accionesMovHTML(m)+'</div>';
@@ -23826,9 +23872,9 @@
                 '<td style="color:var(--text-2);">'+m.origen+'</td>'+
                 '<td style="font-size:11px;color:var(--text-3);">'+m.cuenta+'</td>'+
                 '<td><span class="pill" style="font-size:10px;">'+m.medio+'</span></td>'+
-                '<td style="text-align:right;color:var(--success);font-weight:600;">'+(m.entrada>0?'$'+(m.entrada).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}):'—')+'</td>'+
-                '<td style="text-align:right;color:var(--danger);">'+(m.salida>0?'$'+(m.salida).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}):'—')+'</td>'+
-                '<td style="text-align:right;font-weight:700;color:'+(s>=0?'var(--success)':'var(--danger)')+';">$'+(s).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</td>'+
+                '<td style="text-align:right;color:var(--success);font-weight:600;">'+(m.entrada>0?_cbFmt(mon,m.entrada):'—')+'</td>'+
+                '<td style="text-align:right;color:var(--danger);">'+(m.salida>0?_cbFmt(mon,m.salida):'—')+'</td>'+
+                '<td style="text-align:right;font-weight:700;color:'+(s>=0?'var(--success)':'var(--danger)')+';">'+_cbFmt(mon,s)+'</td>'+
                 '<td style="text-align:center;white-space:nowrap;">'+acciones+'</td>';
             _cbFilas.push(tr);
         });
@@ -45182,9 +45228,11 @@
         var fmtA = function(n){ return '$' + (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var fmtU = function(n){ return 'USD ' + (n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         // Devuelve {main, sub} priorizando ARS, mostrando USD como complemento
+        // Un saldo NEGATIVO también cuenta (una cuenta en pesos en descubierto con dólares a favor): sólo se omite el que está en cero.
         var par = function(ars, usd, subDef){
-            if ((ars||0) > 0 && (usd||0) > 0) return { main: fmtA(ars), sub: '+ ' + fmtU(usd) };
-            if ((usd||0) > 0) return { main: fmtU(usd), sub: subDef || '' };
+            var hayA = Math.abs(ars||0) >= 0.005, hayU = Math.abs(usd||0) >= 0.005;
+            if (hayA && hayU) return { main: fmtA(ars), sub: '+ ' + fmtU(usd) };
+            if (hayU) return { main: fmtU(usd), sub: subDef || '' };
             return { main: fmtA(ars), sub: subDef || '' };
         };
         var setKpi = function(idV, idS, p){
