@@ -9802,6 +9802,7 @@
     function _presupBorrar(index) {
         if (!datos[index] || !_presupPuedeBorrar()) return false;
         var cambios = _presupReindexarAlBorrar(index);
+        var _pagosDel = datos[index].pagosHistorial;   // sus archivos (comprobante, DDJJ, acuse) se borran cuando la base confirma que el presupuesto ya no está
         datos.splice(index, 1);
         // Los vínculos primero y el presupuesto al final: si algo se corta en el medio, queda un presupuesto de más y no vínculos al equivocado.
         if (cambios.facturas) persistirFacturas();
@@ -9811,7 +9812,7 @@
             try { REF_DOCS.update(cambios.docs).catch(function(e) { console.error('No se pudieron reacomodar los comprobantes recibidos:', e); }); }
             catch (e) { console.error('No se pudieron reacomodar los comprobantes recibidos:', e); }
         }
-        persistir();
+        _despuesDeGuardar(persistir(), function() { _borrarArchivosDePago(_pagosDel); });
         return true;
     }
 
@@ -9826,6 +9827,7 @@
             if (v.plan) partes.push(v.plan + ' ítem' + (v.plan === 1 ? '' : 's') + ' del Plan de Trabajo');
             msg += '\n\nEstá aplicado a ' + partes.join(', ') + '.\nLos comprobantes quedan sin presupuesto (se guardan igual) y los ítems se sacan del Plan de Trabajo.';
         }
+        msg += _avisoArchivosPago(datos[index].pagosHistorial);   // los archivos de sus pagos (comprobante, DDJJ, acuse) se van con él
         if (confirm(msg)) _presupBorrar(index);
     }
 
@@ -10028,6 +10030,65 @@
     function _quitarDocsVEP(o) {   // deshace una subida (si después falla otra cosa antes de guardar el pago)
         if (!o) return;
         ['ddjj', 'acuse'].forEach(function(k) { var id = o[VEP_DOCS[k].id]; if (id) { try { REF_DOCS.child(id).remove(); } catch (_) {} } });
+    }
+    // ═══════════ Archivos que cuelgan de un pago: se van con él ═══════════
+    // Un pago puede llevar hasta tres archivos en REF_DOCS: el comprobante de la transferencia (comprobanteId) y, en un VEP, la DDJJ
+    // presentada (ddjjId) y el acuse (acuseId). Antes, al desaplicar o eliminar el pago —o el comprobante/presupuesto que lo contiene—
+    // esos archivos quedaban huérfanos ocupando lugar en la base. Reglas: (1) un archivo se borra SÓLO si ningún otro pago lo sigue
+    // usando (el pago de varias facturas juntas, `grupoPagoId`, cuelga el MISMO comprobante de cada una); (2) se borra DESPUÉS de que
+    // la base confirmó el guardado del pago quitado (`_despuesDeGuardar`): si el guardado falla, el pago sigue existiendo allá y
+    // necesita su archivo; (3) al REEMPLAZAR un archivo, el viejo se borra recién con el nuevo ya guardado.
+    function _archivosDePago(p) {   // ids de REF_DOCS que cuelgan de este pago (sin repetir)
+        var out = [];
+        if (!p) return out;
+        ['comprobanteId', VEP_DOCS.ddjj.id, VEP_DOCS.acuse.id].forEach(function(k) {
+            var id = p[k];
+            if (id && typeof id === 'string' && out.indexOf(id) < 0) out.push(id);
+        });
+        return out;
+    }
+    // ¿Algún pago (de facturas, comprobantes X o presupuestos) —fuera de los de `ignorar`— o algún comprobante sigue apuntando a este archivo?
+    // `docId`/`adjuntoId` cubre una nota de crédito migrada de un pago viejo, que se quedó con el archivo del asiento (_migrarNotasCreditoViejas).
+    function _archivoPagoEnUso(id, ignorar) {
+        ignorar = ignorar || [];
+        var usa = function(p) { return !!p && ignorar.indexOf(p) < 0 && _archivosDePago(p).indexOf(id) >= 0; };
+        var enLista = function(lista) {
+            return (lista || []).some(function(it) { return !!it && ((it.pagosHistorial || []).some(usa) || it.docId === id || it.adjuntoId === id); });
+        };
+        return enLista(facturas) || enLista(documentos) || enLista(datos);
+    }
+    // Ids que se irían con estos pagos: los suyos que ningún otro pago usa (sirve para avisarlo en el «¿Seguro?» antes de quitarlos).
+    function _archivosLiberables(pagos) {
+        pagos = (pagos || []).filter(Boolean);
+        var ids = [];
+        pagos.forEach(function(p) { _archivosDePago(p).forEach(function(id) { if (ids.indexOf(id) < 0 && !_archivoPagoEnUso(id, pagos)) ids.push(id); }); });
+        return ids;
+    }
+    function _avisoArchivosPago(pagos) {
+        return _archivosLiberables(pagos).length ? '\n\nSe borran también los archivos adjuntos del pago (comprobante, DDJJ o acuse), que ningún otro pago usa.' : '';
+    }
+    // Borra de REF_DOCS los archivos de estos pagos que ya no usa nadie. Se llama con el pago YA quitado de la memoria y guardado.
+    // Devuelve los ids que mandó a borrar. Si los comprobantes X todavía no llegaron (nodo pesado del arranque) no puede ver qué pagos de
+    // documentos comparten el archivo y por prudencia no borra nada: un huérfano ocupa lugar, un archivo borrado de más no se recupera.
+    function _borrarArchivosDePago(pagos) {
+        pagos = (pagos || []).filter(Boolean);
+        if (!pagos.length) return [];
+        if (typeof _docsCargados !== 'undefined' && !_docsCargados) return [];
+        var borrados = [];
+        pagos.forEach(function(p) {
+            _archivosDePago(p).forEach(function(id) {
+                if (borrados.indexOf(id) >= 0) return;
+                if ((documentos || []).some(function(d) { return d && d.id === id; })) return;   // es un comprobante X (un registro), no un archivo
+                if (_archivoPagoEnUso(id, pagos)) return;
+                try { REF_DOCS.child(id).remove(); borrados.push(id); } catch (_) {}
+            });
+        });
+        return borrados;
+    }
+    // Corre `fn` cuando la base confirmó el guardado. Sin promesa (la escritura falló en el acto) o con la promesa rechazada no hace nada.
+    function _despuesDeGuardar(promesa, fn) {
+        if (!promesa) return;
+        Promise.resolve(promesa).then(fn, function(e) { console.warn('Se conservan los archivos del pago: la base no confirmó el guardado.', e); });
     }
     // Botones 📋 DDJJ / ✅ Acuse para ver lo adjunto al pago.
     function _btnsVerDocsVEP(p) {
@@ -10297,8 +10358,11 @@
                 return REF_DOCS.child(docId).set({ nombre: file.name, tipo: tipo, contenido: b64 });
             }).then(function() {
                 var adj = {}; adj[K.id] = docId; adj[K.nombre] = file.name; adj[K.tipo] = tipo;
-                var n = _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj);
+                var sal = {};
+                var n = _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj, sal);
                 if (!n) { try { REF_DOCS.child(docId).remove(); } catch (_) {} alert('No se encontró el pago al que adjuntarlo.'); return; }
+                // Reemplazo: el archivo anterior se borra recién ahora, con el nuevo ya guardado (y sólo si ningún otro pago lo usa).
+                _despuesDeGuardar(sal.prom, function() { _borrarArchivosDePago(sal.viejos); });
                 alert('✅ ' + K.etiqueta + (K.etiqueta.indexOf('La ') === 0 ? ' quedó adjunta' : ' quedó adjunto') + (n > 1 ? ' a las ' + n + ' facturas de este pago' : '') + '.');
                 if (typeof renderizar === 'function') renderizar();
             }).catch(function(e) {
@@ -10309,28 +10373,33 @@
     };
     // Cuelga el adjunto del pago (o de TODOS los pagos del grupo, si el pago fue de varias
     // facturas juntas: es una sola transferencia, el mismo comprobante vale para todas).
-    function _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj) {
+    // `sal` (opcional) recibe `viejos` (los archivos que el adjunto REEMPLAZÓ, como pagos sueltos para _borrarArchivosDePago) y `prom` (la
+    // promesa del guardado), para que quien llama borre los viejos recién cuando la base confirmó el nuevo.
+    function _aplicarCompAPagos(srcTipo, di, pi, grupoId, adj, sal) {
         var n = 0;
+        if (sal) sal.viejos = [];
         var poner = function(p) {
             if (!p) return;
-            Object.keys(adj).forEach(function(k) { p[k] = adj[k]; });
+            var v = {};
+            Object.keys(adj).forEach(function(k) { if (p[k] && p[k] !== adj[k]) v[k] = p[k]; p[k] = adj[k]; });
+            if (sal) sal.viejos.push(v);
             n++;
         };
         if (grupoId) {
             facturas.forEach(function(f) {
                 (f.pagosHistorial || []).forEach(function(p) { if ((p.grupoPagoId || '') === grupoId) poner(p); });
             });
-            if (n) persistirFacturas();
+            if (n) { var pg = persistirFacturas(); if (sal) sal.prom = pg; }
             return n;
         }
         if (srcTipo === 'presup') {
-            var d = datos[di]; poner(d && (d.pagosHistorial || [])[pi]); if (n) persistir();
+            var d = datos[di]; poner(d && (d.pagosHistorial || [])[pi]); if (n) { var pp = persistir(); if (sal) sal.prom = pp; }
         } else if (srcTipo === 'factura') {
-            var f = facturas[di]; poner(f && (f.pagosHistorial || [])[pi]); if (n) persistirFacturas();
+            var f = facturas[di]; poner(f && (f.pagosHistorial || [])[pi]); if (n) { var pf = persistirFacturas(); if (sal) sal.prom = pf; }
         } else if (srcTipo === 'doc') {
             var dd = (documentos || []).find(function(x) { return x.id === di; });
             poner(dd && (dd.pagosHistorial || [])[pi]);
-            if (n) REF_DOCS.child(di).update({ pagosHistorial: dd.pagosHistorial });
+            if (n) { var pd = REF_DOCS.child(di).update({ pagosHistorial: dd.pagosHistorial }); if (sal) sal.prom = pd; }
         }
         return n;
     }
@@ -18002,7 +18071,13 @@
                 }
                 case 'factura': {
                     var i = facturas.findIndex(function(f){ return f.proveedor===D.proveedor && f.numero===D.numero && f.fecha===D.fecha && f.importe===D.importe; });
-                    if (i !== -1) { _espejoSync(Object.assign({}, facturas[i], { pagado: 0 })); facturas.splice(i, 1); persistirFacturas(); deleted = true; } break;
+                    if (i !== -1) {
+                        var _pagosDelF = facturas[i].pagosHistorial;
+                        _espejoSync(Object.assign({}, facturas[i], { pagado: 0 }));
+                        facturas.splice(i, 1);
+                        _despuesDeGuardar(persistirFacturas(), function() { _borrarArchivosDePago(_pagosDelF); });   // los archivos de sus pagos se van con ella
+                        deleted = true;
+                    } break;
                 }
                 case 'venta': {
                     var i = ventas.findIndex(function(v){ return v.uf===D.uf && v.comprador===D.comprador; });
@@ -21127,12 +21202,13 @@
     }
 
     function eliminarFactura(index) {
-        if (confirm('¿Eliminar esta factura?')) {
+        var _fDel = facturas[index];
+        if (confirm('¿Eliminar esta factura?' + _avisoArchivosPago(_fDel && _fDel.pagosHistorial))) {
             // Si estaba aplicada a un presupuesto, su pago espejo se quita (si no, el avance del presupuesto quedaba inflado).
-            var _fDel = facturas[index];
             if (_fDel && _fDel.presupuestoIdx != null && datos[_fDel.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(_fDel.presupuestoIdx, { id: _fDel.id, pagado: 0, fecha: _fDel.fecha, numero: _fDel.numero });
             facturas.splice(index, 1);
-            persistirFacturas();
+            // Los archivos de sus pagos (comprobante, DDJJ, acuse) se van con ella, salvo los que comparte con otra factura del mismo pago.
+            _despuesDeGuardar(persistirFacturas(), function() { _borrarArchivosDePago(_fDel && _fDel.pagosHistorial); });
         }
     }
 
@@ -22653,10 +22729,11 @@
         var p = (pi != null) ? hist[pi] : (hist.length ? hist[hist.length - 1] : null);
         var monto = p ? (p.monto || 0) : (f.pagado || 0);
         var detalle = '$' + (monto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + (p && p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '');
-        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de esta factura (' + detalle + ')?\n\nLa factura vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
-        _desaplicarPagoEntryCore(f, pi);
+        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de esta factura (' + detalle + ')?\n\nLa factura vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.' + _avisoArchivosPago([p]))) return;
+        var _quitado = _desaplicarPagoEntryCore(f, pi);
         f.estado = _estadoFactDoc(f);
-        REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial: f.pagosHistorial || [], pagado: f.pagado, estado: f.estado });
+        var _prGuardado = REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial: f.pagosHistorial || [], pagado: f.pagado, estado: f.estado });
+        _despuesDeGuardar(_prGuardado, function() { _borrarArchivosDePago([_quitado]); });   // los archivos del pago se van con él
         if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', index);
         _espejoSync(f);
         renderFacturas();
@@ -22678,9 +22755,11 @@
         var p = (pi != null) ? hist[pi] : (hist.length ? hist[hist.length - 1] : null);
         var monto = p ? (p.monto || 0) : (d.pagado || 0);
         var detalle = '$' + (monto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + (p && p.nroCorrelativo ? ' · ' + p.nroCorrelativo : '');
-        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de este comprobante (' + detalle + ')?\n\nVuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.')) return;
-        _desaplicarPagoEntryCore(d, pi);
-        try { REF_DOCS.child(d.id).update({ pagosHistorial: d.pagosHistorial || [], pagado: d.pagado }); } catch(e){}
+        if (!confirm('¿Desaplicar ' + (pi != null ? 'este pago' : 'el último pago') + ' de este comprobante (' + detalle + ')?\n\nVuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.' + _avisoArchivosPago([p]))) return;
+        var _quitado = _desaplicarPagoEntryCore(d, pi);
+        var _prGuardado = null;
+        try { _prGuardado = REF_DOCS.child(d.id).update({ pagosHistorial: d.pagosHistorial || [], pagado: d.pagado }); } catch(e){}
+        _despuesDeGuardar(_prGuardado, function() { _borrarArchivosDePago([_quitado]); });   // los archivos del pago se van con él
         if (d.presupuestoIdx != null && datos[d.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
             _reconciliarFacturaEnPresupuesto(d.presupuestoIdx, { id: d.id, pagado: d.pagado, fecha: d.fecha, numero: d.numero });
         }
@@ -22722,21 +22801,24 @@
         var msg = (entradas.length > 1)
             ? ('¿Eliminar esta Orden de Pago' + (nroComp ? ' (' + nroComp + ')' : '') + '?\n\nCubre ' + entradas.length + ' factura(s) por un total de ' + montoTxt + '. Cada una vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlas después.')
             : ('¿Eliminar esta Orden de Pago' + (nroComp ? ' (' + nroComp + ')' : '') + ' de ' + montoTxt + '?\n\nEl comprobante vuelve a Pendiente/Parcial y se quita su movimiento de Caja/Banco. Podés volver a aplicarlo después.');
+        msg += _avisoArchivosPago(entradas.map(function (e) { return (e.item.pagosHistorial || [])[e.pi]; }));
         if (!confirm(msg)) return;
+        var _quitados = [], _guardados = [], _guardoTodo = true;   // los archivos se borran recién cuando TODAS las patas quedaron guardadas
         entradas.forEach(function (e) {
-            _desaplicarPagoEntryCore(e.item, e.pi);
+            _quitados.push(_desaplicarPagoEntryCore(e.item, e.pi));
             e.item.estado = _estadoFactDoc(e.item);
             if (e.tipoItem === 'fact') {
-                REF_FACTURAS.child(e.item.id || (e.item.id = _colUidItem())).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado, estado: e.item.estado });
+                _guardados.push(REF_FACTURAS.child(e.item.id || (e.item.id = _colUidItem())).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado, estado: e.item.estado }));
                 if (typeof sincronizarPagoPlan === 'function') sincronizarPagoPlan('factura', e.ref);
                 _espejoSync(e.item);
             } else {
-                try { REF_DOCS.child(e.item.id).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado }); } catch (err) {}
+                try { _guardados.push(REF_DOCS.child(e.item.id).update({ pagosHistorial: e.item.pagosHistorial || [], pagado: e.item.pagado })); } catch (err) { _guardoTodo = false; }
                 if (e.item.presupuestoIdx != null && datos[e.item.presupuestoIdx] && typeof _reconciliarFacturaEnPresupuesto === 'function') {
                     _reconciliarFacturaEnPresupuesto(e.item.presupuestoIdx, { id: e.item.id, pagado: e.item.pagado, fecha: e.item.fecha, numero: e.item.numero });
                 }
             }
         });
+        if (_guardoTodo) _despuesDeGuardar(Promise.all(_guardados), function () { _borrarArchivosDePago(_quitados); });   // los archivos del pago se van con él
         if (typeof renderFacturas === 'function') renderFacturas();
         if (typeof renderDocumentos === 'function') renderDocumentos();
         if (typeof renderCuentaCorriente === 'function') renderCuentaCorriente();
@@ -25971,11 +26053,12 @@
     function eliminarDoc(id) {
         var d = (documentos||[]).find(function(x){ return x && x.id===id; });
         var tieneMov = d && ((d.pagado||0) > 0 || (d.pagosHistorial||[]).length > 0);
-        if (!confirm('¿Eliminar este comprobante?' + (tieneMov ? '\n\nTambién se quitará su movimiento de Caja General (el pago asociado).' : ''))) return;
+        if (!confirm('¿Eliminar este comprobante?' + (tieneMov ? '\n\nTambién se quitará su movimiento de Caja General (el pago asociado).' : '') + _avisoArchivosPago(d && d.pagosHistorial))) return;
         if (d && d.nro) _liberarNroComprobante(d.nro, d.modalidad);
         if (d && d.presupuestoIdx != null && datos[d.presupuestoIdx]) _reconciliarFacturaEnPresupuesto(d.presupuestoIdx, { id: d.id, pagado: 0, fecha: d.fecha, numero: d.numero });
         if (d && d.adjuntoId) REF_DOCS.child(d.adjuntoId).remove();
-        REF_DOCS.child(id).remove();
+        var _prBorrado = REF_DOCS.child(id).remove();
+        _despuesDeGuardar(_prBorrado, function() { _borrarArchivosDePago(d && d.pagosHistorial); });   // los archivos de sus pagos se van con él
     }
 
     // =================== VENCIMIENTOS (agenda de servicios) ===================
@@ -26560,10 +26643,10 @@
     function eliminarMovPagoDoc(docId, pagoId) {
         var d = (documentos||[]).find(function(x){ return x && x.id===docId; });
         if (!d) { alert('Documento no encontrado.'); return; }
-        if (!confirm('¿Eliminar este pago del documento? Dejará de figurar en Caja General.')) return;
         var hist = d.pagosHistorial || [];
+        var p = pagoId ? hist.find(function(x){ return x && x.pagoId===pagoId; }) : null;
+        if (!confirm('¿Eliminar este pago del documento? Dejará de figurar en Caja General.' + _avisoArchivosPago([p]))) return;
         if (pagoId) {
-            var p = hist.find(function(x){ return x && x.pagoId===pagoId; });
             var monto = p ? (p.monto||0) : 0;
             // Liberar el número correlativo del pago si era el último de su tipo
             if (p && p.nroCorrelativo) _liberarNroComprobante(p.nroCorrelativo, p.tipoAB || p.modalidad);
@@ -26573,11 +26656,13 @@
             // Pago inicial cargado como "monto ya pagado" (sin historial)
             d.pagado = 0;
         }
-        REF_DOCS.child(docId).update({ pagado: d.pagado, pagosHistorial: d.pagosHistorial || [] });
+        var _prMov = REF_DOCS.child(docId).update({ pagado: d.pagado, pagosHistorial: d.pagosHistorial || [] });
+        _despuesDeGuardar(_prMov, function() { _borrarArchivosDePago([p]); });   // los archivos del pago se van con él
         _espejoSync(d);
         // Ofrecer eliminar también el documento completo
         if (confirm('Pago eliminado. ¿Querés eliminar también el documento completo?')) {
-            REF_DOCS.child(docId).remove();
+            var _prDoc = REF_DOCS.child(docId).remove();
+            _despuesDeGuardar(_prDoc, function() { _borrarArchivosDePago(d.pagosHistorial); });   // y los de los pagos que le quedaban
             _espejoSync(Object.assign({}, d, { pagado: 0 }));
         }
         if (typeof renderDocumentos==='function') renderDocumentos();
@@ -40305,8 +40390,13 @@
         // Comprobante de transferencia (si se eligió uno nuevo)
         var _comp = null;
         try { _comp = await _subirComprobantePago('editPagoComprobante'); } catch(e) { return; }
+        var _compViejo = '';   // el comprobante que este reemplaza: se borra de REF_DOCS recién con el nuevo ya guardado
+        var _prEdit = null;    // promesa del guardado del pago
         function _aplicarComp(entry) {
-            if (_comp) { entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo; }
+            if (_comp) {
+                if (entry.comprobanteId && entry.comprobanteId !== _comp.comprobanteId) _compViejo = entry.comprobanteId;
+                entry.comprobanteId = _comp.comprobanteId; entry.comprobanteNombre = _comp.comprobanteNombre; entry.comprobanteTipo = _comp.comprobanteTipo;
+            }
         }
 
         if (src === 'presup') {
@@ -40324,10 +40414,10 @@
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
             if (_provCambia) d.proveedor = _provNuevo;
             // Solo el nodo de este presupuesto (evita pisar a otro usuario en paralelo)
-            REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores, proveedor:d.proveedor });
+            _prEdit = REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores, proveedor:d.proveedor });
         } else if (src === 'doc') {
             var doc = documentos.find(function(x){ return x.id === di; });
-            if (!doc) { cerrarModalEditarPago(); return; }
+            if (!doc) { if (_comp) { try { REF_DOCS.child(_comp.comprobanteId).remove(); } catch(_) {} } cerrarModalEditarPago(); return; }   // el comprobante X ya no existe: el archivo recién subido no cuelga de nada
             var pd = doc.pagosHistorial[pi];
             pd.fecha     = fecha;
             pd.monto     = cap;
@@ -40335,7 +40425,7 @@
             _aplicarComp(pd);
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             if (_provCambia) doc.proveedor = _provNuevo;
-            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial, proveedor: doc.proveedor });
+            _prEdit = REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial, proveedor: doc.proveedor });
             _espejoSync(doc);
         } else {
             var f = facturas[di];
@@ -40349,9 +40439,11 @@
             f.estado = _estadoFactDoc(f);
             if (_provCambia) f.proveedor = _provNuevo;
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
-            REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado, proveedor:f.proveedor });
+            _prEdit = REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado, proveedor:f.proveedor });
             _espejoSync(f);
         }
+        // Reemplazó un comprobante: el viejo se borra ahora que el nuevo está guardado (y sólo si ningún otro pago del grupo lo usa).
+        if (_compViejo) _despuesDeGuardar(_prEdit, function() { _borrarArchivosDePago([{ comprobanteId: _compViejo }]); });
 
         cerrarModalEditarPago();
         renderEgresos();
@@ -40374,7 +40466,10 @@
         var diRaw = document.getElementById('editPagoDatoIdx').value;
         var di    = src === 'doc' ? diRaw : parseInt(diRaw);
         var pi    = parseInt(document.getElementById('editPagoPagoIdx').value);
-        if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
+        var _pEl = (_editPagoItem(src, di) || {}).pagosHistorial;
+        _pEl = _pEl ? _pEl[pi] : null;   // el pago que se va: con él se van sus archivos
+        if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.' + _avisoArchivosPago([_pEl]))) return;
+        var _prEl = null;
 
         if (src === 'presup') {
             var d = datos[di];
@@ -40384,13 +40479,13 @@
             d.pagadoPresupuesto = d.pagosHistorial.reduce(function(s,x){ return s+(x.capital||0)+(x.canjeCapital||0); }, 0);
             d.pagadoMayores     = d.pagosHistorial.reduce(function(s,x){ return s+(x.mayores||0); }, 0);
             // Solo el nodo de este presupuesto (evita pisar a otro usuario en paralelo)
-            REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores });
+            _prEl = REF_DATOS.child(d.id || (d.id=_colUidItem())).update({ pagosHistorial:d.pagosHistorial, pagado:d.pagado, pagadoPresupuesto:d.pagadoPresupuesto, pagadoMayores:d.pagadoMayores });
         } else if (src === 'doc') {
             var doc = documentos.find(function(x){ return x.id === di; });
             if (!doc || !doc.pagosHistorial) { cerrarModalEditarPago(); return; }
             doc.pagosHistorial.splice(pi, 1);
             doc.pagado = doc.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
-            REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
+            _prEl = REF_DOCS.child(doc.id).update({ pagado: doc.pagado, pagosHistorial: doc.pagosHistorial });
             _espejoSync(doc);
         } else {
             var f = facturas[di];
@@ -40399,9 +40494,10 @@
             f.pagado = f.pagosHistorial.reduce(function(s,x){ return s+(x.monto||0); }, 0);
             f.estado = _estadoFactDoc(f);
             // Solo el nodo de esta factura (evita pisar a otro usuario en paralelo)
-            REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
+            _prEl = REF_FACTURAS.child(f.id || (f.id=_colUidItem())).update({ pagosHistorial:f.pagosHistorial, pagado:f.pagado, estado:f.estado });
             _espejoSync(f);
         }
+        _despuesDeGuardar(_prEl, function() { _borrarArchivosDePago([_pEl]); });   // los archivos del pago se van con él
 
         cerrarModalEditarPago();
         renderEgresos();
