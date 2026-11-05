@@ -76,11 +76,12 @@
         return dias >= dm ? 1 : dias / dm;
     }
     function esperado(a, periodo) { return r2(canonEn(a, periodo) * fraccion(a, periodo)); }
-    // _alqCalcIVA: importes ya redondeados y cerrando entre sí (el no gravado sale por resta)
+    // _alqCalcIVA (v571): la parte con IVA es un importe que YA INCLUYE el IVA (el canon es el total a facturar); el IVA se desagrega y el no gravado sale por resta
     function ivaCalc(a, base) {
         var pct = a.ivaPctGravado, alic = a.ivaAlicuota;
         var grav = Math.round(base * pct) / 100, baseR = Math.round(base * 100) / 100;
-        return { grav: grav, nog: Math.round((baseR - grav) * 100) / 100, iva: Math.round(grav * alic) / 100 };
+        var neto = Math.round(grav / (1 + alic / 100) * 100) / 100;
+        return { grav: grav, nog: Math.round((baseR - grav) * 100) / 100, neto: neto, iva: Math.round((grav - neto) * 100) / 100 };
     }
     // _alqSaldoPendiente: cuotas con saldo desde el inicio hasta la fecha de cierre
     function saldoAlCerrar(a) {
@@ -92,7 +93,7 @@
             if (p < a.inicio.substring(0, 7) || p > tope.substring(0, 7)) continue;
             if ((a.mesesBonificados || []).indexOf(p) >= 0) continue;
             var esp = esperado(a, p), cob = 0;
-            a.cobrosHistorial.forEach(function (c) { if (c.periodo === p && (c.concepto === 'alquiler' || !c.concepto)) cob += c.monto - (c.iva || 0); });
+            a.cobrosHistorial.forEach(function (c) { if (c.periodo === p && (c.concepto === 'alquiler' || !c.concepto)) cob += c.monto - (c.ivaIncluido ? 0 : (c.iva || 0)); });
             if (esp > 0 && cob < esp * 0.98) total += Math.max(0, esp - cob);
         }
         return r2(total);
@@ -223,9 +224,9 @@
         var periodo = per(n), canon = (o.monto != null) ? o.monto : esperado(a, periodo), f = fechaCobro(a, n, o.dia || 8), medio = o.medio || EF;
         var ref = o.ref || '';
         if (a.ivaActivo) {
-            // con IVA el cobro se parte en DOS recibos: la parte gravada (neto + IVA, con su factura) y la no gravada
+            // con IVA el cobro se parte en DOS recibos: la parte con IVA INCLUIDO (con su factura) y la sin IVA; entre los dos suman el canon
             var v = ivaCalc(a, canon), medioB = o.medioB || medio;
-            nuevoReg(L, a, f, periodo, v.grav + v.iva, medio, { parteIva: 'gravada', montoGravado: v.grav, iva: v.iva, facturaNro: medio.t === 'A' ? nroFactura(o.pv || '0003') : '' });
+            nuevoReg(L, a, f, periodo, v.grav, medio, { parteIva: 'gravada', montoGravado: v.neto, iva: v.iva, ivaIncluido: true, facturaNro: medio.t === 'A' ? nroFactura(o.pv || '0003') : '' });
             if (v.nog > 0) nuevoReg(L, a, f, periodo, v.nog, medioB, { parteIva: 'nograv' });
             return;
         }
@@ -300,7 +301,7 @@
         inquilino: 'Librería Aurora S.R.L.', email: 'administracion@libreriaaurora-demo.com', doc: ['CUIT', soloDig(cuit('30', 52486117))], sociedad: true,
         contacto: ['Natalia Rovira', 'natalia.rovira@libreriaaurora-demo.com'], garante: ['Hugo Rovira', 'DNI', '11874520', '11 5553-6620'],
         inicio: fm(-13, 1), meses: 36, canon: 1240000, ajustes: [[-7, 1375000], [-1, 1520000]], indice: 'IPC', frecuencia: 6, diaPago: 10,
-        deposito: [2480000, 2], iva: [21, 100], obs: 'Factura A mensual por el canon más IVA. Rubro: librería y papelería.' });
+        deposito: [2480000, 2], iva: [21, 100], obs: 'Factura A mensual; el canon ya incluye el IVA. Rubro: librería y papelería.' });
     cobroOtro(L2, al2, al2.inicio, 'deposito', 2480000, BCO, 'Depósito de garantía (2 meses)');
     serie(L2, al2, -13, 0, { dia: 8, medio: BCO, pv: '0003' });
     ALQ2.push(al2);

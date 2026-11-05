@@ -129,6 +129,52 @@ await p.evaluate(i => imprimirContratoAlquiler(i), i1); await p.waitForTimeout(2
 const ctr = await p.evaluate(() => window.__rec || '');
 ok('S8: el contrato impreso dice «Canon con IVA incluido», el neto, el IVA y «Total a facturar» = el canon', /Canon con IVA incluido/.test(ctr) && /Neto gravado/.test(ctr) && /Total a facturar/.test(ctr) && /5\.260\.905/.test(ctr) && !/5\.865\.790/.test(ctr), ctr.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
 
+// ───── S9: elegir otra «parte con IVA incluido» deja la parte sin IVA en «el resto» (el total no se recarga) ─────
+const i6 = await nuevo({ unidad: 'IVA-RESTO', ivaPctGravado: PCT });
+await abrirCobro(i6);
+await p.evaluate(() => { document.getElementById('cobroAlqGravado').value = 3000000; _cobroAlqGravadoChange(); });
+let c6 = await campos();
+ok('S9: con 3.000.000 con IVA, la parte sin IVA pasa a ser el resto (2.260.905) y el total sigue siendo el canon', Number(c6.nog) === 2260905 && Number(c6.monto) === CANON && Number(c6.iva) === 520661.16, JSON.stringify(c6));
+ok('S9: ya no avisa que se pasa del canon', !/se pasa/.test(c6.hint), c6.hint);
+// tipear la parte sin IVA la suelta: las partes mandan (así se carga un pago parcial) y la parte con IVA ya no la mueve
+await p.evaluate(() => { document.getElementById('cobroAlqNoGravado').value = 500000; document.getElementById('cobroAlqNoGravado').dispatchEvent(new Event('input')); });
+await p.evaluate(() => { document.getElementById('cobroAlqGravado').value = 1000000; _cobroAlqGravadoChange(); });
+c6 = await campos();
+ok('S9: con la parte sin IVA tipeada a mano, cambiar la parte con IVA no la toca y el total es la suma (1.500.000)', Number(c6.nog) === 500000 && Number(c6.monto) === 1500000, JSON.stringify(c6));
+await p.evaluate(() => cerrarModalCobroAlquiler());
+
+// ───── S10: tildar el desglose después de tipear un monto a mano no congela el cambio de período ─────
+const mesAnt = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 7); })();
+const i7 = await nuevo({ unidad: 'IVA-PERIODO', canon: 1000000, canonActual: 1100000, ivaPctGravado: 60, ajustesCanon: [{ periodo: mesAnt, monto: 1000000 }, { periodo: per, monto: 1100000 }] });
+await abrirCobro(i7);
+await p.evaluate(() => { var d = document.getElementById('cobroAlqDesglose'); d.checked = false; _cobroAlqToggleDesglose(); var m = document.getElementById('cobroAlqMonto'); m.value = 600000; m.dispatchEvent(new Event('input')); d.checked = true; _cobroAlqToggleDesglose(); });
+await p.evaluate(m => { document.getElementById('cobroAlqPeriodo').value = m; _cobroAlqPeriodoChange(); }, mesAnt);
+const c7 = await campos();
+ok('S10: al cambiar el período con el desglose prendido las partes se recalculan con el canon de ESE mes (1.000.000, no el del mes anterior)', Number(c7.monto) === 1000000 && Math.abs(Number(c7.grav) + Number(c7.nog) - 1000000) < 0.011, JSON.stringify(c7));
+await p.evaluate(() => cerrarModalCobroAlquiler());
+
+// ───── S11: el cuadro «entran $X» sigue a las partes cuando el cobro entra en otra moneda ─────
+const i8 = await nuevo({ unidad: 'IVA-USD', moneda: 'USD', canon: 1000, canonActual: 1000, ivaPctGravado: 50 });
+await abrirCobro(i8);
+await p.evaluate(() => { var s = document.getElementById('cobroAlqMonedaCobro'); s.value = 'ARS'; document.getElementById('cobroAlqTc').value = 1000; _cobroAlqRefrescarMoneda(); });
+await p.evaluate(() => { document.getElementById('cobroAlqGravado').value = 800; _cobroAlqGravadoChange(); document.getElementById('cobroAlqNoGravado').value = 400; document.getElementById('cobroAlqNoGravado').dispatchEvent(new Event('input')); });
+const cv = await p.evaluate(() => ({ monto: document.getElementById('cobroAlqMonto').value, caja: document.getElementById('cobroAlqConversion').innerText }));
+ok('S11: con las partes en 800 + 400 el cuadro dice USD 1.200 → entran $1.200.000 (no el importe del canon)', Number(cv.monto) === 1200 && /1\.200,00/.test(cv.caja) && /1\.200\.000,00/.test(cv.caja), JSON.stringify(cv));
+await p.evaluate(() => cerrarModalCobroAlquiler());
+
+// ───── S12: los datos de ejemplo de la demo usan el modelo nuevo ─────
+const dm = await p.evaluate(() => {
+  const a = alquileres.find(x => x.ivaActivo && (x.cobrosHistorial || []).some(c => c.parteIva === 'gravada'));
+  if (!a) return null;
+  const grav = a.cobrosHistorial.filter(c => c.parteIva === 'gravada');
+  const meses = {}; a.cobrosHistorial.filter(c => c.periodo && (c.concepto === 'alquiler' || !c.concepto)).forEach(c => { meses[c.periodo] = (meses[c.periodo] || 0) + c.monto; });
+  const sp = _alqSaldoPeriodo(a, per_());
+  function per_() { return new Date().toISOString().substring(0, 7); }
+  return { unidad: a.unidad, todosIncl: grav.every(c => c.ivaIncluido === true), cierra: grav.every(c => Math.abs(c.monto - c.montoGravado - c.iva) < 0.011), pagoMes: meses[per_()], esperado: _alqCanonEsperado(a, per_()), pagada: sp.pagada };
+});
+ok('S12: los recibos con IVA de la demo llevan «IVA incluido» y neto + IVA = lo cobrado', dm && dm.todosIncl && dm.cierra, JSON.stringify(dm));
+ok('S12: en la demo lo cobrado de un mes con IVA es el canon (no el canon más IVA)', dm && (dm.pagoMes == null || Math.abs(dm.pagoMes - dm.esperado) < 0.011), JSON.stringify(dm));
+
 const malos = res.filter(x => x[0] === 'FALLA');
 res.forEach(x => console.log(x.join(' ')));
 const errs = errores.filter(e => !/gsi|Failed to load resource|tradingview/.test(e));
