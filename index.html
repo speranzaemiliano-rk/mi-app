@@ -3806,7 +3806,7 @@
                     <div class="hp-kpi-val" id="kpiPagarV">—</div>
                     <div class="hp-kpi-sub" id="kpiPagarSub">Facturas pendientes</div>
                   </div>
-                  <div class="hp-kpi" onclick="mostrarTab('Ventas')" title="Cobros registrados este mes">
+                  <div class="hp-kpi" onclick="mostrarTab('CajaGeneral')" title="Cobros del mes según la Caja General (ventas de UF, alquileres, honorarios, recibos emitidos e ingresos «Otro»)">
                     <div class="hp-kpi-top"><span class="hp-kpi-ico">📈</span><span class="hp-kpi-lbl">Cobrado este mes</span></div>
                     <div class="hp-kpi-val" id="kpiMesV">—</div>
                     <div class="hp-kpi-sub" id="kpiMesSub">Cobros del mes</div>
@@ -4762,11 +4762,11 @@
                             <div class="stat-label">UF Totales</div>
                             <div class="stat-value" id="ventasUFTotal">0</div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card" title="Unidades con el precio cobrado por completo">
                             <div class="stat-label">Vendidas</div>
                             <div class="stat-value" id="ventasUFVendidas" style="color:var(--success);">0</div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card" title="Unidades libres: sin comprador y sin ningún cobro. Las que ya tienen comprador (aunque todavía estén en cuotas) no cuentan.">
                             <div class="stat-label">Disponibles</div>
                             <div class="stat-value" id="ventasUFDisponibles" style="color:var(--gold);">0</div>
                         </div>
@@ -23783,7 +23783,7 @@
         });
         ingGeneral.forEach(function(ig){if(!ig.esBancario)return;var esS=ig.esEgreso||ig.tipo==='mov_banco_salida';_acu(ig.cuentaId,ig.moneda,esS?0:ig.monto||0,esS?ig.monto||0:0);});
         // Cobros de Ventas/Alquileres/Servicios marcados "A — Banco" (antes se perdían: no entraban ni a Efectivo ni a Cuentas Bancarias)
-        ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,c.comp==='usd'?'USD':'ARS',c.monto||0,0);});});
+        ventas.forEach(function(v){(v.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,_ventaCobroMoneda(v,c),c.monto||0,0);});});
         // Alquileres: la moneda y el importe con que ENTRÓ la plata (un contrato en USD cobrado en pesos suma pesos, no «USD 1.000» en una cuenta en pesos).
         alquileres.forEach(function(a){(a.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,_alqCobroMoneda(a,c),_alqCobroImporte(a,c),0);});});
         servicios.forEach(function(s){(s.cobrosHistorial||[]).forEach(function(c){if(c.tipoAB==='A')_acu(c.cuentaId,'ARS',c.monto||0,0);});});
@@ -23884,7 +23884,7 @@
             if (c.tipoAB !== 'A') return;
             var cId = c.cuentaId||'';
             var cb  = cuentasBancarias.find(function(x){ return (x.id||x.banco) === cId; });
-            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, c.comp === 'usd' ? 'USD' : 'ARS'), medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'venta', srcRef:vIdx });
+            movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', cuenta: cb?cb.banco:(cId||'—'), cuentaId: cId, moneda: _cbMonedaMov(mapaMon, cId, _ventaCobroMoneda(v, c)), medio: 'Cobro', entrada: c.monto||0, salida: 0, srcTipo:'venta', srcRef:vIdx });
         }); });
         alquileres.forEach(function(a, aIdx){ (a.cobrosHistorial||[]).forEach(function(c, cIdx){
             if (c.tipoAB !== 'A') return;
@@ -24113,7 +24113,7 @@
         ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.formaPago === 'canje') return; // canje de m²: no es efectivo
-                if (c.comp === 'usd') return;
+                if (_ventaCobroMoneda(v, c) === 'USD') return;
                 if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
@@ -24255,7 +24255,7 @@
         ventas.forEach((v,vIdx) => {
             (v.cobrosHistorial||[]).forEach(c => {
                 if (c.formaPago === 'canje') return; // canje de m²: no es efectivo
-                if (c.comp !== 'usd') return;
+                if (_ventaCobroMoneda(v, c) !== 'USD') return;
                 if (c.tipoAB === 'A') return;
                 movs.push({ fecha: c.fecha, tipo: 'Cobro Venta UF', desc: (v.uf||'UF')+(v.tipo?' — '+v.tipo:''), origen: v.comprador||'—', ingreso: c.monto||0, egreso: 0, srcTipo:'venta', srcRef:vIdx });
             });
@@ -27154,12 +27154,13 @@
         activeListeners.push({ ref: ref, event: 'value' });
     }
 
-    // Carga con listener .on() reactivo - igual que el resto del sistema
+    // Carga con listener .on() reactivo - igual que el resto del sistema.
+    // Alquileres, servicios e ingresos generales también repintan los KPIs del Inicio: «Cobrado este mes» suma sus cobros (además de los de ventas).
     function cargarDatosIngresos() {
         _cargarConListener(REF_VENTAS,      function(v) { ventas     = v; renderVentas(); }, 'ventas');
-        _cargarConListener(REF_ALQUILERES,  function(v) { alquileres = v; renderAlquileres(); }, 'alquileres');
-        _cargarConListener(REF_SERVICIOS,   function(v) { servicios  = v; renderServicios(); }, 'servicios');
-        _cargarConListener(REF_ING_GENERAL, function(v) { ingGeneral = v; renderIngGeneral(); }, 'ingGeneral');
+        _cargarConListener(REF_ALQUILERES,  function(v) { alquileres = v; renderAlquileres(); if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs(); }, 'alquileres');
+        _cargarConListener(REF_SERVICIOS,   function(v) { servicios  = v; renderServicios(); if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs(); }, 'servicios');
+        _cargarConListener(REF_ING_GENERAL, function(v) { ingGeneral = v; renderIngGeneral(); if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs(); }, 'ingGeneral');
         _cargarConListener(REF_DESARROLLOS, function(v) { desarrollos = v; if (typeof renderDesarrollos==='function') renderDesarrollos(); if (typeof renderAportantes==='function') renderAportantes(); }, 'desarrollos');
         _cargarConListener(REF_APORTANTES,  function(v) { aportantes  = v; if (typeof renderAportantes==='function') renderAportantes(); }, 'aportantes');
         _cargarConListener(REF_METROS,      function(v) { metrosCanje = v; if (typeof renderMetros==='function') renderMetros(); }, 'metrosCanje');
@@ -29246,6 +29247,38 @@
         return res;
     }
 
+    // ¿En qué moneda ENTRÓ el cobro de una venta? USD para el terreno/precio en dólares, la cuota en dólares, la cochera en dólares
+    // y una cuota de venta en dólares. Antes sólo se miraba `comp === 'usd'` y una cuota o una cochera en dólares figuraban como pesos.
+    function _ventaCobroMoneda(v, c) {
+        var comp = c && c.comp;
+        if (comp === 'usd' || comp === 'cuota_usd_simple' || comp === 'cochera_usd') return 'USD';
+        if (comp === 'cuota' && v && v.cuotasMoneda === 'usd') return 'USD';
+        return 'ARS';
+    }
+
+    // ¿Esta UF está LIBRE para vender? Sólo si no tiene comprador cargado, no tiene ningún cobro (ni una seña, ni la cochera) y no es una venta cerrada.
+    // Una UF con comprador —aunque todavía no haya pagado nada o esté en cuotas— ya no está a la venta. El comprador con sólo espacios cuenta como vacío.
+    function _ventaDisponible(v) {
+        if (!v) return false;
+        if (String(v.comprador || '').trim()) return false;
+        if ((v.cobrosHistorial || []).length) return false;
+        if ((v.cocheraCobrado || 0) > 0) return false;
+        var r = resumenVenta(v);
+        return !((r.cobradoUSD || 0) > 0 || (r.cobradoARS || 0) > 0);
+    }
+    // Conteos de las tarjetas de Ventas: SIEMPRE sobre todas las UF (no sobre lo que dejaron los filtros de la lista).
+    // «Vendida» = precio cobrado por completo; una libre sin precio cargado no cuenta como vendida (no tiene pendiente, pero tampoco venta).
+    function _ventasConteos() {
+        var c = { total: (ventas || []).length, vendidas: 0, disponibles: 0 };
+        (ventas || []).forEach(function(v) {
+            if (_ventaDisponible(v)) { c.disponibles++; return; }
+            var r = resumenVenta(v);
+            if (Math.max(r.precioUSD - r.cobradoUSD, 0) <= 0 && Math.max(r.precioARS - r.cobradoARS, 0) <= 0) c.vendidas++;
+        });
+        return c;
+    }
+
+
     function renderVentas() {
         if (typeof _hKPIs === 'function' && document.getElementById('kpiSaldoV')) _hKPIs();
         const tbody = document.getElementById('ventasBody');
@@ -29256,7 +29289,7 @@
         const busq      = ((document.getElementById('ventasBuscador')||{}).value||'').toLowerCase();
         const filtMod   = (document.getElementById('ventasFiltroModalidad')||{}).value||'';
         const filtEst   = (document.getElementById('ventasFiltroEstado')||{}).value||'';
-        let totalCobUSD = 0, totalCobARS = 0, vendidas = 0;
+        let totalCobUSD = 0, totalCobARS = 0;
         const visibles = ventas.filter(function(v) {
             if (filtMod && v.modalidad !== filtMod) return false;
             if (busq && !((v.uf||'').toLowerCase().includes(busq) || (v.comprador||'').toLowerCase().includes(busq))) return false;
@@ -29277,7 +29310,7 @@
                 const pendARS = Math.max(r.precioARS - r.cobradoARS, 0);
                 const pct = Math.min(100, r.precioUSD > 0 ? Math.round((r.cobradoUSD / r.precioUSD) * 100) : (r.precioARS > 0 ? Math.round((r.cobradoARS / r.precioARS) * 100) : 0));
                 const completa = pendUSD <= 0 && pendARS <= 0;
-                if (completa) vendidas++;
+
                 const estadoBadge = completa
                     ? '<span class="badge-rol badge-ok">✓ Completa</span>'
                     : '<span class="badge-rol badge-warn">⏳ En curso</span>';
@@ -29345,9 +29378,10 @@
             });
         }
         const s = function(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; };
-        s('ventasUFTotal', ventas.length);
-        s('ventasUFVendidas', vendidas);
-        s('ventasUFDisponibles', ventas.length - vendidas);
+        var cnt = _ventasConteos();
+        s('ventasUFTotal', cnt.total);
+        s('ventasUFVendidas', cnt.vendidas);
+        s('ventasUFDisponibles', cnt.disponibles);
         s('ventasTotalCobrado', fmtUSD(totalCobUSD) + (totalCobARS > 0 ? ' + ' + fmt(totalCobARS) : ''));
         requestAnimationFrame(function() { _sc.scrollTop = _sy; });
     }
@@ -39519,17 +39553,13 @@
         return { ingGeneral: ingGeneral, ventas: ventas, alquileres: alquileres, servicios: servicios,
                  datos: datos, facturas: facturas, documentos: documentos, cuentasBancarias: cuentasBancarias };
     }
-    // Arma la lista de movimientos de caja (cobros, pagos y movimientos manuales, ya con la moneda y el
-    // importe con que ENTRÓ o SALIÓ la plata) a partir de las colecciones que se le pasan; sin argumentos
-    // usa las del proyecto activo. Es la ÚNICA lógica de recolección: la pantalla de Caja General le agrega
-    // filtros y saldos corridos, y la Tesorería la corre sobre las colecciones de OTROS proyectos.
-    // ⚠️ Las variables de abajo se llaman igual que las globales A PROPÓSITO (las tapan): el cuerpo es el
-    // mismo de siempre, sólo que lee lo que se le pasó y no el proyecto activo.
-    function _cgRecolectarMovs(cols) {
+    // Movimientos de la Caja General que salen de ingGeneral y de los cobros de ventas, alquileres y servicios (secciones 1 a 4 del libro).
+    // Es la ÚNICA fuente de estos movimientos: `_cgRecolectarMovs` (y con él la Caja General) los usa y el «Cobrado este mes» del Inicio (`_hKPIs`)
+    // los suma, así los dos números salen de lo mismo. Ojo: devuelve también las SALIDAS de ingGeneral (esIngreso:false); quien necesite sólo
+    // ingresos filtra por `esIngreso`. Sin argumentos usa las colecciones del proyecto activo.
+    function _cgMovsDeIngresos(cols) {
         cols = cols || _colsProyectoActivo();
-        var ingGeneral = cols.ingGeneral || [], ventas = cols.ventas || [], alquileres = cols.alquileres || [],
-            servicios = cols.servicios || [], datos = cols.datos || [], facturas = cols.facturas || [], documentos = cols.documentos || [];
-        // ── Recolectar TODOS los movimientos ──────────────────
+        var ingGeneral = cols.ingGeneral || [], ventas = cols.ventas || [], alquileres = cols.alquileres || [], servicios = cols.servicios || [];
         var movs = [];
 
         // 1. Ingresos/Egresos de Caja
@@ -39542,14 +39572,14 @@
             var srcTipo = ig.origenEmitidoId ? 'emitido' : (ig.esBancario ? 'movbanco' : 'movcaja');
             var srcRef  = ig.origenEmitidoId ? ig.origenEmitidoId : igIdx;
             var esBanco = ig.esBancario || ig.tipo==='mov_banco_entrada' || ig.tipo==='mov_banco_salida';
-            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',medio:(esBanco?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1,srcTipo:srcTipo,srcRef:srcRef});
+            movs.push({fecha:ig.fecha,moneda:ig.moneda||'ARS',tipo:esEgr?'Egreso de Caja':'Ingreso General',desc:_cajaDescMask(ig,ig.origen||ig.referencia||'—'),origen:tL[ig.tipo]||ig.tipo||'—',medio:(esBanco?'Banco':'Efectivo'),monto:ig.monto||0,esIngreso:!esEgr,igIdx:esMov?igIdx:-1,srcTipo:srcTipo,srcRef:srcRef,igTipo:ig.tipo||''});
         });
 
         // 2. Cobros de Ventas UF
         ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
                 if (c.formaPago === 'canje') return; // canje de m²: no mueve caja
-                var mon = c.comp === 'usd' ? 'USD' : 'ARS';
+                var mon = _ventaCobroMoneda(v, c);
                 movs.push({
                     fecha: c.fecha, moneda: mon,
                     tipo: 'Cobro Venta UF', desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''),
@@ -39586,6 +39616,36 @@
                 });
             });
         });
+        return movs;
+    }
+
+    // ¿Qué clase de COBRO es este movimiento de la Caja General? Devuelve el rótulo de la fuente o '' si no es un cobro.
+    // Cobro = ventas de UF, alquileres, honorarios, recibos/comprobantes emitidos que entraron a caja o banco, e ingresos generales de tipo «Otro».
+    // NO son cobros —aunque sean ingresos de la caja—: aportes de socios, préstamos, subsidios, devoluciones y los movimientos manuales o importados
+    // del extracto (`mov_ingreso_caja`/`mov_banco_entrada`, que incluyen pases entre cuentas, intereses, la compra/venta de dólares y el mismo cobro
+    // ya cargado que se contaría dos veces). Para que cuente, hay que registrarlo como cobro o como ingreso general «Otro».
+    function _cgFuenteCobro(m) {
+        if (!m || !m.esIngreso) return '';
+        if (m.srcTipo === 'venta')    return 'Ventas UF';
+        if (m.srcTipo === 'alquiler') return 'Alquileres';
+        if (m.srcTipo === 'servicio') return 'Honorarios';
+        if (m.srcTipo === 'emitido')  return 'Recibos emitidos';
+        if (m.igTipo === 'otro')      return 'Otros ingresos';
+        return '';
+    }
+
+    // Arma la lista de movimientos de caja (cobros, pagos y movimientos manuales, ya con la moneda y el
+    // importe con que ENTRÓ o SALIÓ la plata) a partir de las colecciones que se le pasan; sin argumentos
+    // usa las del proyecto activo. Es la ÚNICA lógica de recolección: la pantalla de Caja General le agrega
+    // filtros y saldos corridos, y la Tesorería la corre sobre las colecciones de OTROS proyectos.
+    // ⚠️ Las variables de abajo se llaman igual que las globales A PROPÓSITO (las tapan): el cuerpo es el
+    // mismo de siempre, sólo que lee lo que se le pasó y no el proyecto activo.
+    function _cgRecolectarMovs(cols) {
+        cols = cols || _colsProyectoActivo();
+        var ingGeneral = cols.ingGeneral || [], ventas = cols.ventas || [], alquileres = cols.alquileres || [],
+            servicios = cols.servicios || [], datos = cols.datos || [], facturas = cols.facturas || [], documentos = cols.documentos || [];
+        // ── Recolectar TODOS los movimientos ──────────────────
+        var movs = _cgMovsDeIngresos(cols);   // secciones 1 a 4: ingGeneral + cobros de ventas, alquileres y servicios
 
         // 5. Pagos de Presupuestos (A=Banco, B=Efectivo)
         datos.forEach(function(d, dIdx) {
@@ -39962,7 +40022,7 @@
         ventas.forEach(function(v, vIdx) {
             (v.cobrosHistorial||[]).forEach(function(c) {
                 if (c.formaPago === 'canje') return; // canje de m²: no es ingreso de dinero
-                var mon = c.comp === 'usd' ? 'USD' : 'ARS';
+                var mon = _ventaCobroMoneda(v, c);
                 movs.push({ fecha: c.fecha, moneda: mon, tipo: 'Venta UF',
                     desc: (v.uf||'UF') + (v.tipo?' — '+v.tipo:''), cliente: v.comprador || '—', monto: c.monto || 0,
                     srcTipo: 'venta', srcRef: vIdx });
@@ -45009,7 +45069,7 @@
             if (esEgr) egr += ig.monto||0; else ing += ig.monto||0;
         });
         col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
-            if (c.formaPago==='canje') return; if (c.comp==='usd') return; if (c.tipoAB==='A') return;
+            if (c.formaPago==='canje') return; if (_ventaCobroMoneda(v, c) === 'USD') return; if (c.tipoAB==='A') return;
             ing += c.monto||0;
         });});
         col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; if (_alqCobroMoneda(a,c)!=='ARS') return; ing += _alqCobroImporte(a,c); });});
@@ -45037,7 +45097,7 @@
             if (esEgr) egr += ig.monto||0; else ing += ig.monto||0;
         });
         col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
-            if (c.formaPago==='canje') return; if (c.comp!=='usd') return; if (c.tipoAB==='A') return;
+            if (c.formaPago==='canje') return; if (_ventaCobroMoneda(v, c) !== 'USD') return; if (c.tipoAB==='A') return;
             ing += c.monto||0;
         });});
         col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A') return; if (_alqCobroMoneda(a,c)!=='USD') return; ing += _alqCobroImporte(a,c); });});
@@ -45462,14 +45522,38 @@
         var pP = par(pagarArs, pagarUsd, nPend ? (nPend + ' factura' + (nPend!==1?'s':'') + ' pend.') : 'Sin pendientes');
         if (pP.sub.indexOf('USD') > -1 && nPend) pP.sub += ' · ' + nPend + ' pend.';
         setKpi('kpiPagarV','kpiPagarSub', pP);
-        // 4) Cobrado este mes (cobrosHistorial de ventas)
-        var mesISO = ''; try { mesISO = new Date().toISOString().slice(0,7); } catch(e){}
-        var mesArs=0, mesUsd=0;
-        _vt.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){
-            if ((c.fecha||'').slice(0,7) !== mesISO) return;
-            if (c.comp==='usd') mesUsd += c.monto||0; else mesArs += c.monto||0;
-        }); });
-        setKpi('kpiMesV','kpiMesSub', par(mesArs, mesUsd, 'Cobros del mes'));
+        // 4) Cobrado este mes: todo lo que entró como COBRO en el mes según la Caja General (ventas de UF, alquileres, honorarios, recibos emitidos que
+        //    entraron a caja o banco e ingresos generales «Otro»), cada moneda por su lado. Sale de los mismos movimientos que el libro de la Caja General
+        //    (`_cgMovsDeIngresos`), no de una cuenta aparte. Qué es un cobro y qué no (aportes, préstamos, pases entre cuentas…) lo dice `_cgFuenteCobro`.
+        //    El mes es el de la fecha LOCAL: `toISOString()` es UTC y a partir de las 21 h del último día del mes (Argentina) ya cae en el mes siguiente.
+        var mesISO = ''; try { mesISO = _hoyLocalISO().slice(0,7); } catch(e){}
+        try {
+            var mesArs=0, mesUsd=0, porFuente={}, ordenFuentes=[];
+            _cgMovsDeIngresos().forEach(function(m){
+                var fuente = _cgFuenteCobro(m);
+                if (!fuente || (m.fecha||'').slice(0,7) !== mesISO) return;
+                var usd = (m.moneda === 'USD'), monto = m.monto||0;
+                if (usd) mesUsd += monto; else mesArs += monto;
+                if (!porFuente[fuente]) { porFuente[fuente] = { ars:0, usd:0 }; ordenFuentes.push(fuente); }
+                if (usd) porFuente[fuente].usd += monto; else porFuente[fuente].ars += monto;
+            });
+            setKpi('kpiMesV','kpiMesSub', par(mesArs, mesUsd, 'Cobros del mes'));
+            // El detalle va en el tooltip de la tarjeta: qué fuentes suman y qué NO es un cobro.
+            var cardMes = document.getElementById('kpiMesV'); cardMes = cardMes && cardMes.closest('.hp-kpi');
+            if (cardMes) {
+                var _fA = function(n){ return '$' + (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+                var _fU = function(n){ return 'USD ' + (Number(n)||0).toLocaleString(undefined,{maximumFractionDigits:2}); };
+                var lineas = ordenFuentes.map(function(f){
+                    var o = porFuente[f], partes = [];
+                    if (o.ars) partes.push(_fA(o.ars));
+                    if (o.usd) partes.push(_fU(o.usd));
+                    return f + ': ' + partes.join(' + ');
+                });
+                cardMes.title = 'Cobros del mes según la Caja General: ventas de UF, alquileres, honorarios, recibos emitidos e ingresos «Otro», cada moneda por separado. ' +
+                    'No incluye aportes de socios, préstamos, subsidios, devoluciones, movimientos manuales o importados del banco ni compra/venta de dólares.' +
+                    (lineas.length ? '\n' + lineas.join('\n') : '\nTodavía no hay cobros este mes.');
+            }
+        } catch (e) { console.warn('[Inicio] no se pudo calcular «Cobrado este mes»:', e); }
     }
     function _hDolares() {
         var map=[
