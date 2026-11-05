@@ -3615,7 +3615,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v570</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v571</div>
         </div>
     </nav>
 
@@ -16927,7 +16927,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v570';
+    var APP_VER = 'v571';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -29689,24 +29689,35 @@
         if (a.adjuntoId) return [{ id: a.adjuntoId, nombre: a.adjuntoNombre || 'Contrato', tipo: a.adjuntoTipo || '' }];
         return [];
     }
-    // Desglose de IVA sobre un monto de canon. La proporción gravada (ivaPctGravado) se aplica al
-    // canon vigente, así al actualizarse el canon las dos partes (gravada y no gravada) crecen igual.
+    // Desglose de IVA sobre un monto de canon. La proporción (ivaPctGravado) se aplica al canon vigente,
+    // así al actualizarse el canon las dos partes (con IVA y sin IVA) crecen igual.
+    // ⚠️ La «parte con IVA» es un importe que YA INCLUYE el IVA: el canon es el total a facturar y el IVA se
+    // DESAGREGA de esa parte (dividiendo por 1,21 con la alícuota del 21%). Antes se la tomaba como neto y se
+    // le SUMABA el IVA encima: el IVA se cobraba sobre un importe que ya lo traía, y el total daba más que el canon.
+    function _alqIvaDeBruto(bruto, alic) {
+        var b = Math.round((bruto || 0) * 100) / 100;
+        var neto = Math.round(b / (1 + (alic || 0) / 100) * 100) / 100;
+        return { neto: neto, iva: Math.round((b - neto) * 100) / 100 };   // el IVA sale por resta: neto + IVA cierra siempre con el bruto
+    }
     function _alqCalcIVA(a, monto) {
         var base = monto || 0;
-        if (!a || !a.ivaActivo) return { activo:false, gravado:base, iva:0, noGravado:0, total:base, alicuota:0, pct:100 };
+        if (!a || !a.ivaActivo) return { activo:false, gravado:base, neto:base, iva:0, noGravado:0, total:base, alicuota:0, pct:100 };
         var pct  = Math.max(0, Math.min(100, a.ivaPctGravado != null ? a.ivaPctGravado : 100));
         var alic = (a.ivaAlicuota != null ? a.ivaAlicuota : 21);
-        // Devuelve los importes YA redondeados a centavos y cerrando entre sí: el no
-        // gravado sale por RESTA del canon y el IVA sale del gravado redondeado. Antes
-        // devolvía los valores exactos y cada pantalla redondeaba por su cuenta, así
-        // que la ficha del contrato y el modal de cobro mostraban centavos distintos
-        // para el mismo contrato — justamente lo que se reportó.
+        // Devuelve los importes YA redondeados a centavos y cerrando entre sí: el no gravado sale por RESTA del
+        // canon, el neto del bruto y el IVA por resta del neto. `gravado` = parte con IVA INCLUIDO (no neto).
         var gravado   = Math.round(base * pct) / 100;        // base * pct/100, a 2 decimales
         var baseR     = Math.round(base * 100) / 100;
         var noGravado = Math.round((baseR - gravado) * 100) / 100;
-        var iva       = Math.round(gravado * alic) / 100;    // gravado * alic/100, a 2 decimales
-        return { activo:true, gravado:gravado, iva:iva, noGravado:noGravado,
-                 total: Math.round((baseR + iva) * 100) / 100, alicuota:alic, pct:pct };
+        var d = _alqIvaDeBruto(gravado, alic);
+        return { activo:true, gravado:gravado, neto:d.neto, iva:d.iva, noGravado:noGravado,
+                 total: baseR, alicuota:alic, pct:pct };
+    }
+    // Lo que un cobro paga DEL CANON. Un recibo anterior con desglose (sin `ivaIncluido`) guardaba el IVA APARTE del canon
+    // (monto = neto + IVA, y sólo el neto pagaba canon); uno nuevo (`ivaIncluido`) tiene el IVA adentro del canon.
+    function _alqCobroCanon(c) {
+        if (!c) return 0;
+        return (c.monto || 0) - (c.ivaIncluido ? 0 : (c.iva || 0));
     }
 
     // ── Mover alquileres seleccionados del proyecto actual a otra empresa/proyecto ──
@@ -33488,8 +33499,8 @@
         var mon = document.getElementById('alqMoneda').value === 'USD' ? 'USD ' : '$ ';
         var brk = _alqCalcIVA({ ivaActivo:true, ivaPctGravado:pct, ivaAlicuota:alic }, canonAct);
         var f = function(n){ return mon + (n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
-        el.innerHTML = 'Sobre el canon actual (' + f(canonAct) + '): gravado ' + f(brk.gravado) + ' + IVA ' + f(brk.iva)
-            + ' + no gravado ' + f(brk.noGravado) + ' = <strong>total a facturar ' + f(brk.total) + '</strong>';
+        el.innerHTML = 'Sobre el canon actual (' + f(canonAct) + '): con IVA incluido ' + f(brk.gravado) + ' (neto ' + f(brk.neto) + ' + IVA ' + f(brk.iva) + ')'
+            + ' + sin IVA ' + f(brk.noGravado) + ' = <strong>total a facturar ' + f(brk.total) + '</strong>';
     }
 
     // ── Adjuntos del alquiler (varios archivos) ──
@@ -33582,7 +33593,7 @@
     // «Pagada» sigue siendo ≥98% del esperado (tolerancia de centavos). El esperado ya viene prorrateado si el mes es proporcional.
     function _alqCobradoPeriodo(a, periodo) {
         return _r2((a.cobrosHistorial || []).filter(function(c) { return c && c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto); })
-            .reduce(function(s, c) { return s + (c.monto || 0) - (c.iva || 0); }, 0));
+            .reduce(function(s, c) { return s + _alqCobroCanon(c); }, 0));
     }
     function _alqSaldoPeriodo(a, periodo) {
         var esp = _alqCanonEsperado(a, periodo) || 0, cob = _alqCobradoPeriodo(a, periodo);
@@ -35478,13 +35489,11 @@
     // Reparte un monto en gravado / IVA / no gravado según la proporción del contrato (se usa al abrir el cobro y al cambiar el período).
     function _cobroAlqCalcDesglose(a, canon) {
         var brk = _alqCalcIVA(a, canon);
-        // Redondear los tres por separado deja al gravado + el no gravado sin dar
-        // el canon (hasta un centavo de diferencia). El no gravado se calcula por
-        // RESTA del canon redondeado, así la suma cierra siempre; y el IVA sale
-        // del gravado YA redondeado, que es el número que se ve en pantalla.
+        // La parte con IVA es un importe que YA trae el IVA adentro (no se le suma otro): el IVA se desagrega
+        // de ahí, y la parte sin IVA sale por RESTA del canon redondeado, así la suma cierra siempre con el canon.
         var _gr = _r2(brk.gravado);
         document.getElementById('cobroAlqGravado').value   = _gr;
-        document.getElementById('cobroAlqIvaMonto').value  = _r2(_gr * (brk.alicuota || 0) / 100);
+        document.getElementById('cobroAlqIvaMonto').value  = _alqIvaDeBruto(_gr, brk.alicuota).iva;
         document.getElementById('cobroAlqNoGravado').value = _r2(_r2(canon) - _gr);
         _cobroAlqIvaAMano = false;
     }
@@ -35500,7 +35509,7 @@
     function _cobroAlqGravadoChange() {
         if (!_cobroAlqIvaAMano) {
             var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
-            document.getElementById('cobroAlqIvaMonto').value = _r2(g * _cobroAlqAlicuota() / 100);
+            document.getElementById('cobroAlqIvaMonto').value = _alqIvaDeBruto(g, _cobroAlqAlicuota()).iva;
         }
         _cobroAlqPreview();
     }
@@ -35558,7 +35567,7 @@
     // selector «¿Dónde entra la plata?» de arriba, que es el único que hay.
     window._cobroAlqCorregirIva = function() {
         var g = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
-        document.getElementById('cobroAlqIvaMonto').value = _r2(g * _cobroAlqAlicuota() / 100);
+        document.getElementById('cobroAlqIvaMonto').value = _alqIvaDeBruto(g, _cobroAlqAlicuota()).iva;
         _cobroAlqIvaAMano = false;
         _cobroAlqPreview();
     };
@@ -35574,7 +35583,7 @@
         var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
         var iva  = parseFloat(document.getElementById('cobroAlqIvaMonto').value) || 0;
         var nog  = parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0;
-        var totalA = grav + iva;
+        var totalA = grav;   // la parte con IVA ya incluye el IVA: es lo que se cobra por esa parte
         var f = function(n){ return mon + (n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var el = document.getElementById('cobroAlqDesglosePreview');
         var _dst = function(m){ return m === 'A' ? 'banco' : 'efectivo'; };
@@ -35582,17 +35591,18 @@
         // El IVA que corresponde al neto que está escrito. Si no coincide se avisa:
         // un IVA que no es el de su neto se arrastra al recibo y al libro de ventas.
         var alic = _cobroAlqAlicuota();
-        var ivaOk = _r2(grav * alic / 100);
+        var ivaOk = _alqIvaDeBruto(grav, alic).iva;
         var _aviso = (grav > 0 && Math.abs(iva - ivaOk) > 0.011)
-            ? '<div style="margin-top:6px;color:var(--danger);font-weight:600;">⚠️ El IVA no da: ' + alic + '% de ' +
-              f(grav) + ' es ' + f(ivaOk) + ' (hay ' + f(Math.abs(iva - ivaOk)) + ' de diferencia). ' +
+            ? '<div style="margin-top:6px;color:var(--danger);font-weight:600;">⚠️ El IVA no da: el IVA incluido en ' + f(grav) + ' al ' + alic + '% es ' +
+              f(ivaOk) + ' (hay ' + f(Math.abs(iva - ivaOk)) + ' de diferencia). ' +
               '<button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;" onclick="_cobroAlqCorregirIva()">Corregir</button></div>'
-            : '';
-        if (el) el.innerHTML = '<strong>Recibo ' + mA + '</strong> (gravada): ' + f(grav) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
+            : (iva > grav + 0.011 ? '<div style="margin-top:6px;color:var(--danger);font-weight:600;">⚠️ El IVA no puede ser mayor que la parte con IVA.</div>' : '');
+        var netoA = _r2(grav - iva);
+        if (el) el.innerHTML = '<strong>Recibo ' + mA + '</strong> (con IVA incluido): neto ' + f(netoA) + ' + IVA ' + f(iva) + ' = ' + f(totalA)
             + ' → <strong>' + _dst(mA) + '</strong>'
-            + ' &nbsp;·&nbsp; <strong>Recibo ' + mB + '</strong> (no gravada): ' + f(nog)
+            + ' &nbsp;·&nbsp; <strong>Recibo ' + mB + '</strong> (sin IVA): ' + f(nog)
             + ' → <strong>' + _dst(mB) + '</strong>'
-            + ' &nbsp;·&nbsp; Total: <strong>' + f(totalA + nog) + '</strong>' + _aviso;
+            + ' &nbsp;·&nbsp; Total a cobrar: <strong>' + f(totalA + nog) + '</strong>' + _aviso;
         var montoInput = document.getElementById('cobroAlqMonto');
         if (montoInput.disabled) montoInput.value = _r2(totalA + nog);
         _cobroAlqAdjuntosToggle();   // cambiar el destino de una parte prende/apaga los papeles
@@ -35708,8 +35718,9 @@
             var grav = parseFloat(document.getElementById('cobroAlqGravado').value) || 0;
             var iva  = parseFloat(document.getElementById('cobroAlqIvaMonto').value) || 0;
             var nog  = parseFloat(document.getElementById('cobroAlqNoGravado').value) || 0;
-            var totalA = grav + iva;
+            var totalA = grav;   // la parte con IVA ya trae el IVA adentro: no se le suma otra vez
             if (totalA <= 0 && nog <= 0) { alert('Cargá al menos un monto en la Parte A o en la Parte B.'); return; }
+            if (iva > grav + 0.011) { alert('El IVA no puede ser mayor que la parte con IVA incluido.'); return; }
             var recibos = [];
             // Cada parte puede entrar por un lado distinto: lo habitual es la gravada
             // por banco (va con factura) y la no gravada en mano. `tipoAB` es el que
@@ -35718,7 +35729,7 @@
             if (totalA > 0) {
                 var nroA = await obtenerProximoComprobante(medioA);
                 var regA = _conMoneda({ fecha: fechaC, periodo: periodo, monto: totalA, concepto: concepto, ref: refC, nroRecibo: nroA, tipoAB: medioA,
-                             parteIva: 'gravada', montoGravado: grav, iva: iva, facturaNro: facturaNro });
+                             parteIva: 'gravada', montoGravado: _r2(grav - iva), iva: iva, ivaIncluido: true, facturaNro: facturaNro });
                 if (facturaMeta) { regA.facturaId = facturaMeta.id; regA.facturaNombre = facturaMeta.nombre; regA.facturaTipo = facturaMeta.tipo; }
                 _ponerTransf(regA, medioA);
                 a.cobrosHistorial.push(regA); recibos.push(regA);
@@ -35971,7 +35982,8 @@
             var periodo = cursor.getFullYear() + '-' + String(cursor.getMonth()+1).padStart(2,'0');
             var cobrosDelPeriodo = (a.cobrosHistorial||[]).filter(function(c){ return c.periodo === periodo && (c.concepto==='alquiler'||!c.concepto); });
             var cobrado = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.monto||0); }, 0);
-            var cobradoIva = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.iva||0); }, 0);   // el IVA de un cobro con desglose no paga canon
+            var cobradoIva = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.ivaIncluido ? 0 : (c.iva||0)); }, 0);   // el IVA de un recibo ANTERIOR con desglose iba aparte y no pagaba canon
+            var cobradoIvaIncl = cobrosDelPeriodo.reduce(function(s,c){ return s+(c.ivaIncluido ? (c.iva||0) : 0); }, 0);   // el de un recibo nuevo ya está dentro del canon
             // Canon esperado de ESTE período puntual (según el historial de ajustes, no el canon
             // "actual" en vivo) — así un ajuste que se aplique a futuro nunca recalcula ni cambia
             // el estado de un mes que ya se cobró.
@@ -36023,7 +36035,8 @@
                 + '<td style="padding:7px 10px;text-align:right;' + (esBonif?'color:var(--text-3);text-decoration:line-through;':'') + '">' + monSym + (canonPeriodo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
                     + (_frP ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);text-decoration:none;" title="Período proporcional">📐 ' + _frP.dias + ' de ' + _frP.diasMes + ' días</div>' : '') + '</td>'
                 + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (esBonif ? '—' : (cobrado>0 ? monSym+(cobrado - cobradoIva).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
-                    + (cobradoIva > 0 ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="El IVA no paga canon: se cobra aparte">+ IVA ' + monSym + cobradoIva.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>' : '') : '—')) + '</td>'
+                    + (cobradoIva > 0 ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="En este recibo el IVA se cobró aparte del canon">+ IVA ' + monSym + cobradoIva.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>' : '')
+                    + (cobradoIvaIncl > 0 ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="El IVA ya está dentro del canon cobrado">(incl. IVA ' + monSym + cobradoIvaIncl.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ')</div>' : '') : '—')) + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;">' + estadoHtml + '</td>'
                 + '<td style="padding:7px 10px;text-align:center;white-space:nowrap;">' + accion + '</td>'
                 + '</tr>');
@@ -36284,7 +36297,7 @@
         if ((concepto === 'alquiler' || !concepto) && /^\d{4}-\d{2}$/.test(periodo || '')) {
             var _espR = _alqCanonEsperado(a, periodo) || 0, _fR = String((reg && reg.fecha) || fecha || '');
             var _acumR = _r2((a.cobrosHistorial || []).filter(function(c) { return c && c.periodo === periodo && (c.concepto === 'alquiler' || !c.concepto) && String(c.fecha || '') <= _fR; })
-                .reduce(function(s, c) { return s + (c.monto || 0) - (c.iva || 0); }, 0));
+                .reduce(function(s, c) { return s + _alqCobroCanon(c); }, 0));
             if (_espR > 0 && _acumR > 0 && _acumR < _espR * 0.98)
                 _parcialRec = '<br><strong>Pago parcial</strong> a cuenta del período: cobrado a la fecha ' + fmtN(_acumR, a.moneda) + ' de ' + fmtN(_espR, a.moneda) + ' · <strong>saldo pendiente ' + fmtN(_r2(_espR - _acumR), a.moneda) + '</strong>';
         }
@@ -37037,9 +37050,10 @@
         });
         var _ivaBrk = _alqCalcIVA(a, a.canonActual || a.canon);
         var _filasIva = _ivaBrk.activo
-            ? '<tr><td>Canon neto gravado</td><td></td><td class="tr">'+fmtN(_ivaBrk.gravado,a.moneda)+'</td></tr>'
-              + '<tr><td>IVA ('+(_ivaBrk.alicuota)+'%)</td><td></td><td class="tr">'+fmtN(_ivaBrk.iva,a.moneda)+'</td></tr>'
-              + (_ivaBrk.noGravado ? '<tr><td>Canon no gravado</td><td></td><td class="tr">'+fmtN(_ivaBrk.noGravado,a.moneda)+'</td></tr>' : '')
+            ? '<tr><td>Canon con IVA incluido</td><td></td><td class="tr">'+fmtN(_ivaBrk.gravado,a.moneda)+'</td></tr>'
+              + '<tr><td>&nbsp;&nbsp;Neto gravado</td><td></td><td class="tr">'+fmtN(_ivaBrk.neto,a.moneda)+'</td></tr>'
+              + '<tr><td>&nbsp;&nbsp;IVA ('+(_ivaBrk.alicuota)+'%)</td><td></td><td class="tr">'+fmtN(_ivaBrk.iva,a.moneda)+'</td></tr>'
+              + (_ivaBrk.noGravado ? '<tr><td>Canon sin IVA</td><td></td><td class="tr">'+fmtN(_ivaBrk.noGravado,a.moneda)+'</td></tr>' : '')
               + '<tr><td><strong>Total a facturar</strong></td><td></td><td class="tr"><strong>'+fmtN(_ivaBrk.total,a.moneda)+'</strong></td></tr>'
             : '';
         var _filasGarante = a.garante
@@ -47251,7 +47265,7 @@
         <div id="alqIvaPanel" style="display:none;">
           <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
             <div class="form-group" style="margin:0;">
-              <label>Parte con IVA ($)</label>
+              <label>Parte con IVA incluido ($)</label>
               <input type="number" id="alqIvaConIva" step="0.01" min="0" placeholder="0" oninput="_alqIvaSync('con')">
             </div>
             <div class="form-group" style="margin:0;">
@@ -47270,7 +47284,7 @@
             </div>
             <div class="form-hint" id="alqIvaPreview" style="align-self:center;"></div>
           </div>
-          <div class="form-hint">Los montos ($) son sobre el <strong>monto inicial</strong>. Se guarda la proporción gravada y se aplica también al canon actualizado, así se ajustan las dos partes por igual.</div>
+          <div class="form-hint">Los montos ($) son sobre el <strong>monto inicial</strong>, que es el <strong>total a facturar</strong>: la «parte con IVA» <strong>ya incluye el IVA</strong> (se desagrega dividiendo por 1,21 con el 21%), no se le suma otra vez. Se guarda la proporción y se aplica también al canon actualizado, así se ajustan las dos partes por igual.</div>
         </div>
       </div>
 
@@ -47397,13 +47411,14 @@
       </div>
       <div id="cobroAlqIvaWrap" style="display:none;">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:2px 0 8px;">
-          <input type="checkbox" id="cobroAlqDesglose" onchange="_cobroAlqToggleDesglose()"> 🧾 Desglosar IVA — genera dos recibos (Parte A con IVA + Parte B sin IVA)
+          <input type="checkbox" id="cobroAlqDesglose" onchange="_cobroAlqToggleDesglose()"> 🧾 Desglosar IVA — genera dos recibos (Parte A con IVA incluido + Parte B sin IVA)
         </label>
         <div id="cobroAlqDesglosePanel" style="display:none;background:var(--surface);border-radius:8px;padding:10px;margin-bottom:10px;">
-          <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Parte A — gravada (con IVA)</div>
+          <div class="form-hint" style="margin:0 0 8px;">El <strong>total a cobrar no se recarga con IVA</strong>: elegí <strong>qué parte lleva IVA</strong> y el IVA se desagrega de ese importe (se divide por 1,21 con el 21%). El resto es la parte sin IVA.</div>
+          <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Parte A — con IVA incluido</div>
           <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
-            <div class="form-group" style="margin:0;"><label>Neto gravado</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqGravadoChange()"></div>
-            <div class="form-group" style="margin:0;"><label>IVA</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqIvaAMano=true;_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>Parte con IVA incluido</label><input type="number" id="cobroAlqGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqGravadoChange()"></div>
+            <div class="form-group" style="margin:0;"><label>IVA incluido</label><input type="number" id="cobroAlqIvaMonto" step="0.01" min="0" placeholder="0" oninput="_cobroAlqIvaAMano=true;_cobroAlqPreview()"></div>
             <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
               <select id="cobroAlqMedioA" onchange="_cobroAlqPreview()">
                 <option value="A">A — Banco</option>
@@ -47411,9 +47426,9 @@
               </select>
             </div>
           </div>
-          <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — no gravada (sin IVA)</div>
+          <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Parte B — sin IVA</div>
           <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
-            <div class="form-group" style="margin:0;"><label>Monto no gravado</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
+            <div class="form-group" style="margin:0;"><label>Parte sin IVA</label><input type="number" id="cobroAlqNoGravado" step="0.01" min="0" placeholder="0" oninput="_cobroAlqPreview()"></div>
             <div class="form-group" style="margin:0;"><label>¿Dónde entra?</label>
               <select id="cobroAlqMedioB" onchange="_cobroAlqPreview()">
                 <option value="A">A — Banco</option>

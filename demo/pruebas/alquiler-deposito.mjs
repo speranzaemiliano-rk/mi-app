@@ -186,7 +186,8 @@ const montoDic = async (conDesvio) => { await p.evaluate(() => cerrarModalCobroA
   if (conDesvio) await p.evaluate(() => { var s = document.getElementById('cobroAlqConcepto'); s.value = 'deposito'; _cobroAlqConceptoChange(); document.getElementById('cobroAlqMonto').value = 123456; document.getElementById('cobroAlqMonto').dispatchEvent(new Event('input')); s.value = 'alquiler'; _cobroAlqConceptoChange(); });
   return await p.evaluate(d => { document.getElementById('cobroAlqPeriodo').value = d; _cobroAlqPeriodoChange(); return document.getElementById('cobroAlqMonto').value; }, dic); };
 const dControl = await montoDic(false), dDesvio = await montoDic(true);
-ok('modal: el monto tipeado en el depósito no congela el recálculo del alquiler (diciembre, con ajuste de canon)', dControl === dDesvio && Number(dControl) > 2000000, JSON.stringify({ dControl, dDesvio }));
+// con el IVA INCLUIDO en el canon (v571) el total a cobrar de diciembre es el canon del ajuste (2.000.000) y no ese canon + IVA encima
+ok('modal: el monto tipeado en el depósito no congela el recálculo del alquiler (diciembre, con ajuste de canon)', dControl === dDesvio && Number(dControl) === 2000000, JSON.stringify({ dControl, dDesvio }));
 // (modal) Depósito → «Otro»: no arrastra el monto del depósito (otra moneda)
 await p.evaluate(() => { cerrarModalCobroAlquiler(); });
 let iE = await nuevo({ unidad: 'DEP-OTRO', deposito: 1000, depMoneda: 'USD', ivaActivo: true, ivaAlicuota: 21, ivaPctGravado: 50 });
