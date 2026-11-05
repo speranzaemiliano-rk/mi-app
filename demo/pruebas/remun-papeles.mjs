@@ -136,17 +136,151 @@ ok('S5: al decir que sí cambia y el borrador no viaja al otro empleado', await 
 await p.evaluate(() => { window.__conf = true; cerrarModalLiquidar(); });
 ok('S5: sin borrador cerrar el modal no pregunta', !(await p.isVisible('#modalLiquidar')));
 
-// ───── S6: un archivo demasiado pesado ─────
+// ───── S6: sólo PDF y fotos ─────
 await p.evaluate(() => liquidarSueldoEmpleado(0));
 await p.waitForTimeout(300);
 await setMes('2098-06');
 await p.evaluate(() => { window.__alerts = []; });
-await subir('A', 'comprobante', { name: 'enorme.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(9 * 1024 * 1024, 1) });
-ok('S6: un archivo que pasa el límite se rechaza con aviso y no queda en el borrador', (await p.evaluate(() => window.__alerts)).some(m => /supera los/.test(m)) && await p.evaluate(() => _liqPapelesBorrador.length === 0));
+const SVG = { name: 'factura.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="document.title=\'XSS\'"></svg>') };
+const HTML = { name: 'factura.html', mimeType: 'text/html', buffer: Buffer.from('<script>document.title="XSS"</script>') };
+const BIN = { name: 'enorme.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(9 * 1024 * 1024, 1) };
+for (const f of [SVG, HTML, BIN]) await subir('A', 'comprobante', f);
+const al6 = await p.evaluate(() => window.__alerts);
+ok('S6: un SVG, un HTML y un binario se rechazan con aviso y no entran al borrador', al6.filter(m => /no se puede adjuntar/.test(m)).length === 3 && await p.evaluate(() => _liqPapelesBorrador.length === 0), JSON.stringify(al6));
+ok('S6: el selector sólo ofrece PDF, JPG, PNG y WEBP (no «image/*»)', await p.evaluate(() => document.getElementById('liqPapelFile').accept === 'application/pdf,image/jpeg,image/png,image/webp'));
+
+// ───── S7: un adjunto viejo SVG/HTML nunca se abre en línea (XSS por blob con el origen de la app) ─────
+await p.evaluate(() => {
+  window.__blobs = []; window.__opens = 0; window.__descargas = [];
+  const crear = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = (b) => { window.__blobs.push(b.type); return crear(b); };
+  window.open = () => { window.__opens++; return null; };
+  const clic = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { window.__descargas.push({ dl: this.download || '', target: this.target || '' }); };
+});
+const abrir = (a) => p.evaluate(x => { window.__blobs = []; window.__opens = 0; window.__descargas = []; _remAbrirAdjunto(x); return { blobs: window.__blobs.slice(), opens: window.__opens, desc: window.__descargas.slice() }; }, a);
+const b64 = (t) => 'data:text/plain;base64,' + Buffer.from(t).toString('base64');
+let r7 = await abrir({ nombre: 'f.svg', tipo: 'image/svg+xml', contenido: b64('<svg onload="x"/>') });
+ok('S7: un SVG se DESCARGA como octet-stream, no se abre en línea', r7.opens === 0 && r7.blobs[0] === 'application/octet-stream' && r7.desc.length === 1 && r7.desc[0].dl === 'f.svg', JSON.stringify(r7));
+r7 = await abrir({ nombre: 'f.html', tipo: 'text/html', contenido: b64('<script>1</script>') });
+ok('S7: un HTML se descarga igual', r7.opens === 0 && r7.blobs[0] === 'application/octet-stream' && r7.desc.length === 1, JSON.stringify(r7));
+r7 = await abrir({ nombre: 'trampa.pdf', tipo: 'text/html', contenido: b64('<script>1</script>') });
+ok('S7: «.pdf» con tipo text/html tampoco se abre en línea (manda el tipo, no el nombre)', r7.opens === 0 && r7.blobs[0] === 'application/octet-stream', JSON.stringify(r7));
+r7 = await abrir({ nombre: 'f.pdf', tipo: 'application/pdf', contenido: b64('%PDF') });
+ok('S7: un PDF se abre en una pestaña con su tipo', r7.opens === 1 && r7.blobs[0] === 'application/pdf' && r7.desc.length === 0, JSON.stringify(r7));
+r7 = await abrir({ nombre: 'f.png', tipo: 'image/png', contenido: b64('x') });
+ok('S7: una imagen de trama se abre en línea', r7.opens === 1 && r7.blobs[0] === 'image/png', JSON.stringify(r7));
+r7 = await abrir({ nombre: 'viejo.pdf', tipo: '', contenido: b64('%PDF') });
+ok('S7: un dato viejo sin tipo y con extensión .pdf se sigue viendo', r7.opens === 1 && r7.blobs[0] === 'application/pdf', JSON.stringify(r7));
+// los otros dos visores de Remuneraciones (consolidaciones y recibo del pago) usan el mismo abridor
+r7 = await p.evaluate(() => { window.__blobs = []; window.__opens = 0; window.__descargas = [];
+  remunConsolidados.push({ id: 'C-X', adjuntos: [{ nombre: 'a.svg', tipo: 'image/svg+xml', contenido: 'PHN2Zy8+' }] });
+  remunPagos.push({ id: 'P-X', adjunto: { nombre: 'a.html', tipo: 'text/html', contenido: 'PHA+' } });
+  verAdjuntoConsolidado('C-X', 0); const a = { opens: window.__opens, blobs: window.__blobs.slice() };
+  window.__blobs = []; window.__opens = 0; descargarReciboRemun('P-X');
+  remunConsolidados = remunConsolidados.filter(x => x.id !== 'C-X'); remunPagos = remunPagos.filter(x => x.id !== 'P-X');
+  return { cons: a, pago: { opens: window.__opens, blobs: window.__blobs.slice() } }; });
+ok('S7: el adjunto de una consolidación y el recibo de un pago (SVG/HTML) también se descargan', r7.cons.opens === 0 && r7.cons.blobs[0] === 'application/octet-stream' && r7.pago.opens === 0 && r7.pago.blobs[0] === 'application/octet-stream', JSON.stringify(r7));
+
+// ───── S8: el tope de peso se aplica también al sumar el borrador a un recibo existente ─────
+const GRANDE = 'A'.repeat(5000000);
+await setMes('2098-07');
+await p.evaluate(g => { const e = remuneraciones[0]; window.__alerts = []; window.__confirms = [];
+  _liqPapelesBorrador = [{ id: 'PAP-G1', parte: 'A', clase: 'comprobante', nombre: 'g1.pdf', tipo: 'application/pdf', contenido: g, nro: '', subidoEn: 1 }]; }, GRANDE);
+await p.evaluate(() => { window.__conf = true; guardarReciboMes(); }); await p.waitForTimeout(700);
+let rg = await recDe('2098-07');
+ok('S8: el recibo nuevo con un archivo de 5 M de caracteres se guarda', rg && rg.papeles.length === 1, JSON.stringify(rg && rg.papeles.length));
+await p.evaluate(g => { _liqPapelesBorrador = [{ id: 'PAP-G2', parte: 'B', clase: 'comprobante', nombre: 'g2.pdf', tipo: 'application/pdf', contenido: g, nro: '', subidoEn: 2 }]; window.__alerts = []; window.__conf = true; guardarReciboMes(); }, GRANDE);
+await p.waitForTimeout(700);
+rg = await recDe('2098-07');
+ok('S8: sumar otro de 5 M a ese recibo (10 M en total) se corta con aviso del tope', (await p.evaluate(() => window.__alerts)).some(m => /tope/.test(m)) && rg.papeles.length === 1, JSON.stringify(await p.evaluate(() => window.__alerts)));
+ok('S8: el borrador se conserva (no se perdió nada)', await p.evaluate(() => _liqPapelesBorrador.length === 1 && _liqPapelesBorrador[0].id === 'PAP-G2'));
+await p.evaluate(() => { _liqPapelesBorrador = []; });
+
+// ───── S9: si la base rechaza la escritura, el «guardado» no se canta y el borrador se conserva ─────
+await p.evaluate(() => { window.__upd0 = REF_REMUN_RECIBOS.update; REF_REMUN_RECIBOS.update = () => Promise.reject(new Error('Write too large')); window.__alerts = []; window.__confs = [];
+  _liqPapelesBorrador = [{ id: 'PAP-R1', parte: 'A', clase: 'factura', nombre: 'r1.pdf', tipo: 'application/pdf', contenido: 'AAAA', nro: '', subidoEn: 3 }]; window.__conf = true; guardarReciboMes(); });
+await p.waitForTimeout(900);
+const rr = await recDe('2098-07');
+const al9 = await p.evaluate(() => window.__alerts);
+ok('S9: la base rechazó el guardado → no se dijo «✅ guardado» y se avisó que no se guardó', !al9.some(m => /^✅ Recibo/.test(m)) && al9.some(m => /NO se guardó|NO quedaron|no quedaron/.test(m)), JSON.stringify(al9));
+ok('S9: el borrador se conserva y el recibo en memoria no quedó con el archivo', await p.evaluate(() => _liqPapelesBorrador.length === 1) && rr.papeles.every(x => x.id !== 'PAP-R1'), JSON.stringify(rr));
+// y un archivo que entra DIRECTO a un recibo existente, con la base rechazando
+await p.evaluate(() => { _liqPapelesBorrador = []; window.__alerts = []; });
+await subir('A', 'comprobante', PNG);
+const al9b = await p.evaluate(() => window.__alerts);
+ok('S9: un archivo directo a un recibo existente que la base rechaza se revierte y avisa', al9b.some(m => /NO quedaron guardados/.test(m)) && (await recDe('2098-07')).papeles.length === 1, JSON.stringify(al9b));
+await p.evaluate(() => { REF_REMUN_RECIBOS.update = window.__upd0; });
+
+// ───── S10: «Imprimir y guardar» con el recibo ya guardado suma el borrador ─────
+await p.evaluate(() => { _imprimirReciboDe = () => {}; _liqPapelesBorrador = [{ id: 'PAP-I1', parte: 'B', clase: 'comprobante', nombre: 'i1.png', tipo: 'image/png', contenido: 'AAAA', nro: '', subidoEn: 4 }]; imprimirReciboActual(); });
+await p.waitForTimeout(800);
+rg = await recDe('2098-07');
+ok('S10: «Imprimir y guardar» con el recibo existente suma el archivo del borrador', rg.papeles.some(x => x.id === 'PAP-I1') && (await enNube(rg.id)).n === 2 && await p.evaluate(() => _liqPapelesBorrador.length === 0), JSON.stringify(rg));
+
+// ───── S11: mientras la base confirma, un archivo no se ve duplicado ─────
+await p.evaluate(() => { const rec = _liqReciboActual(); const dup = rec.papeles[0]; _liqPapelesBorrador = [JSON.parse(JSON.stringify(dup))]; _liqPapelesRender(); });
+const filas11 = await p.evaluate(() => document.querySelectorAll('#liqPapelesA .liq-papel, #liqPapelesB .liq-papel').length);
+const nRec = (await recDe('2098-07')).papeles.length;
+ok('S11: el archivo que está a la vez en el recibo y en el borrador se muestra UNA vez', filas11 === nRec, filas11 + ' vs ' + nRec);
+await p.evaluate(() => { _liqPapelesBorrador = []; _liqPapelesRender(); });
+
+// ───── S12: repintar no destruye el N° de factura que se está tipeando ─────
+await subir('A', 'factura', PDF);
+await p.click('#liqPapelesA input.liq-papel-nro');
+await p.keyboard.type('0001-0');
+const nodo = await p.evaluate(() => { window.__nodoNro = document.querySelector('#liqPapelesA input.liq-papel-nro'); return true; });
+await p.evaluate(() => { for (let i = 0; i < 5; i++) { _liqPapelesRender(); _liqPapelEstadoPintar('A'); } if (typeof _renderRecibosEmpleadoActivo === 'function') _renderRecibosEmpleadoActivo(); });
+await p.keyboard.type('0012');
+const e12 = await p.evaluate(() => { const i = document.querySelector('#liqPapelesA input.liq-papel-nro'); return { mismo: i === window.__nodoNro, foco: document.activeElement === i, valor: i.value }; });
+ok('S12: tras varios repintados el casillero sigue siendo el mismo nodo, con foco y con todo lo tipeado', e12.mismo && e12.foco && e12.valor === '0001-00012', JSON.stringify(e12));
+// si el repintado SÍ hace falta (entra otro archivo mientras se tipea) se conserva valor y foco
+await p.evaluate(() => { _liqPapelesBorrador = [{ id: 'PAP-S12', parte: 'A', clase: 'comprobante', nombre: 's12.png', tipo: 'image/png', contenido: 'AAAA', nro: '', subidoEn: 5 }]; _liqPapelesRender(); });
+const e12b = await p.evaluate(() => { const i = document.querySelector('#liqPapelesA input.liq-papel-nro'); return { foco: document.activeElement === i, valor: i.value }; });
+ok('S12: si hay que repintar de verdad, se conserva el valor tipeado y el foco', e12b.foco && e12b.valor === '0001-00012', JSON.stringify(e12b));
+await p.keyboard.press('Tab');
+await p.waitForTimeout(300);
+ok('S12: al salir del casillero el N° se guarda en el recibo', (await recDe('2098-07')).papeles.some(x => x.nro === '0001-00012'));
+await p.evaluate(() => { _liqPapelesBorrador = []; _liqPapelesRender(); });
+
+// ───── S13: avance de la compresión legible y varias subidas a la vez ─────
+await p.evaluate(() => { window.__lee0 = leerArchivoBase64; window.__esperas = {};
+  leerArchivoBase64 = (file, cb) => new Promise(res => { if (cb) cb(3, 40); window.__esperas[file.name] = () => res('data:' + file.type + ';base64,AAAA'); }); });
+await setMes('2098-08');
+const [fcA] = await Promise.all([p.waitForEvent('filechooser'), p.click('#liqPapelesA button[onclick*="\'factura\'"]')]); await fcA.setFiles({ name: 'lenta-A.pdf', mimeType: 'application/pdf', buffer: PDF.buffer });
+await p.waitForTimeout(200);
+const [fcB] = await Promise.all([p.waitForEvent('filechooser'), p.click('#liqPapelesB button[onclick*="\'comprobante\'"]')]); await fcB.setFiles({ name: 'lenta-B.png', mimeType: 'image/png', buffer: PNG.buffer });
+await p.waitForTimeout(200);
+let est = await p.evaluate(() => ({ a: document.querySelector('#liqPapelesA .liq-papel-estado').innerText, b: document.querySelector('#liqPapelesB .liq-papel-estado').innerText }));
+ok('S13: el avance dice «página 3 de 40», no un número suelto', /página 3 de 40/.test(est.a), JSON.stringify(est));
+ok('S13: dos subidas a la vez muestran cada una su estado, en su parte', /lenta-A\.pdf/.test(est.a) && /lenta-B\.png/.test(est.b), JSON.stringify(est));
+await p.evaluate(() => window.__esperas['lenta-B.png']()); await p.waitForTimeout(300);
+est = await p.evaluate(() => ({ a: document.querySelector('#liqPapelesA .liq-papel-estado').innerText, b: document.querySelector('#liqPapelesB .liq-papel-estado').innerText }));
+ok('S13: cuando termina la B, el estado de la A (que sigue procesando) no se apaga', /lenta-A\.pdf/.test(est.a) && est.b === '', JSON.stringify(est));
+// guardar con un archivo procesándose se frena
+await p.evaluate(() => { window.__alerts = []; guardarReciboMes(); liquidarYPagar(); });
+ok('S13: «Guardar recibo» y «Liquidar y pagar» esperan a que termine el archivo en proceso', (await p.evaluate(() => window.__alerts)).filter(m => /procesando un archivo/.test(m)).length === 2);
+// cerrar con un archivo procesándose avisa; si se cierra, el archivo no aparece después
+await p.evaluate(() => { window.__conf = false; window.__confirms = []; });
+const cerro1 = await p.evaluate(() => cerrarModalLiquidar());
+ok('S13: cerrar con un archivo procesándose pregunta y, si dice que no, devuelve false y no cierra', cerro1 === false && await p.isVisible('#modalLiquidar') && (await p.evaluate(() => window.__confirms)).some(m => /procesándose/.test(m)));
+await p.evaluate(() => { window.__conf = true; });
+const cerro2 = await p.evaluate(() => cerrarModalLiquidar());
+await p.evaluate(() => window.__esperas['lenta-A.pdf']()); await p.waitForTimeout(400);
+ok('S13: si cierra igual, el archivo que terminaba de procesarse NO queda en un borrador invisible', cerro2 === true && await p.evaluate(() => _liqPapelesBorrador.length === 0 && Object.keys(_liqPapelOps).length === 0));
+await p.evaluate(() => { leerArchivoBase64 = window.__lee0; });
+
+// ───── S14: «Cargar un adelanto / pago» respeta el «no» al descartar archivos ─────
+await p.evaluate(() => liquidarSueldoEmpleado(0)); await p.waitForTimeout(300);
+await setMes('2098-09');
+await p.evaluate(() => { _liqPapelesBorrador = [{ id: 'PAP-V1', parte: 'A', clase: 'factura', nombre: 'v1.pdf', tipo: 'application/pdf', contenido: 'AAAA', nro: '', subidoEn: 6 }]; window.__conf = false; window.__vista0 = localStorage.getItem('rk_rem_vista'); empIrACargarPago(); });
+ok('S14: al decir que no, el modal sigue abierto y no se cambió de vista ni se abrió el formulario de pago', await p.isVisible('#modalLiquidar') && await p.evaluate(() => localStorage.getItem('rk_rem_vista') === window.__vista0 && getComputedStyle(document.getElementById('remPagoForm')).display === 'none'));
+await p.evaluate(() => { window.__conf = true; cerrarModalLiquidar(); });
 
 const malos = res.filter(x => x[0] === 'FALLA');
 res.forEach(x => console.log(x.join(' ')));
-const errs = errores.filter(e => !/gsi|Failed to load resource|tradingview/.test(e));
+// los console.error de S9 son los esperados: ahí se simula a propósito una escritura rechazada por la base
+const errs = errores.filter(e => !/gsi|Failed to load resource|tradingview|Write too large|guardado en la nube|no se pudo guardar|no quedaron en la base/.test(e));
 console.log(`\n${res.length - malos.length}/${res.length} OK` + (errs.length ? '\nerrores de página: ' + JSON.stringify(errs.slice(0, 5)) : ''));
 await b.close();
 process.exit(malos.length || errs.length ? 1 : 0);

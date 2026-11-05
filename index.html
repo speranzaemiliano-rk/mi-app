@@ -1399,6 +1399,7 @@
         .liq-papel-nom { flex: 1; min-width: 130px; overflow-wrap: anywhere; }
         .liq-papel input.liq-papel-nro { width: 120px; padding: 4px 6px; font-size: 12px; }
         .liq-papel-pend { font-size: 10.5px; color: var(--warn); }
+        .liq-papel-estado { overflow-wrap: anywhere; }
         @media (max-width: 720px) {
             .emp-concepto-head, .emp-concepto-head-b { display: none; }
             .emp-concepto-fila, .emp-concepto-fila-b { grid-template-columns: 1fr 1fr 26px 26px; }
@@ -3614,7 +3615,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v568</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v569</div>
         </div>
     </nav>
 
@@ -8972,7 +8973,8 @@
             var byteStr = atob(_leerPresupArchivoDB64);
             var arr = new Uint8Array(byteStr.length);
             for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-            var blob = new Blob([arr], { type: _leerPresupArchivoTipo || 'application/pdf' });
+            // Sólo PDF e imágenes de trama se muestran en línea (un SVG/HTML abierto como blob corre scripts con el origen de la app).
+            var blob = new Blob([arr], { type: _tipoVisibleEnLinea(_leerPresupArchivoTipo || 'application/pdf', '') || 'application/octet-stream' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url; a.target = '_blank'; a.rel = 'noopener';
@@ -10351,11 +10353,12 @@
                 const byteStr  = atob(base64);
                 const arr      = new Uint8Array(byteStr.length);
                 for (let i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-                const blob     = new Blob([arr], { type: tipo });
+                // Un SVG o un HTML abiertos como blob corren sus scripts con el origen de la app: sólo se
+                // muestran en línea PDF e imágenes de trama; lo demás se descarga (ver _tipoVisibleEnLinea).
+                const tv       = _tipoVisibleEnLinea(tipo, nombre_);
+                const blob     = new Blob([arr], { type: tv || 'application/octet-stream' });
                 const url      = URL.createObjectURL(blob);
-                const esPDF    = tipo.includes('pdf') || nombre_.toLowerCase().endsWith('.pdf');
-                const esImagen = tipo.startsWith('image/');
-                if (esPDF || esImagen) {
+                if (tv) {
                     // Abrir en nueva pestaña con <a target=_blank> — browsers no lo bloquean
                     const a = document.createElement('a');
                     a.href = url; a.target = '_blank'; a.rel = 'noopener';
@@ -16924,7 +16927,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v568';
+    var APP_VER = 'v569';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -26139,12 +26142,11 @@
             var byteStr = atob(base64);
             var arr     = new Uint8Array(byteStr.length);
             for (var i = 0; i < byteStr.length; i++) arr[i] = byteStr.charCodeAt(i);
-            var blob = new Blob([arr], { type: tipo });
+            var tv   = _tipoVisibleEnLinea(tipo, nombre);   // sólo PDF e imágenes de trama se muestran en línea
+            var blob = new Blob([arr], { type: tv || 'application/octet-stream' });
             var url  = URL.createObjectURL(blob);
-            var esPDF    = tipo.indexOf('pdf') !== -1 || nombre.toLowerCase().endsWith('.pdf');
-            var esImagen = tipo.indexOf('image/') === 0;
             var a = document.createElement('a');
-            if (esPDF || esImagen) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; }
+            if (tv) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; }
             else { a.href = url; a.download = nombre; }
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
@@ -31281,18 +31283,7 @@
     function descargarReciboRemun(id) {
         var rp = (remunPagos||[]).find(function(x){ return x.id===id; });
         if (!rp || !rp.adjunto || !rp.adjunto.contenido) { alert('Este pago no tiene recibo adjunto.'); return; }
-        try {
-            var cont = rp.adjunto.contenido;
-            var tipo = rp.adjunto.tipo || 'application/octet-stream';
-            var base64 = cont.indexOf(',') !== -1 ? cont.split(',')[1] : cont;
-            var byteStr = atob(base64);
-            var arr = new Uint8Array(byteStr.length);
-            for (var i=0;i<byteStr.length;i++) arr[i]=byteStr.charCodeAt(i);
-            var blob = new Blob([arr], {type:tipo});
-            var url = URL.createObjectURL(blob);
-            window.open(url, '_blank');
-            setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
-        } catch(e) { console.error(e); alert('No se pudo abrir el recibo.'); }
+        _remAbrirAdjunto(rp.adjunto);
     }
 
     // Borra un pago Y, si ya había ido a Caja/Banco, su movimiento. Si la consolidación juntaba
@@ -31414,14 +31405,7 @@
         var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
         var a = c && c.adjuntos && c.adjuntos[idx];
         if (!a || !a.contenido) { alert('Adjunto no disponible.'); return; }
-        try {
-            var cont = a.contenido, tipo = a.tipo || 'application/octet-stream';
-            var b64 = cont.indexOf(',') !== -1 ? cont.split(',')[1] : cont;
-            var bs = atob(b64), arr = new Uint8Array(bs.length);
-            for (var i = 0; i < bs.length; i++) arr[i] = bs.charCodeAt(i);
-            var url = URL.createObjectURL(new Blob([arr], { type: tipo }));
-            window.open(url, '_blank'); setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
-        } catch (e) { console.error(e); alert('No se pudo abrir el adjunto.'); }
+        _remAbrirAdjunto(a);
     }
     function quitarAdjuntoConsolidado(consId, idx) {
         var c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
@@ -31978,7 +31962,7 @@
     window.empIrACargarPago = function() {
         var nombre = ((document.getElementById('empleadoNombre') || {}).value || '').trim();
         var mes = (document.getElementById('empLiqMes') || {}).value || '';
-        if (typeof cerrarModalLiquidar === 'function') cerrarModalLiquidar();
+        if (typeof cerrarModalLiquidar === 'function' && cerrarModalLiquidar() === false) return;   // dijo que no a descartar los archivos: no se navega
         if (typeof remVista === 'function') remVista('pagos');
         if (typeof abrirFormRemunPago === 'function') {
             abrirFormRemunPago({ nombre: nombre, mes: mes, banco: 0, efectivo: 0, tipo: 'adelanto', detalle: 'Adelanto' });
@@ -32163,11 +32147,20 @@
         _liqPapelesRender();
         document.getElementById('modalLiquidar').classList.add('active');
     };
+    // Devuelve false si el usuario se arrepiente (hay archivos sin guardar o procesándose), true si cerró.
     window.cerrarModalLiquidar = function() {
-        // Lo elegido y todavía sin guardar se pierde al cerrar: se avisa en vez de tirarlo callado.
-        if (_liqPapelesBorrador.length && !confirm('Elegiste ' + _liqPapelesBorrador.length + ' archivo(s) (facturas / comprobantes) que todavía NO se guardaron: se guardan junto con el recibo.\n\n¿Cerrar y descartarlos?')) return;
+        var proc = Object.keys(_liqPapelOps).length;
+        if (_liqPapelesBorrador.length || proc) {
+            var txt = '';
+            if (_liqPapelesBorrador.length) txt += 'Elegiste ' + _liqPapelesBorrador.length + ' archivo(s) (facturas / comprobantes) que todavía NO se guardaron: se guardan junto con el recibo.';
+            if (proc) txt += (txt ? '\n\n' : '') + 'Hay ' + proc + ' archivo(s) procesándose: si cerrás, no se adjuntan.';
+            if (!confirm(txt + '\n\n¿Cerrar y descartarlos?')) return false;
+        }
         _liqPapelesBorrador = [];
+        _liqPapelOps = {};
+        _liqPapelGen++;     // lo que todavía se esté procesando ya no se adjunta
         document.getElementById('modalLiquidar').classList.remove('active');
+        return true;
     };
     window.cerrarModalEmpleado = function() { document.getElementById('modalEmpleado').classList.remove('active'); };
 
@@ -32513,6 +32506,18 @@
             snap.nroRecibo = 'RS-' + String(snap.nroReciboSeq).padStart(6, '0');
         }
         var existente = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
+        // Facturas y comprobantes que se eligieron en la liquidación antes de que existiera el recibo.
+        // El tope de peso se mira ACÁ, con lo que el recibo ya tiene: el borrador no está atado a un mes
+        // y se pudo armar contra otro recibo.
+        var _borr = _liqPapelesBorrador.slice();
+        if (_borr.length) {
+            var _ya0 = {}; ((existente && existente.papeles) || []).forEach(function(p){ if (p && p.id) _ya0[p.id] = 1; });
+            var _extra0 = _borr.filter(function(p){ return !_ya0[p.id]; });
+            if (_liqPapelChars(existente ? existente.papeles : null) + _liqPapelChars(_extra0) > LIQ_PAPELES_MAX_CHARS) {
+                alert('Con los archivos elegidos, los adjuntos de ' + _mesLabel(mes) + ' pasan el tope que admite la base (~6 MB en total).\n\nQuitá alguno o subí una versión más liviana. El recibo NO se guardó.');
+                return false;
+            }
+        }
         if (existente) {
             if (!opts.silencioso && !confirm('Ya hay un recibo guardado de ' + emp.nombre + ' para ' + _mesLabel(mes) + '. ¿Reemplazarlo con la liquidación actual?')) return false;
             Object.assign(existente, snap);   // conserva el id existente
@@ -32520,8 +32525,6 @@
             snap.id = 'REC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
             remunRecibos.push(snap);
         }
-        // Facturas y comprobantes que se eligieron en la liquidación antes de que existiera el recibo.
-        var _borr = _liqPapelesBorrador.slice();
         if (_borr.length) {
             var _dest = existente || snap, _ya = {};
             (_dest.papeles || []).forEach(function(p){ if (p && p.id) _ya[p.id] = 1; });
@@ -32539,8 +32542,18 @@
         return Promise.resolve(_guardado).then(function() {
             if (!REF_REMUN_RECIBOS || !_id) { _liqPapelesSoltar(_borr); return true; }
             return REF_REMUN_RECIBOS.child(_id).once('value').then(function(sn) {
-                if (sn.exists()) { _liqPapelesSoltar(_borr); return true; }
-                throw new Error('El recibo no quedó en la base (la escritura no dejó rastro).');
+                if (!sn.exists()) throw new Error('El recibo no quedó en la base (la escritura no dejó rastro).');
+                // Con un recibo ya guardado, que exista no prueba que se haya escrito ESTA versión: si traía
+                // archivos se comprueba que estén. Si no, se vuelve atrás en memoria y el borrador se conserva.
+                var _ids = _borr.map(function(p){ return p.id; });
+                if (_ids.length && !_liqPapelesEnSnap(sn.val(), _ids)) {
+                    var _rr = (remunRecibos || []).find(function(r){ return r && r.id === _id; });
+                    if (_rr) { _rr.papeles = (_rr.papeles || []).filter(function(p){ return _ids.indexOf(p.id) === -1; }); if (!_rr.papeles.length) delete _rr.papeles; }
+                    _liqPapelesRender();
+                    throw new Error('Los archivos adjuntos no quedaron en la base (la escritura fue rechazada, por ejemplo por pesar demasiado). Siguen acá sin guardar.');
+                }
+                _liqPapelesSoltar(_borr);
+                return true;
             });
         });
     }
@@ -32557,8 +32570,13 @@
                 '\n\nGuardá el legajo (💾 Guardar empleado) y usá «💾 Guardar recibo del mes» para que quede en «Recibos anteriores».');
             return;
         }
-        var yaExiste = (remunRecibos || []).some(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
-        if (yaExiste) return;   // ya está guardado; no lo pisamos
+        var yaExiste = (remunRecibos || []).find(function(r){ return r.empleadoId === emp.id && r.mes === mes; });
+        if (yaExiste) {
+            // El recibo ya está guardado y no se pisa, pero los archivos elegidos en la liquidación (que el
+            // bloque rotula «se guarda junto con el recibo») sí se suman: si no, quedaban sin guardar y sin aviso.
+            if (_liqPapelesBorrador.length) _liqPapelesGuardarEn(yaExiste.id, _liqPapelesBorrador.slice(), true);
+            return;
+        }
         Promise.resolve(_guardarReciboSnap(emp, mes, { silencioso: true })).catch(function(e) {
             var msg = (e && (e.code || e.message)) ? (e.code || e.message) : String(e);
             alert('⚠️ El recibo se imprimió pero NO quedó guardado.\n\nMotivo: ' + msg);
@@ -32570,6 +32588,7 @@
     // «💰 Liquidar y pagar», que es el camino normal.
     window.guardarReciboMes = function() {
         if (!_esDuenoRemun()) return;
+        if (_liqPapelesProcesando(true)) return;
         var emp = _empDesdeModal();
         if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
         if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con "Guardar empleado", y después guardá el recibo del mes.'); return; }
@@ -32717,9 +32736,62 @@
     // cuando se guarda (cualquiera de los tres botones). Si ya existe, se guarda en el acto.
     var _liqPapelesBorrador = [];
     var _liqPapelDest = null;
-    var _liqPapelEstado = null;        // { parte, txt } mientras se procesa un archivo
+    var _liqPapelOps = {};             // subidas en curso: opId → { parte, txt } (puede haber varias a la vez)
+    var _liqPapelOpSeq = 0;
+    var _liqPapelGen = 0;              // sube al cerrar el modal: lo que se estaba procesando ya no se adjunta
     var LIQ_PAPELES_MAX_CHARS = 9000000;   // tope de base64 por recibo: el nodo de Firebase admite ~10 MB
     var _LIQ_PAPEL = { factura: { ico: '🧾', txt: 'Factura' }, comprobante: { ico: '📎', txt: 'Comprobante' } };
+    var _LIQ_PAPEL_EXT = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+
+    // Con qué tipo se puede MOSTRAR un archivo en una pestaña nueva: sólo PDF e imágenes de trama.
+    // ⚠️ Un SVG o un HTML abiertos como blob corren sus scripts con el ORIGEN DE LA APP (tokens de
+    // sesión, claves en localStorage, la base como dueño), y el archivo puede venirle de un tercero
+    // (la factura de un monotributista). Por eso lo demás nunca se abre en línea: se descarga como
+    // application/octet-stream. Devuelve '' si no es mostrable.
+    function _tipoVisibleEnLinea(tipo, nombre) {
+        var t = String(tipo || '').toLowerCase().split(';')[0].trim();
+        if (/^(application\/pdf|image\/(jpeg|png|webp|gif))$/.test(t)) return t;
+        if (!t || t === 'application/octet-stream') {      // datos viejos sin tipo: se mira la extensión
+            var m = /\.([a-z0-9]+)$/i.exec(nombre || '');
+            return (m && _LIQ_PAPEL_EXT[m[1].toLowerCase()]) || '';
+        }
+        return '';
+    }
+    // Abre (si es seguro mostrarlo) o descarga un archivo guardado en base64.
+    function _abrirBlobSeguro(contenido, tipo, nombre) {
+        var b64 = contenido.indexOf(',') !== -1 ? contenido.split(',')[1] : contenido;
+        var bs = atob(b64), arr = new Uint8Array(bs.length);
+        for (var i = 0; i < bs.length; i++) arr[i] = bs.charCodeAt(i);
+        var tv = _tipoVisibleEnLinea(tipo, nombre);
+        var url = URL.createObjectURL(new Blob([arr], { type: tv || 'application/octet-stream' }));
+        if (tv) {
+            var w = window.open(url, '_blank');
+            try { if (w) w.opener = null; } catch (e) {}
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+        } else {
+            var a = document.createElement('a');
+            a.href = url; a.download = nombre || 'archivo';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+        }
+    }
+    // Abre un adjunto de Remuneraciones ({nombre, tipo, contenido}).
+    function _remAbrirAdjunto(a) {
+        if (!a || !a.contenido) { alert('El archivo no está disponible.'); return; }
+        try { _abrirBlobSeguro(a.contenido, a.tipo, a.nombre); }
+        catch (e) { console.error(e); alert('No se pudo abrir el archivo.'); }
+    }
+    // Sólo se aceptan PDF y JPG/PNG/WEBP. Devuelve el tipo normalizado o '' si no corresponde.
+    function _liqPapelTipoPermitido(file) {
+        var t = String(file.type || '').toLowerCase();
+        if (/^(application\/pdf|image\/(jpeg|png|webp))$/.test(t)) return t;
+        if (!t || t === 'application/octet-stream') {
+            var m = /\.([a-z0-9]+)$/i.exec(file.name || '');
+            var e = m ? _LIQ_PAPEL_EXT[m[1].toLowerCase()] : '';
+            return (e && e !== 'image/gif') ? e : '';
+        }
+        return '';
+    }
 
     function _liqPapelEmpMes() {
         var empId = (editandoEmpleadoIdx >= 0 && remuneraciones[editandoEmpleadoIdx]) ? remuneraciones[editandoEmpleadoIdx].id : null;
@@ -32738,51 +32810,121 @@
         return p ? { p: p, rec: null, borrador: true } : null;
     }
     function _liqPapelChars(lista) { return (lista || []).reduce(function(t, p){ return t + ((p && p.contenido) ? p.contenido.length : 0); }, 0); }
-
-    // Abre un archivo guardado en base64 (el mismo mecanismo de las consolidaciones).
-    function _remAbrirAdjunto(a) {
-        if (!a || !a.contenido) { alert('El archivo no está disponible.'); return; }
-        try {
-            var cont = a.contenido, tipo = a.tipo || 'application/octet-stream';
-            var b64 = cont.indexOf(',') !== -1 ? cont.split(',')[1] : cont;
-            var bs = atob(b64), arr = new Uint8Array(bs.length);
-            for (var i = 0; i < bs.length; i++) arr[i] = bs.charCodeAt(i);
-            var url = URL.createObjectURL(new Blob([arr], { type: tipo }));
-            window.open(url, '_blank'); setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
-        } catch (e) { console.error(e); alert('No se pudo abrir el archivo.'); }
+    // Hay un archivo procesándose (comprimiendo): guardar ahora lo dejaría afuera.
+    function _liqPapelesProcesando(avisar) {
+        var n = Object.keys(_liqPapelOps).length;
+        if (n && avisar) alert('Se está procesando un archivo adjunto. Esperá unos segundos a que termine y volvé a guardar.');
+        return n > 0;
+    }
+    // ¿Están TODOS estos ids en los papeles del recibo que devolvió la base? Se comprueba el
+    // contenido y no sólo que el recibo exista: con un recibo ya guardado, `exists()` da true aunque
+    // la escritura de esta versión haya sido rechazada (por ejemplo por pesar demasiado).
+    function _liqPapelesEnSnap(val, ids) {
+        var pap = (val && val.papeles) || [];
+        if (!Array.isArray(pap)) pap = Object.keys(pap).map(function(k){ return pap[k]; });
+        var hay = {}; pap.forEach(function(p){ if (p && p.id) hay[p.id] = 1; });
+        return ids.every(function(i){ return hay[i]; });
+    }
+    // Suma archivos a un recibo YA guardado, lo persiste y confirma contra la base que quedaron.
+    // Si no entran (tope de peso) o la base los rechaza, deja el recibo como estaba y avisa.
+    // esBorrador: lo que se suma sale del borrador, que se suelta recién con la base confirmada.
+    function _liqPapelesGuardarEn(recId, nuevos, esBorrador) {
+        var rec = (remunRecibos || []).find(function(r){ return r && r.id === recId; });
+        if (!rec) return Promise.resolve(false);
+        var ya = {}; (rec.papeles || []).forEach(function(p){ if (p && p.id) ya[p.id] = 1; });
+        var extra = nuevos.filter(function(p){ return !ya[p.id]; });
+        if (!extra.length) { if (esBorrador) _liqPapelesSoltar(nuevos); return Promise.resolve(true); }
+        if (_liqPapelChars(rec.papeles) + _liqPapelChars(extra) > LIQ_PAPELES_MAX_CHARS) {
+            alert('Con estos archivos los adjuntos de ' + _mesLabel(rec.mes) + ' pasan el tope que admite la base (~6 MB en total).\n\nQuitá alguno o subí una versión más liviana.');
+            return Promise.resolve(false);
+        }
+        var ids = extra.map(function(p){ return p.id; });
+        rec.papeles = (rec.papeles || []).concat(extra);
+        return Promise.resolve(persistirRemunRecibos()).then(function() {
+            if (!REF_REMUN_RECIBOS) return true;
+            return REF_REMUN_RECIBOS.child(recId).once('value').then(function(sn){ return _liqPapelesEnSnap(sn.val(), ids); });
+        }).then(function(ok) {
+            if (!ok) throw new Error('rechazado');
+            if (esBorrador) _liqPapelesSoltar(nuevos);
+            return true;
+        }).catch(function() {
+            var rr = (remunRecibos || []).find(function(r){ return r && r.id === recId; });
+            if (rr) { rr.papeles = (rr.papeles || []).filter(function(p){ return ids.indexOf(p.id) === -1; }); if (!rr.papeles.length) delete rr.papeles; }
+            alert('❌ Los archivos NO quedaron guardados en la base.\n\nSuele ser por el peso: la base rechaza escrituras muy grandes. El recibo quedó como estaba' + (esBorrador ? ' y los archivos siguen acá, sin guardar.' : '.'));
+            return false;
+        }).then(function(r) {
+            if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista();
+            _renderRecibosEmpleadoActivo();
+            return r;
+        });
     }
 
+    // Muestra, bajo cada parte, lo que se está procesando (una línea por parte; pueden ser varias subidas).
+    function _liqPapelEstadoPintar(parte) {
+        var el = document.querySelector('#liqPapeles' + parte + ' .liq-papel-estado'); if (!el) return;
+        var txts = Object.keys(_liqPapelOps).map(function(k){ return _liqPapelOps[k]; })
+            .filter(function(o){ return o.parte === parte; }).map(function(o){ return o.txt; });
+        el.style.display = txts.length ? '' : 'none';
+        el.textContent = txts.length ? ('⏳ ' + txts.join(' · ')) : '';
+    }
+
+    // Repinta los dos bloques. Sólo toca el HTML si cambió QUÉ archivos hay (o su parte/clase/nombre):
+    // repintar por cualquier cosa —un tick de progreso, el listener de Firebase— destruía el casillero
+    // «N° de factura» que se estaba tipeando y le sacaba el foco. Si igual hay que repintar, se
+    // conserva lo tipeado, el foco y la selección.
     window._liqPapelesRender = function() {
         var rec = _liqReciboActual();
         var mes = (document.getElementById('empLiqMes') || {}).value || '';
         ['A', 'B'].forEach(function(parte) {
             var cont = document.getElementById('liqPapeles' + parte); if (!cont) return;
             var gu = rec ? (rec.papeles || []).filter(function(p){ return p && p.parte === parte; }) : [];
-            var bo = _liqPapelesBorrador.filter(function(p){ return p && p.parte === parte; });
-            var filas = gu.concat(bo).map(function(p) {
-                var c = _LIQ_PAPEL[p.clase] || _LIQ_PAPEL.comprobante;
-                var pend = bo.indexOf(p) !== -1;
-                var idq = escHtml(p.id);
-                return '<div class="liq-papel">' +
-                    '<span>' + c.ico + '</span>' +
-                    '<span class="liq-papel-nom"><strong>' + c.txt + '</strong> · ' + escHtml(p.nombre || 'archivo') +
-                        (pend ? ' <span class="liq-papel-pend">· se guarda junto con el recibo' + (mes ? ' de ' + escHtml(_mesLabel(mes)) : '') + '</span>' : '') + '</span>' +
-                    (p.clase === 'factura'
-                        ? '<input type="text" class="liq-papel-nro" placeholder="N° de factura" maxlength="40" value="' + escHtml(p.nro || '') + '" onchange="_liqPapelNro(\'' + idq + '\', this.value)">'
-                        : '') +
-                    '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelVer(\'' + idq + '\')" title="Abrir el archivo">👁</button>' +
-                    '<button type="button" class="btn btn-danger-sm" onclick="_liqPapelQuitar(\'' + idq + '\')" title="Quitar este archivo">✕</button>' +
-                '</div>';
-            }).join('');
-            var est = (_liqPapelEstado && _liqPapelEstado.parte === parte) ? _liqPapelEstado.txt : '';
-            cont.innerHTML =
-                '<div class="liq-papeles-tit"><span>📎 Facturas y comprobantes — ' + (parte === 'A' ? '🅰️ Parte A' : '🅱️ Parte B') + '</span>' +
-                    '<span class="liq-papeles-btns">' +
-                        '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelAgregar(\'' + parte + '\',\'factura\')" title="Adjuntar la factura de esta parte">🧾 Factura</button>' +
-                        '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelAgregar(\'' + parte + '\',\'comprobante\')" title="Adjuntar el comprobante de pago (transferencia, recibo firmado…)">📎 Comprobante</button>' +
-                    '</span></div>' +
-                (est ? '<div class="form-hint" style="margin:0 0 4px;">⏳ ' + escHtml(est) + '</div>' : '') +
-                (filas || '<div class="form-hint" style="margin:0;">Opcional. Si esta parte lleva una factura o un comprobante de pago, adjuntalo acá y queda guardado con el recibo del mes.</div>');
+            var yaG = {}; gu.forEach(function(p){ yaG[p.id] = 1; });
+            // Mientras la base confirma un guardado, el mismo archivo está en el recibo Y en el borrador: se muestra una vez.
+            var bo = _liqPapelesBorrador.filter(function(p){ return p && p.parte === parte && !yaG[p.id]; });
+            var lista = gu.concat(bo);
+            var sig = mes + '|' + lista.map(function(p){ return [p.id, p.clase, p.nombre, bo.indexOf(p) !== -1 ? 1 : 0].join('~'); }).join('|');
+            if (cont.getAttribute('data-sig') !== sig) {
+                var act = document.activeElement, keep = null;
+                if (act && act.classList && act.classList.contains('liq-papel-nro') && cont.contains(act)) {
+                    keep = { pid: act.getAttribute('data-pid'), v: act.value, s: act.selectionStart, e: act.selectionEnd };
+                }
+                var filas = lista.map(function(p) {
+                    var c = _LIQ_PAPEL[p.clase] || _LIQ_PAPEL.comprobante;
+                    var pend = bo.indexOf(p) !== -1;
+                    var idq = escHtml(p.id);
+                    return '<div class="liq-papel">' +
+                        '<span>' + c.ico + '</span>' +
+                        '<span class="liq-papel-nom"><strong>' + c.txt + '</strong> · ' + escHtml(p.nombre || 'archivo') +
+                            (pend ? ' <span class="liq-papel-pend">· se guarda junto con el recibo' + (mes ? ' de ' + escHtml(_mesLabel(mes)) : '') + '</span>' : '') + '</span>' +
+                        (p.clase === 'factura'
+                            ? '<input type="text" class="liq-papel-nro" data-pid="' + idq + '" placeholder="N° de factura" maxlength="40" value="' + escHtml(p.nro || '') + '" onchange="_liqPapelNro(\'' + idq + '\', this.value)">'
+                            : '') +
+                        '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelVer(\'' + idq + '\')" title="Abrir el archivo">👁</button>' +
+                        '<button type="button" class="btn btn-danger-sm" onclick="_liqPapelQuitar(\'' + idq + '\')" title="Quitar este archivo">✕</button>' +
+                    '</div>';
+                }).join('');
+                cont.innerHTML =
+                    '<div class="liq-papeles-tit"><span>📎 Facturas y comprobantes — ' + (parte === 'A' ? '🅰️ Parte A' : '🅱️ Parte B') + '</span>' +
+                        '<span class="liq-papeles-btns">' +
+                            '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelAgregar(\'' + parte + '\',\'factura\')" title="Adjuntar la factura de esta parte">🧾 Factura</button>' +
+                            '<button type="button" class="btn btn-outline btn-sm" onclick="_liqPapelAgregar(\'' + parte + '\',\'comprobante\')" title="Adjuntar el comprobante de pago (transferencia, recibo firmado…)">📎 Comprobante</button>' +
+                        '</span></div>' +
+                    '<div class="form-hint liq-papel-estado" style="margin:0 0 4px; display:none;"></div>' +
+                    (filas || '<div class="form-hint" style="margin:0;">Opcional. Si esta parte lleva una factura o un comprobante de pago, adjuntalo acá (PDF o foto) y queda guardado con el recibo del mes.</div>');
+                cont.setAttribute('data-sig', sig);
+                if (keep) {
+                    var el = cont.querySelector('.liq-papel-nro[data-pid="' + keep.pid + '"]');
+                    if (el) { el.value = keep.v; el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (e) {} }
+                }
+            } else {
+                // Mismos archivos: sólo se ponen al día los N° que cambiaron por otro lado (y no el que se está tipeando).
+                Array.prototype.forEach.call(cont.querySelectorAll('.liq-papel-nro'), function(inp) {
+                    if (inp === document.activeElement) return;
+                    var f = lista.find(function(p){ return p.id === inp.getAttribute('data-pid'); });
+                    if (f && inp.value !== (f.nro || '')) inp.value = f.nro || '';
+                });
+            }
+            _liqPapelEstadoPintar(parte);
         });
     };
 
@@ -32800,19 +32942,27 @@
         var file = inp && inp.files && inp.files[0];
         var d = _liqPapelDest; _liqPapelDest = null;
         if (!file || !d || !_esDuenoRemun()) return;
+        var tipo = _liqPapelTipoPermitido(file);
+        if (!tipo) {
+            alert('«' + file.name + '» no se puede adjuntar: sólo se aceptan PDF y fotos (JPG, PNG o WEBP).');
+            if (inp) inp.value = ''; return;
+        }
         if (!_archivoComprimible(file) && file.size > MAX_DOC_MB * 1024 * 1024) {
             alert('«' + file.name + '» supera los ' + MAX_DOC_MB + ' MB.'); if (inp) inp.value = ''; return;
         }
-        _liqPapelEstado = { parte: d.parte, txt: 'Procesando «' + file.name + '»…' };
-        _liqPapelesRender();
+        var op = 'op' + (++_liqPapelOpSeq), gen = _liqPapelGen;
+        _liqPapelOps[op] = { parte: d.parte, txt: 'Procesando «' + file.name + '»…' };
+        _liqPapelEstadoPintar(d.parte);
         try {
-            var b64 = await leerArchivoBase64(file, function(t) {
-                _liqPapelEstado = { parte: d.parte, txt: 'Procesando «' + file.name + '»… ' + t };
-                _liqPapelesRender();
-            });
+            var b64 = await leerArchivoBase64(file, _progresoCompresion(function(t) {
+                if (!_liqPapelOps[op]) return;
+                _liqPapelOps[op].txt = 'Procesando «' + file.name + '» — ' + t;
+                _liqPapelEstadoPintar(d.parte);
+            }));
             // Todo lo que sigue se resuelve DESPUÉS del await: el listener de Firebase reemplaza los
-            // objetos del array y quien cambió de empleado o de mes mientras tanto no tiene que
-            // llevarse el archivo del otro.
+            // objetos del array y quien cerró el modal, cambió de empleado o de mes mientras tanto no
+            // tiene que llevarse el archivo (ni dejarlo en un borrador que ya nadie ve).
+            if (gen !== _liqPapelGen) return;     // se cerró el modal: el archivo se descarta (ya se avisó al cerrar)
             var k = _liqPapelEmpMes();
             if (k.empId !== d.empId || k.mes !== d.mes) {
                 alert('Cambiaste de empleado o de mes mientras se procesaba «' + file.name + '». No se adjuntó: volvé a elegirlo.');
@@ -32821,7 +32971,7 @@
             var p = {
                 id: 'PAP-' + Date.now() + '-' + Math.floor(Math.random() * 100000),
                 parte: d.parte, clase: d.clase, nombre: file.name,
-                tipo: file.type || 'application/octet-stream', contenido: b64, nro: '', subidoEn: Date.now()
+                tipo: tipo, contenido: b64, nro: '', subidoEn: Date.now()
             };
             var rec = _liqReciboActual();
             var total = _liqPapelChars(rec ? rec.papeles : null) + _liqPapelChars(_liqPapelesBorrador) + (b64 ? b64.length : 0);
@@ -32829,18 +32979,12 @@
                 alert('Con este archivo los adjuntos de ' + (k.mes ? _mesLabel(k.mes) : 'este recibo') + ' pasan el tope que admite la base (~6 MB en total).\n\nQuitá alguno o subí una versión más liviana.');
                 return;
             }
-            if (rec) {
-                rec.papeles = (rec.papeles || []).concat([p]);
-                await persistirRemunRecibos();
-                if (typeof _renderRemunRecibosLista === 'function') _renderRemunRecibosLista();
-                _renderRecibosEmpleadoActivo();
-            } else {
-                _liqPapelesBorrador.push(p);
-            }
+            if (rec) await _liqPapelesGuardarEn(rec.id, [p], false);
+            else _liqPapelesBorrador.push(p);
         } catch (e) {
             console.error(e); alert('No se pudo adjuntar el archivo: ' + (e && e.message ? e.message : e));
         } finally {
-            _liqPapelEstado = null;
+            delete _liqPapelOps[op];
             if (inp) inp.value = '';
             _liqPapelesRender();
         }
@@ -32897,6 +33041,7 @@
     // botón. Si no se puso ningún importe, ofrece guardar nada más que el recibo.
     window.liquidarYPagar = async function() {
         if (!_esDuenoRemun()) return;
+        if (_liqPapelesProcesando(true)) return;
         var emp = _empDesdeModal();
         if (!emp.nombre) { alert('Cargá el nombre del empleado.'); return; }
         if (editandoEmpleadoIdx < 0 || !emp.id) { alert('Guardá primero el legajo con «💾 Guardar empleado», y después liquidá el sueldo.'); return; }
@@ -47808,7 +47953,7 @@
         <button type="button" class="btn btn-outline btn-sm rem-add-concepto" onclick="empAgregarConcepto('','haber',null,{remun:false})" style="border-color:var(--warn); color:var(--warn);">➕ Agregar concepto no remunerativo</button>
         <div class="liq-papeles" id="liqPapelesB"></div>
       </div>
-      <input type="file" id="liqPapelFile" accept="application/pdf,image/*" style="display:none;" onchange="_liqPapelElegido()">
+      <input type="file" id="liqPapelFile" accept="application/pdf,image/jpeg,image/png,image/webp" style="display:none;" onchange="_liqPapelElegido()">
       <div id="empPreviewLiquidacion" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--text-2); margin:12px 0;"></div>
       <!-- Adelantos / pagos ya registrados de ese mes: se restan solos en el recibo -->
       <div id="empAvisoPagos" style="display:none; margin:0 0 12px; padding:9px 12px; border-radius:8px; font-size:12px; border:1px solid var(--warn); background:rgba(230,160,60,.08); color:var(--text-2);"></div>
