@@ -3617,7 +3617,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v572</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v573</div>
         </div>
     </nav>
 
@@ -5988,7 +5988,7 @@
                                         <th>Proyecto</th>
                                         <th style="text-align:right" title="Saldo de la Caja General del proyecto, en pesos (efectivo y banco)">Caja ARS</th>
                                         <th style="text-align:right" title="Saldo de la Caja General del proyecto, en dólares (efectivo y banco)">Caja USD</th>
-                                        <th style="text-align:right" title="Saldo neto de Cuentas Bancarias del proyecto, en pesos (ya está incluido en la caja)">Banco</th>
+                                        <th style="text-align:right" title="Saldo neto de Cuentas Bancarias del proyecto, en pesos: el saldo inicial de las cuentas más lo que entró y salió por banco. Es otra mirada, no se suma a la caja">Banco</th>
                                     </tr>
                                 </thead>
                                 <tbody id="tesSaldosBody">
@@ -12603,7 +12603,7 @@
                 + (_regimenesFacturaCorto(f) ? ' <span class="pill" style="font-size:10px;background:#FEF2F2;color:#C0392B;border:1px solid #FCA5A5;" title="Suma a la base de retención de: '+escHtml(_regimenesFacturaCorto(f))+'">🏛️ '+escHtml(_regimenesFacturaCorto(f))+'</span>' : '')
                 + (function(){ var _pd=_presupDeComprobante(f); return _pd ? ' <span class="pill" style="font-size:10px;background:#E8F0FE;color:#1a56c4;border:1px solid #B6CDF8;" title="Aplicada al presupuesto de '+escHtml(_pd.proveedor||'—')+'">📋 '+escHtml(_pd.concepto||_pd.proveedor||'presupuesto')+(_pd.proveedor&&_pd.concepto?' · '+escHtml(_pd.proveedor):'')+'</span>' : ''; })()
                 + '</span>'
-                + '<strong style="white-space:nowrap;">$'+(pend).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong>'
+                + '<strong style="white-space:nowrap;">'+_fmtMonto(pend, _monDe(f))+'</strong>'
                 + '</label>';
         });
         // Notas de crédito a favor (sin factura asignada) de este proveedor: se pueden APLICAR a
@@ -12645,6 +12645,13 @@
         if (it) it.checked = checked;
         _pagoFDMultiRecalc();
     }
+    // Monedas distintas entre las facturas tildadas (['ARS'], ['USD'] o las dos). Un solo pago y una sola Orden de Pago no pueden
+    // sumar pesos con dólares: el «Total a pagar», la base de retención y el recibo saldrían con un número que no es de ninguna moneda.
+    function _pagoFDMultiMonedas(sel) {
+        var out = [];
+        sel.forEach(function(x){ var m = _monDe(x.f); if (out.indexOf(m) < 0) out.push(m); });
+        return out;
+    }
     function _pagoFDMultiRecalc() {
         var sel = _pagoFDMulti.items.filter(function(x){ return x.checked; });
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
@@ -12657,7 +12664,9 @@
         if (res) {
             if (sel.length) {
                 res.style.display = '';
-                res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>$' + (montoTotal).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</strong>';
+                var _monsSel = _pagoFDMultiMonedas(sel);
+                res.innerHTML = '<strong>' + sel.length + '</strong> factura(s) seleccionada(s) — Total a pagar: <strong>' + (_monsSel.length > 1 ? '—' : _fmtMonto(montoTotal, _monsSel[0])) + '</strong>';
+                if (_monsSel.length > 1) res.innerHTML += '<div style="margin-top:8px;color:var(--danger,#b3261e);font-weight:600;">⛔ Hay facturas en pesos y en dólares. Un pago no puede sumarlas: destildá las de una de las monedas y pagalas por separado.</div>';
                 var _mz = _presupMezclaProveedores(sel.map(function(x){ return x.f; }));
                 if (_mz) res.innerHTML += '<div style="margin-top:8px;color:var(--danger,#b3261e);font-weight:600;">⛔ Aplicadas a presupuestos de proveedores distintos (' + _mz.map(function(g){ return escHtml(g.prov); }).join(' y ') +
                     '). Un pago no puede repartirse entre ellos: destildá las de uno y pagalas por separado.</div>';
@@ -12675,6 +12684,11 @@
         if (!fecha) { alert('Ingresá la fecha del pago.'); return; }
         var montoTotal = sel.reduce(function(s,x){ return s + x.pend; }, 0);
         if (montoTotal <= 0) { alert('El total a pagar debe ser mayor a cero.'); return; }
+        // Pesos con dólares no se suman: se frena acá, antes de subir nada ni gastar el N° de OP.
+        if (_pagoFDMultiMonedas(sel).length > 1) {
+            alert('Hay facturas en pesos y en dólares tildadas a la vez.\n\nUn pago (y su Orden de Pago) no puede sumarlas. Destildá las de una de las monedas y pagalas por separado.');
+            return;
+        }
         // Un pago no puede repartirse entre presupuestos de distinto proveedor: se frena acá, antes de subir nada ni gastar el N° de OP.
         var _mezcla = _presupMezclaProveedores(sel.map(function(x){ return x.f; }));
         if (_mezcla) {
@@ -14867,7 +14881,20 @@
         if (!_facComputaArca(v)) return { neto: signo*total, iva: 0, total: signo*total, alicPct: 0, estimado: false, moneda: mon, signo: signo };
         var neto, estimado = false;
         if ((v.netoGravado||0) > 0) { neto = v.netoGravado; }
-        else { neto = total>0 ? total/1.21 : 0; estimado = total>0; }
+        else {
+            // Una nota de crédito no guarda su neto: si está aplicada a una factura que SÍ lo tiene, hereda la proporción neto/total de esa
+            // factura (una NC total sobre una factura al 10,5 % tiene que neutralizar su IVA, no el de un 21 % estimado).
+            var _orig = null;
+            if (v.esNotaCredito && v.notaCreditoDe) {
+                var _lst = (v.notaCreditoKind === 'doc') ? documentos : facturas;
+                _orig = (_lst || []).find(function(x){ return x && x.id === v.notaCreditoDe; }) || null;
+            }
+            if (_orig && (_orig.netoGravado||0) > 0 && (_orig.importe||0) > 0 && total > 0) {
+                neto = Math.min(total, total * (_orig.netoGravado / _orig.importe));
+            } else {
+                neto = total>0 ? total/1.21 : 0; estimado = total>0;
+            }
+        }
         var iva = total - neto;
         var alicPct = neto>0 ? Math.round((iva/neto)*100) : 0;
         return { neto: signo*neto, iva: signo*iva, total: signo*total, alicPct: alicPct, estimado: estimado, moneda: mon, signo: signo };
@@ -17151,7 +17178,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v572';
+    var APP_VER = 'v573';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -17840,18 +17867,18 @@
         let acciones = '';
         if (esSuperAdmin && s.estado === 'pendiente') {
             acciones = `<div style="display:flex;gap:8px;margin-top:10px;">
-                <button class="btn btn-sm" onclick="aprobarSolicitud('${s.id}')" style="background:#1E8E3E;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✓ Aprobar</button>
-                <button class="btn btn-sm" onclick="rechazarSolicitud('${s.id}')" style="background:#D93025;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✗ Rechazar</button>
+                <button class="btn btn-sm" onclick="aprobarSolicitud('${_jsq(s.id)}')" style="background:#1E8E3E;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✓ Aprobar</button>
+                <button class="btn btn-sm" onclick="rechazarSolicitud('${_jsq(s.id)}')" style="background:#D93025;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">✗ Rechazar</button>
             </div>`;
         } else if (!esSuperAdmin && s.estado === 'pendiente') {
-            acciones = `<div style="margin-top:10px;"><button class="btn btn-sm" onclick="cancelarSolicitud('${s.id}')" style="background:transparent;color:var(--text-2);border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">Cancelar solicitud</button></div>`;
+            acciones = `<div style="margin-top:10px;"><button class="btn btn-sm" onclick="cancelarSolicitud('${_jsq(s.id)}')" style="background:transparent;color:var(--text-2);border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;">Cancelar solicitud</button></div>`;
         }
-        const rechazoNote = s.estado==='rechazada' && s.motivoRechazo ? `<div style="margin-top:6px;font-size:12px;color:#D93025;">Motivo: ${s.motivoRechazo}</div>` : '';
+        const rechazoNote = s.estado==='rechazada' && s.motivoRechazo ? `<div style="margin-top:6px;font-size:12px;color:#D93025;">Motivo: ${escHtml(s.motivoRechazo)}</div>` : '';
         return `<div style="border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:10px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
                 <div style="flex:1;">
-                    <div style="font-size:13px;font-weight:600;color:var(--text-1);margin-bottom:4px;">${s.descripcion||'—'}</div>
-                    <div style="font-size:11px;color:var(--text-3);">Solicitado por <strong>${s.solicitadoPor||'—'}</strong> · ${fecha}</div>
+                    <div style="font-size:13px;font-weight:600;color:var(--text-1);margin-bottom:4px;">${escHtml(s.descripcion||'—')}</div>
+                    <div style="font-size:11px;color:var(--text-3);">Solicitado por <strong>${escHtml(s.solicitadoPor||'—')}</strong> · ${fecha}</div>
                     ${rechazoNote}
                 </div>
                 <span style="font-size:11px;font-weight:600;color:${estadoColor};white-space:nowrap;">${estadoLabel}</span>
@@ -23740,8 +23767,10 @@
     // valga para todos los movimientos). La moneda de un movimiento es la de SU CUENTA; si no tiene cuenta (cobro «A — Banco» sin elegir cuenta,
     // pago viejo) vale la propia que traiga (factura/documento en USD, cobro de venta en dólares, alquiler cobrado en otra moneda); sin dato, pesos.
     // Elegir a propósito la cuenta y no la moneda del comprobante hace que la suma de los saldos de las cuentas de una moneda cierre con el total.
+    // Sin argumento usa las cuentas del proyecto activo (las del extracto); la Tesorería le pasa las de OTRO proyecto.
     function _cbMapaMonedas(cuentas) {
         var m = Object.create(null);
+        if (cuentas === undefined) cuentas = cuentasBancarias;
         (cuentas || []).forEach(function(cb) { m[cb.id || cb.banco] = cb.moneda === 'USD' ? 'USD' : 'ARS'; });
         return m;
     }
@@ -40613,8 +40642,8 @@
                         : '<span class="pill" style="font-size:10px;color:var(--danger);border-color:var(--danger);">Pendiente</span>';
                 return '<tr>'+
                     '<td>'+(f.fecha?formatearFecha(f.fecha):'—')+'</td>'+
-                    '<td>'+(f.numero||'—')+'</td>'+
-                    '<td>'+(f.descripcion||'—')+'</td>'+
+                    '<td>'+escHtml(f.numero||'—')+'</td>'+
+                    '<td>'+escHtml(f.descripcion||'—')+'</td>'+
                     '<td>'+(f.moneda||'ARS')+'</td>'+
                     '<td style="text-align:right;">'+_fmtMonto(f.importe,_monDe(f))+'</td>'+
                     '<td style="text-align:right;color:var(--success);">'+_fmtMonto(f.pagado,_monDe(f))+'</td>'+
@@ -40649,7 +40678,7 @@
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
                     '<td>Presup.</td>'+
-                    '<td>'+(d.concepto||'—')+'</td>'+
+                    '<td>'+escHtml(d.concepto||'—')+'</td>'+
                     '<td>'+modBadge+'</td>'+
                     '<td style="text-align:right;">'+fmtA(p.capital||0)+'</td>'+
                     '<td style="text-align:right;color:var(--warn);">'+fmtA(p.mayores||0)+'</td>'+
@@ -40664,7 +40693,7 @@
                 filas.push('<tr>'+
                     '<td>'+(d.fecha?formatearFecha(d.fecha):'—')+'</td>'+
                     '<td>Presup.</td>'+
-                    '<td>'+(d.concepto||'—')+'</td>'+
+                    '<td>'+escHtml(d.concepto||'—')+'</td>'+
                     '<td><span class="pill" style="font-size:10px;">—</span></td>'+
                     '<td style="text-align:right;">'+fmtA(d.pagado)+'</td>'+
                     '<td style="text-align:right;">—</td>'+
@@ -40690,7 +40719,7 @@
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
                     '<td>Factura</td>'+
-                    '<td>'+(f.numero?'N°'+f.numero+' — ':'')+(f.descripcion||'—')+'</td>'+
+                    '<td>'+escHtml((f.numero?'N°'+f.numero+' — ':'')+(f.descripcion||'—'))+'</td>'+
                     '<td>'+modBadge+'</td>'+
                     '<td style="text-align:right;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;">—</td>'+
@@ -40711,12 +40740,12 @@
                 var modBadge = (p.tipoAB||p.modalidad||'B')==='A'
                     ? '<span class="pill" style="font-size:10px;color:var(--blue);border-color:var(--blue);">Banco</span>'
                     : '<span class="pill" style="font-size:10px;color:var(--warn);border-color:var(--warn);">Efectivo</span>';
-                var retBtn = _retBtnsHTML('imprimirRetDoc', "'"+d.id+"'", pi, p.retenciones);
-                var editBtn = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\'doc\',\''+d.id+'\','+pi+')" title="Editar pago">✏</button>' : '';
+                var retBtn = _retBtnsHTML('imprimirRetDoc', "'"+_jsq(d.id)+"'", pi, p.retenciones);
+                var editBtn = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirEditarPago(\'doc\',\''+_jsq(d.id)+'\','+pi+')" title="Editar pago">✏</button>' : '';
                 filas.push('<tr>'+
                     '<td>'+(p.fecha?formatearFecha(p.fecha):'—')+'</td>'+
                     '<td>Documento</td>'+
-                    '<td>'+(d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—')+'</td>'+
+                    '<td>'+escHtml((d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'))+'</td>'+
                     '<td>'+modBadge+'</td>'+
                     '<td style="text-align:right;">'+fmtA(p.monto||0)+'</td>'+
                     '<td style="text-align:right;">—</td>'+
@@ -40731,7 +40760,7 @@
                 filas.push('<tr>'+
                     '<td>'+(d.fecha?formatearFecha(d.fecha):'—')+'</td>'+
                     '<td>Documento</td>'+
-                    '<td>'+(d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—')+'</td>'+
+                    '<td>'+escHtml((d.numero?'N°'+d.numero+' — ':'')+(d.descripcion||'—'))+'</td>'+
                     '<td><span class="pill" style="font-size:10px;">—</span></td>'+
                     '<td style="text-align:right;">'+fmtA(d.pagado)+'</td>'+
                     '<td style="text-align:right;">—</td>'+
@@ -40757,11 +40786,11 @@
             var conceptoE = e.tipoDoc==='factura'
                 ? ((e.items&&e.items.length?(e.items[0].desc||''):'') + (e.items&&e.items.length>1?' +'+(e.items.length-1)+' ítem(s)':''))
                 : (e.concepto||'');
-            var editBtnE = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEmitir(\''+e.id+'\')" title="Editar comprobante">✏</button>' : '';
+            var editBtnE = puedeEditar ? '<button class="btn btn-outline btn-sm" onclick="abrirModalEmitir(\''+_jsq(e.id)+'\')" title="Editar comprobante">✏</button>' : '';
             filas.push('<tr>'+
                 '<td>'+(e.fecha?formatearFecha(e.fecha):'—')+'</td>'+
                 '<td>Comprobante emitido</td>'+
-                '<td>'+(e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—')+'</td>'+
+                '<td>'+escHtml((e.nro?'N°'+e.nro+' — ':'')+(conceptoE||'—'))+'</td>'+
                 '<td>'+modBadge+'</td>'+
                 '<td style="text-align:right;">'+fmtA(e.total||0)+'</td>'+
                 '<td style="text-align:right;">—</td>'+
@@ -43905,7 +43934,7 @@
                 '<strong>Cómo se calcula.</strong> Son los mismos saldos que muestran las pantallas de cada proyecto: '+
                 '<strong>Caja ARS / USD</strong> = el saldo de <em>Caja General</em> (cobros y pagos, en efectivo y por banco, cada moneda por separado) y '+
                 '<strong>Banco</strong> = el <em>Saldo neto</em> de <em>Cuentas Bancarias</em> (en pesos, con el saldo inicial de las cuentas). '+
-                'El banco ya está dentro de la caja: no se suman entre sí.'+
+                'Los cobros y pagos por banco ya figuran en la Caja General, pero el Banco además parte del saldo inicial de las cuentas (la Caja General no lo cuenta): son dos miradas del mismo dinero, <strong>no se suman entre sí</strong>.'+
                 (fallidas.length?'<div style="margin-top:6px;color:var(--danger);">⚠️ No se pudo leer: '+escHtml(fallidas.join(', '))+'. Quedó afuera de los totales; probá con 🔄 Actualizar.</div>':'')+
                 '</div>';
         }
@@ -45115,7 +45144,7 @@
             col.documentos.forEach(function(d){ (d.pagosHistorial||[]).forEach(function(p){ if (p.modalidad==='A' && p.cuentaId===cid) sal += _netoPagado(p); });});
             col.ingGeneral.forEach(function(ig){ if (!ig.esBancario || ig.cuentaId!==cid) return; if (ig.esEgreso||ig.tipo==='mov_banco_salida') sal += ig.monto||0; else ent += ig.monto||0; });
             col.ventas.forEach(function(v){ (v.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
-            col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
+            col.alquileres.forEach(function(a){ (a.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += _alqCobroImporte(a, c); });});   // lo que ENTRÓ (misma regla que Cuentas Bancarias)
             col.servicios.forEach(function(s){ (s.cobrosHistorial||[]).forEach(function(c){ if (c.tipoAB==='A' && c.cuentaId===cid) ent += c.monto||0; });});
             var saldoAct = (cb.saldo||0) + ent - sal;
             if (cb.moneda==='USD') usdNeto += saldoAct; else arsNeto += saldoAct;
@@ -45550,7 +45579,7 @@
                     return f + ': ' + partes.join(' + ');
                 });
                 cardMes.title = 'Cobros del mes según la Caja General: ventas de UF, alquileres, honorarios, recibos emitidos e ingresos «Otro», cada moneda por separado. ' +
-                    'No incluye aportes de socios, préstamos, subsidios, devoluciones, movimientos manuales o importados del banco ni compra/venta de dólares.' +
+                    'No incluye aportes de socios, préstamos, subsidios, devoluciones, movimientos manuales o importados del banco ni compra/venta de dólares (si un recibo emitido documenta un aporte o un préstamo y entró a caja, sí suma: se emite sin afectar la caja y se registra el aporte aparte).' +
                     (lineas.length ? '\n' + lineas.join('\n') : '\nTodavía no hay cobros este mes.');
             }
         } catch (e) { console.warn('[Inicio] no se pudo calcular «Cobrado este mes»:', e); }
