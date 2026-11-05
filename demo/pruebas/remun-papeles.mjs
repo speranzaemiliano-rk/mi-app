@@ -136,18 +136,30 @@ ok('S5: al decir que sí cambia y el borrador no viaja al otro empleado', await 
 await p.evaluate(() => { window.__conf = true; cerrarModalLiquidar(); });
 ok('S5: sin borrador cerrar el modal no pregunta', !(await p.isVisible('#modalLiquidar')));
 
-// ───── S6: sólo PDF y fotos ─────
+// ───── S6: se puede adjuntar cualquier archivo (PDF, foto, Excel, Word…); el límite es el peso ─────
 await p.evaluate(() => liquidarSueldoEmpleado(0));
 await p.waitForTimeout(300);
 await setMes('2098-06');
 await p.evaluate(() => { window.__alerts = []; });
 const SVG = { name: 'factura.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="document.title=\'XSS\'"></svg>') };
 const HTML = { name: 'factura.html', mimeType: 'text/html', buffer: Buffer.from('<script>document.title="XSS"</script>') };
+const XLSX = { name: 'liquidacion.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('PK\x03\x04 datos') };
+const DOCX = { name: 'contrato.docx', mimeType: '', buffer: Buffer.from('PK\x03\x04 datos') };   // sin tipo: lo deduce el navegador (o queda octet-stream); se conserva el nombre
 const BIN = { name: 'enorme.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(9 * 1024 * 1024, 1) };
-for (const f of [SVG, HTML, BIN]) await subir('A', 'comprobante', f);
-const al6 = await p.evaluate(() => window.__alerts);
-ok('S6: un SVG, un HTML y un binario se rechazan con aviso y no entran al borrador', al6.filter(m => /no se puede adjuntar/.test(m)).length === 3 && await p.evaluate(() => _liqPapelesBorrador.length === 0), JSON.stringify(al6));
-ok('S6: el selector sólo ofrece PDF, JPG, PNG y WEBP (no «image/*»)', await p.evaluate(() => document.getElementById('liqPapelFile').accept === 'application/pdf,image/jpeg,image/png,image/webp'));
+ok('S6: el selector de archivos no restringe el tipo (sin «accept»)', await p.evaluate(() => !document.getElementById('liqPapelFile').hasAttribute('accept')));
+for (const f of [XLSX, DOCX, SVG, HTML]) await subir('A', 'comprobante', f);
+let b6 = await p.evaluate(() => _liqPapelesBorrador.map(x => ({ n: x.nombre, t: x.tipo })));
+ok('S6: un Excel, un Word, un SVG y un HTML entran al borrador con su tipo', b6.length === 4 && b6.find(x => x.n === 'liquidacion.xlsx').t === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' && !!b6.find(x => x.n === 'contrato.docx').t, JSON.stringify(b6));   // el navegador deduce el tipo del .docx; si no, queda octet-stream
+ok('S6: el rechazo por tipo ya no existe (ningún aviso de «no se puede adjuntar»)', !(await p.evaluate(() => window.__alerts)).some(m => /no se puede adjuntar/.test(m)));
+await p.evaluate(() => { window.__blobs = []; window.__opens = 0; window.__descargas = [];
+  const crear = URL.createObjectURL.bind(URL); URL.createObjectURL = (b) => { window.__blobs.push(b.type); return crear(b); };
+  window.open = () => { window.__opens++; return null; }; HTMLAnchorElement.prototype.click = function () { window.__descargas.push(this.download || ''); };
+  window.__ids = _liqPapelesBorrador.map(x => ({ n: x.nombre, id: x.id })); window.__ids.forEach(x => _liqPapelVer(x.id)); });
+const v6 = await p.evaluate(() => ({ opens: window.__opens, blobs: window.__blobs.slice(), desc: window.__descargas.slice() }));
+ok('S6: los 4 se DESCARGAN con su nombre (ninguno se abre en línea con el origen de la app)', v6.opens === 0 && v6.desc.length === 4 && v6.desc.includes('liquidacion.xlsx') && v6.desc.includes('contrato.docx') && v6.blobs.every(t => t === 'application/octet-stream'), JSON.stringify(v6));
+await p.evaluate(() => { _liqPapelesBorrador = []; window.__alerts = []; });
+await subir('A', 'comprobante', BIN);
+ok('S6: un archivo que pasa los 8 MB se rechaza por peso y no entra al borrador', (await p.evaluate(() => window.__alerts)).some(m => /supera los/.test(m)) && await p.evaluate(() => _liqPapelesBorrador.length === 0));
 
 // ───── S7: un adjunto viejo SVG/HTML nunca se abre en línea (XSS por blob con el origen de la app) ─────
 await p.evaluate(() => {
