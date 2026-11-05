@@ -31278,17 +31278,26 @@
     // la consolidación por tildado («Pagos de sueldo») como la de un clic («Sueldos del mes»).
     // opts.silencioso = sin confirmación ni aviso final: lo usa «Liquidar y pagar», donde el
     // usuario ya eligió el reparto y la fecha, y el resumen sale todo junto al terminar.
+    // ⚠️ Los objetos de «sel» pueden quedar VIEJOS: el listener de Firebase reemplaza los de remunPagos en cada
+    // evento (también con el eco de la propia escritura, y con lo que cambie otra persona), y acá hay awaits de
+    // por medio. Por eso lo que se lee de «sel» (importes) se lee ANTES de esperar, y la marca se pone sobre el
+    // pago que esté en remunPagos AL MOMENTO de marcar, buscado por id (_remMarcarConsolidados).
     async function _remConsolidarCore(sel, fecha, cuentaId, opts) {
         opts = opts || {};
         fecha = fecha || _remHoyISO();
-        var banco = sel.reduce(function(s,rp){ return s+(rp.montoBanco||0); },0);
-        var efe   = sel.reduce(function(s,rp){ return s+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); },0);   // incluye el 'no oficial' de registros viejos (todo sale de la caja)
+        // Pagos cuyo movimiento YA salió pero quedaron sin marca (el error de antes: la marca se ponía en un objeto
+        // viejo y no se guardaba). Se marcan con la consolidación que ya tenían, SIN generar otro movimiento.
+        var yaSalidos = [], aMandar = [];
+        sel.forEach(function(rp){ var c = _remConsolidacionDe(rp); if (c) yaSalidos.push({ id: rp.id, fecha: c.fecha || fecha, consId: c.id }); else aMandar.push(rp); });
+        var banco = aMandar.reduce(function(s,rp){ return s+(rp.montoBanco||0); },0);
+        var efe   = aMandar.reduce(function(s,rp){ return s+(rp.montoEfectivo||0)+(rp.montoNoOficial||0); },0);   // incluye el 'no oficial' de registros viejos (todo sale de la caja)
         if (banco > 0 && !cuentaId) { alert('Hay parte en banco: elegí la cuenta bancaria de salida.'); return false; }
-        var msg = '¿Consolidar '+sel.length+' pago(s) con fecha '+formatearFecha(fecha)+'?\n\n';
+        var msg = '¿Consolidar '+aMandar.length+' pago(s) con fecha '+formatearFecha(fecha)+'?\n\n';
         if (efe>0)   msg += '• Caja (efectivo): $'+(efe).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'\n';
         if (banco>0) msg += '• Banco: $'+(banco).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'\n';
         msg += '\nSe registran como «Remuneraciones» (sin detalle por empleado).';
-        if (!opts.silencioso && !confirm(msg)) return false;
+        if (yaSalidos.length) msg += '\n\n(' + yaSalidos.length + ' pago(s) más ya tenían su movimiento en Caja/Banco: sólo se marcan, no se vuelven a mandar.)';
+        if (aMandar.length && !opts.silencioso && !confirm(msg)) return false;
         var consId = 'CONS-' + Date.now();
         var cajaMovId = '', bancoMovId = '', cb = null;
         if (efe > 0) {
@@ -31311,28 +31320,60 @@
             });
         }
         await persistirIngGeneral();
-        sel.forEach(function(rp){ rp.consolidado = true; rp.consolidadoFecha = fecha; rp.consolidadoId = consId; delete _remPagoSel[rp.id]; });
+        _remMarcarConsolidados(aMandar.map(function(rp){ return { id: rp.id, fecha: fecha, consId: consId }; }).concat(yaSalidos));
         await persistirRemunPagos();
-        remunConsolidados.push({
-            id: consId, fecha: fecha, cuentaId: cuentaId,
-            cuentaNombre: cb ? ((cb.banco || 'Cuenta') + (cb.alias ? ' · ' + cb.alias : '')) : '',
-            totalBanco: banco, totalEfectivo: efe,
-            pagoIds: sel.map(function(rp){ return rp.id; }),
-            cajaMovId: cajaMovId, bancoMovId: bancoMovId,
-            empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
-            proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
-            adjuntos: [], creadoEn: Date.now()
-        });
-        await persistirRemunConsolidados();
+        if (aMandar.length) {
+            remunConsolidados.push({
+                id: consId, fecha: fecha, cuentaId: cuentaId,
+                cuentaNombre: cb ? ((cb.banco || 'Cuenta') + (cb.alias ? ' · ' + cb.alias : '')) : '',
+                totalBanco: banco, totalEfectivo: efe,
+                pagoIds: aMandar.map(function(rp){ return rp.id; }),
+                cajaMovId: cajaMovId, bancoMovId: bancoMovId,
+                empresaId: (typeof empresaActual !== 'undefined' && empresaActual) ? empresaActual.id : null,
+                proyectoId: (typeof proyectoActual !== 'undefined' && proyectoActual) ? proyectoActual.id : null,
+                adjuntos: [], creadoEn: Date.now()
+            });
+            await persistirRemunConsolidados();
+        }
         renderRemuneraciones();
         if (typeof renderCajaGeneral==='function') renderCajaGeneral();
         if (typeof renderEfectivoPesos==='function') renderEfectivoPesos();
         if (typeof renderIngGeneral==='function') renderIngGeneral();
         if (!opts.silencioso) {
             var _dest = (efe>0 && banco>0) ? 'Caja y Banco' : (banco>0 ? 'Banco' : 'Caja (efectivo)');
-            alert('✅ Consolidado. Se generó el movimiento «Remuneraciones» en '+_dest+'.');
+            var _fin = aMandar.length ? '✅ Consolidado. Se generó el movimiento «Remuneraciones» en '+_dest+'.' : '';
+            if (yaSalidos.length) _fin += (_fin ? '\n\n' : '') + 'ℹ️ ' + yaSalidos.length + ' pago(s) ya estaban en Caja/Banco (su movimiento ya existía): quedaron marcados como consolidados, sin duplicar el movimiento.';
+            alert(_fin);
         }
         return true;
+    }
+
+    // Marca como consolidados los pagos de la lista [{id, fecha, consId}]. Los busca POR ID en remunPagos en el
+    // momento de marcar: el objeto que se tenía en la mano antes de un await puede ser una copia vieja (el listener
+    // de Firebase reemplaza los del array), y marcarla no cambia nada ni se guarda (el guardado es por diferencia
+    // contra remunPagos). Si el pago ya no existe (otra persona lo borró en el medio) no hay qué marcar: se avisa
+    // por consola y la consolidación queda registrada igual, para poder revertirla y llevarse el movimiento.
+    function _remMarcarConsolidados(lista) {
+        lista.forEach(function(it) {
+            delete _remPagoSel[it.id];
+            var vivo = (remunPagos || []).find(function(x){ return x && x.id === it.id; });
+            if (!vivo) { console.warn('[remuneraciones] el pago ' + it.id + ' ya no existe: no se pudo marcar como consolidado.'); return; }
+            vivo.consolidado = true; vivo.consolidadoFecha = it.fecha; vivo.consolidadoId = it.consId;
+        });
+    }
+    // Consolidación que ya mandó este pago a Caja/Banco. Lo normal es la que dice su propia marca (consolidadoId).
+    // Pero hasta que se corrigió el marcado de «Liquidar y pagar» quedaron pagos SIN marca cuyo movimiento sí salió:
+    // se reconocen porque una consolidación los lista en pagoIds y sus movimientos siguen en Caja/Banco. Si esos
+    // movimientos ya no están (alguien los borró a mano desde Caja), el pago es un pendiente de verdad.
+    function _remConsolidacionDe(rp) {
+        if (!rp) return null;
+        var cs = remunConsolidados || [];
+        if (rp.consolidado) return rp.consolidadoId ? (cs.find(function(c){ return c && c.id === rp.consolidadoId; }) || null) : null;
+        return cs.find(function(c) {
+            if (!c || (c.pagoIds || []).indexOf(rp.id) < 0) return false;
+            var movs = [c.cajaMovId, c.bancoMovId].filter(Boolean);
+            return movs.length > 0 && movs.every(function(id){ return (ingGeneral || []).some(function(m){ return m && m.id === id; }); });
+        }) || null;
     }
 
     async function consolidarRemunPagos() {
@@ -31371,8 +31412,7 @@
         if (!rp) return false;
         var _m = function(n){ return '$' + (n || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         var total = (rp.montoBanco || 0) + (rp.montoEfectivo || 0) + (rp.montoNoOficial || 0);
-        var cons = (rp.consolidado && rp.consolidadoId)
-            ? (remunConsolidados || []).find(function(c){ return c.id === rp.consolidadoId; }) : null;
+        var cons = _remConsolidacionDe(rp);   // también el pago que quedó sin marca teniendo su movimiento hecho
         if (cons && (cons.pagoIds || []).length > 1) {
             alert('Este pago se mandó a Caja/Banco JUNTO con otros ' + ((cons.pagoIds || []).length - 1) + ' pago(s), '
                 + 'en un solo movimiento.\n\nPara borrarlo hay que revertir primero esa consolidación '
@@ -31469,6 +31509,11 @@
         if (!c) { alert('No encontré la consolidación.'); return; }
         try {
             var b64 = await leerArchivoBase64(file);
+            // Leer el archivo tarda: mientras tanto el listener de Firebase pudo reemplazar el objeto de la
+            // consolidación (o alguien borrarla). Se vuelve a buscar por id, o el adjunto se agregaba a una
+            // copia vieja y no se guardaba, sin ningún aviso.
+            c = (remunConsolidados || []).find(function(x){ return x.id === consId; });
+            if (!c) { alert('La consolidación ya no existe (la borró otra persona mientras se subía el archivo).'); return; }
             if (!c.adjuntos) c.adjuntos = [];
             c.adjuntos.push({ nombre: file.name, tipo: file.type || 'application/octet-stream', contenido: b64, subidoEn: Date.now() });
             await persistirRemunConsolidados();
@@ -33194,7 +33239,11 @@
             }
             _remRecordarMedio(banco, efe);
             // Y derecho a Caja/Banco: el usuario eligió que esto sea automático al liquidar.
-            var okC = await _remConsolidarCore([pago], fechaPago, cuentaId, { silencioso: true });
+            // Se pasa el pago que está AHORA en remunPagos: el listener de Firebase ya reemplazó el objeto
+            // «pago» de arriba por una copia (con el eco de la escritura), y marcar la vieja no se guardaba:
+            // el pago quedaba «pendiente de consolidar» con su movimiento ya hecho.
+            var pagoVivo = (remunPagos || []).find(function(x){ return x && x.id === idPago; }) || pago;
+            var okC = await _remConsolidarCore([pagoVivo], fechaPago, cuentaId, { silencioso: true });
             if (typeof _empAvisoPagosDelMes === 'function') _empAvisoPagosDelMes();
             renderRemuneraciones();
             _liqPagoRefrescar(true);
