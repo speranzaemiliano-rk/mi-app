@@ -116,6 +116,10 @@ ARCA/AFIP (`@afipsdk/afip.js`), Belvo, Prometeo, Google Gemini (leer facturas PD
 
 `unidades/index.html` es una **tabla de las unidades de cada edificio** (propietario, inquilino, m²) con valor por m² en USD y en pesos (TC base y TC alternativo), siete conceptos prorrateados por m² (retención de Ganancias, Ingresos Brutos, fondo de administración, reserva, fondo de alhajamiento, recupero de Bienes Personales, recupero CDI Edenor), fecha de posesión, hora de firma, agrupado por propietario y copia de mails. Mismo proyecto de Firebase que el sistema (`modo-prueba-bb8c2`), datos en `global/edificios/<edId>` y alta por **Importar Excel**. ⚠️ Los teléfonos y mails de los propietarios **no van al repo** (se publica en GitHub Pages). Ver `unidades/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta) para el modelo de datos y las trampas conocidas.
 
+## Agenda de posesiones (`agenda/`) — aparte de la app
+
+`agenda/` es la **agenda virtual de entrega de posesiones**: cada inversor recibe un link por unidad (`agenda/?e=<edId>&t=<token>`, sin login), elige día y horario libre (turnos de 1 hora) y carga sus datos, si viene con apoderado y los acompañantes; el administrador (`agenda/admin.html`, con login y rol) bloquea/habilita horarios, ve todas las reservas y genera los links. Mismo proyecto de Firebase que el sistema; datos en `agendaPosesiones/<edId>`. ⚠️ La privacidad entre inversores la dan **las reglas** (rama `agendaPosesiones` de `database.rules.json`, hay que publicarlas a mano). Ver `agenda/CLAUDE.md` (se carga solo al trabajar dentro de esa carpeta).
+
 ## Despliegue
 
 - Frontend: estático (GitHub Pages en `/mi-app/`; también listo para Firebase Hosting vía `firebase.json`).
