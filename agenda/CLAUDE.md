@@ -11,6 +11,10 @@ Agenda virtual para que los inversores elijan día y horario de la **entrega de 
 
 Turnos de **1 hora, uno a la vez**. Cada unidad reserva **un solo turno**. Cambiar o cancelar lo hace el administrador (cancelar libera el horario y la unidad puede volver a reservar con el mismo link).
 
+## Cómo se llega
+
+Es un **módulo del sistema**: aparece en «¿A dónde entrás?» y en los atajos del pie del menú (`MODULOS.agenda` y la lista `todos` de `_modulosDeUsuario()` en el `index.html` de la raíz; abre `agenda/admin.html`). Como comparte origen y proyecto de Firebase, la sesión abierta en el sistema vale y no vuelve a pedir login. Se puede ocultar por usuario con `usuarios/<uid>/modulos/agenda = false`.
+
 ## Modelo de datos — `agendaPosesiones/<edId>`
 
 `<edId>` es el mismo id que `global/edificios/<edId>` (el admin elige el edificio de ese listado).
