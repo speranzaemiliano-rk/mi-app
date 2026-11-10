@@ -92,6 +92,24 @@ await p.waitForTimeout(1500);
 const nota = await p.evaluate(() => (document.getElementById('tesSaldosNota') || {}).textContent || '');
 ok('T1: la nota de la Tesorería ya no dice que «el banco está dentro de la caja»', nota.length > 0 && !/ya est[aá] dentro de la caja/.test(nota) && /no se suman/i.test(nota), nota);
 
+// ── empresa: provincia fuera de la lista y «Nueva empresa» ──
+const emp = await p.evaluate(async () => {
+  const e = empresas[0]; const eid = e.id;
+  await REF_EMPRESAS.child(eid).child('datos').update({ provincia: 'Capital Federal', telefono: '1111' });
+  e.datos = Object.assign({}, e.datos, { provincia: 'Capital Federal', telefono: '1111' });   // la lista en memoria no se refresca sola
+  return eid;
+});
+await p.waitForTimeout(300);
+const prov = await p.evaluate((eid) => { dbVerDatos(eid); const sel = document.querySelector('#dbEditForm [data-key=provincia]'); return { value: sel.value, texto: sel.options[sel.selectedIndex].text }; }, emp);
+ok('P3: «Datos de empresa» muestra una provincia que la lista cerrada no tiene (Capital Federal), no «— Seleccionar —»', prov.value === 'Capital Federal' && prov.texto === 'Capital Federal', JSON.stringify(prov));
+await p.evaluate((eid) => { document.querySelector('#dbEditForm [data-key=telefono]').value = '2222'; dbGuardarDatos(eid); }, emp);
+await p.waitForTimeout(500);
+const tras = await p.evaluate((eid) => ({ prov: (empresas.find(e => e.id === eid).datos || {}).provincia, tel: (empresas.find(e => e.id === eid).datos || {}).telefono }), emp);
+ok('P4: cambiar sólo el teléfono y guardar conserva la provincia', tras.prov === 'Capital Federal' && tras.tel === '2222', JSON.stringify(tras));
+const nuevaEmp = await p.evaluate(() => { abrirModalEmpresa(); const a = document.getElementById('empTipoPersona'), c = document.getElementById('empCondIva'); const r0 = [a.selectedIndex, c.selectedIndex];
+  a.selectedIndex = 1; c.selectedIndex = 1; abrirModalEmpresa(); return { antes: r0, despues: [a.selectedIndex, c.selectedIndex] }; });
+ok('P5: «Nueva empresa» no hereda el tipo de persona ni la condición de IVA de la última que se abrió', nuevaEmp.despues[0] === 0 && nuevaEmp.despues[1] === 0, JSON.stringify(nuevaEmp));
+
 ok('Z: sin errores de JS durante toda la prueba', errores.length === 0, JSON.stringify(errores.slice(0, 3)));
 for (const r of res) console.log(r.join(' '));
 console.log('\n' + res.filter(r => r[0] === 'OK ').length + '/' + res.length + ' OK');

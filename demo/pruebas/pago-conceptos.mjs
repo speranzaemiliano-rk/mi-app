@@ -187,7 +187,7 @@ ok('H1: el certificado de retención muestra la base de cálculo de cada régime
 const certViejo = await p.evaluate(() => _retBodyHTML('X', { fecha: '2026-11-01', monto: 1000, retenciones: [{ codigo: '78', monto: 20, desc: 'Reg.78' }], nroCorrelativo: 'OP-1' }, 'N', 'ganancias'));
 ok('H2: el certificado de un pago anterior (sin reparto) sale como siempre, sin columna de base', certViejo && !/Base de cálculo/.test(certViejo));
 const opHtml = await p.evaluate(() => { const f = facturas.find(x => x.id === 'fc_1'), pg = f.pagosHistorial[0]; return imprimirReciboFactura(f, pg.monto, pg.fecha, 'A', pg.retenciones.map(r => ({ codigo: r.codigo, monto: r.monto, desc: r.desc, sobre: r.sobre })), pg.totalRet, 'OP-9', '', true); });
-ok('H3: la Orden de Pago dice sobre qué concepto va cada retención', /Ret\. Reg\.78/.test(opHtml) && /s\/ Venta de bienes/.test(opHtml), (opHtml || '').slice(0, 200));
+ok('H3: la Orden de Pago dice sobre qué concepto va cada retención, en su propia línea (no parte el importe)', /Ret\. Reg\.78<\/span><span>- [^<]+<\/span><\/div><div[^>]*>sobre Venta de bienes/.test(opHtml), (opHtml || '').slice(0, 200));
 await p.evaluate(() => { mostrarTab('Pagos'); });
 await p.waitForTimeout(700);
 const panel = await p.evaluate(() => { const i = _pagosRows.findIndex(r => r.conceptosRet && r.prov === 'Colocaciones SA'); if (i < 0) return null; pagosSeleccionar(i); return document.getElementById('pagosPanel').innerHTML; });
@@ -199,6 +199,45 @@ const xss = await p.evaluate(() => {
   const d = document.createElement('div'); d.innerHTML = document.getElementById('pagosPanel').innerHTML + _retBodyHTML('X', f.pagosHistorial[0], 'N', 'ganancias'); document.body.appendChild(d);
   const r = { imgs: d.querySelectorAll('img').length, xss: window.__xss }; d.remove(); return r; });
 ok('H5: el nombre de un concepto con HTML no ejecuta nada (ni en el panel ni en el certificado)', xss.imgs === 0 && xss.xss === undefined, JSON.stringify(xss));
+
+// ═════════ I: arreglos de la revisión ═════════
+await p.evaluate(async () => { ['fc_7', 'fc_8', 'fc_u'].forEach((id, k) => facturas.push({ id, proveedor: 'Colocaciones SA', fecha: '2026-11-05', numero: 'R-' + k, descripcion: 'Rev ' + k, importe: 1210000, netoGravado: 1000000, moneda: id === 'fc_u' ? 'USD' : 'ARS', pagosHistorial: [], estado: 'pendiente', tipoComprobante: 'A', pagado: 0 })); await persistirFacturas(); });
+// quitar un concepto: el que queda cierra contra el comprobante y «completar con el resto» funciona con una sola línea
+await abrir('fc_7');
+await p.evaluate(() => { document.getElementById('pagoFDConcOn').checked = true; pagoFDConcToggle(true); const ids = _pagoFDConc.lineas.map(l => l.id); pagoFDConcCampo(ids[0], 'base', '600000'); pagoFDConcQuitar(ids[1]); });
+e = await estado();
+ok('I1: al quitar un concepto el que queda toma la base del comprobante (1.000.000), no se queda a medias', e.lineas === 1 && cerca(Number(e.base), 1000000), JSON.stringify(e));
+await p.evaluate(() => { const id = _pagoFDConc.lineas[0].id; pagoFDConcCampo(id, 'base', '300000'); });
+const rs1 = await p.evaluate(() => document.getElementById('pagoFDConcResumen').textContent);
+await p.evaluate(() => pagoFDConcResto());
+e = await estado();
+ok('I2: con una sola línea, «completar con el resto» vuelve a cerrar en 1.000.000', /completar con el resto/.test(rs1) && cerca(Number(e.base), 1000000), rs1 + ' | ' + e.base);
+
+// una retención destildada a mano sigue destildada al tocar el reparto
+await abrir('fc_8');
+await p.evaluate(() => { document.getElementById('pagoFDConcOn').checked = true; pagoFDConcToggle(true); const ids = _pagoFDConc.lineas.map(l => l.id); pagoFDConcCampo(ids[0], 'base', '600000'); pagoFDConcReg(ids[0], '94'); pagoFDConcReg(ids[1], '94'); });
+const i94 = await p.evaluate(() => _pagoFDRetsCalculadas.findIndex(r => r.codigo === '94'));
+await p.evaluate((i) => pagoFDToggleRet(i), i94);
+let a94 = await p.evaluate(() => _pagoFDRetsCalculadas.find(r => r.codigo === '94').activa);
+await p.evaluate(() => { const id = _pagoFDConc.lineas[0].id; pagoFDConcCampo(id, 'desc', 'Bienes'); });
+const re = await p.evaluate(() => ({ activa: _pagoFDRetsCalculadas.find(r => r.codigo === '94').activa, checks: Array.from(document.querySelectorAll('#pagoFDRetDesglose input[type=checkbox]')).map(c => c.checked) }));
+ok('I3: la retención destildada a mano (Reg.94) sigue destildada después de escribir el nombre de un concepto (y la casilla lo muestra)', a94 === false && re.activa === false && JSON.stringify(re.checks) === '[true,false]', JSON.stringify(re));
+// tocar «Una» de nuevo no descarta el reparto del mismo comprobante
+await p.evaluate(() => pagoFDSelModo('una'));
+e = await estado();
+ok('I4: apretar «Una» con el mismo comprobante NO descarta el reparto (sigue con sus 2 conceptos y la base suma)', e.panelVisible && e.lineas === 2 && e.baseRO && cerca(Number(e.base), 1000000), JSON.stringify(e));
+// ...y el pago sale sin la retención destildada
+await p.evaluate(() => { document.getElementById('pagoFDMonto').value = 1210000; });
+await p.evaluate(() => _guardarPagoFDInterno());
+await p.waitForTimeout(300);
+const pg8 = await p.evaluate(() => JSON.parse(JSON.stringify(facturas.find(x => x.id === 'fc_8').pagosHistorial[0] || null)));
+ok('I5: se guarda sin la retención que se destildó (sólo Reg.78)', pg8 && pg8.retenciones.length === 1 && pg8.retenciones[0].codigo === '78', JSON.stringify(pg8 && pg8.retenciones));
+
+// factura en dólares: los importes del reparto salen con USD
+await abrir('fc_u');
+await p.evaluate(() => { document.getElementById('pagoFDConcOn').checked = true; pagoFDConcToggle(true); const ids = _pagoFDConc.lineas.map(l => l.id); pagoFDConcCampo(ids[0], 'desc', 'Bienes'); pagoFDConcCampo(ids[0], 'base', '600000'); pagoFDConcReg(ids[0], '94'); });
+const usd = await p.evaluate(() => ({ res: document.getElementById('pagoFDConcResumen').textContent, sobre: _pagoFDRetsCalculadas.map(r => r.sobre).join(' | ') }));
+ok('I6: en una factura en dólares el resumen y el «sobre» de cada retención dicen USD y no «$»', /USD 600\.000,00/.test(usd.res) && /USD 600\.000,00/.test(usd.sobre) && !/\$\s?600/.test(usd.res + usd.sobre), JSON.stringify(usd));
 
 ok('Z: sin errores de JS durante toda la prueba', errores.length === 0, JSON.stringify(errores.slice(0, 3)));
 for (const r of res) console.log(r.join(' '));
