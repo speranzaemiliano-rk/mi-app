@@ -3633,7 +3633,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v575</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v576</div>
         </div>
     </nav>
 
@@ -12239,7 +12239,9 @@
         var val=sel?sel.value:'';
         _pagoFDMostrarBanco();
         _pagoFDVepPanel();
-        _pagoFDConcApagar(true);   // el reparto por conceptos era del comprobante anterior
+        // El reparto por conceptos es de UN comprobante: si es el mismo (p. ej. se tocó «Una» de nuevo) sigue; si cambió, se descarta.
+        var _keyItem = _pagoFDTab + ':' + val;
+        if (!(_pagoFDConc.activo && _pagoFDConc.itemKey === _keyItem)) _pagoFDConcApagar(true);
         if(!val){ if(info)info.style.display='none'; _pagoFDRegAvisoPintar(null); _pagoFDConcRefrescar(); return; }
         var imp=0,pag=0,_itFD=null;
         if(_pagoFDTab==='fact'){var f=facturas[parseInt(val)];if(!f){info.style.display='none';return;}_itFD=f;imp=f.importe||0;pag=f.pagado||0;}
@@ -12255,7 +12257,7 @@
         // Se recalcula al cambiar de comprobante, salvo que el usuario la haya escrito a mano
         // (antes sólo se completaba si estaba vacía, así que al cambiar de factura quedaba la
         // base de la anterior).
-        if(bi&&bi.dataset.manual!=='1'){
+        if(bi&&bi.dataset.manual!=='1'&&!_pagoFDConc.activo){   // con el reparto prendido la base es la suma de los conceptos
             // Si la factura tiene neto gravado cargado (ya sin IVA ni percepciones de IIBB), se
             // escala proporcionalmente al monto pendiente en vez de estimar con importe/1.21.
             var fRef = (_pagoFDTab==='fact' && typeof f !== 'undefined') ? f : null;
@@ -12320,11 +12322,11 @@
     // cada régimen: es lo que lee el acumulado mensual del proveedor y SICORE) y `baseImponible` (la suma de las líneas).
     // Los regímenes que se ofrecen son TODOS (como en «Agregar retención»): los que el proveedor no tiene configurados
     // se muestran con borde punteado y se calculan igual si se tildan. Sólo aplica a UN comprobante en modalidad A.
-    var _pagoFDConc = { activo:false, lineas:[], objetivo:0, seq:0, prevBase:'', prevManual:false };
+    var _pagoFDConc = { activo:false, lineas:[], objetivo:0, seq:0, prevBase:'', prevManual:false, itemKey:'' };
     var PAGO_CONC_SUGERIDOS = ['Venta de bienes', 'Servicios de colocación', 'Obra / mano de obra', 'Honorarios', 'Alquiler', 'Flete'];
     var _RET_CORTO = { '78':'Reg.78', '94':'Reg.94', '119':'Reg.119', '30/31/32':'Reg.30/31/32', 'SUSS-Ing':'SUSS Ing.', 'SUSS-Const':'SUSS Const.', 'SUSS-Limp':'SUSS Limp.' };
     function _pagoFDConcR2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
-    function _pagoFDConcFmt(n) { return '$' + (Number(n) || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function _pagoFDConcFmt(n) { return _fmtMonto(n, _monDe(_pagoFDConcItem())); }   // con la moneda del comprobante (pesos o USD)
     function _pagoFDConcProv() { return buscarProveedorPorNombre(_pagoFDProvNombre()); }
     // ¿Se puede repartir este pago? Un solo comprobante, modalidad A, proveedor con ficha y sin exención, y un comprobante que lleve retención.
     function _pagoFDConcDisponible() {
@@ -12373,7 +12375,7 @@
         return p;
     }
     function _pagoFDConcReset() {
-        _pagoFDConc = { activo:false, lineas:[], objetivo:0, seq:0, prevBase:'', prevManual:false };
+        _pagoFDConc = { activo:false, lineas:[], objetivo:0, seq:0, prevBase:'', prevManual:false, itemKey:'' };
         var bi = document.getElementById('pagoFDBase'); if (bi) bi.readOnly = false;
         var chk = document.getElementById('pagoFDConcOn'); if (chk) chk.checked = false;
         var box = document.getElementById('pagoFDConcBox'); if (box) box.style.display = 'none';
@@ -12384,7 +12386,8 @@
         if (!_pagoFDConc.activo) return;
         var bi = document.getElementById('pagoFDBase');
         var prevB = _pagoFDConc.prevBase, prevM = _pagoFDConc.prevManual;
-        _pagoFDConc.activo = false; _pagoFDConc.lineas = [];
+        _pagoFDConc.activo = false; _pagoFDConc.lineas = []; _pagoFDConc.itemKey = '';
+        _pagoFDRetsCalculadas = [];
         if (bi) { bi.readOnly = false; bi.value = prevB; if (prevM) bi.dataset.manual = '1'; else delete bi.dataset.manual; }
         var chk = document.getElementById('pagoFDConcOn'); if (chk) chk.checked = false;
         var pn = document.getElementById('pagoFDConcPanel'); if (pn) pn.style.display = 'none';
@@ -12412,6 +12415,8 @@
         var obj = parseFloat(bi.value) || Math.round((parseFloat(document.getElementById('pagoFDMonto').value) || 0) / 1.21);
         _pagoFDConc.objetivo = _pagoFDConcR2(obj);
         _pagoFDConc.activo = true;
+        _pagoFDConc.itemKey = _pagoFDTab + ':' + document.getElementById('pagoFDItem').value;
+        _pagoFDRetsCalculadas = [];   // sin restos de tildes del modo anterior
         _pagoFDConc.lineas = [ _pagoFDConcNueva(_pagoFDConc.objetivo, _pagoFDConcRegsIniciales(prov)), _pagoFDConcNueva(0, []) ];
         _pagoFDConcRender();
         _pagoFDConcSync();
@@ -12444,7 +12449,7 @@
         var C = _pagoFDConc; if (!C.activo) return;
         var n = C.lineas.length, last = C.lineas[n - 1];
         // La última línea es «el resto» mientras no se la escriba a mano: cierra contra la base calculada del comprobante.
-        if (n >= 2 && last && !last.aMano) {
+        if (n >= 1 && last && !last.aMano) {
             var otros = C.lineas.slice(0, n - 1).reduce(function(s, l){ return s + (parseFloat(l.base) || 0); }, 0);
             last.base = Math.max(0, _pagoFDConcR2(C.objetivo - otros));
             var inp = document.getElementById('pagoFDConcBase_' + last.id);
@@ -12642,7 +12647,9 @@
         var _provCalc=_ctxReg.conceptos?_pagoFDConcProvCalc(prov):prov;
         var rets=(_provCalc&&base>0)?calcularRetenciones(base,_provCalc,provNombre,mesAno,_ctxReg.opts):[];
         if(!soloTotales){
-            _pagoFDRetsCalculadas=rets.map(function(r){var _o=Object.assign({},r,{activa:true}); if(_ctxReg.conceptos) _o.sobre=_pagoFDConcSobre(r.codigo); return _o;});
+            // Con el reparto por conceptos cada tecla recalcula: una retención que se destildó a mano sigue destildada mientras el régimen se siga calculando.
+            var _prevAct={}; (_pagoFDRetsCalculadas||[]).forEach(function(r){ _prevAct[r.codigo]=r.activa; });
+            _pagoFDRetsCalculadas=rets.map(function(r){var _o=Object.assign({},r,{activa:true}); if(_ctxReg.conceptos){ _o.sobre=_pagoFDConcSobre(r.codigo); if(_prevAct[r.codigo]===false) _o.activa=false; } return _o;});
             if(!rets.length){
                 desgEl.innerHTML='<div class="ret-row" style="color:var(--text-3);font-size:12px;">'
                     +(_ctxReg.sinRetencion?'Esta factura está marcada sin retención: no se calcula ningún régimen.':(prov?'Este proveedor no tiene retenciones automáticas configuradas.':'Seleccioná un ítem para ver retenciones automáticas.'))
@@ -12650,7 +12657,7 @@
             } else {
                 desgEl.innerHTML=_pagoFDRetsCalculadas.map(function(r,i){
                     return '<label class="ret-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 0;">'
-                        +'<input type="checkbox" checked onchange="pagoFDToggleRet('+i+')" style="margin-top:3px;cursor:pointer;">'
+                        +'<input type="checkbox"'+(r.activa?' checked':'')+' onchange="pagoFDToggleRet('+i+')" style="margin-top:3px;cursor:pointer;">'
                         +'<span style="flex:1;"><strong>Reg.'+r.codigo+'</strong> — '+r.desc+'</span>'
                         +'<strong style="color:var(--danger);white-space:nowrap;">$'+(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong>'
                         +'</label>'
@@ -17470,7 +17477,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v575';
+    var APP_VER = 'v576';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -22855,7 +22862,8 @@
         var retsBlock = '';
         if (totalRet > 0) {
             (rets||[]).forEach(function(r){
-                retsBlock += '<div class="tot-row ret"><span>Ret. Reg.' + r.codigo + (r.sobre ? ' <span style="font-size:10px;">s/ ' + escHtml(r.sobre) + '</span>' : '') + '</span><span>- ' + fmt(r.monto) + '</span></div>';
+                retsBlock += '<div class="tot-row ret"><span>Ret. Reg.' + r.codigo + '</span><span>- ' + fmt(r.monto) + '</span></div>'
+                    + (r.sobre ? '<div style="font-size:10px;color:var(--muted);margin:-3px 0 6px;line-height:1.3;">sobre ' + escHtml(r.sobre) + '</div>' : '');
             });
             retsBlock += '<div class="tot-row neto"><span>Neto al proveedor</span><span>' + fmt(neto) + '</span></div>';
         }
@@ -24705,6 +24713,8 @@
             ['empNombre','empCuit','empCodigo','empIIBB','empInicioAct','empDireccion','empCiudad','empProvincia','empCP','empTelefono','empEmail','empWeb','empResponsable'].forEach(id => {
                 const el = document.getElementById(id); if (el) el.value = '';
             });
+            // Los desplegables vuelven a su primera opción: si no, una empresa nueva heredaba el tipo de persona y la condición de IVA de la última editada.
+            ['empTipoPersona','empCondIva'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
         }
         document.getElementById('modalEmpresa').classList.add('active');
         setTimeout(() => { const n = document.getElementById('empNombre'); if(n) n.focus(); }, 100);
@@ -45572,6 +45582,8 @@
                 Object.keys(c.opciones).forEach(function(k) {
                     html += '<option value="' + k + '"' + (c.val === k ? ' selected' : '') + '>' + c.opciones[k] + '</option>';
                 });
+                // Un valor guardado que la lista no tiene (cargado a mano o por una versión vieja) se muestra y se conserva: sin esto el desplegable quedaba en blanco y al guardar se borraba.
+                if (c.val && !Object.prototype.hasOwnProperty.call(c.opciones, c.val)) html += '<option value="' + escHtml(c.val) + '" selected>' + escHtml(c.val) + '</option>';
                 html += '</select>';
             } else if (c.tipo === 'provinciaAR') {
                 html += '<select data-key="' + c.key + '" id="dbProvSelect" onchange="dbCargarCiudades()" style="' + inputStyle + '">'
@@ -45579,6 +45591,8 @@
                 provinciasAR.forEach(function(p) {
                     html += '<option value="' + p + '"' + (c.val === p ? ' selected' : '') + '>' + p + '</option>';
                 });
+                // «Editar empresa» deja escribir cualquier provincia a mano: si no está en la lista, se muestra y se conserva (antes se borraba al guardar).
+                if (c.val && provinciasAR.indexOf(c.val) === -1) html += '<option value="' + escHtml(c.val) + '" selected>' + escHtml(c.val) + '</option>';
                 html += '</select>';
             } else if (c.tipo === 'ciudadAR') {
                 html += '<input type="text" data-key="' + c.key + '" id="dbCiudadInput" value="' + (c.val || '').replace(/"/g, '&quot;') + '" placeholder="Escribí para buscar..." list="dbCiudadList" autocomplete="off" oninput="dbBuscarCiudad()" style="' + inputStyle + '">';
