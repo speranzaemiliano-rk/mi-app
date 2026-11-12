@@ -98,8 +98,8 @@ const sp = await p.evaluate(() => { const a = alquileres.find(x => x.id === 'bp_
 ok('D1: «Finalizar» calcula la deuda de febrero sobre lo que se cobra (28 días, 14 bonificados → 155.000)', JSON.stringify(sp).indexOf('155000') >= 0 || (sp && cerca(Number(sp.saldo || sp.total || 0), 155000 + 310000)) , JSON.stringify(sp));
 // el backend tiene la MISMA cuenta
 const srv = fs.readFileSync(new URL('../../functions/server.js', import.meta.url), 'utf8');
-const m = srv.match(/function _alqFraccionPeriodo\(a, periodo\) \{[\s\S]*?\n\}\n/);
-const fnSrv = new Function('return ' + m[0])();
+const mF = srv.match(/function _alqImporteFijo\(a, periodo\) \{[\s\S]*?\n\}\n/), m = srv.match(/function _alqFraccionPeriodo\(a, periodo\) \{[\s\S]*?\n\}\n/);
+const fnSrv = new Function(mF[0] + m[0] + '; return _alqFraccionPeriodo;')();   // _alqFraccionPeriodo del backend usa _alqImporteFijo
 const casos = [];
 for (const prop of [false, true]) for (const per of ['2026-01', '2026-02', '2026-03', '2027-12', '2028-02']) for (const bo of [0, 1, 5, 14, 15, 40]) casos.push({ prop, per, bo });
 const front = await p.evaluate((casos) => casos.map(c => { const a = { inicio: '2026-03-20', fin: '2027-12-19', proporcionalInicio: c.prop, proporcionalFin: c.prop }; if (c.bo) a.bonifParcial = { [c.per]: { dias: c.bo } }; return _alqFraccionPeriodo(a, c.per); }), casos);
