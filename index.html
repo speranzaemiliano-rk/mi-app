@@ -3633,7 +3633,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v576</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v577</div>
         </div>
     </nav>
 
@@ -17477,7 +17477,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v576';
+    var APP_VER = 'v577';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -34384,16 +34384,31 @@
     // sólo hasta el 19: así 24 meses de contrato suman 24 cuotas y no 25. Cada punta se prende por separado en el contrato
     // (`proporcionalInicio` / `proporcionalFin`); sin esas marcas todo funciona como siempre. El proporcional es por DÍAS REALES del
     // mes (20 al 31 de enero = 12 de 31), contando el día de inicio. Devuelve null si el período se cobra entero.
-    function _alqFraccionPeriodo(a, periodo) {
+    // Días que el contrato cobra en ese período ANTES de bonificar nada (el mes entero, o el tramo del primer/último mes proporcional).
+    function _alqDiasBasePeriodo(a, periodo) {
         if (!a || !a.inicio || !periodo || !/^\d{4}-\d{2}$/.test(periodo)) return null;
         var y = parseInt(periodo.substring(0, 4), 10), m = parseInt(periodo.substring(5, 7), 10);
         var diasMes = new Date(y, m, 0).getDate();
         var desde = 1, hasta = diasMes;
         if (a.proporcionalInicio && a.inicio.substring(0, 7) === periodo) desde = parseInt(a.inicio.substring(8, 10), 10) || 1;
         if (a.proporcionalFin && a.fin && a.fin.substring(0, 7) === periodo) hasta = Math.min(diasMes, parseInt(a.fin.substring(8, 10), 10) || diasMes);
-        var dias = Math.max(0, hasta - desde + 1);
-        if (dias >= diasMes) return null;
-        return { factor: dias / diasMes, dias: dias, diasMes: diasMes, desde: desde, hasta: hasta };
+        return { dias: Math.max(0, hasta - desde + 1), diasMes: diasMes, desde: desde, hasta: hasta };
+    }
+    // ⚠️ BONIFICACIÓN PARCIAL (`a.bonifParcial[periodo] = {dias, nota?}`): se bonifican N días de ESE mes (la mitad, una semana…) y se cobra el resto en
+    // proporción. Va por la misma cuenta del proporcional —días reales del mes—, así que todo lo que ya usaba `_alqFraccionPeriodo` /
+    // `_alqCanonEsperado` (plan, saldo, modal de cobro, recibo, Finalizar, backend) la toma sola. Nunca llega a bonificar TODOS los días: para eso está 🎁 (mes
+    // entero, `mesesBonificados`). Si el contrato cambió (p. ej. se destildó el proporcional) y lo guardado ya no entra, se acota.
+    function _alqBonifParcial(a, periodo) {
+        var b = a && a.bonifParcial && a.bonifParcial[periodo];
+        var d = b ? parseInt(b.dias, 10) : 0;
+        return d > 0 ? d : 0;
+    }
+    function _alqFraccionPeriodo(a, periodo) {
+        var base = _alqDiasBasePeriodo(a, periodo); if (!base) return null;
+        var bonif = Math.min(_alqBonifParcial(a, periodo), Math.max(0, base.dias - 1));
+        if (base.dias >= base.diasMes && !bonif) return null;
+        var dias = base.dias - bonif;
+        return { factor: dias / base.diasMes, dias: dias, diasMes: base.diasMes, desde: base.desde, hasta: base.hasta, bonif: bonif, diasBase: base.dias };
     }
     // Lo que corresponde cobrar de ESE período: el canon vigente, prorrateado si es el primer/último mes proporcional.
     function _alqCanonEsperado(a, periodo) {
@@ -34470,6 +34485,11 @@
     }
     function _alqTextoFraccion(f, periodo) {
         var mm = periodo.substring(5, 7) + '/' + periodo.substring(0, 4), d2 = function(n) { return String(n).padStart(2, '0'); };
+        if (f.bonif) {
+            // Con bonificación parcial: «16 de 31 días (15 bonificados)»; si además el mes es proporcional, también el tramo («12 del 20 al 31/01, 5 bonificados»).
+            return f.dias + ' de ' + f.diasMes + ' días (' + (f.diasBase < f.diasMes ? f.diasBase + ' del ' + d2(f.desde) + ' al ' + d2(f.hasta) + '/' + mm + ', ' : '')
+                + f.bonif + (f.bonif === 1 ? ' bonificado' : ' bonificados') + ')';
+        }
         return f.dias + ' de ' + f.diasMes + ' días (' + d2(f.desde) + ' al ' + d2(f.hasta) + '/' + mm + ')';
     }
 
@@ -36157,7 +36177,9 @@
         var fr = (concepto === 'alquiler') ? _alqFraccionPeriodo(a, periodo) : null, hp = document.getElementById('cobroAlqProrrata');
         if (!hp) return;
         hp.style.display = fr ? '' : 'none';
-        if (fr) hp.textContent = '📐 Período proporcional: ' + _alqTextoFraccion(fr, periodo) + ' — se carga el canon por ese tramo. Podés corregir el monto si hace falta.';
+        if (fr) hp.textContent = fr.bonif
+            ? '🎁 Bonificación parcial: ' + _alqTextoFraccion(fr, periodo) + ' — se carga el canon por los días que se cobran. Podés corregir el monto si hace falta.'
+            : '📐 Período proporcional: ' + _alqTextoFraccion(fr, periodo) + ' — se carga el canon por ese tramo. Podés corregir el monto si hace falta.';
     }
     // Al cambiar «Período que cubre» el monto esperado cambia (el primer/último mes son proporcionales): se recalcula, salvo que el monto ya
     // se haya tipeado a mano. El desglose de IVA sigue al monto; el N° de factura y los archivos elegidos no se tocan.
@@ -36726,9 +36748,74 @@
         var a = alquileres[idx]; if (!a) return;
         if (!Array.isArray(a.mesesBonificados)) a.mesesBonificados = [];
         var pos = a.mesesBonificados.indexOf(periodo);
-        if (pos === -1) a.mesesBonificados.push(periodo); else a.mesesBonificados.splice(pos, 1);
+        if (pos === -1) {
+            a.mesesBonificados.push(periodo);
+            // El mes entero bonificado absorbe a la bonificación parcial de ese mes (si no, al quitar el 🎁 reaparecería una bonificación vieja).
+            if (a.bonifParcial && a.bonifParcial[periodo]) { delete a.bonifParcial[periodo]; if (!Object.keys(a.bonifParcial).length) delete a.bonifParcial; }
+        } else a.mesesBonificados.splice(pos, 1);
         persistirAlquileres();
         _renderPlanAlquiler();
+    }
+    // ── Bonificar PARTE de un mes (la mitad, una semana, ciertos días) ──
+    function _alqBonifParcialAbrir(idx, periodo) {
+        var a = alquileres[idx]; if (!a || !/^\d{4}-\d{2}$/.test(periodo || '')) return;
+        var base = _alqDiasBasePeriodo(a, periodo); if (!base) return;
+        if (base.dias < 2) { alert('Este período se cobra un solo día: para no cobrarlo, bonificá el mes entero con 🎁.'); return; }
+        var act = _alqBonifParcial(a, periodo), maxD = base.dias - 1;
+        var meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+        var lbl = meses[parseInt(periodo.substring(5, 7), 10) - 1] + ' ' + periodo.substring(0, 4);
+        var mitad = Math.max(1, Math.min(maxD, Math.floor(base.dias / 2)));
+        var pre = function(n, t) { return n >= 1 && n <= maxD ? '<button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById(\'bpDias\').value=' + n + ';_alqBonifParcialPrev(' + idx + ',\'' + periodo + '\')">' + t + ' (' + n + ' días)</button> ' : ''; };
+        var nota = (a.bonifParcial && a.bonifParcial[periodo] && a.bonifParcial[periodo].nota) || '';
+        abrirModalGenerico('🎁 Bonificar parte del mes',
+            '<div style="font-size:13px;margin-bottom:12px;line-height:1.5;">Alquiler de <strong style="text-transform:capitalize;">' + lbl + '</strong> · ' + escHtml(a.unidad || '') + (a.inquilino ? ' · ' + escHtml(a.inquilino) : '') + '<br>'
+            + '<span style="color:var(--text-3);">Elegí cuántos días no se cobran: el resto se cobra en proporción (días reales del mes).' + (base.dias < base.diasMes ? ' Este período ya es proporcional: se cobran ' + base.dias + ' de ' + base.diasMes + ' días.' : '') + '</span></div>'
+            + '<div style="margin-bottom:10px;">' + pre(mitad, 'La mitad') + pre(7, 'Una semana') + pre(15, 'Quincena') + '</div>'
+            + '<div class="form-group"><label>Días a bonificar (de 1 a ' + maxD + ')</label><input type="number" id="bpDias" min="1" max="' + maxD + '" step="1" value="' + (act || '') + '" placeholder="Ej: 15" oninput="_alqBonifParcialPrev(' + idx + ',\'' + periodo + '\')" style="width:100%;"></div>'
+            + '<div class="form-group"><label>Nota (opcional)</label><input type="text" id="bpNota" maxlength="120" value="' + escHtml(nota) + '" placeholder="Ej: del 1 al 15, obras en el local" style="width:100%;"></div>'
+            + '<div id="bpPrev" style="font-size:12px;margin:8px 0 14px;padding:8px 10px;border-radius:8px;background:var(--surface-2,#f5f5f5);min-height:34px;"></div>'
+            + '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+            + (act ? '<button type="button" class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="_alqBonifParcialQuitar(' + idx + ',\'' + periodo + '\')">✖ Quitar la bonificación</button>' : '')
+            + '<button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById(\'modalGenerico\').remove()">Cancelar</button>'
+            + '<button type="button" class="btn btn-gold btn-sm" onclick="_alqBonifParcialGuardar(' + idx + ',\'' + periodo + '\')">💾 Guardar</button></div>');
+        _alqBonifParcialPrev(idx, periodo);
+    }
+    // Días elegidos (entero) o null si no valen: entre 1 y los días que se cobran MENOS uno.
+    function _alqBonifParcialLeer(a, periodo) {
+        var base = _alqDiasBasePeriodo(a, periodo); if (!base) return null;
+        var el = document.getElementById('bpDias'), v = el ? parseFloat(el.value) : NaN;
+        if (!isFinite(v) || v < 1 || v > base.dias - 1 || Math.floor(v) !== v) return null;
+        return v;
+    }
+    function _alqBonifParcialPrev(idx, periodo) {
+        var a = alquileres[idx], box = document.getElementById('bpPrev'); if (!a || !box) return;
+        var base = _alqDiasBasePeriodo(a, periodo), n = _alqBonifParcialLeer(a, periodo);
+        if (!n) { box.innerHTML = '<span style="color:var(--text-3);">Ingresá un número entero de días entre 1 y ' + (base.dias - 1) + '.</span>'; return; }
+        var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
+        var sinBonif = _r2(canon * base.dias / base.diasMes), cobra = _r2(canon * (base.dias - n) / base.diasMes);
+        box.innerHTML = 'Se bonifican <strong>' + n + '</strong> días: se cobran <strong>' + (base.dias - n) + ' de ' + base.diasMes + ' días</strong> → <strong>' + _alqFmtMon(a, cobra) + '</strong>'
+            + ' <span style="color:var(--text-3);">(en vez de ' + _alqFmtMon(a, sinBonif) + ')</span>';
+    }
+    function _alqBonifParcialGuardar(idx, periodo) {
+        var a = alquileres[idx]; if (!a) return;
+        var n = _alqBonifParcialLeer(a, periodo);
+        if (!n) { alert('Ingresá la cantidad de días a bonificar: un número entero, de 1 hasta ' + ((_alqDiasBasePeriodo(a, periodo) || { dias: 2 }).dias - 1) + '.'); return; }
+        if ((a.mesesBonificados || []).indexOf(periodo) !== -1) { alert('Ese mes ya está bonificado entero (🎁): quitá primero esa bonificación.'); return; }
+        var nota = String(((document.getElementById('bpNota') || {}).value) || '').trim().slice(0, 120);
+        if (!a.bonifParcial || typeof a.bonifParcial !== 'object') a.bonifParcial = {};
+        a.bonifParcial[periodo] = nota ? { dias: n, nota: nota } : { dias: n };
+        persistirAlquileres();
+        var m = document.getElementById('modalGenerico'); if (m) m.remove();
+        _renderPlanAlquiler();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
+    }
+    function _alqBonifParcialQuitar(idx, periodo) {
+        var a = alquileres[idx]; if (!a) return;
+        if (a.bonifParcial) { delete a.bonifParcial[periodo]; if (!Object.keys(a.bonifParcial).length) delete a.bonifParcial; }
+        persistirAlquileres();
+        var m = document.getElementById('modalGenerico'); if (m) m.remove();
+        _renderPlanAlquiler();
+        if (typeof renderAlquileres === 'function') renderAlquileres();
     }
     // Fila del depósito de garantía al principio del plan: pactado, cobrado y estado, con sus acciones (cobrar/completar, editar cada cobro, desaplicar).
     function _planAlqFilaDeposito(a, idx) {
@@ -36849,12 +36936,18 @@
                 if (estado === 'pendiente' || estado === 'vencida') {
                     accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqToggleBonificado(' + idx + ',\'' + periodo + '\')" title="Bonificar este mes (plazo de gracia)">🎁</button>';
                 }
+                // Bonificar sólo PARTE del mes (la mitad, una semana, ciertos días): también con un pago parcial hecho; el saldo se recalcula.
+                if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
+                    accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqBonifParcialAbrir(' + idx + ',\'' + periodo + '\')" title="' + (_frP && _frP.bonif ? 'Cambiar o quitar la bonificación parcial de este mes' : 'Bonificar parte del mes: la mitad o ciertos días') + '"' + (_frP && _frP.bonif ? ' style="background:#EDE7F6;color:#6A1B9A;border-color:#C9B5E8;"' : '') + '>🎁½</button>';
+                }
             }
             var mesLbl = cursor.toLocaleDateString('es-AR', {month:'long', year:'numeric'});
             filas.push('<tr style="background:' + (esBonif?'#F6F2FB':estado==='pagada'?'#F8FFF8':estado==='vencida'?'#FFF8F8':'') + ';">'
                 + '<td style="padding:7px 10px;text-transform:capitalize;">' + mesLbl + '</td>'
                 + '<td style="padding:7px 10px;text-align:right;' + (esBonif?'color:var(--text-3);text-decoration:line-through;':'') + '">' + monSym + (canonPeriodo).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
-                    + (_frP ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);text-decoration:none;" title="Período proporcional">📐 ' + _frP.dias + ' de ' + _frP.diasMes + ' días</div>' : '') + '</td>'
+                    + (_frP ? (_frP.bonif
+                        ? '<div style="font-size:10px;font-weight:400;color:#6A1B9A;text-decoration:none;" title="' + escHtml(((a.bonifParcial[periodo] || {}).nota) || 'Bonificación parcial') + '">🎁 ' + _frP.bonif + (_frP.bonif === 1 ? ' día bonificado' : ' días bonificados') + ' · se cobran ' + _frP.dias + ' de ' + _frP.diasMes + '</div>'
+                        : '<div style="font-size:10px;font-weight:400;color:var(--text-3);text-decoration:none;" title="Período proporcional">📐 ' + _frP.dias + ' de ' + _frP.diasMes + ' días</div>') : '') + '</td>'
                 + '<td style="padding:7px 10px;text-align:right;' + (cobrado>0?'color:var(--success);font-weight:600;':'color:var(--text-3);') + '">' + (esBonif ? '—' : (cobrado>0 ? monSym+(cobrado - cobradoIva).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
                     + (cobradoIva > 0 ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="En este recibo el IVA se cobró aparte del canon">+ IVA ' + monSym + cobradoIva.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</div>' : '')
                     + (cobradoIvaIncl > 0 ? '<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="El IVA ya está dentro del canon cobrado">(incl. IVA ' + monSym + cobradoIvaIncl.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ')</div>' : '') : '—')) + '</td>'
@@ -37091,7 +37184,7 @@
         var _monM = _alqMonedaMonto(a, reg);   // moneda del `monto` de ESTE cobro (un depósito puede estar en otra que el contrato)
         var cLabel = {alquiler:'Alquiler mensual',deposito:'Depósito de garantía',expensas:'Expensas',otro:'Otro'}[concepto]||concepto;
         var _frRec = (concepto === 'alquiler' || !concepto) ? _alqFraccionPeriodo(a, periodo) : null;
-        if (_frRec) cLabel += ' — proporcional: ' + _alqTextoFraccion(_frRec, periodo);
+        if (_frRec) cLabel += (_frRec.bonif ? ' — con bonificación parcial: ' : ' — proporcional: ') + _alqTextoFraccion(_frRec, periodo);
         if (reg && reg.parteIva === 'gravada') cLabel += ' — Parte A (gravada, con IVA)';
         else if (reg && reg.parteIva === 'nograv') cLabel += ' — Parte B (no gravada)';
         var _rh = buildReciboHeader('Orden de Recibo', nroRecibo || null, emision, {
