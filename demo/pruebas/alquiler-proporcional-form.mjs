@@ -35,6 +35,14 @@ ok('A3: el texto del primer mes dice 17 de 31 días y $ 170.000,00, y ofrece el 
 ok('A4: el último mes acompaña al primero (24 meses → termina el 14/10/2028, 14 de 31 días = $ 140.000,00)', e.fin && e.finVis && e.radF[0] === true && /14 de 31 días/.test(e.txtF) && /140\.000,00/.test(e.txtF) && /24 cuotas/.test(e.txtF), JSON.stringify(e));
 r = await p.evaluate(() => document.getElementById('alqFin').value);
 ok('A5: la fecha de fin calculada es 2028-10-14', r === '2028-10-14', r);
+// el texto «N meses son N cuotas» usa la duración REAL (en la v579 quedó fijo en «24 meses»)
+await poner('alqDuracion', '18');
+e = await estado();
+ok('A5b: con 18 meses el texto del último mes dice «18 meses son 18 cuotas y no 19» (no un 24 fijo)', /18 meses son 18 cuotas y no 19/.test(e.txtF) && !/24/.test(e.txtF), e.txtF);
+await poner('alqDuracion', '');
+e = await estado();
+ok('A5c: sin duración el texto no inventa un número', /primer y el último mes suman una cuota/.test(e.txtF) && !/\d+ meses son/.test(e.txtF), e.txtF);
+await poner('alqDuracion', '24');
 
 // guardar: queda proporcionalInicio/Fin y las cuotas dan lo esperado (primer mes proporcional, el resto entero)
 await poner('alqUnidad', 'PF-1');
