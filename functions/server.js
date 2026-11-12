@@ -1621,8 +1621,19 @@ const ALQ_DIAS_AVISO = [5, 1, 0]; // días antes del vencimiento en que se avisa
 // Primer / último mes PROPORCIONAL de un contrato: si empieza el 20, ese mes se cobran del 20 a fin de mes (días reales del mes, contando
 // el de inicio); si termina el 19, el último mes se cobra hasta el 19. Es la MISMA regla que `_alqFraccionPeriodo` de index.html: si se
 // cambia una, hay que cambiar la otra. Devuelve null si el período se cobra entero (o el contrato no tiene las marcas).
+// IMPORTE PACTADO del primer / último mes (`a.importeInicio` / `a.importeFin`): en vez de prorratear por días se cobra ESE importe (alquiler 1000 que empezó el
+// 15 → se acordó cobrar 500). Gana sobre el proporcional y sobre una bonificación parcial de ese mes. Devuelve el importe, o null si el período no es el
+// primero/último o no tiene uno pactado. Es la MISMA regla que `_alqImporteFijo` de index.html: si se cambia una, hay que cambiar la otra.
+function _alqImporteFijo(a, periodo) {
+    if (!a || !/^\d{4}-\d{2}$/.test(String(periodo || ''))) return null;
+    const ii = parseFloat(a.importeInicio), iF = parseFloat(a.importeFin);
+    if (ii > 0 && a.inicio && String(a.inicio).substring(0, 7) === periodo) return ii;
+    if (iF > 0 && a.fin && String(a.fin).substring(0, 7) === periodo) return iF;
+    return null;
+}
 function _alqFraccionPeriodo(a, periodo) {
     if (!a || !a.inicio || !/^\d{4}-\d{2}$/.test(String(periodo || ''))) return null;
+    if (_alqImporteFijo(a, periodo) !== null) return null;   // con importe pactado no hay fracción de días: se cobra ese importe
     const y = parseInt(periodo.substring(0, 4), 10), m = parseInt(periodo.substring(5, 7), 10);
     const diasMes = new Date(y, m, 0).getDate();
     let desde = 1, hasta = diasMes;
@@ -1755,7 +1766,8 @@ async function revisarAlquileres() {
                     const delPeriodo = cobros.filter((c) => c && (c.concepto === 'alquiler' || !c.concepto) && c.periodo === periodo);
                     const cobradoCanon = delPeriodo.reduce((s, c) => s + (Number(c.monto) || 0) - (c.ivaIncluido ? 0 : (Number(c.iva) || 0)), 0);   // un recibo con `ivaIncluido` trae el IVA adentro del canon; uno anterior lo cobraba aparte
                     const frEsp = _alqFraccionPeriodo(a, periodo);
-                    const esperadoCanon = _alqCanonVigenteEnPeriodo(a, periodo) * (frEsp ? frEsp.factor : 1);   // con los ajustes de canon: el esperado de ESE mes
+                    const fijoEsp = _alqImporteFijo(a, periodo);   // importe pactado del primer/último mes (gana sobre el canon y sobre cualquier fracción)
+                    const esperadoCanon = fijoEsp !== null ? fijoEsp : _alqCanonVigenteEnPeriodo(a, periodo) * (frEsp ? frEsp.factor : 1);   // con los ajustes de canon: el esperado de ESE mes
                     if (delPeriodo.length && (esperadoCanon <= 0 || cobradoCanon >= esperadoCanon * 0.98)) continue;   // cobrada completa
                     const saldoParcial = delPeriodo.length ? Math.max(0, esperadoCanon - cobradoCanon) : 0;
 
@@ -1763,7 +1775,7 @@ async function revisarAlquileres() {
                     let vence = new Date(hoy.getFullYear(), hoy.getMonth(), dia); vence.setHours(0, 0, 0, 0);
                     // En el mes en que EMPIEZA un contrato con primer mes proporcional la cuota no vence antes de que empiece (inicio el 20, día de
                     // pago 5 → vence el 20). Los contratos sin la marca siguen como siempre: no se les manda aviso por un mes que ya pasó.
-                    if (a.proporcionalInicio && a.inicio && String(a.inicio).substring(0, 7) === periodo) {
+                    if ((a.proporcionalInicio || parseFloat(a.importeInicio) > 0) && a.inicio && String(a.inicio).substring(0, 7) === periodo) {
                         const ini = new Date(a.inicio + 'T00:00:00');
                         if (!isNaN(ini.getTime()) && ini > vence) vence = ini;
                     }
@@ -1781,7 +1793,9 @@ async function revisarAlquileres() {
                         const monSym = a.moneda === 'USD' ? 'USD ' : '$ ';
                         let monto = _alqCanonVigenteEnPeriodo(a, periodo);
                         const fr = _alqFraccionPeriodo(a, periodo);   // primer/último mes proporcional: el monto es el de ese tramo
-                        if (fr) monto = monto * fr.factor;
+                        const fijo = _alqImporteFijo(a, periodo);     // o el importe pactado de ese mes
+                        if (fijo !== null) monto = fijo;
+                        else if (fr) monto = monto * fr.factor;
                         const cuando = diasRestantes === 0 ? 'hoy' : ('en ' + diasRestantes + ' día(s)');
                         const asunto = '⏰ Alquiler ' + (a.unidad || '') + (saldoParcial > 0 ? ': el saldo de la cuota vence ' : ': la cuota vence ') + cuando;
                         const cuerpo = 'Hola,\n\n' +
@@ -1790,7 +1804,7 @@ async function revisarAlquileres() {
                             'vence el día ' + vence.getDate() + ' de este mes (' + cuando + ').\n' +
                             (saldoParcial > 0
                                 ? 'Ya se cobró ' + monSym + cobradoCanon.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' de la cuota. Saldo pendiente: ' + monSym + saldoParcial.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\n'
-                                : (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (fr.bonif ? ' (con ' + fr.bonif + ' día(s) bonificado(s): se cobran ' + fr.dias + ' de ' + fr.diasMes + ' días)' : ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)') : Math.round(monto)) + '\n' : '')) +
+                                : (monto ? 'Monto: ' + monSym + (fijo !== null ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (importe acordado para el ' + (String(a.inicio || '').substring(0, 7) === periodo ? 'primer' : 'último') + ' mes)' : fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (fr.bonif ? ' (con ' + fr.bonif + ' día(s) bonificado(s): se cobran ' + fr.dias + ' de ' + fr.diasMes + ' días)' : ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)') : Math.round(monto)) + '\n' : '')) +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
                             '\n\n— ' + BRAND_NOMBRE;
