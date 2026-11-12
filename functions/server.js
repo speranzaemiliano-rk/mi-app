@@ -1628,9 +1628,14 @@ function _alqFraccionPeriodo(a, periodo) {
     let desde = 1, hasta = diasMes;
     if (a.proporcionalInicio && String(a.inicio).substring(0, 7) === periodo) desde = parseInt(String(a.inicio).substring(8, 10), 10) || 1;
     if (a.proporcionalFin && a.fin && String(a.fin).substring(0, 7) === periodo) hasta = Math.min(diasMes, parseInt(String(a.fin).substring(8, 10), 10) || diasMes);
-    const dias = Math.max(0, hasta - desde + 1);
-    if (dias >= diasMes) return null;
-    return { factor: dias / diasMes, dias, diasMes, desde, hasta };
+    const diasBase = Math.max(0, hasta - desde + 1);
+    // Bonificación PARCIAL del mes (`a.bonifParcial[periodo] = {dias}`: la mitad, una semana…): se cobran esos días de menos. Es la misma regla que
+    // `_alqFraccionPeriodo` de index.html; nunca llega a bonificar todos los días (para eso está `mesesBonificados`, el mes entero).
+    const bp = a.bonifParcial && a.bonifParcial[periodo];
+    const bonif = Math.min(Math.max(0, parseInt(bp && bp.dias, 10) || 0), Math.max(0, diasBase - 1));
+    if (diasBase >= diasMes && !bonif) return null;
+    const dias = diasBase - bonif;
+    return { factor: dias / diasMes, dias, diasMes, desde, hasta, bonif, diasBase };
 }
 
 // Canon vigente en un período, según el historial de ajustes (`ajustesCanon`). Es la MISMA regla que `_canonVigenteEnPeriodo` de index.html
@@ -1785,7 +1790,7 @@ async function revisarAlquileres() {
                             'vence el día ' + vence.getDate() + ' de este mes (' + cuando + ').\n' +
                             (saldoParcial > 0
                                 ? 'Ya se cobró ' + monSym + cobradoCanon.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' de la cuota. Saldo pendiente: ' + monSym + saldoParcial.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\n'
-                                : (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)' : Math.round(monto)) + '\n' : '')) +
+                                : (monto ? 'Monto: ' + monSym + (fr ? monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (fr.bonif ? ' (con ' + fr.bonif + ' día(s) bonificado(s): se cobran ' + fr.dias + ' de ' + fr.diasMes + ' días)' : ' (período proporcional: ' + fr.dias + ' de ' + fr.diasMes + ' días)') : Math.round(monto)) + '\n' : '')) +
                             (a.direccion ? 'Propiedad: ' + a.direccion + '\n' : '') +
                             '\nEmpresa: ' + (emp.nombre || eid) +
                             '\n\n— ' + BRAND_NOMBRE;
