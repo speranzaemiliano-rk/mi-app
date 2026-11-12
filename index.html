@@ -3633,7 +3633,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v578</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v579</div>
         </div>
     </nav>
 
@@ -17477,7 +17477,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v578';
+    var APP_VER = 'v579';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -34127,7 +34127,8 @@
         _alqDuracionDesdeFechas();
         document.getElementById('alqPropInicio').checked = !!(a && a.proporcionalInicio);
         document.getElementById('alqPropFin').checked    = !!(a && a.proporcionalFin);
-        _alqPropFinTocado = !!a;   // un contrato ya cargado no se toca solo; uno nuevo sí (al prender el primer mes se prende el último)
+        _alqPropFinTocado = !!a;   // un contrato ya cargado no se toca solo; uno nuevo sí (el último mes acompaña al primero)
+        _alqPropIniTocado = !!a;   // en uno nuevo, cambiar la fecha a mitad de mes deja elegido el proporcional hasta que la persona decida
         _alqProrrataPreview();
         document.getElementById('modalAlquiler').classList.add('active');
     }
@@ -34173,9 +34174,12 @@
         if (meses > 0) el.value = meses;
     }
 
-    // Muestra cuánto sale el primer / último mes proporcional con lo que hay cargado en el formulario, y deshabilita cada casilla si no
-    // corresponde (el contrato empieza el día 1 / termina el último día del mes). Sin marcar, no hace nada más que informar.
-    var _alqPropFinTocado = false;
+    // 📐 Primer / último mes proporcional, a la vista al cargar el contrato. El bloque `#alqProrrataWrap` (debajo de las fechas) aparece SOLO cuando el
+    // contrato no empieza el 1 o no termina a fin de mes, y deja elegir entre «proporcional» y «mes entero» con el importe de cada opción. Las dos casillas
+    // ocultas (`alqPropInicio` / `alqPropFin`) son el ESTADO: las lee `guardarAlquiler` (`checked && !disabled`) y no cambió nada de cómo se guarda ni se
+    // calcula (`proporcionalInicio` / `proporcionalFin`, `_alqFraccionPeriodo`, backend). Lo que toca la persona son los botones de opción que se pintan acá.
+    var _alqPropFinTocado = false;   // el último mes acompaña al primero mientras nadie lo haya elegido a mano
+    var _alqPropIniTocado = false;   // en un contrato NUEVO, mientras nadie eligió, al poner una fecha a mitad de mes queda el proporcional
     function _alqProrrataDatos() {
         return {
             inicio: document.getElementById('alqInicio').value, fin: document.getElementById('alqFin').value,
@@ -34184,35 +34188,74 @@
             ajustesCanon: _alqAjustesCanonWorking
         };
     }
-    function _alqProrrataCambio(cual) {
-        _alqProrrataPreview();   // refresca qué casillas corresponden (según las fechas de ahora) antes de decidir
-        if (cual === 'fin') _alqPropFinTocado = true;
-        // al prender el primer mes se prende también el último (si aplica): lo normal es que vayan juntos; se puede destildar
-        if (cual === 'inicio' && document.getElementById('alqPropInicio').checked && !_alqPropFinTocado) {
-            var f = document.getElementById('alqPropFin'); if (!f.disabled) f.checked = true;
-        }
+    // Un botón de opción elegido: `prop` true = proporcional, false = mes entero.
+    function _alqProrrataElegir(cual, prop) {
+        var el = document.getElementById(cual === 'fin' ? 'alqPropFin' : 'alqPropInicio');
+        if (!el || el.disabled) return;
+        el.checked = !!prop;
+        if (cual === 'fin') _alqPropFinTocado = true; else _alqPropIniTocado = true;
         _alqProrrataPreview();
     }
+    // La fecha de inicio cambió. En un contrato NUEVO que arranca a mitad de mes se deja elegido el proporcional (se ve el importe y se pasa a «mes
+    // entero» con un toque): lo que se pidió es poder cobrar el primer mes por los días reales y que desde el siguiente las cuotas sean enteras.
+    function _alqInicioCambio() {
+        _alqCalcFin();
+        _alqProrrataPreview();   // primero pone al día si el primer mes aplica con la fecha nueva (habilita/deshabilita la casilla)
+        var el = document.getElementById('alqPropInicio');
+        if (editandoAlqIdx < 0 && !_alqPropIniTocado && el && !el.disabled && !el.checked) { el.checked = true; _alqProrrataPreview(); }
+    }
     function _alqProrrataPreview() {
-        var elI = document.getElementById('alqPropInicio'), elF = document.getElementById('alqPropFin'), out = document.getElementById('alqProrrataPreview');
-        if (!elI || !elF || !out) return;
+        var elI = document.getElementById('alqPropInicio'), elF = document.getElementById('alqPropFin'), wrap = document.getElementById('alqProrrataWrap');
+        var boxI = document.getElementById('alqProrrataIni'), boxF = document.getElementById('alqProrrataFin');
+        if (!elI || !elF || !wrap || !boxI || !boxF) return;
         var ini = document.getElementById('alqInicio').value, fin = document.getElementById('alqFin').value;
         var diaIni = ini ? parseInt(ini.substring(8, 10), 10) : 1;
+        var diaFin = fin ? parseInt(fin.substring(8, 10), 10) : 0;
         var diasMesFin = fin ? new Date(parseInt(fin.substring(0, 4), 10), parseInt(fin.substring(5, 7), 10), 0).getDate() : 0;
         var aplicaI = !!ini && diaIni > 1;
-        var aplicaF = !!fin && parseInt(fin.substring(8, 10), 10) < diasMesFin;
+        var aplicaF = !!fin && diaFin < diasMesFin;
         // Sólo se destilda cuando la fecha ESTÁ y no corresponde (empieza el día 1 / termina a fin de mes). Con la fecha a medio tipear
         // (vacía) se deshabilita pero se respeta la marca: si no, retipear el año borraba la casilla en silencio.
         elI.disabled = !aplicaI; if (!aplicaI && ini) elI.checked = false;
         elF.disabled = !aplicaF; if (!aplicaF && fin) elF.checked = false;
-        var a = _alqProrrataDatos(), fmt = function(n) { return (document.getElementById('alqMoneda').value === 'USD' ? 'USD ' : '$ ') + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
-        var lineas = [];
-        if (ini && !aplicaI) lineas.push('El contrato empieza el día 1: el primer mes se cobra entero.');
+        // El último mes acompaña al primero (lo normal es que vayan juntos: 24 meses = 24 cuotas) mientras nadie lo eligió a mano; un contrato ya cargado no se toca.
+        if (!_alqPropFinTocado && !elF.disabled) elF.checked = elI.checked && !elI.disabled;
+        wrap.style.display = (aplicaI || aplicaF) ? '' : 'none';
+        var a = _alqProrrataDatos(), usd = document.getElementById('alqMoneda').value === 'USD';
+        var fmt = function(n) { return (usd ? 'USD ' : '$ ') + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+        var d2 = function(n) { return String(n).padStart(2, '0'); };
+        var fechaTxt = function(iso) { return d2(parseInt(iso.substring(8, 10), 10)) + '/' + iso.substring(5, 7) + '/' + iso.substring(0, 4); };
         var sinCanon = !(a.canon || a.canonActual || (a.ajustesCanon || []).length);
-        var imp = function(per) { return sinCanon ? '<em>cargá el canon para ver el importe</em>' : '<strong>' + fmt(_alqCanonEsperado(a, per)) + '</strong>'; };
-        if (elI.checked && !elI.disabled) { var pI = ini.substring(0, 7), fI = _alqFraccionPeriodo(a, pI); if (fI) lineas.push('Primer mes: ' + _alqTextoFraccion(fI, pI) + ' → ' + imp(pI)); }
-        if (elF.checked && !elF.disabled) { var pF = fin.substring(0, 7), fF = _alqFraccionPeriodo(a, pF); if (fF) lineas.push('Último mes: ' + _alqTextoFraccion(fF, pF) + ' → ' + imp(pF)); }
-        out.innerHTML = lineas.join('<br>');
+        var imp = function(x, per) { return sinCanon ? '<em>cargá el canon para ver el importe</em>' : '<strong>' + fmt(_alqCanonEsperado(x, per)) + '</strong>'; };
+        var conMarca = function(k, v) { var x = {}; for (var p in a) x[p] = a[p]; x[k] = v; return x; };
+        // Un extremo del contrato: título + los dos botones de opción (proporcional / mes entero) con el importe de cada uno.
+        var bloque = function(cual, titulo, txtProp, txtEnt) {
+            var nm = cual === 'fin' ? 'alqPropFinRad' : 'alqPropIniRad';
+            var op = function(prop, txt) {
+                return '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:4px;">'
+                    + '<input type="radio" name="' + nm + '" onchange="_alqProrrataElegir(\'' + cual + '\', ' + prop + ')" style="margin-top:3px;"><span>' + txt + '</span></label>';
+            };
+            return '<div style="font-weight:600;margin-bottom:4px;">' + titulo + '</div>' + op('true', txtProp) + op('false', txtEnt);
+        };
+        var pintar = function(box, html, marcado) {
+            // Sólo se repinta si cambió el contenido: repintar en cada tecla del canon le sacaba el foco a quien navega los botones con el teclado.
+            if (box.getAttribute('data-sig') !== html) { box.innerHTML = html; box.setAttribute('data-sig', html); }
+            var r = box.querySelectorAll('input[type=radio]');
+            if (r.length === 2) { r[0].checked = !!marcado; r[1].checked = !marcado; }
+        };
+        if (aplicaI) {
+            var pI = ini.substring(0, 7), xPI = conMarca('proporcionalInicio', true), xEI = conMarca('proporcionalInicio', false), fI = _alqFraccionPeriodo(xPI, pI);
+            pintar(boxI, bloque('inicio', 'Primer mes — el contrato empieza el ' + fechaTxt(ini),
+                '<strong>Cobrar proporcional</strong> — ' + (fI ? _alqTextoFraccion(fI, pI) : '') + ' → ' + imp(xPI, pI) + '. Desde el mes siguiente, la cuota entera.',
+                '<strong>Cobrar el mes entero</strong> → ' + imp(xEI, pI)), elI.checked);
+        } else { boxI.innerHTML = ''; boxI.removeAttribute('data-sig'); }
+        boxF.style.display = aplicaF ? '' : 'none';
+        if (aplicaF) {
+            var pF = fin.substring(0, 7), xPF = conMarca('proporcionalFin', true), xEF = conMarca('proporcionalFin', false), fF = _alqFraccionPeriodo(xPF, pF);
+            pintar(boxF, bloque('fin', 'Último mes — el contrato termina el ' + fechaTxt(fin),
+                '<strong>Cobrar sólo hasta el ' + diaFin + '</strong> — ' + (fF ? _alqTextoFraccion(fF, pF) : '') + ' → ' + imp(xPF, pF) + (aplicaI ? ' (así 24 meses son 24 cuotas y no 25).' : '.'),
+                '<strong>Cobrar el mes entero</strong> → ' + imp(xEF, pF)), elF.checked);
+        } else { boxF.innerHTML = ''; boxF.removeAttribute('data-sig'); }
     }
 
     // Al abrir el modal, mostrar la duración derivada del inicio/fin ya cargados.
@@ -48282,7 +48325,7 @@
       <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
         <div class="form-group">
           <label>Inicio del contrato</label>
-          <input type="date" id="alqInicio" onchange="_alqCalcFin(); _alqProrrataPreview()">
+          <input type="date" id="alqInicio" onchange="_alqInicioCambio()">
         </div>
         <div class="form-group">
           <label>Duración (meses)</label>
@@ -48294,6 +48337,17 @@
           <input type="date" id="alqFin" onchange="_alqFinManual(); _alqProrrataPreview()">
           <div class="form-hint" style="font-size:11px;">Podés ajustarla a mano.</div>
         </div>
+      </div>
+
+      <!-- Primer / último mes proporcional: aparece sólo cuando el contrato no empieza el 1 o no termina a fin de mes, justo debajo de las
+           fechas, para que se elija en el momento de cargarlo. Las dos casillas son el ESTADO (las lee guardarAlquiler y el resto del código);
+           lo que ve y toca la persona son los botones de opción que pinta _alqProrrataPreview. -->
+      <div id="alqProrrataWrap" class="cac-desglose" style="margin-bottom:12px;display:none;">
+        <div class="ret-panel-title">📐 ¿Cómo se cobra el mes en que empieza / termina?</div>
+        <input type="checkbox" id="alqPropInicio" style="display:none;">
+        <input type="checkbox" id="alqPropFin" style="display:none;">
+        <div id="alqProrrataIni"></div>
+        <div id="alqProrrataFin" style="margin-top:10px;"></div>
       </div>
 
       <!-- Canon -->
@@ -48320,19 +48374,6 @@
             <input type="number" id="alqDiaPago" step="1" min="1" max="31" placeholder="Ej: 10">
             <div class="form-hint">Último día para pagar cada mes: <strong>5</strong> = se cobra del 1 al 5. Se usa para avisar cuando la cuota está por vencer o vencida.</div>
           </div>
-        </div>
-        <!-- Primer / último mes proporcional: el contrato no empieza el 1 ni termina a fin de mes -->
-        <div id="alqProrrataWrap" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
-          <div style="font-weight:600;margin-bottom:6px;">📐 Meses proporcionales</div>
-          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="alqPropInicio" onchange="_alqProrrataCambio('inicio')" style="margin-top:3px;">
-            <span><strong>Primer mes proporcional</strong> — si el contrato empieza el 20, se cobran del 20 a fin de mes; desde el mes siguiente, la cuota entera.</span>
-          </label>
-          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
-            <input type="checkbox" id="alqPropFin" onchange="_alqProrrataCambio('fin')" style="margin-top:3px;">
-            <span><strong>Último mes proporcional</strong> — si termina el 19, el último mes se cobra sólo hasta el 19 (así 24 meses son 24 cuotas y no 25).</span>
-          </label>
-          <div id="alqProrrataPreview" class="form-hint" style="margin-top:8px;"></div>
         </div>
       </div>
 
