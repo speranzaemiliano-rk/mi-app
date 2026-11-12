@@ -3633,7 +3633,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v577</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v578</div>
         </div>
     </nav>
 
@@ -17477,7 +17477,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v577';
+    var APP_VER = 'v578';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -36792,15 +36792,23 @@
         var base = _alqDiasBasePeriodo(a, periodo), n = _alqBonifParcialLeer(a, periodo);
         if (!n) { box.innerHTML = '<span style="color:var(--text-3);">Ingresá un número entero de días entre 1 y ' + (base.dias - 1) + '.</span>'; return; }
         var canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
-        var sinBonif = _r2(canon * base.dias / base.diasMes), cobra = _r2(canon * (base.dias - n) / base.diasMes);
+        // Misma cuenta que `_alqCanonEsperado` (canon × días/diasMes): con otro orden de operaciones podía diferir un centavo de lo que después muestra el plan.
+        var sinBonif = base.dias >= base.diasMes ? canon : _r2(canon * (base.dias / base.diasMes)), cobra = _r2(canon * ((base.dias - n) / base.diasMes));
+        var cob = _alqCobradoPeriodo(a, periodo);
         box.innerHTML = 'Se bonifican <strong>' + n + '</strong> días: se cobran <strong>' + (base.dias - n) + ' de ' + base.diasMes + ' días</strong> → <strong>' + _alqFmtMon(a, cobra) + '</strong>'
-            + ' <span style="color:var(--text-3);">(en vez de ' + _alqFmtMon(a, sinBonif) + ')</span>';
+            + ' <span style="color:var(--text-3);">(en vez de ' + _alqFmtMon(a, sinBonif) + ')</span>'
+            + (cob > 0 ? '<div style="margin-top:4px;color:' + (cob >= cobra * 0.98 ? 'var(--warn)' : 'var(--text-3)') + ';">Ya se cobraron ' + _alqFmtMon(a, cob)
+                + (cob >= cobra * 0.98 ? ' (' + (cob > cobra + 0.005 ? 'quedan ' + _alqFmtMon(a, _r2(cob - cobra)) + ' cobrados de más y ' : '') + 'el mes queda pagado)' : ' · faltarían ' + _alqFmtMon(a, _r2(cobra - cob))) + '.</div>' : '');
     }
     function _alqBonifParcialGuardar(idx, periodo) {
         var a = alquileres[idx]; if (!a) return;
         var n = _alqBonifParcialLeer(a, periodo);
         if (!n) { alert('Ingresá la cantidad de días a bonificar: un número entero, de 1 hasta ' + ((_alqDiasBasePeriodo(a, periodo) || { dias: 2 }).dias - 1) + '.'); return; }
         if ((a.mesesBonificados || []).indexOf(periodo) !== -1) { alert('Ese mes ya está bonificado entero (🎁): quitá primero esa bonificación.'); return; }
+        // Si ya se cobró más de lo que queda por cobrar con esta bonificación, se avisa antes de guardar (el mes quedaría «Pagada» con plata de más).
+        var _bs = _alqDiasBasePeriodo(a, periodo), _canon = _canonVigenteEnPeriodo(a.canon, a.canonActual, a.ajustesCanon, periodo) || 0;
+        var _cobra = _r2(_canon * ((_bs.dias - n) / _bs.diasMes)), _cob = _alqCobradoPeriodo(a, periodo);
+        if (_cob > _cobra + 0.005 && !confirm('Ya se cobraron ' + _alqFmtMon(a, _cob) + ' de ese mes y con esta bonificación se cobran ' + _alqFmtMon(a, _cobra) + ': quedarían ' + _alqFmtMon(a, _r2(_cob - _cobra)) + ' cobrados de más.\n\n¿Guardar la bonificación igual?')) return;
         var nota = String(((document.getElementById('bpNota') || {}).value) || '').trim().slice(0, 120);
         if (!a.bonifParcial || typeof a.bonifParcial !== 'object') a.bonifParcial = {};
         a.bonifParcial[periodo] = nota ? { dias: n, nota: nota } : { dias: n };
@@ -36936,8 +36944,9 @@
                 if (estado === 'pendiente' || estado === 'vencida') {
                     accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqToggleBonificado(' + idx + ',\'' + periodo + '\')" title="Bonificar este mes (plazo de gracia)">🎁</button>';
                 }
-                // Bonificar sólo PARTE del mes (la mitad, una semana, ciertos días): también con un pago parcial hecho; el saldo se recalcula.
-                if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial') {
+                // Bonificar sólo PARTE del mes (la mitad, una semana, ciertos días): también con un pago parcial hecho; el saldo se recalcula. Si el mes ya
+                // TIENE bonificación parcial el botón sigue (aunque con ella el mes quede «Pagada»): es la única forma de cambiarla o quitarla sin desaplicar los cobros.
+                if (estado === 'pendiente' || estado === 'vencida' || estado === 'parcial' || (_frP && _frP.bonif)) {
                     accion += '<button type="button" class="btn btn-outline btn-sm" onclick="_alqBonifParcialAbrir(' + idx + ',\'' + periodo + '\')" title="' + (_frP && _frP.bonif ? 'Cambiar o quitar la bonificación parcial de este mes' : 'Bonificar parte del mes: la mitad o ciertos días') + '"' + (_frP && _frP.bonif ? ' style="background:#EDE7F6;color:#6A1B9A;border-color:#C9B5E8;"' : '') + '>🎁½</button>';
                 }
             }
@@ -37200,7 +37209,8 @@
                 ' · TC $' + Number(reg.tc || 0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + '</td><td></td><td class="tr"><strong>' +
                 fmtN(reg.montoCobrado, reg.monedaCobro) + '</strong></td></tr>';
         }
-        // Pago parcial: el recibo dice cuánto se lleva cobrado del período y cuánto falta (a la fecha del recibo, para que una reimpresión no cambie).
+        // Pago parcial: el recibo dice cuánto se lleva cobrado del período y cuánto falta. Lo cobrado se cuenta a la fecha del recibo, pero el ESPERADO sale del contrato de HOY
+        // (proporcional, bonificación parcial): una reimpresión después de cambiarlos puede decir otra cosa que el papel original.
         var _parcialRec = '';
         if (concepto === 'deposito') {   // el recibo del depósito dice cuánto se lleva cobrado a la fecha del recibo y cuánto queda
             var _diR = _alqDepositoEstado(a, String((reg && reg.fecha) || fecha || '')), _fdR = function(n) { return fmtN(n, _diR.moneda); };

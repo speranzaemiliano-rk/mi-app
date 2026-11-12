@@ -107,6 +107,31 @@ const back = casos.map(c => { const a = { inicio: '2026-03-20', fin: '2027-12-19
 const difs = casos.filter((c, k) => JSON.stringify(front[k]) !== JSON.stringify(back[k]));
 ok('D2: el backend (server.js) calcula la misma fracción que la app en ' + casos.length + ' casos (proporcional, bonificaciones, meses de 28/30/31 días)', difs.length === 0, JSON.stringify(difs.slice(0, 2)) + JSON.stringify(front[0]) + JSON.stringify(back[0]));
 
+// ═════════ E: arreglos de la revisión ═════════
+// un mes cobrado en parte que la bonificación deja «Pagada»: avisa antes, y el botón sigue para cambiarla o quitarla
+await p.evaluate(async () => { const a = alquileres.find(x => x.id === 'bp_1'); delete a.bonifParcial; a.cobrosHistorial = [{ id: 'ec1', periodo: '2026-04', concepto: 'alquiler', monto: 186000, fecha: '2026-04-02' }]; await persistirAlquileres(); });
+await p.waitForTimeout(300);
+await p.evaluate(async () => { window.__confirms = []; window.confirm = m => { window.__confirms.push(String(m)); return true; }; });
+await p.evaluate((i) => { _alqBonifParcialAbrir(i, '2026-04'); document.getElementById('bpDias').value = '15'; _alqBonifParcialPrev(i, '2026-04'); }, await idx('bp_1'));
+const pv = await p.evaluate(() => document.getElementById('bpPrev').textContent);
+ok('E1: la vista previa avisa que ya hay $186.000 cobrados y que quedarían cobrados de más', /Ya se cobraron \$ 186\.000,00/.test(pv) && /cobrados de más/.test(pv) && /el mes queda pagado/.test(pv), pv);
+await p.evaluate((i) => _alqBonifParcialGuardar(i, '2026-04'), await idx('bp_1'));
+await p.waitForTimeout(300);
+const cf = await p.evaluate(() => ({ c: window.__confirms.slice(), b: JSON.stringify((alquileres.find(x => x.id === 'bp_1').bonifParcial || {})['2026-04'] || null) }));
+ok('E2: al guardar pide confirmación nombrando lo cobrado de más (31.000: abril tiene 30 días, se cobran 155.000) y, aceptada, guarda', cf.c.length === 1 && /31\.000,00/.test(cf.c[0]) && cf.b === JSON.stringify({ dias: 15 }), JSON.stringify(cf));
+await p.evaluate((i) => { abrirPlanAlquiler(i); }, await idx('bp_1'));
+await p.waitForTimeout(400);
+const fa = await fila('abril');
+ok('E3: aunque el mes quede «Pagada» la fila sigue ofreciendo 🎁½ (resaltado) para cambiar o quitar la bonificación', fa && /Pagada/.test(fa.txt) && /🎁½/.test(fa.txt) && /background:#EDE7F6/.test(fa.html), JSON.stringify(fa && fa.txt));
+await p.evaluate((i) => _alqBonifParcialQuitar(i, '2026-04'), await idx('bp_1'));
+const fb = await fila('abril');
+ok('E4: quitándola vuelve a «Parcial» sin tocar los cobros y sin el botón resaltado', fb && /Parcial/.test(fb.txt) && !/background:#EDE7F6/.test(fb.html), JSON.stringify(fb && fb.txt));
+// la vista previa usa la misma cuenta que el esperado (sin diferencias de un centavo)
+const dif = await p.evaluate(() => { const out = []; for (const canon of [100007.31, 100043.86, 123456.78, 99999.99, 310000.01]) for (const dm of [28, 30, 31]) for (let n = 1; n < dm; n++) { const a = { inicio: '2026-01-01', canon, canonActual: canon, bonifParcial: { '2027-02': { dias: n } } };
+  const per = dm === 28 ? '2027-02' : dm === 30 ? '2027-04' : '2027-03'; a.bonifParcial = { [per]: { dias: n } }; const esp = _alqCanonEsperado(a, per);
+  const prev = _r2(canon * ((dm - n) / dm)); if (Math.abs(esp - prev) > 1e-9) out.push([canon, dm, n, esp, prev]); } return out; });
+ok('E5: la vista previa y el esperado dan lo mismo al centavo (140 combinaciones con centavos)', dif.length === 0, JSON.stringify(dif.slice(0, 3)));
+
 ok('Z: sin errores de JS durante toda la prueba', errores.length === 0, JSON.stringify(errores.slice(0, 3)));
 for (const r of res) console.log(r.join(' '));
 console.log('\n' + res.filter(r => r[0] === 'OK ').length + '/' + res.length + ' OK');
