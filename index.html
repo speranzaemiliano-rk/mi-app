@@ -1460,6 +1460,30 @@
             #modalFichaPresup .modal-body td, #modalFichaPresup .modal-body th { white-space: normal; }
         }
 
+        /* ── IVA y percepciones de un comprobante recibido ──────────────────────── */
+        .imp-grupo { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
+        .imp-grupo > label { margin-top: 0; }
+        .imp-sub { font-weight: 400; font-size: 11px; color: var(--text-3); }
+        .imp-sub2 { margin: 10px 0 6px; font-weight: 600; font-size: 12px; }
+        .imp-aviso { margin: 6px 0; padding: 6px 10px; font-size: 12px; color: var(--warn); background: var(--warn-bg); border-left: 3px solid var(--warn); border-radius: 3px; }
+        .imp-cab, .imp-fila { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) minmax(110px, 1fr) 34px; gap: 8px; align-items: center; }
+        .imp-cab { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); margin-top: 8px; }
+        .imp-fila { margin-bottom: 6px; }
+        .imp-fila select, .imp-fila input { width: 100%; min-width: 0; }
+        .imp-perc { grid-template-columns: minmax(150px, 1.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 34px; }
+        .imp-perc input[type=number] { grid-column: 3; }   /* el importe siempre en la misma columna, con o sin el campo de detalle */
+        .imp-fila input[readonly] { background: transparent; color: var(--text-2); cursor: default; }
+        .imp-x { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 15px; padding: 4px; }
+        .imp-acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 6px; }
+        .imp-resumen { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; line-height: 1.6; }
+        .imp-error { color: var(--danger); font-size: 12px; font-weight: 600; margin-top: 4px; }
+        @media (max-width: 760px) {
+            .imp-cab { display: none; }
+            .imp-fila, .imp-perc { grid-template-columns: 1fr 1fr 34px; }
+            .imp-fila select { grid-column: 1 / -1; }
+            .imp-perc input[type=number] { grid-column: auto; }
+        }
+
         /* ── Detalle del comprobante: una fila = un ítem ─────────────────────────── */
         .fact-items-cab, .fact-item-fila {
             display: grid;
@@ -6124,6 +6148,7 @@
                             <th style="padding:6px 8px;text-align:right;">Neto</th>
                             <th style="padding:6px 8px;text-align:center;">IVA %</th>
                             <th style="padding:6px 8px;text-align:right;">IVA $</th>
+                            <th style="padding:6px 8px;text-align:right;" title="Percepciones (IIBB, IVA…) e importes sin IVA (no gravado, exento). El detalle está al pasar el mouse.">Percep. / otros</th>
                             <th style="padding:6px 8px;text-align:right;">Total</th>
                             <th style="padding:6px 8px;text-align:center;">Estado</th>
                           </tr>
@@ -7736,11 +7761,13 @@
                 </div>
                 <div class="form-group">
                     <label>Moneda</label>
-                    <select id="factMoneda">
+                    <select id="factMoneda" onchange="_impRefrescar('fact')">
                         <option value="ARS">ARS — Pesos argentinos</option>
                         <option value="USD">USD — Dólares</option>
                     </select>
                 </div>
+                <!-- IVA (alícuota/s) y percepciones del comprobante: lo arma _impRender; se esconde en Comprobante X, VEP y «no computa ARCA» -->
+                <div class="form-group imp-grupo" id="factImpGrupo" style="display:none;"></div>
                 <div class="form-group">
                     <label>🛡️ Fondo de reparo (garantía de obra)</label>
                     <input type="number" id="factFondoReparoPct" step="0.01" min="0" max="100" placeholder="Ej: 10">
@@ -12261,8 +12288,9 @@
             // Si la factura tiene neto gravado cargado (ya sin IVA ni percepciones de IIBB), se
             // escala proporcionalmente al monto pendiente en vez de estimar con importe/1.21.
             var fRef = (_pagoFDTab==='fact' && typeof f !== 'undefined') ? f : null;
-            bi.value = (fRef && fRef.netoGravado > 0 && fRef.importe > 0)
-                ? Math.round(pend * (fRef.netoGravado / fRef.importe))
+            var _rnF = fRef ? _facRatioNeto(fRef) : null;   // con IVA/percepciones cargados: importe − IVA − percepciones (alícuota real, no 21 %)
+            bi.value = (_rnF != null)
+                ? Math.round(pend * _rnF)
                 : Math.round(pend/1.21);
         }
         _pagoFDConcRefrescar();
@@ -12876,7 +12904,7 @@
             if ((f.estado||'pendiente') === 'pagada') return;
             var pend = _saldoFactDoc(f);
             if (pend <= 0) return;
-            var neto = (f.netoGravado > 0 && f.importe > 0) ? Math.round(pend * (f.netoGravado / f.importe)) : Math.round(pend / 1.21);
+            var _rnM = _facRatioNeto(f), neto = (_rnM != null) ? Math.round(pend * _rnM) : Math.round(pend / 1.21);
             _pagoFDMulti.items.push({ idx:i, f:f, pend:pend, neto:neto, checked:true });
             rows += '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft);cursor:pointer;font-size:13px;">'
                 + '<input type="checkbox" checked onchange="pagoFDMultiToggle('+i+',this.checked)" style="cursor:pointer;">'
@@ -15125,15 +15153,15 @@
         var foot = document.getElementById('rptComprasFoot');
         if (!body) return;
         var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
-        if (!items.length) { body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
-        var totNeto=0, totIVA=0, totTotal=0, hayEstimado=false, nIncl=0, nUSD=0;
+        if (!items.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:16px;">Sin facturas en el período</td></tr>'; foot.innerHTML=''; return; }
+        var totNeto=0, totIVA=0, totTotal=0, totOtros=0, hayEstimado=false, nIncl=0, nUSD=0;
         body.innerHTML = items.map(function(v) {
             var d = _rptIvaCompra(v);
             if (d.estimado) hayEstimado = true;
             // El libro es en PESOS y no hay tipo de cambio por comprobante: un comprobante en USD se lista (con su moneda a la
             // vista) pero NO entra en los totales ni en el IVA del período; el pie avisa cuántos quedaron afuera.
             var usd = d.moneda === 'USD';
-            if (usd) nUSD++; else { nIncl++; totNeto += d.neto; totIVA += d.iva; totTotal += d.total; }
+            if (usd) nUSD++; else { nIncl++; totNeto += d.neto; totIVA += d.iva; totTotal += d.total; totOtros += (d.percep||0) + (d.noGrav||0) + (d.exento||0); }
             var fm = usd ? function(n){ return _fmtMonto(n, 'USD'); } : _fmtM;
             var estado = v.estado==='pagada' ? '<span style="color:var(--success);">✔ Pagada</span>' : v.estado==='parcial' ? '<span style="color:var(--gold);">◑ Parcial</span>' : '<span style="color:var(--danger);">○ Pendiente</span>';
             var tagNC = v.esNotaCredito ? ' <span title="Nota de crédito: resta de las compras del período" style="color:#1e8e3e;font-size:10px;font-weight:700;">NC</span>' : '';
@@ -15143,8 +15171,9 @@
                 '<td style="padding:5px 8px;">'+(v.numero||'—')+tagNC+'</td>' +
                 '<td style="padding:5px 8px;">'+(v.descripcion||'—')+'</td>' +
                 '<td style="padding:5px 8px;text-align:right;">'+fm(d.neto)+'</td>' +
-                '<td style="padding:5px 8px;text-align:center;">'+(d.alicPct ? d.alicPct+'%' : '0%')+(d.estimado?'<span title="IVA estimado: la factura no tiene neto gravado cargado" style="color:var(--gold);">~</span>':'')+'</td>' +
+                '<td style="padding:5px 8px;text-align:center;">'+(d.alicLabel || (d.alicPct ? d.alicPct+'%' : '0%'))+(d.estimado?'<span title="IVA estimado: la factura no tiene neto gravado cargado" style="color:var(--gold);">~</span>':'')+'</td>' +
                 '<td style="padding:5px 8px;text-align:right;">'+fm(d.iva)+'</td>' +
+                '<td style="padding:5px 8px;text-align:right;">'+_rptCeldaOtros(d, fm)+'</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-weight:600;">'+fm(d.total)+'</td>' +
                 '<td style="padding:5px 8px;text-align:center;">'+estado+'</td>' +
                 '</tr>';
@@ -15156,6 +15185,7 @@
             '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totNeto)+'</td>' +
             '<td></td>' +
             '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totIVA)+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totOtros)+'</td>' +
             '<td style="padding:6px 8px;text-align:right;">'+_fmtM(totTotal)+'</td>' +
             '<td></td></tr>';
     }
@@ -15177,7 +15207,19 @@
         var total = v.esNotaCredito ? Math.abs(v.importe||0) : (v.importe||0);
         // Un VEP / comprobante no fiscal (tipoComprobante 'X') es un comprobante ARCA registrable,
         // pero NO genera crédito fiscal de IVA: su IVA es 0 (no se estima). Sí cuenta su total.
-        if (!_facComputaArca(v)) return { neto: signo*total, iva: 0, total: signo*total, alicPct: 0, estimado: false, moneda: mon, signo: signo };
+        if (!_facComputaArca(v)) return { neto: signo*total, iva: 0, total: signo*total, alicPct: 0, alicLabel: '—', estimado: false, moneda: mon, signo: signo, noGrav: 0, exento: 0, percep: 0, percDet: [], tieneDetalle: false };
+        // IVA discriminado AL CARGAR el comprobante (por alícuota, con percepciones y sin IVA): se usa tal cual, no se estima. Neto + IVA +
+        // percepciones + sin IVA = total por construcción (ver «IVA y percepciones de un comprobante recibido»).
+        var im = _facImp(v);
+        if (im.tiene) {
+            var _al = [], _seen = {};
+            im.gravados.forEach(function(g) { if (!_seen[g.alic]) { _seen[g.alic] = 1; _al.push(g.alic); } });
+            return { neto: signo*im.neto, iva: signo*im.iva, total: signo*total,
+                     alicPct: _al.length === 1 ? _al[0] : (im.neto > 0 ? Math.round(im.iva / im.neto * 1000) / 10 : 0),
+                     alicLabel: _al.length ? _al.map(_alicPctTxt).join(' / ') : '—',
+                     estimado: false, moneda: mon, signo: signo, noGrav: signo*im.ng, exento: signo*im.ex, percep: signo*im.percTot,
+                     percDet: im.perc.map(function(x) { return { tipo: x.tipo, desc: x.desc, monto: signo*x.monto }; }), tieneDetalle: true };
+        }
         var neto, estimado = false;
         if ((v.netoGravado||0) > 0) { neto = v.netoGravado; }
         else {
@@ -15195,8 +15237,23 @@
             }
         }
         var iva = total - neto;
-        var alicPct = neto>0 ? Math.round((iva/neto)*100) : 0;
-        return { neto: signo*neto, iva: signo*iva, total: signo*total, alicPct: alicPct, estimado: estimado, moneda: mon, signo: signo };
+        var alicPct = neto>0 ? Math.round((iva/neto)*1000)/10 : 0;   // un decimal: el 10,5 % no se muestra como 11 %
+        return { neto: signo*neto, iva: signo*iva, total: signo*total, alicPct: alicPct, alicLabel: _alicPctTxt(alicPct), estimado: estimado, moneda: mon, signo: signo, noGrav: 0, exento: 0, percep: 0, percDet: [], tieneDetalle: false };
+    }
+    function _alicPctTxt(n) { return String(Number(n) || 0).replace('.', ',') + '%'; }
+    // Nombre corto de una percepción para el libro («IIBB CABA», «IIBB Córdoba»…).
+    function _rptPercNombre(x) {
+        var t = _impTipoPerc(x.tipo);
+        return (t.conDesc && x.desc) ? (t.id === 'iibb_otra' ? 'IIBB ' + x.desc : x.desc) : t.corto;
+    }
+    // Celda «Percep. / otros» del libro: percepciones + importes sin IVA, con el detalle en el tooltip.
+    function _rptCeldaOtros(d, fm) {
+        var o = (d.percep || 0) + (d.noGrav || 0) + (d.exento || 0);
+        if (!o) return '—';
+        var det = (d.percDet || []).map(function(x) { return _rptPercNombre(x) + ' ' + fm(x.monto); });
+        if (d.noGrav) det.push('No gravado ' + fm(d.noGrav));
+        if (d.exento) det.push('Exento ' + fm(d.exento));
+        return '<span title="' + escHtml(det.join(' · ')) + '">' + fm(o) + '</span>';
     }
 
     // Tipo elegido en el selector "Todas/Solo Ganancias/Solo SUSS" de la tarjeta de Retenciones.
@@ -15373,6 +15430,9 @@
         // Las notas de crédito restan (_rptIvaCompra las devuelve en negativo).
         var totCompras = compras.reduce(function(s,v){ return s+_rptIvaCompra(v).total; },0);
         var totIVAC    = compras.reduce(function(s,v){ return s+_rptIvaCompra(v).iva; },0);
+        // Percepciones sufridas en las compras del período (IIBB CABA / Buenos Aires / otras, IVA, Ganancias, otros tributos): se acreditan en sus DDJJ.
+        var percPor = {}, totPerc = 0;
+        compras.forEach(function(v){ _rptIvaCompra(v).percDet.forEach(function(x){ var k = _rptPercNombre(x); percPor[k] = (percPor[k]||0) + x.monto; totPerc += x.monto; }); });
         var posIVA     = totIVAV - totIVAC; // débito fiscal (ventas) − crédito fiscal (compras)
         // retenciones
         var totRet = 0;
@@ -15400,6 +15460,11 @@
               '<div class="stat-sub">'+compras.length+' comprobante'+(compras.length===1?'':'s')+' · Total '+_fmtM(totCompras)+
                 (nComprasUSD ? '<br><span style="color:var(--warn);">'+nComprasUSD+' en USD no incluido'+(nComprasUSD===1?'':'s')+'</span>' : '')+'</div>' +
             '</div>' +
+            (totPerc ? '<div class="stat-card" style="border-left:4px solid var(--gold);">' +
+              '<div class="stat-label">Percepciones sufridas (compras)</div>' +
+              '<div class="stat-value" style="font-size:18px;color:var(--gold);">'+_fmtM(totPerc)+'</div>' +
+              '<div class="stat-sub">'+Object.keys(percPor).map(function(k){ return escHtml(k)+' '+_fmtM(percPor[k]); }).join(' · ')+'</div>' +
+            '</div>' : '') +
             '<div class="stat-card" style="border-left:4px solid '+posColor+';">' +
               '<div class="stat-label">Posición IVA del período</div>' +
               '<div class="stat-value" style="font-size:18px;color:'+posColor+';">'+_fmtM(Math.abs(posIVA))+'</div>' +
@@ -15436,18 +15501,18 @@
                 }).join('')+'</tbody><tfoot><tr><td colspan="5">TOTAL ('+items.length+' comprobantes)</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totI)+'</td><td class="r">'+_fmtM(totT)+'</td></tr></tfoot></table>';
         } else if (tipo === 'compras') {
             var items = (facturas||[]).filter(function(v){ return rptEnPeriodo(v.fecha, f) && v.computaARCA !== false; });
-            var totN=0,totIV=0,totT=0,hayEst=false,nIncl=0,nUSDp=0;
+            var totN=0,totIV=0,totT=0,totOt=0,hayEst=false,nIncl=0,nUSDp=0;
             content = '<h1>📥 Libro IVA Compras — Facturas de Proveedores</h1><h2>'+empresa+' — '+periodo+'</h2>' +
-                '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
+                '<table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Nro Factura</th><th>Concepto</th><th class="r">Neto</th><th class="c">IVA%</th><th class="r">IVA $</th><th class="r">Percep. / otros</th><th class="r">Total</th><th class="c">Estado</th></tr></thead><tbody>' +
                 items.map(function(v){
                     var d = _rptIvaCompra(v); if (d.estimado) hayEst=true;
                     // Mismo criterio que la pantalla: las NC restan y los USD se listan pero no se suman (el libro es en pesos).
                     var usd = d.moneda === 'USD';
-                    if (usd) nUSDp++; else { nIncl++; totN+=d.neto;totIV+=d.iva;totT+=d.total; }
+                    if (usd) nUSDp++; else { nIncl++; totN+=d.neto;totIV+=d.iva;totT+=d.total; totOt+=(d.percep||0)+(d.noGrav||0)+(d.exento||0); }
                     var fm = usd ? function(n){ return _fmtMonto(n,'USD'); } : _fmtM;
                     var est = v.estado==='pagada'?'<span class="ok">Pagada</span>':v.estado==='parcial'?'<span class="pend">Parcial</span>':'<span class="ret">Pendiente</span>';
-                    return '<tr'+(usd?' style="color:#777;"':'')+'><td>'+_rptFechaDMY(v.fecha)+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+(v.esNotaCredito?' (NC)':'')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+fm(d.neto)+'</td><td class="c">'+(d.alicPct||0)+'%'+(d.estimado?'~':'')+'</td><td class="r">'+fm(d.iva)+'</td><td class="r">'+fm(d.total)+'</td><td class="c">'+est+'</td></tr>';
-                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+nIncl+' comprobante'+(nIncl===1?'':'s')+')</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
+                    return '<tr'+(usd?' style="color:#777;"':'')+'><td>'+_rptFechaDMY(v.fecha)+'</td><td>'+(v.proveedor||'—')+'</td><td>'+(v.numero||'—')+(v.esNotaCredito?' (NC)':'')+'</td><td>'+(v.descripcion||'—')+'</td><td class="r">'+fm(d.neto)+'</td><td class="c">'+(d.alicLabel||((d.alicPct||0)+'%'))+(d.estimado?'~':'')+'</td><td class="r">'+fm(d.iva)+'</td><td class="r">'+_rptCeldaOtros(d, fm)+'</td><td class="r">'+fm(d.total)+'</td><td class="c">'+est+'</td></tr>';
+                }).join('')+'</tbody><tfoot><tr><td colspan="4">TOTAL ('+nIncl+' comprobante'+(nIncl===1?'':'s')+')</td><td class="r">'+_fmtM(totN)+'</td><td></td><td class="r">'+_fmtM(totIV)+'</td><td class="r">'+_fmtM(totOt)+'</td><td class="r">'+_fmtM(totT)+'</td><td></td></tr></tfoot></table>' +
                 (hayEst?'<p style="font-size:11px;color:#777;margin-top:-16px;">~ IVA estimado al 21% en facturas sin neto gravado cargado.</p>':'') +
                 (nUSDp?'<p style="font-size:11px;color:#777;margin-top:-16px;">'+_rptAvisoUSD(nUSDp)+'. Las notas de crédito (NC) restan.</p>':'');
         } else {
@@ -15495,9 +15560,18 @@
                 // Pesos: enteros, como siempre. Dólares: con centavos (redondearlos a entero perdería plata) y la columna Moneda lo dice.
                 var usd = d.moneda === 'USD';
                 var rd = function(n) { return usd ? Math.round(n * 100) / 100 : Math.round(n); };
+                // Percepciones por tipo (cada una en su columna, para la DDJJ de IIBB y el crédito de IVA/Ganancias).
+                var pp = { iibb_caba: 0, iibb_pba: 0, iibb_otra: 0, iva: 0, ganancias: 0, otra: 0 };
+                (d.percDet || []).forEach(function(x) { pp[x.tipo in pp ? x.tipo : 'otra'] += x.monto; });
+                var detOtras = (d.percDet || []).filter(function(x) { return (x.tipo === 'iibb_otra' || x.tipo === 'otra') && x.desc; }).map(function(x) { return _rptPercNombre(x); }).join(', ');
                 return { 'Fecha': _rptFechaDMY(v.fecha), 'Proveedor': v.proveedor||'', 'Nro Factura': v.numero||'',
                          'Concepto': v.descripcion||'', 'Neto Gravado': rd(d.neto),
-                         'IVA %': d.alicPct, 'IVA $': rd(d.iva), 'Total': rd(d.total),
+                         'IVA %': (d.alicLabel && d.alicLabel.indexOf('/') !== -1) ? d.alicLabel : d.alicPct, 'IVA $': rd(d.iva),
+                         'No gravado': rd(d.noGrav || 0), 'Exento': rd(d.exento || 0),
+                         'Perc. IIBB CABA': rd(pp.iibb_caba), 'Perc. IIBB Bs. As.': rd(pp.iibb_pba), 'Perc. IIBB otras': rd(pp.iibb_otra),
+                         'Perc. IVA': rd(pp.iva), 'Perc. Ganancias': rd(pp.ganancias), 'Otros tributos': rd(pp.otra),
+                         'Detalle percepciones': detOtras,
+                         'Total': rd(d.total),
                          'IVA estimado': d.estimado ? 'Sí (21%)' : '', 'Pagado': v.pagado||0, 'Estado': v.estado||'',
                          'Moneda': d.moneda, 'Tipo': _facTipoLabel(v) };
             });
@@ -20696,6 +20770,7 @@
         // Comprobante X y VEP → forzar "no computa ARCA" (ninguno da crédito fiscal de IVA).
         if (clase === 'factx' || clase === 'vep') { var cs = document.getElementById('leerFactComputaARCA'); if (cs) cs.value = 'false'; }
         lfToggleNC();
+        _impSync('lf');   // el panel de IVA y percepciones se esconde en Comprobante X / VEP y la letra C propone 0 %
     }
     function lfToggleNC() {
         var chk = document.getElementById('leerFactEsNC');
@@ -20774,11 +20849,14 @@
     }
 
     // Inicializar estado del paso 2 al mostrarlo
-    function lfInicializarPaso2(provNombre) {
+    function lfInicializarPaso2(provNombre, datosIA) {
         lfSelTipo('presup');
         lfPoblarPresupuestos(provNombre);
         lfSelPagarAhora(true);
         lfSelMod('A');
+        // IVA por alícuota y percepciones: lo que leyó la IA (o, sin eso, 21 % / 0 % según la letra), para revisar y corregir.
+        _impIniciar('lf', null);
+        if (datosIA) _impCargarIA('lf', datosIA);
         var hoy = new Date().toISOString().substring(0,10);
         document.getElementById('lfFechaPago').value = hoy;
         // Un comprobante elegido en la factura anterior de la tanda no debe colarse en ésta.
@@ -20789,7 +20867,8 @@
         _medioPagoReset('lfNroComprobante', 'lfMedioPago');
         // Auto-completar base imponible con neto gravado de Gemini o importe/1.21
         var _lfImp = parseFloat(document.getElementById('leerFactImporte').value) || 0;
-        var _lfNeto = window._lfNetoGravado || (_lfImp > 0 ? Math.round(_lfImp / 1.21 * 100) / 100 : 0);
+        var _lfBPanel = _impBaseRet('lf');   // importe − IVA − percepciones con la alícuota elegida en el panel
+        var _lfNeto = _lfBPanel != null ? _lfBPanel : (window._lfNetoGravado || (_lfImp > 0 ? Math.round(_lfImp / 1.21 * 100) / 100 : 0));
         document.getElementById('lfRetBase').value = _lfNeto > 0 ? Math.round(_lfNeto) : '';
         document.getElementById('lfRetBase')._editado = false;
         document.getElementById('lfRetDesglose').innerHTML = '';
@@ -20861,7 +20940,8 @@
                 '  "cae": "número de CAE (Código de Autorización Electrónica), o null",\n' +
                 '  "vencimientoCae": "fecha de vencimiento del CAE en formato YYYY-MM-DD, o null",\n' +
                 '  "netoGravado": importe neto gravado numérico (sin IVA, sin percepciones), o null si no figura,\n' +
-                '  "importeIVA": importe del IVA numérico, o null si no figura,\n' +
+                '  "importeIVA": importe del IVA numérico (la suma de todas las alícuotas), o null si no figura,\n' +
+                _IA_IMP_PROMPT +
                 '  "importe": importe total numérico sin símbolo de moneda (ej: 15000.50),\n' +
                 '  "moneda": "ARS o USD",\n' +
                 '  "descripcion": "descripción breve del concepto o servicio facturado",\n' +
@@ -21037,7 +21117,7 @@
         }
         // Inicializar controles de tipo de carga / pago
         var provSel = document.getElementById('leerFactProv').value.trim();
-        lfInicializarPaso2(provSel);
+        lfInicializarPaso2(provSel, datos);
     }
 
     // ══════════════════════════════════════════════════════════
@@ -21191,6 +21271,8 @@
 
         // ── Nota de Crédito: no crea una factura de deuda; se aplica como crédito ──
         if (document.getElementById('leerFactEsNC') && document.getElementById('leerFactEsNC').checked) {
+            var _ncImpLF = _impLeer('lf');   // IVA y percepciones de la nota de crédito
+            if (_ncImpLF && _ncImpLF.error) { alert(_ncImpLF.error); return; }
             var _ncBtn = document.getElementById('lfGuardarBtn');
             if (_ncBtn) { _ncBtn.disabled = true; _ncBtn.textContent = 'Guardando…'; }
             try {
@@ -21207,7 +21289,7 @@
                 var _ncNombre = _ncProvObj ? _ncProvObj.razonSocial : prov;
                 var _ncTarget = (document.getElementById('leerFactNCFactura') || {}).value || '__credito__';
                 var _ncLetra = (document.getElementById('leerFactLetraVal') || {}).value || 'A';
-                _aplicarNotaCredito({ nombre: _ncNombre, target: _ncTarget, letra: _ncLetra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: _ncAdj });
+                _aplicarNotaCredito({ nombre: _ncNombre, target: _ncTarget, letra: _ncLetra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: _ncAdj, imp: _ncImpLF });
                 cerrarLeerFactPDF();
                 if (typeof renderFacturas === 'function') renderFacturas();
                 if (typeof renderDocumentos === 'function') renderDocumentos();
@@ -21224,6 +21306,10 @@
         // Este camino (leer el PDF con IA) no chequeaba duplicados: era por donde se
         // colaba la misma factura cargada por dos personas.
         if (!confirmarSiDuplicado({ proveedor: prov, numero: numero, importe: importe, fecha: fecha })) return;
+
+        // IVA por alícuota y percepciones (panel «🧮 IVA y percepciones»): si lo cargado no cierra con el importe, se frena antes de subir nada.
+        var _impLF = _impLeer('lf');
+        if (_impLF && _impLF.error) { alert(_impLF.error); return; }
 
         // ── Tipo de carga + presupuesto vinculado ────────────────────
         var tipoCarga = document.getElementById('lfTipo').value || 'presup';
@@ -21254,6 +21340,7 @@
             computaARCA:      (document.getElementById('leerFactComputaARCA')||{}).value !== 'false'
         };
 
+        _impAplicar(nueva, _impLF);
         if (tipoCarga === 'presup') {
             var presupIdx = document.getElementById('lfPresupuesto').value;
             if (presupIdx !== '') nueva.presupuestoIdx = parseInt(presupIdx);
@@ -21386,6 +21473,7 @@
             selFactComputaARCA(true);
             var _fc = document.getElementById('factClase'); if (_fc) _fc.value = 'fact|A';
             factClaseChange();
+            _impIniciar('fact', null);   // IVA (21 % por defecto) y percepciones: panel limpio para el comprobante nuevo
             renderCheckboxesCompartir('checkboxesCompartirFact', 'panelCompartirFact');
             if (typeof onFactPresupChange === 'function') onFactPresupChange();
         } catch (e) { console.error('agregarFactura (preparación):', e); }
@@ -21483,6 +21571,7 @@
         selFactPagoInmediato(false); // en edición no re-pagamos
         selFactModalidad('A');
         selFactComputaARCA(f.computaARCA !== false); // legado sin el campo → computa ARCA
+        _impIniciar('fact', f);   // IVA y percepciones tal cual se cargaron (uno anterior sin detalle se muestra sin tocarlo)
         var _pendienteEdit = _saldoFactDoc(f);
         var _avisoPagada = document.getElementById('factYaPagadaAviso');
         var _panelInmediato = document.getElementById('factPagoInmediatoPanel');
@@ -21646,6 +21735,7 @@
         var f = document.getElementById('ncFecha'); if (f) f.value = nc ? (nc.fecha || new Date().toISOString().slice(0,10)) : new Date().toISOString().slice(0,10);
         var preTarget = nc ? (nc.notaCreditoDe ? ((nc.notaCreditoKind || 'fact') + ':' + nc.notaCreditoDe) : '__credito__') : null;
         _ncPoblarFacturas(preTarget, editId);
+        _impIniciar('nc', nc || null);   // IVA y percepciones de la nota de crédito (al editar, los que se cargaron)
         var gb = document.getElementById('ncGuardarBtn'); if (gb) gb.textContent = nc ? 'Guardar cambios' : 'Guardar nota de crédito';
         var h2 = document.querySelector('#modalNotaCredito h2'); if (h2) h2.textContent = nc ? '🧾 Editar Nota de Crédito' : '🧾 Nota de Crédito';
         document.getElementById('modalNotaCredito').classList.add('active');
@@ -21714,14 +21804,15 @@
                 '  "fecha": "fecha de emisión YYYY-MM-DD",\n' +
                 '  "tipoComprobante": "A, B, C o X (la letra de la nota de crédito), o null",\n' +
                 '  "importe": importe total numérico sin símbolo (ej: 15000.50),\n' +
-                '  "moneda": "ARS o USD"\n' +
+                '  "moneda": "ARS o USD",\n' +
+                _IA_IMP_PROMPT +
                 '}\nSi algún dato no está, usá null. Respondé SOLO el JSON.';
-            var body = { contents: [{ parts: [ { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } }, { text: prompt } ] }], generationConfig: { temperature: 0, maxOutputTokens: 1024 } };
+            var body = { contents: [{ parts: [ { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } }, { text: prompt } ] }], generationConfig: { temperature: 0, maxOutputTokens: 2048 } };
             var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
             var resp, lastErr = null;
             for (var i = 0; i < MODELOS.length; i++) {
                 if (i > 0) { est.textContent = '⚠️ Reintentando con ' + MODELOS[i] + '…'; await new Promise(function(r){ setTimeout(r, 3000); }); }
-                body.generationConfig = { temperature: 0, maxOutputTokens: 1024 };
+                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
                 if (MODELOS[i].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
                 resp = await _geminiProxy(MODELOS[i], body);
                 if (resp.ok) { lastErr = null; break; }
@@ -21740,6 +21831,7 @@
             if (ex.importe != null && !isNaN(parseFloat(ex.importe))) document.getElementById('ncImporte').value = parseFloat(ex.importe);
             if (ex.tipoComprobante && ['A','B','C','X'].indexOf(String(ex.tipoComprobante).toUpperCase()) !== -1) document.getElementById('ncLetra').value = String(ex.tipoComprobante).toUpperCase();
             if (ex.moneda && (ex.moneda === 'ARS' || ex.moneda === 'USD')) document.getElementById('ncMoneda').value = ex.moneda;
+            _impCargarIA('nc', ex);   // IVA por alícuota y percepciones que figuren en la nota de crédito
             est.textContent = '✅ Datos cargados. Revisalos y elegí la factura que anula.';
         } catch (err) {
             est.innerHTML = '❌ ' + (err.message || 'No se pudo leer el PDF.') + '<br><small>Podés cargar los datos a mano igual.</small>';
@@ -21776,8 +21868,10 @@
                 if (!o.adj && facturas[idx].docId) { rec.docId = facturas[idx].docId; rec.docNombre = facturas[idx].docNombre; rec.docTipo = facturas[idx].docTipo; }
                 rec.id = o.editId;
                 facturas[idx] = Object.assign({}, facturas[idx], rec);
-            } else { rec.id = o.editId; facturas.push(rec); }
+                _impAplicar(facturas[idx], o.imp);   // IVA y percepciones: reemplaza lo anterior (sin reaparecer una percepción que se sacó)
+            } else { rec.id = o.editId; _impAplicar(rec, o.imp); facturas.push(rec); }
         } else {
+            _impAplicar(rec, o.imp);
             rec.id = 'NC-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
             facturas.push(rec);
         }
@@ -21797,6 +21891,8 @@
         if (!nombre) { alert('Elegí el proveedor.'); return; }
         if (!fecha) { alert('Ingresá la fecha de la nota de crédito.'); return; }
         if (importe <= 0) { alert('Ingresá un importe válido.'); return; }
+        var impNC = _impLeer('nc');   // IVA y percepciones: si no cierran con el importe, se frena antes de subir el adjunto
+        if (impNC && impNC.error) { alert(impNC.error); return; }
 
         var btn = document.getElementById('ncGuardarBtn');
         var _lbl = _ncEditId ? 'Guardar cambios' : 'Guardar nota de crédito';
@@ -21807,7 +21903,7 @@
             try { adj = await _subirComprobantePago('ncArchivo'); }
             catch (e) { if (btn) { btn.disabled = false; btn.textContent = _lbl; } return; }
 
-            _aplicarNotaCredito({ nombre: nombre, target: target, letra: letra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: adj, editId: _ncEditId });
+            _aplicarNotaCredito({ nombre: nombre, target: target, letra: letra, numero: numero, fecha: fecha, importe: importe, moneda: moneda, adj: adj, editId: _ncEditId, imp: impNC });
 
             var _fueEdit = !!_ncEditId;
             cerrarNotaCredito();
@@ -21925,6 +22021,7 @@
         }
         if (typeof _factMostrarNroProvHint === 'function') _factMostrarNroProvHint();
         _factVepDocsRefrescar();
+        _impSync('fact');   // el panel de IVA y percepciones se esconde en Comprobante X / VEP y la letra C propone 0 %
     }
 
     // Formulario de carga manual de factura, marcado como Nota de Crédito: oculta los controles
@@ -21996,6 +22093,7 @@
         if (b1) b1.className = 'modalidad-btn' + (si ? ' selected-A' : '');
         if (b2) b2.className = 'modalidad-btn' + (!si ? ' selected-B' : '');
         if (typeof _factMostrarNroProvHint === 'function') _factMostrarNroProvHint();
+        if (typeof _impSync === 'function') _impSync('fact');
     }
 
     // Determina automáticamente si una factura computa ARCA comparando el receptor
@@ -22426,6 +22524,7 @@
     }
 
     function onFactImporteChange() {
+        _impRefrescar('fact');   // el neto y el IVA siguen al importe total
         const imp = parseFloat(document.getElementById('factImporte').value) || 0;
         const monto = document.getElementById('factMontoPago');
         if (monto && !monto._editado) monto.value = Math.round(imp) || '';
@@ -22542,6 +22641,336 @@
         return out.length ? out : null;
     }
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    // IVA Y PERCEPCIONES DE UN COMPROBANTE RECIBIDO (factura A/B/C, nota de crédito, nota de débito)
+    //
+    // Antes un comprobante guardaba sólo el importe total y, a lo sumo, `netoGravado`: el IVA salía «por resta» (y se
+    // estimaba al 21 % si no había neto), así que un proveedor que factura parte al 21 % y parte al 10,5 %, o que suma una
+    // percepción de IIBB, quedaba mal en el Libro de Compras. Ahora, al cargarlo (a mano, leyendo el PDF con IA o como
+    // nota de crédito) se elige la alícuota, se puede partir el importe en varias y se cargan las percepciones.
+    //
+    // Modelo (todo OPCIONAL: sin estos campos el comprobante es «anterior» y todo funciona como siempre):
+    //   ivaDetalle:     [{alic, neto, iva}]   una fila por alícuota (27 | 21 | 10.5 | 5 | 2.5 | 0). LISTA y no mapa por alícuota:
+    //                   «10.5» lleva un punto y Firebase no lo admite en una clave.
+    //   netoNoGravado / netoExento: importes sin IVA (sólo si > 0).
+    //   percepciones:   [{tipo, monto, desc?}]  tipo = iibb_caba | iibb_pba | iibb_otra | iva | ganancias | otra.
+    //   importeIVA:     suma del IVA;  netoGravado: suma de los netos gravados (el campo de siempre, sigue sincronizado).
+    // ⚠️ El IMPORTE TOTAL manda: la primera fila de IVA «cierra» (su neto = total − percepciones − no gravado/exento − las demás
+    // filas, y su IVA sale por RESTA, así neto + IVA + percepciones siempre suma el total al centavo). Los importes los lee
+    // `_facImp` (Libro de Compras, base de retención, listas): una factura sin detalle no pasa por ahí.
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    var IMP_ALICUOTAS = [27, 21, 10.5, 5, 2.5, 0];
+    // Parte del pedido a la IA (lectura de facturas y de notas de crédito): IVA por alícuota, percepciones e importes sin IVA.
+    var _IA_IMP_PROMPT =
+        '  "ivaDetalle": [ { "alicuota": 21, "neto": neto gravado numérico a esa alícuota, "iva": importe del IVA de esa alícuota } ] — una entrada por cada alícuota que figure (27, 21, 10.5, 5, 2.5 o 0); [] si el comprobante no discrimina IVA (por ejemplo una Factura C),\n' +
+        '  "importeNoGravado": importe no gravado numérico, o null,\n' +
+        '  "importeExento": importe exento numérico, o null,\n' +
+        '  "percepciones": [ { "tipo": "IIBB CABA" | "IIBB Buenos Aires" | "IIBB otra jurisdicción" | "IVA" | "Ganancias" | "Otra", "detalle": "texto del renglón (ej: Perc. IIBB Bs.As.)", "importe": numérico } ] — percepciones e impuestos adicionales que se SUMAN al neto + IVA (Percepción de Ingresos Brutos, de IVA, otros tributos); [] si no hay,\n';
+    var IMP_PERC_TIPOS = [
+        { id: 'iibb_caba', nombre: 'IIBB CABA (AGIP)',          corto: 'IIBB CABA' },
+        { id: 'iibb_pba',  nombre: 'IIBB Buenos Aires (ARBA)',  corto: 'IIBB Bs. As.' },
+        { id: 'iibb_otra', nombre: 'IIBB otra jurisdicción',    corto: 'IIBB otra', conDesc: true, ph: 'Jurisdicción (ej: Córdoba)' },
+        { id: 'iva',       nombre: 'Percepción de IVA',         corto: 'Perc. IVA' },
+        { id: 'ganancias', nombre: 'Percepción de Ganancias',   corto: 'Perc. Ganancias' },
+        { id: 'otra',      nombre: 'Otro impuesto / tasa',      corto: 'Otros trib.', conDesc: true, ph: 'Detalle (ej: impuesto interno)' }
+    ];
+    var _IMP_CTX = {
+        fact: { importe: 'factImporte',     moneda: 'factMoneda',     grupo: 'factImpGrupo',
+                info: function() { return { clase: _impVal('factClaseVal') || 'fact', letra: _impVal('factLetraVal') || 'A', computa: _impVal('factComputaARCA') !== 'false' }; } },
+        lf:   { importe: 'leerFactImporte', moneda: 'leerFactMoneda', grupo: 'lfImpGrupo',
+                info: function() { return { clase: _impVal('leerFactClaseVal') || 'fact', letra: _impVal('leerFactLetraVal') || 'A', computa: _impVal('leerFactComputaARCA') !== 'false' }; } },
+        nc:   { importe: 'ncImporte',       moneda: 'ncMoneda',       grupo: 'ncImpGrupo',
+                info: function() { var l = _impVal('ncLetra') || 'A'; return { clase: 'nc', letra: l, computa: l !== 'X' }; } }
+    };
+    var _impEst = {};   // prefijo ('fact' | 'lf' | 'nc') → estado del panel
+    function _impVal(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+    function _impR2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+    function _impNum(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function _impTxtAlic(a) { return String(Number(a) || 0).replace('.', ',') + ' %'; }
+    function _impArr(x) { return Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).map(function(k) { return x[k]; }) : []); }
+    function _impTipoPerc(id) { return IMP_PERC_TIPOS.filter(function(t) { return t.id === id; })[0] || IMP_PERC_TIPOS[IMP_PERC_TIPOS.length - 1]; }
+    // Alícuota que se propone según la letra: la C (monotributista) no discrimina IVA; A y B sí.
+    function _impAlicDefecto(letra) { return String(letra || 'A').toUpperCase() === 'C' ? 0 : 21; }
+    function _impEstadoNuevo(letra) { return { filas: [{ alic: _impAlicDefecto(letra), neto: null, iva: null }], ng: 0, ex: 0, verNGEX: false, perc: [], tocado: false, legacy: false, visible: true, letra: letra || 'A', aviso: '' }; }
+    // Alícuota estándar más cercana a un porcentaje (dentro de `tol` puntos), o null.
+    function _impAlicCercana(pct, tol) {
+        var mejor = null, dif = (tol == null ? 0.6 : tol);
+        IMP_ALICUOTAS.forEach(function(a) { if (Math.abs(a - pct) <= dif) { dif = Math.abs(a - pct); mejor = a; } });
+        return mejor;
+    }
+
+    // ── Lectura de un comprobante guardado: lo que usan el Libro de Compras, la base de retención y las listas ──
+    function _facImp(f) {
+        var g = _impArr(f && f.ivaDetalle).filter(Boolean).map(function(x) { return { alic: Number(x.alic) || 0, neto: Number(x.neto) || 0, iva: Number(x.iva) || 0 }; });
+        var p = _impArr(f && f.percepciones).filter(Boolean).map(function(x) { return { tipo: x.tipo || 'otra', monto: Number(x.monto) || 0, desc: x.desc || '' }; });
+        var ng = Number(f && f.netoNoGravado) || 0, ex = Number(f && f.netoExento) || 0;
+        var neto = 0, iva = 0, percTot = 0;
+        g.forEach(function(x) { neto += x.neto; iva += x.iva; });
+        p.forEach(function(x) { percTot += x.monto; });
+        return { tiene: g.length > 0 || p.length > 0 || ng > 0 || ex > 0, gravados: g, perc: p, ng: ng, ex: ex, neto: _impR2(neto), iva: _impR2(iva), percTot: _impR2(percTot) };
+    }
+    // Qué parte del importe es base de retención (importe − IVA − percepciones). null = no hay detalle y se usa lo de siempre.
+    function _facRatioNeto(f) {
+        var d = _facImp(f), imp = Number(f && f.importe) || 0;
+        if (d.tiene && imp > 0) { var r = (imp - d.iva - d.percTot) / imp; return r > 0 ? Math.min(1, r) : null; }
+        return (f && f.netoGravado > 0 && imp > 0) ? f.netoGravado / imp : null;
+    }
+    // Textos cortos para listas: «IVA 10,5 %», «IVA 21 % + 10,5 %», «Perc. IIBB CABA».
+    function _facImpTxt(f) {
+        var d = _facImp(f); if (!d.tiene) return '';
+        var seen = {}, al = [];
+        d.gravados.forEach(function(x) { if (!seen[x.alic]) { seen[x.alic] = 1; al.push(x.alic); } });
+        var partes = [];
+        if (al.length) partes.push('IVA ' + al.map(function(a) { return String(a).replace('.', ','); }).join(' + ') + ' %');
+        var pt = {}; d.perc.forEach(function(x) { pt[x.tipo] = 1; });
+        var np = Object.keys(pt).map(function(t) { var c = _impTipoPerc(t).corto; return /^IIBB/.test(c) ? 'Perc. ' + c : c; });
+        if (np.length) partes.push(np.join(' + '));
+        return partes.join(' · ');
+    }
+
+    // ── Cuenta del panel ──
+    function _impResolver(est, total) {
+        total = _impR2(total);
+        var percTot = 0; est.perc.forEach(function(x) { percTot += _impR2(x.monto); });
+        var ng = _impR2(est.ng), ex = _impR2(est.ex), otros = 0;
+        var filas = est.filas.map(function(f, i) {
+            var a = Number(f.alic) || 0;
+            if (i === 0) return { alic: a, neto: 0, iva: 0 };
+            var neto = _impR2(f.neto);
+            var iva = (f.iva != null && f.iva !== '') ? _impR2(f.iva) : _impR2(neto * a / 100);
+            otros += neto + iva;
+            return { alic: a, neto: neto, iva: iva };
+        });
+        var resto0 = _impR2(total - percTot - ng - ex - otros), f0 = filas[0], a0 = f0.alic;
+        if (est.filas[0].iva != null && est.filas[0].iva !== '') { f0.iva = _impR2(est.filas[0].iva); f0.neto = _impR2(resto0 - f0.iva); }
+        else { f0.neto = _impR2(resto0 / (1 + a0 / 100)); f0.iva = _impR2(resto0 - f0.neto); }
+        var neto = 0, iva = 0; filas.forEach(function(f) { neto += f.neto; iva += f.iva; });
+        return { total: total, filas: filas, ng: ng, ex: ex, percTot: _impR2(percTot), neto: _impR2(neto), iva: _impR2(iva), resto0: resto0, ok: total <= 0 || (resto0 >= -0.005 && f0.neto >= -0.005) };
+    }
+
+    // ── Estado inicial / de un comprobante guardado ──
+    function _impDesdeRegistro(rec) {
+        var d = _facImp(rec), letra = (rec && rec.tipoComprobante) || 'A';
+        var est = _impEstadoNuevo(letra), total = Number(rec && rec.importe) || 0;
+        if (!d.tiene) {
+            // Comprobante ANTERIOR (sin detalle): se propone lo más parecido a lo que ya tenía, sin tocarlo mientras no se edite el panel.
+            est.legacy = true;
+            if (rec && rec.netoGravado > 0 && total > 0) {
+                var a = _impAlicCercana((total - rec.netoGravado) / rec.netoGravado * 100, 0.5);
+                if (a != null) est.filas[0].alic = a; else est.aviso = 'Este comprobante se cargó antes con un neto de ' + _impNum(rec.netoGravado) + ' y el IVA no coincide con una alícuota: revisá el IVA y las percepciones.';
+            } else { est.aviso = 'Este comprobante se cargó sin discriminar el IVA (se estimaba al 21 %). Elegí la alícuota y cargá las percepciones si las hay.'; }
+            return est;
+        }
+        est.filas = d.gravados.length ? d.gravados.map(function(x) { return { alic: x.alic, neto: x.neto, iva: null }; }) : [{ alic: _impAlicDefecto(letra), neto: null, iva: null }];
+        // El IVA que difiere de lo que daría la cuenta (se copió a mano de la factura) queda fijo.
+        var r = _impResolver({ filas: est.filas, ng: d.ng, ex: d.ex, perc: d.perc }, total);
+        d.gravados.forEach(function(x, i) { if (r.filas[i] && Math.abs(r.filas[i].iva - x.iva) > 0.005) est.filas[i].iva = x.iva; });
+        est.ng = d.ng; est.ex = d.ex; est.verNGEX = d.ng > 0 || d.ex > 0;
+        est.perc = d.perc.map(function(x) { return { tipo: x.tipo, monto: x.monto, desc: x.desc || '' }; });
+        return est;
+    }
+    function _impVisible(p) {
+        var cfg = _IMP_CTX[p], i = cfg.info();
+        return !!i.computa && ['fact', 'nc', 'nd'].indexOf(i.clase) !== -1;
+    }
+    // Abre el panel de un formulario: con los datos de un comprobante guardado (`rec`) o vacío (nueva carga).
+    function _impIniciar(p, rec, letra) {
+        _impEst[p] = rec ? _impDesdeRegistro(rec) : _impEstadoNuevo(letra || _impVal(p === 'nc' ? 'ncLetra' : (p === 'lf' ? 'leerFactLetraVal' : 'factLetraVal')) || 'A');
+        _impSync(p, true);
+    }
+    // Se llama cuando cambia la clase, la letra o «¿computa ARCA?»: muestra u oculta el panel y, si nadie lo tocó, ajusta la alícuota por defecto.
+    function _impSync(p, forzar) {
+        var cfg = _IMP_CTX[p], box = document.getElementById(cfg.grupo); if (!box) return;
+        var est = _impEst[p] || (_impEst[p] = _impEstadoNuevo());
+        est.visible = _impVisible(p);
+        box.style.display = est.visible ? '' : 'none';
+        if (!est.visible) return;
+        var letra = cfg.info().letra;
+        if (!est.tocado && !est.legacy && est.filas.length === 1 && est.letra !== letra) { est.filas[0].alic = _impAlicDefecto(letra); forzar = true; }
+        est.letra = letra;
+        if (forzar || !box.firstChild) _impRender(p); else _impRefrescar(p);
+    }
+
+    // ── Pantalla ──
+    function _impRender(p) {
+        var cfg = _IMP_CTX[p], box = document.getElementById(cfg.grupo), est = _impEst[p]; if (!box || !est) return;
+        var q = "'" + p + "'";
+        var optAlic = function(sel) { return IMP_ALICUOTAS.map(function(a) { return '<option value="' + a + '"' + (Number(a) === Number(sel) ? ' selected' : '') + '>' + (a === 0 ? '0 % (sin IVA)' : _impTxtAlic(a)) + '</option>'; }).join(''); };
+        var h = '<label>🧮 IVA y percepciones <span class="imp-sub">— elegí la alícuota y cargá las percepciones si las hay</span></label>'
+            + '<div class="imp-aviso" id="' + p + 'ImpAviso"' + (est.aviso ? '' : ' style="display:none;"') + '>' + escHtml(est.aviso || '') + '</div>'
+            + '<div class="imp-cab"><span>Alícuota de IVA</span><span>Neto gravado</span><span>IVA</span><span></span></div>';
+        est.filas.forEach(function(f, i) {
+            h += '<div class="imp-fila">'
+                + '<select aria-label="Alícuota de IVA" onchange="_impAlic(' + q + ',' + i + ',this.value)">' + optAlic(f.alic) + '</select>'
+                + (i === 0
+                    ? '<input type="number" id="' + p + 'ImpN0" readonly tabindex="-1" aria-label="Neto gravado" title="Se calcula: importe total menos percepciones, IVA y las otras líneas">'
+                    : '<input type="number" step="0.01" min="0" id="' + p + 'ImpN' + i + '" aria-label="Neto gravado" value="' + (f.neto != null && f.neto !== '' ? f.neto : '') + '" oninput="_impNeto(' + q + ',' + i + ',this.value)">')
+                + '<input type="number" step="0.01" min="0" id="' + p + 'ImpI' + i + '" aria-label="IVA" value="' + (f.iva != null && f.iva !== '' ? f.iva : '') + '" oninput="_impIva(' + q + ',' + i + ',this.value)" title="Se calcula solo; escribilo si el de la factura difiere por redondeo">'
+                + (i > 0 ? '<button type="button" class="imp-x" onclick="_impQuitarFila(' + q + ',' + i + ')" title="Quitar esta alícuota" aria-label="Quitar esta alícuota">✕</button>' : '<span></span>')
+                + '</div>';
+        });
+        h += '<div class="imp-acciones"><button type="button" class="btn btn-outline btn-sm" onclick="_impAgregarFila(' + q + ')">➕ Otra alícuota</button>'
+            + '<span class="imp-sub">por si facturan parte al 21 % y parte al 10,5 %</span>'
+            + (est.verNGEX || est.ng > 0 || est.ex > 0 ? '' : '<button type="button" class="btn btn-outline btn-sm" onclick="_impVerNGEX(' + q + ')">➕ No gravado / exento</button>') + '</div>';
+        if (est.verNGEX || est.ng > 0 || est.ex > 0) {
+            h += '<div class="imp-fila imp-ngex"><span class="imp-sub">Sin IVA</span>'
+                + '<input type="number" step="0.01" min="0" aria-label="Importe no gravado" placeholder="No gravado" value="' + (est.ng || '') + '" oninput="_impNGEX(' + q + ',\'ng\',this.value)">'
+                + '<input type="number" step="0.01" min="0" aria-label="Importe exento" placeholder="Exento" value="' + (est.ex || '') + '" oninput="_impNGEX(' + q + ',\'ex\',this.value)"><span></span></div>';
+        }
+        h += '<div class="imp-sub2">Percepciones y otros tributos <span class="imp-sub">(se suman al neto + IVA)</span></div>';
+        est.perc.forEach(function(x, j) {
+            var t = _impTipoPerc(x.tipo);
+            h += '<div class="imp-fila imp-perc">'
+                + '<select aria-label="Tipo de percepción" onchange="_impPercTipo(' + q + ',' + j + ',this.value)">' + IMP_PERC_TIPOS.map(function(o) { return '<option value="' + o.id + '"' + (o.id === t.id ? ' selected' : '') + '>' + o.nombre + '</option>'; }).join('') + '</select>'
+                + '<input type="text" id="' + p + 'ImpPD' + j + '" aria-label="Detalle" maxlength="60" placeholder="' + escHtml(t.ph || '') + '" value="' + escHtml(x.desc || '') + '" oninput="_impPercDesc(' + q + ',' + j + ',this.value)"' + (t.conDesc ? '' : ' style="display:none;"') + '>'
+                + '<input type="number" step="0.01" min="0" aria-label="Importe de la percepción" placeholder="Importe" value="' + (x.monto || '') + '" oninput="_impPercMonto(' + q + ',' + j + ',this.value)">'
+                + '<button type="button" class="imp-x" onclick="_impPercQuitar(' + q + ',' + j + ')" title="Quitar" aria-label="Quitar la percepción">✕</button></div>';
+        });
+        h += '<div class="imp-acciones"><button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'iibb_caba\')">➕ IIBB CABA</button>'
+            + '<button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'iibb_pba\')">➕ IIBB Bs. As.</button>'
+            + '<button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'otra\')">➕ Otra percepción / tributo</button></div>'
+            + '<div class="imp-resumen" id="' + p + 'ImpResumen" aria-live="polite"></div>';
+        box.innerHTML = h;
+        _impRefrescar(p);
+    }
+    // Actualiza lo calculado SIN repintar (si no, se perdería el foco al tipear).
+    function _impRefrescar(p) {
+        var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est || !est.visible) return;
+        var total = parseFloat(_impVal(cfg.importe)) || 0, r = _impResolver(est, total), usd = _impVal(cfg.moneda) === 'USD', sim = usd ? 'USD ' : '$ ';
+        r.filas.forEach(function(f, i) {
+            var n = document.getElementById(p + 'ImpN' + i), iv = document.getElementById(p + 'ImpI' + i);
+            if (n && i === 0) n.value = total > 0 ? f.neto : '';
+            var manual = est.filas[i].iva != null && est.filas[i].iva !== '';
+            if (iv && !manual && document.activeElement !== iv) iv.value = (total > 0 || f.iva) ? f.iva : '';
+        });
+        var rs = document.getElementById(p + 'ImpResumen');
+        if (rs) {
+            if (!(total > 0)) rs.innerHTML = '<span class="imp-sub">Cargá el importe total y se calculan el neto y el IVA.</span>';
+            else {
+                var partes = ['Neto gravado <strong>' + sim + _impNum(r.neto) + '</strong>', 'IVA <strong>' + sim + _impNum(r.iva) + '</strong>'];
+                if (r.ng + r.ex > 0) partes.push('Sin IVA <strong>' + sim + _impNum(r.ng + r.ex) + '</strong>');
+                if (r.percTot > 0) partes.push('Percepciones <strong>' + sim + _impNum(r.percTot) + '</strong>');
+                rs.innerHTML = partes.join(' + ') + ' = <strong>' + sim + _impNum(total) + '</strong>'
+                    + (r.ok ? '' : '<div class="imp-error">⚠️ Lo cargado supera el importe total: revisá los netos, el IVA o las percepciones.</div>');
+            }
+        }
+        // La base de retención sigue al panel (neto + sin IVA, sin percepciones ni IVA).
+        if (p === 'fact' && typeof recalcularRetencionesFactura === 'function') recalcularRetencionesFactura();
+        if (p === 'lf') {
+            var bl = document.getElementById('lfRetBase'), b = _impBaseRet('lf');
+            if (bl && !bl._editado && b != null) bl.value = Math.round(b) || '';
+            if (typeof lfRecalcRet === 'function' && document.getElementById('lfModalidad')) lfRecalcRet();
+        }
+    }
+    function _impTocar(p) { var est = _impEst[p]; if (est) { est.tocado = true; est.aviso = ''; var av = document.getElementById(p + 'ImpAviso'); if (av) av.style.display = 'none'; } return est; }
+    function _impAlic(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].alic = parseFloat(v) || 0; _impRefrescar(p); }
+    function _impNeto(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].neto = v === '' ? null : parseFloat(v); _impRefrescar(p); }
+    function _impIva(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].iva = v === '' ? null : parseFloat(v); _impRefrescar(p); }
+    function _impAgregarFila(p) {
+        var e = _impTocar(p); if (!e) return;
+        var usadas = e.filas.map(function(f) { return Number(f.alic); }), a = [10.5, 21, 27, 5, 2.5, 0].filter(function(x) { return usadas.indexOf(x) === -1; })[0];
+        e.filas.push({ alic: a != null ? a : 10.5, neto: null, iva: null });
+        _impRender(p);
+    }
+    function _impQuitarFila(p, i) { var e = _impTocar(p); if (!e || i < 1) return; e.filas.splice(i, 1); _impRender(p); }
+    function _impVerNGEX(p) { var e = _impTocar(p); if (!e) return; e.verNGEX = true; _impRender(p); }
+    function _impNGEX(p, k, v) { var e = _impTocar(p); if (!e) return; e[k] = parseFloat(v) || 0; _impRefrescar(p); }
+    function _impPercAgregar(p, tipo) { var e = _impTocar(p); if (!e) return; e.perc.push({ tipo: tipo || 'iibb_caba', monto: 0, desc: '' }); _impRender(p); var inp = document.querySelectorAll('#' + _IMP_CTX[p].grupo + ' .imp-perc input[type=number]'); if (inp.length) inp[inp.length - 1].focus(); }
+    function _impPercQuitar(p, j) { var e = _impTocar(p); if (!e) return; e.perc.splice(j, 1); _impRender(p); }
+    function _impPercTipo(p, j, v) {
+        var e = _impTocar(p); if (!e || !e.perc[j]) return; e.perc[j].tipo = v;
+        var t = _impTipoPerc(v), d = document.getElementById(p + 'ImpPD' + j);
+        if (d) { d.style.display = t.conDesc ? '' : 'none'; d.placeholder = t.ph || ''; }
+        _impRefrescar(p);
+    }
+    function _impPercDesc(p, j, v) { var e = _impTocar(p); if (e && e.perc[j]) e.perc[j].desc = String(v || '').slice(0, 60); }
+    function _impPercMonto(p, j, v) { var e = _impTocar(p); if (e && e.perc[j]) { e.perc[j].monto = parseFloat(v) || 0; _impRefrescar(p); } }
+
+    // ── Lo que se guarda ──
+    // null = no tocar el comprobante (uno anterior sin detalle que no se editó en el panel); {vacio:true} = el panel no corresponde
+    // (Comprobante X, VEP, no computa ARCA): se quitan los campos; si no, el detalle (con `error` si no cierra).
+    function _impLeer(p) {
+        var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est) return null;
+        if (!_impVisible(p)) return { vacio: true };
+        if (est.legacy && !est.tocado) return null;
+        var total = parseFloat(_impVal(cfg.importe)) || 0, r = _impResolver(est, total), out = { ivaDetalle: [], percepciones: [] };
+        if (!r.ok) out.error = 'Lo cargado en «IVA y percepciones» supera el importe total: revisá los netos, el IVA o las percepciones.';
+        r.filas.forEach(function(f) { if (Math.abs(f.neto) > 0.004 || Math.abs(f.iva) > 0.004) out.ivaDetalle.push({ alic: f.alic, neto: f.neto, iva: f.iva }); });
+        out.netoGravado = r.neto; out.importeIVA = r.iva;
+        if (r.ng > 0) out.netoNoGravado = r.ng;
+        if (r.ex > 0) out.netoExento = r.ex;
+        est.perc.forEach(function(x) {
+            var m = _impR2(x.monto); if (!(m > 0)) return;
+            var o = { tipo: x.tipo, monto: m }, d = String(x.desc || '').trim();
+            if (d && _impTipoPerc(x.tipo).conDesc) o.desc = d;
+            out.percepciones.push(o);
+        });
+        return out;
+    }
+    // Pasa el detalle al comprobante: quita lo anterior y escribe lo nuevo (una percepción que se sacó no tiene que reaparecer).
+    function _impAplicar(t, imp) {
+        if (!imp) return t;
+        ['ivaDetalle', 'percepciones', 'netoNoGravado', 'netoExento', 'importeIVA'].forEach(function(k) { delete t[k]; });
+        if (imp.vacio) return t;
+        if (imp.ivaDetalle && imp.ivaDetalle.length) t.ivaDetalle = imp.ivaDetalle;
+        if (imp.percepciones && imp.percepciones.length) t.percepciones = imp.percepciones;
+        if (imp.netoNoGravado) t.netoNoGravado = imp.netoNoGravado;
+        if (imp.netoExento) t.netoExento = imp.netoExento;
+        t.netoGravado = imp.netoGravado;
+        t.importeIVA = imp.importeIVA;
+        return t;
+    }
+    // Base de retención según el panel (importe − IVA − percepciones), o null si hay que usar lo de siempre.
+    function _impBaseRet(p) {
+        var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est || !est.visible || (est.legacy && !est.tocado)) return null;
+        var total = parseFloat(_impVal(cfg.importe)) || 0; if (!(total > 0)) return null;
+        var r = _impResolver(est, total), b = total - r.iva - r.percTot;
+        return b > 0 ? b : null;
+    }
+
+    // ── Lo que lee la IA del PDF ──
+    function _impTipoPercDeTexto(t) {
+        var s = String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        if (/\b(caba|agip|capital federal|ciudad)\b/.test(s)) return 'iibb_caba';
+        if (/(buenos aires|bs\.? ?as|arba|\bpba\b|\bba\b)/.test(s)) return 'iibb_pba';
+        if (/(iibb|ingresos brutos|brutos)/.test(s)) return 'iibb_otra';
+        if (/\biva\b/.test(s)) return 'iva';
+        if (/ganancias/.test(s)) return 'ganancias';
+        return 'otra';
+    }
+    function _impCargarIA(p, d) {
+        d = d || {};
+        var cfg = _IMP_CTX[p], est = _impEst[p] || (_impEst[p] = _impEstadoNuevo()), total = Number(d.importe) || parseFloat(_impVal(cfg.importe)) || 0;
+        var filasIA = _impArr(d.ivaDetalle).filter(Boolean).map(function(x) {
+            var neto = Number(x.neto != null ? x.neto : (x.netoGravado != null ? x.netoGravado : x.importeNeto)) || 0, iva = Number(x.iva != null ? x.iva : x.importeIVA) || 0;
+            var a = Number(String(x.alicuota != null ? x.alicuota : x.alic).replace(',', '.'));
+            if (!(a >= 0)) a = neto > 0 ? (iva / neto * 100) : 21;
+            var cerc = _impAlicCercana(a, 0.6);
+            return { alic: cerc != null ? cerc : 21, neto: neto, iva: iva };
+        }).filter(function(x) { return x.neto > 0 || x.iva > 0; });
+        if (!filasIA.length && Number(d.netoGravado) > 0) {
+            var iva0 = d.importeIVA != null ? Number(d.importeIVA) : null, a0 = iva0 != null ? _impAlicCercana(iva0 / d.netoGravado * 100, 0.6) : null;
+            filasIA = [{ alic: a0 != null ? a0 : _impAlicDefecto(est.letra), neto: Number(d.netoGravado), iva: iva0 != null ? iva0 : null }];
+        }
+        if (filasIA.length) {
+            filasIA.sort(function(x, y) { return y.neto - x.neto; });   // la de mayor neto cierra el total
+            est.filas = filasIA.map(function(x, i) { return { alic: x.alic, neto: i === 0 ? null : x.neto, iva: null }; });
+            est.perc = [];
+            _impArr(d.percepciones).filter(Boolean).forEach(function(x) {
+                var m = Number(x.importe != null ? x.importe : x.monto) || 0; if (!(m > 0)) return;
+                var txt = [x.tipo, x.detalle, x.descripcion].filter(Boolean).join(' '), tipo = _impTipoPercDeTexto(txt), o = { tipo: tipo, monto: m, desc: '' };
+                if (_impTipoPerc(tipo).conDesc) o.desc = String(x.detalle || x.tipo || '').slice(0, 60);
+                est.perc.push(o);
+            });
+            est.ng = Number(d.importeNoGravado) || 0; est.ex = Number(d.importeExento) || 0; est.verNGEX = est.ng > 0 || est.ex > 0;
+            // El IVA que leyó la IA queda fijo si no es lo que daría la cuenta (redondeo de la factura).
+            var r = _impResolver(est, total);
+            filasIA.forEach(function(x, i) { if (x.iva != null && r.filas[i] && Math.abs(r.filas[i].iva - x.iva) > 0.005) est.filas[i].iva = x.iva; });
+            est.tocado = true; est.legacy = false; est.aviso = '';
+        }
+        _impSync(p, true);
+    }
+
     // Retenciones para pago directo de factura
     var _factRetsCalculadas = [];
     function recalcularRetencionesFactura(soloTotales) {
@@ -22552,7 +22981,8 @@
         const baseInp = document.getElementById('factRetBase');
         // Preferir el neto gravado guardado en la factura (ya excluye IVA y percepciones de
         // IIBB) — si no está cargado, se estima como antes con importe/1.21.
-        var netoDefault = window._factNetoGravado > 0 ? Math.round(window._factNetoGravado) : (importe > 0 ? Math.round(importe / 1.21) : 0);
+        var _bPanel = (typeof _impBaseRet === 'function') ? _impBaseRet('fact') : null;   // importe − IVA − percepciones, con la alícuota que se eligió
+        var netoDefault = _bPanel != null ? Math.round(_bPanel) : (window._factNetoGravado > 0 ? Math.round(window._factNetoGravado) : (importe > 0 ? Math.round(importe / 1.21) : 0));
         if (baseInp && !baseInp._editado) baseInp.value = netoDefault || '';
         const base = parseFloat(document.getElementById('factRetBase')?.value) || netoDefault;
         const nombreProv = document.getElementById('factProveedor').value;
@@ -22611,9 +23041,11 @@
             if (!_fncProv) { alert('Elegí el proveedor.'); return; }
             if (!_fncFecha) { alert('La fecha es obligatoria.'); return; }
             if (_fncImporte <= 0) { alert('El importe debe ser mayor a cero.'); return; }
+            var _fncImp = _impLeer('fact');   // IVA y percepciones de la nota de crédito
+            if (_fncImp && _fncImp.error) { alert(_fncImp.error); return; }
             var _fncAdj = null;
             try { _fncAdj = await _subirComprobantePago('factArchivo'); } catch (e2) { return; }
-            _aplicarNotaCredito({ nombre: _fncProv, target: _fncTarget, letra: _fncLetra, numero: _fncNumero, fecha: _fncFecha, importe: _fncImporte, moneda: _fncMoneda, adj: _fncAdj });
+            _aplicarNotaCredito({ nombre: _fncProv, target: _fncTarget, letra: _fncLetra, numero: _fncNumero, fecha: _fncFecha, importe: _fncImporte, moneda: _fncMoneda, adj: _fncAdj, imp: _fncImp });
             cerrarFactura();
             if (typeof renderFacturas === 'function') renderFacturas();
             if (typeof renderDocumentos === 'function') renderDocumentos();
@@ -22650,6 +23082,10 @@
         };
         if (!nuevo.proveedor) { alert('Seleccioná un proveedor.'); return; }
         if (nuevo.importe <= 0) { alert('Ingresá un importe válido.'); return; }
+        // IVA por alícuota y percepciones (panel «🧮 IVA y percepciones»). Si lo cargado no cierra con el importe se frena acá.
+        const _impF = _impLeer('fact');
+        if (_impF && _impF.error) { alert(_impF.error); return; }
+        _impAplicar(nuevo, _impF);
         // Regímenes de retención a los que suma esta factura (el selector sólo aparece si el
         // proveedor tiene 2 o más). «Ninguno» ([]) = la factura no lleva retención: se guarda `sinRetencion`.
         const _regSel = _regimenesFactLeer('fact');
@@ -22760,7 +23196,7 @@
             // retenciones y la base acumulada del mes) y lo que trajo la IA (CUIT, CAE, dirección…), dejando
             // `pagado`/`estado` sin ningún pago que los respalde. Se conserva lo que el formulario no toca.
             // Los campos que el formulario SÍ decide —y que pueden quedar vacíos a propósito— no se restauran.
-            var _delForm = { presupuestoIdx:1, presupuestoPorcentaje:1, presupuestoComentario:1, regimenesBase:1, sinRetencion:1, docId:1, docNombre:1, docTipo:1 };
+            var _delForm = { presupuestoIdx:1, presupuestoPorcentaje:1, presupuestoComentario:1, regimenesBase:1, sinRetencion:1, docId:1, docNombre:1, docTipo:1, ivaDetalle:1, percepciones:1, netoNoGravado:1, netoExento:1, importeIVA:1 };
             Object.keys(facturas[_if]).forEach(function(k) {
                 if (!(k in nuevo) && !_delForm[k]) nuevo[k] = facturas[_if][k];
             });
@@ -23228,7 +23664,7 @@
                     <td><strong>${escHtml(f.proveedor||'—')}</strong> ${badgeCompartido(f)}${_regimenesPillFila(f, idx)}${f.esNotaDebito ? ` <span class="pill" style="background:#fdecea;color:#b3261e;" title="Nota de débito: suma a la cuenta corriente del proveedor">🧾 Nota de Débito ${escHtml(f.tipoComprobante||'')}</span>` : ''}${f.esVEP ? ' <span class="pill" style="background:#e8f0fe;color:#1a56c4;" title="Volante Electrónico de Pago: comprobante del pago de un impuesto o aporte. No da crédito fiscal de IVA.">🏛️ VEP</span>' : (_facComputaArca(f) ? '' : ' <span class="pill" style="background:#fef7e0;color:#b06000;" title="Comprobante ARCA registrable, pero sin crédito fiscal de IVA (ej. VEP de impuestos)">No computa IVA</span>')}</td>
                     <td>${escHtml(f.numero||'—')}</td>
                     <td>${escHtml(f.descripcion||'—')}</td>
-                    <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></td>
+                    <td style="text-align:right;"><strong>${f.moneda==='USD'?'USD ':'$'}${f.importe.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong>${_facImpTxt(f) ? `<div style="font-size:10px;font-weight:400;color:var(--text-3);" title="IVA y percepciones cargados con el comprobante">${escHtml(_facImpTxt(f))}</div>` : ''}</td>
                     <td style="text-align:right;">${_fmtMonto(f.pagado||0, _monDe(f))}</td>
                     <td>${estadoBadge}</td>
                     <td>${docBtn}</td>
@@ -23742,6 +24178,7 @@
             if (datos_.moneda) { var ms = document.getElementById('leerFactMoneda'); if (ms) ms.value = datos_.moneda; }
             setVal('leerFactDesc',    datos_.descripcion);
             window._lfNetoGravado = datos_.netoGravado || null;
+            _impIniciar('lf', null); _impCargarIA('lf', datos_);   // IVA por alícuota y percepciones, igual que al leer un PDF
             provAutocompletar('leerFactProv');
             // Poblar el datalist con los proveedores YA cargados, para poder ELEGIR uno existente
             // (antes solo se poblaba en el flujo "Leer PDF"; en el de Gmail quedaba vacío y por eso
@@ -49960,7 +50397,7 @@
       <div style="display:grid; grid-template-columns:110px 1fr 130px; gap:12px;">
         <div class="form-group">
           <label>Tipo</label>
-          <select id="ncLetra"><option value="A">NC A</option><option value="B">NC B</option><option value="C">NC C</option><option value="X">NC X</option></select>
+          <select id="ncLetra" onchange="_impSync('nc')"><option value="A">NC A</option><option value="B">NC B</option><option value="C">NC C</option><option value="X">NC X</option></select>
         </div>
         <div class="form-group">
           <label>Número</label>
@@ -49974,13 +50411,14 @@
       <div style="display:grid; grid-template-columns:1fr 120px; gap:12px;">
         <div class="form-group">
           <label>Importe</label>
-          <input type="number" id="ncImporte" min="0" step="0.01" placeholder="0.00">
+          <input type="number" id="ncImporte" min="0" step="0.01" placeholder="0.00" oninput="_impRefrescar('nc')">
         </div>
         <div class="form-group">
           <label>Moneda</label>
-          <select id="ncMoneda"><option value="ARS">ARS</option><option value="USD">USD</option></select>
+          <select id="ncMoneda" onchange="_impRefrescar('nc')"><option value="ARS">ARS</option><option value="USD">USD</option></select>
         </div>
       </div>
+      <div class="form-group imp-grupo" id="ncImpGrupo" style="display:none;"></div>
       <div class="form-group">
         <label>Adjuntar PDF / foto <span style="color:var(--text-3);font-weight:400;">(opcional)</span></label>
         <input type="file" id="ncArchivo" accept="application/pdf,image/*">
@@ -50115,7 +50553,7 @@
           </div>
           <div class="form-group">
             <label>¿Computa ARCA? <span style="font-weight:400;color:var(--text-3);font-size:11px;">(a nombre de la empresa)</span></label>
-            <select id="leerFactComputaARCA" style="width:100%;">
+            <select id="leerFactComputaARCA" style="width:100%;" onchange="_impSync('lf')">
               <option value="true">Sí — computa ARCA (Facturas ARCA)</option>
               <option value="false">No — Comprobantes X (no oficiales)</option>
             </select>
@@ -50147,15 +50585,16 @@
 
           <div class="form-group">
             <label>Moneda</label>
-            <select id="leerFactMoneda" style="width:100%;">
+            <select id="leerFactMoneda" style="width:100%;" onchange="_impRefrescar('lf')">
               <option value="ARS">ARS — Pesos</option>
               <option value="USD">USD — Dólares</option>
             </select>
           </div>
           <div class="form-group">
             <label>Importe total *</label>
-            <input type="number" id="leerFactImporte" step="0.01" min="0" placeholder="0.00" style="font-size:16px;font-weight:700;">
+            <input type="number" id="leerFactImporte" step="0.01" min="0" placeholder="0.00" style="font-size:16px;font-weight:700;" oninput="_impRefrescar('lf')">
           </div>
+          <div class="form-group imp-grupo" id="lfImpGrupo" style="grid-column:1/-1;display:none;"></div>
           <div class="form-group">
             <label>🛡️ Fondo de reparo (%)</label>
             <input type="number" id="leerFactFondoReparoPct" step="0.01" min="0" max="100" placeholder="Ej: 10">
