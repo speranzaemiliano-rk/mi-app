@@ -185,7 +185,7 @@ const xl = await p.evaluate(() => {
 });
 if (xl && !xl.err) {
   const x2 = xl.find(r => r['Nro Factura'] === 'L-2'), x1 = xl.find(r => r['Nro Factura'] === 'L-1'), x3 = xl.find(r => r['Nro Factura'] === 'L-3'), xo = xl.find(r => r['Nro Factura'] === 'L-OLD');
-  ok('C9: el Excel separa percepciones por tipo y no gravado, y el IVA % de varias alícuotas sale como texto', x1 && x1['Perc. IIBB CABA'] === 30 && x2 && x2['Perc. IIBB Bs. As.'] === 38 && x2['IVA %'] === '21% / 10,5%' && x3 && x3['No gravado'] === 56 && /Córdoba/.test(x3['Detalle percepciones'] || ''), JSON.stringify([x1, x2, x3]));
+  ok('C9: el Excel separa percepciones por tipo y no gravado CON centavos (37,5 / 55,5 / 0,01: una percepción chica no desaparece) y el IVA % de varias alícuotas sale como texto', x1 && x1['Perc. IIBB CABA'] === 30 && x2 && x2['Perc. IIBB Bs. As.'] === 37.5 && x2['IVA %'] === '21% / 10,5%' && x3 && x3['No gravado'] === 55.5 && x3['Perc. IIBB otras'] === 0.01 && /Córdoba/.test(x3['Detalle percepciones'] || ''), JSON.stringify([x1, x2, x3]));
   ok('C10: y para una sola alícuota sigue siendo un número (21) como antes', x1 && x1['IVA %'] === 21 && xo && xo['IVA %'] === 21 && xo['Perc. IIBB CABA'] === 0, JSON.stringify([x1 && x1['IVA %'], xo]));
 } else ok('C9: Excel disponible', false, JSON.stringify(xl));
 // impresión del libro
@@ -226,7 +226,7 @@ ok('E4: quitar la percepción al editar la nota de crédito la borra', nc2.perce
 
 // ═════════ F: lectura con IA ═════════
 await p.evaluate(() => { _impIniciar('lf', null); });
-await p.evaluate(() => { document.getElementById('leerFactImporte').value = '1240'; _impCargarIA('lf', { importe: 1240, netoGravado: 1000, importeIVA: 157.5, ivaDetalle: [{ alicuota: 21, neto: 500, iva: 105 }, { alicuota: 10.5, neto: 500, iva: 52.5 }], percepciones: [{ tipo: 'IIBB CABA', detalle: 'Perc. IIBB CABA', importe: 37.5 }] }); });
+await p.evaluate(() => { document.getElementById('leerFactImporte').value = '1240'; _impCargarIA('lf', { importe: 1240, netoGravado: 1000, importeIVA: 157.5, ivaDetalle: [{ alicuota: 21, neto: 500, iva: 105 }, { alicuota: 10.5, neto: 500, iva: 52.5 }], percepciones: [{ tipo: 'IIBB CABA', detalle: 'Perc. IIBB CABA', importe: 82.5 }] }); });
 r = await resolver('lf');
 const est = await p.evaluate(() => ({ alic: _impEst.lf.filas.map(f => f.alic), perc: _impEst.lf.perc.map(x => x.tipo) }));
 ok('F1: la IA devuelve 21 % y 10,5 % con una percepción de CABA: el panel queda con las dos alícuotas y la percepción', est.alic.length === 2 && est.alic.indexOf(21) !== -1 && est.alic.indexOf(10.5) !== -1 && JSON.stringify(est.perc) === '["iibb_caba"]' && cerca(r.iva, 157.5) && cerca(r.neto + r.iva + r.percTot, 1240), JSON.stringify({ est, r }));
@@ -256,6 +256,114 @@ ok('F5: «Confirmar» de leer PDF con IA guarda las dos alícuotas y la percepci
 // ═════════ G: listas ═════════
 const iR = await p.evaluate(() => { renderFacturas(); const tr = Array.from(document.querySelectorAll('#facturasBody tr')).find(t => /0009-00003333/.test(t.textContent)); return tr ? tr.innerText.replace(/\s+/g, ' ') : null; });
 ok('G1: la lista de Facturas muestra «IVA 21 % + 10,5 %» y la percepción bajo el importe', iR && /IVA 21 \+ 10,5 %/.test(iR) && /Perc\. IIBB Bs\. As\./.test(iR), iR);
+
+// ═════════ H: arreglos de la revisión de la v581 ═════════
+// H1/H2: una nota de crédito computa según SU letra (no según el toggle que dejó un Comprobante X / VEP / «no computa»)
+for (const clase of ['factx|X', 'vep|X']) {
+  await p.evaluate(() => agregarFactura());
+  await poner('factClase', clase, 'change');
+  await poner('factClase', 'nc|A', 'change');
+  ok('H1: «' + clase + '» → Nota de Crédito A: el panel de IVA se ve (antes quedaba escondido y la NC se guardaba sin detalle)', await vis('factImpGrupo'));
+  await p.evaluate(() => cerrarFactura());
+}
+await p.evaluate(() => agregarFactura());
+await p.evaluate(() => selFactComputaARCA(false));
+await poner('factClase', 'nc|A', 'change');
+ok('H2: con «no computa ARCA» elegido antes, la NC A igual muestra el panel', await vis('factImpGrupo'));
+await poner('factClase', 'ncx|X', 'change');
+ok('H3: y la NC X (no oficial) lo esconde', !(await vis('factImpGrupo')));
+await p.evaluate(() => cerrarFactura());
+// guardar la NC A después de X
+await p.evaluate(() => agregarFactura());
+await poner('factClase', 'factx|X', 'change'); await poner('factClase', 'nc|A', 'change');
+await poner('factProveedor', 'Ferretería Doble IVA SA'); await poner('factImporte', '121'); await poner('factNumero', '0001-00007777');
+await p.evaluate(async () => { document.getElementById('formFact').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); });
+await p.waitForTimeout(400);
+r = await p.evaluate(() => { const f = facturas.find(x => x.numero === '0001-00007777'); return f ? JSON.parse(JSON.stringify(f)) : null; });
+ok('H4: esa NC A se guarda con su IVA discriminado (neto 100 + IVA 21), no estimada', r && r.esNotaCredito && r.ivaDetalle && cerca(r.ivaDetalle[0].neto, 100) && cerca(r.ivaDetalle[0].iva, 21), JSON.stringify(r));
+
+// H5: NC sobre una factura al 10,5 % propone el 10,5 % (si el panel no se tocó)
+await p.evaluate(() => { facturas.push({ id: 'fc_105', proveedor: 'Ferretería Doble IVA SA', numero: '0003-00000105', fecha: '2026-11-05', moneda: 'ARS', importe: 1105, netoGravado: 1000, importeIVA: 105, ivaDetalle: [{ alic: 10.5, neto: 1000, iva: 105 }], tipoComprobante: 'A', computaARCA: true, pagado: 0, estado: 'pendiente', tipo: 'directo', pagosHistorial: [] }); return persistirFacturas(); });
+await p.waitForTimeout(250);
+await p.evaluate(() => agregarFactura());
+await poner('factClase', 'nc|A', 'change');
+await poner('factProveedor', 'Ferretería Doble IVA SA');
+await p.evaluate(() => { _factPoblarNCFacturas(); const s = document.getElementById('factNCFactura'); s.value = 'fact:fc_105'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+ok('H5: al elegir la factura al 10,5 % que anula, la NC propone 10,5 % (no 21 %)', (await p.evaluate(() => _impEst.fact.filas[0].alic)) === 10.5);
+await p.evaluate(() => cerrarFactura());
+await p.evaluate(() => abrirNotaCredito('Ferretería Doble IVA SA'));
+await p.evaluate(() => { const s = document.getElementById('ncFactura'); s.value = 'fact:fc_105'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+ok('H6: lo mismo en el modal de nota de crédito', (await p.evaluate(() => _impEst.nc.filas[0].alic)) === 10.5);
+await p.evaluate(() => cerrarNotaCredito());
+
+// H7: la IA trae neto + IVA pero el total tiene algo más (una percepción que no leyó): no se la traga el neto
+await p.evaluate(() => { _impIniciar('lf', null); document.getElementById('leerFactImporte').value = '1240'; _impCargarIA('lf', { importe: 1240, netoGravado: 1000, importeIVA: 210 }); });
+r = await resolver('lf');
+let aviso = await p.evaluate(() => ({ perc: _impEst.lf.perc, aviso: _impEst.lf.aviso, base: _impBaseRet('lf') }));
+ok('H7: neto 1.000 + IVA 210 sobre un total de 1.240 → la diferencia de 30 queda como «Otro tributo · Sin identificar», el neto sigue en 1.000 y hay un aviso', cerca(r.neto, 1000) && cerca(r.iva, 210) && cerca(r.percTot, 30) && aviso.perc.length === 1 && aviso.perc[0].tipo === 'otra' && /Sin identificar/.test(aviso.perc[0].desc) && /diferencia/.test(aviso.aviso) && cerca(aviso.base, 1000), JSON.stringify({ r, aviso }));
+await p.evaluate(() => { _impIniciar('lf', null); document.getElementById('leerFactImporte').value = '1210'; _impCargarIA('lf', { importe: 1210, ivaDetalle: [{ alicuota: 21, neto: 1000, iva: null }] }); });
+r = await resolver('lf');
+ok('H8: una entrada de la IA sin «iva» calcula el IVA (210), no lo fija en 0', cerca(r.iva, 210) && (await p.evaluate(() => _impEst.lf.filas[0].iva)) === null, JSON.stringify(r));
+await p.evaluate(() => { _impIniciar('lf', null); document.getElementById('leerFactImporte').value = '1000'; _impCargarIA('lf', { importe: 1000, netoGravado: 900, importeIVA: 100, importeNoGravado: -50, percepciones: [{ tipo: 'IIBB CABA', importe: -20 }] }); });
+aviso = await p.evaluate(() => ({ ng: _impEst.lf.ng, perc: _impEst.lf.perc.map(x => x.monto) }));
+ok('H9: importes negativos que devuelva la IA se descartan (no sin IVA −50 ni percepción −20)', aviso.ng === 0 && aviso.perc.every(m => m >= 0), JSON.stringify(aviso));
+
+// H10: negativos tipeados: se frenan en 0 y la cuenta coincide con lo guardado
+await p.evaluate(() => agregarFactura());
+await poner('factProveedor', 'Ferretería Doble IVA SA'); await poner('factImporte', '1210');
+await p.evaluate(() => { _impPercAgregar('fact', 'iibb_caba'); _impVerNGEX('fact'); });
+await p.evaluate(() => { const i = document.querySelector('#factImpGrupo .imp-perc input[type=number]'); i.value = '-30'; i.dispatchEvent(new Event('input', { bubbles: true })); const n = document.querySelector('#factImpGrupo .imp-ngex input'); n.value = '-10'; n.dispatchEvent(new Event('input', { bubbles: true })); });
+r = await resolver('fact');
+const impL = await p.evaluate(() => _impLeer('fact'));
+ok('H10: una percepción de −30 y un no gravado de −10 cuentan como 0: la cuenta (neto 1.000 + IVA 210) y lo que se guardaría coinciden', cerca(r.neto, 1000) && cerca(r.iva, 210) && r.percTot === 0 && impL && !impL.error && !impL.percepciones.length && !impL.netoNoGravado && cerca(impL.netoGravado, 1000), JSON.stringify({ r, impL }));
+
+// H11/H12: el IVA tipeado a mano se suelta al cambiar la alícuota o el importe
+await poner('factImpI0', '210.01');
+ok('H11a: (control) el IVA a mano queda fijo', cerca((await resolver('fact')).iva, 210.01));
+await p.evaluate(() => { const s = document.querySelector('#factImpGrupo .imp-fila select'); s.value = '10.5'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+r = await resolver('fact');
+ok('H11: al cambiar la alícuota a 10,5 % el IVA a mano se suelta (114,98, no 210,01)', cerca(r.iva, 114.98) && cerca(r.neto, 1095.02), JSON.stringify(r));
+await poner('factImpI0', '115');
+await poner('factImporte', '2210');
+r = await resolver('fact');
+ok('H12: al cambiar el importe también (2.210 al 10,5 % → neto 2.000 + IVA 210; no el 115 de antes)', cerca(r.iva, 210) && cerca(r.neto, 2000), JSON.stringify(r));
+await p.evaluate(() => cerrarFactura());
+
+// H13: comprobante ANTERIOR: si se le cambia el importe, el desglose que muestra el panel es el que se guarda
+await p.evaluate(() => { facturas.push({ id: 'fc_old3', proveedor: 'Ferretería Doble IVA SA', numero: '0001-00000003', fecha: '2026-11-04', moneda: 'ARS', importe: 1105, netoGravado: 1000, tipoComprobante: 'A', computaARCA: true, pagado: 0, estado: 'pendiente', tipo: 'directo', pagosHistorial: [] }); return persistirFacturas(); });
+await p.waitForTimeout(250);
+const iO3 = await p.evaluate(() => facturas.findIndex(x => x.id === 'fc_old3'));
+await p.evaluate((i) => editarFactura(i), iO3);
+await poner('factImporte', '2210');
+ok('H13: cambiar el importe de un comprobante anterior lo marca como tocado (el panel ya muestra un desglose nuevo)', (await p.evaluate(() => _impEst.fact.tocado)) === true);
+await p.evaluate(() => { document.getElementById('formFact').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); });
+await p.waitForTimeout(400);
+r = await p.evaluate(() => JSON.parse(JSON.stringify(facturas.find(x => x.id === 'fc_old3'))));
+ok('H14: y se guarda coherente (2.210 al 10,5 %: neto 2.000 + IVA 210; netoGravado ya no queda en 1.000)', r.importe === 2210 && r.ivaDetalle && cerca(r.ivaDetalle[0].neto, 2000) && cerca(r.ivaDetalle[0].iva, 210) && cerca(r.netoGravado, 2000), JSON.stringify(r));
+
+// H15: Gmail: la letra, la clase y «¿computa ARCA?» salen de ESTA factura, y la IA pide el IVA por alícuota
+await p.evaluate(() => { window._geminiProxy = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ proveedor: 'Ferretería Doble IVA SA', tipoComprobante: 'C', receptor: 'Constructora Los Álamos S.A.', numero: '0005-00000009', fecha: '2026-11-12', importe: 500, moneda: 'ARS', netoGravado: 500, importeIVA: 0 }) }] } }] }) }); abrirLeerFacturaPDF(); window._leerFactArchivoDB64 = 'AAAA'; window._leerFactArchivoTipo = 'application/pdf'; });
+await p.evaluate(async () => { document.getElementById('leerFactClase').value = 'nc|A'; lfClaseChange(); await procesarFacturaPDFDesdeBase64(); });
+await p.waitForTimeout(300);
+const gm = await p.evaluate(() => ({ clase: document.getElementById('leerFactClase').value, computa: document.getElementById('leerFactComputaARCA').value, alic: _impEst.lf.filas[0].alic, vis: document.getElementById('lfImpGrupo').style.display !== 'none' }));
+ok('H15: importar desde Gmail una Factura C: la clase pasa a «fact|C» (no hereda la NC A anterior), computa ARCA y el panel propone 0 %', gm.clase === 'fact|C' && gm.computa === 'true' && gm.alic === 0 && gm.vis, JSON.stringify(gm));
+ok('H16: el pedido de Gmail y el del Asistente RK piden ivaDetalle y percepciones', await p.evaluate(() => { const src = String(procesarFacturaPDFDesdeBase64) + String(rkCargarFactura || ''); return /_IA_IMP_PROMPT/.test(String(procesarFacturaPDFDesdeBase64)); }));
+await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
+
+// H17: pantalla angosta: cada campo con su rótulo, y «Exento» / «Importe» con ancho útil
+await p.evaluate(() => agregarFactura());
+await poner('factProveedor', 'Ferretería Doble IVA SA'); await poner('factImporte', '1210');
+await p.evaluate(() => { _impVerNGEX('fact'); _impPercAgregar('fact', 'iibb_caba'); });
+await p.setViewportSize({ width: 390, height: 800 });
+await p.waitForTimeout(200);
+const mv = await p.evaluate(() => {
+  const w = (sel) => { const e = document.querySelector(sel); return e ? Math.round(e.getBoundingClientRect().width) : null; };
+  const lbl = Array.from(document.querySelectorAll('#factImpGrupo .imp-cl')).filter(e => getComputedStyle(e).display !== 'none').map(e => e.textContent);
+  return { exento: w('#factImpGrupo .imp-ngex label:nth-of-type(2) input'), ng: w('#factImpGrupo .imp-ngex label:nth-of-type(1) input'), perc: w('#factImpGrupo .imp-perc input[type=number]'), lbl, scroll: document.documentElement.scrollWidth <= window.innerWidth + 1 };
+});
+ok('H17: a 390 px «No gravado», «Exento» y el importe de la percepción miden más de 100 px (antes «Exento» quedaba en 34) y todos tienen rótulo', mv.exento > 100 && mv.ng > 100 && mv.perc > 100 && ['Neto gravado', 'IVA', 'No gravado', 'Exento', 'Importe'].every(t => mv.lbl.indexOf(t) !== -1), JSON.stringify(mv));
+await p.setViewportSize({ width: 1400, height: 900 });
+await p.evaluate(() => cerrarFactura());
 
 console.log(res.map(x => x.join(' · ')).join('\n'));
 const mal = res.filter(x => x[0] === 'FALLA').length;
