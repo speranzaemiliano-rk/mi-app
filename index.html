@@ -3663,7 +3663,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v582</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v583</div>
         </div>
     </nav>
 
@@ -17558,7 +17558,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v582';
+    var APP_VER = 'v583';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -35095,6 +35095,82 @@
         return aplicable ? aplicable.monto : (canonInicial || 0);
     }
 
+    // ── Actualización del canon y MESES YA COBRADOS ─────────────────────────────────────────────────────────────────────────
+    // Lo que se espera cobrar de un mes sale del historial de ajustes (`ajustesCanon`: «desde tal período rige tal canon»). Una actualización
+    // que rige desde un mes que YA se cobró (o editar el «Canon actual» de un contrato sin ajustes, que cuenta para todos los meses) cambia
+    // lo esperado de ese mes: lo cobrado queda como pago a cuenta y el mes pasa a «Parcial» con el saldo. Eso pasaba sin avisar, y a
+    // veces no era lo que se quería. Al guardar el contrato se detectan esos meses y se PREGUNTA: actualizarlos (queda un saldo) o dejarlos
+    // como estaban. Dejarlos se expresa con el MISMO historial de ajustes (no hay campo nuevo, así el backend y el resto lo toman solos).
+    function _alqMesSig(p) { var y = parseInt(p.slice(0, 4), 10), m = parseInt(p.slice(5, 7), 10); return m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0'); }
+    function _alqCanonDe(c, per) { return _canonVigenteEnPeriodo(c.canon, c.canonActual, c.ajustesCanon, per) || 0; }
+    // Meses con cobros de alquiler cuyo canon cambia de `viejo` a `nuevo`: [{periodo, cobrado, canonOld, canonNew, espOld, espNew, saldo, extra}].
+    function _alqMesesCobradosAfectados(viejo, nuevo) {
+        var pers = {};
+        ((viejo && viejo.cobrosHistorial) || []).forEach(function(c) { if (c && (c.concepto === 'alquiler' || !c.concepto) && /^\d{4}-\d{2}$/.test(c.periodo || '')) pers[c.periodo] = 1; });
+        var out = [];
+        Object.keys(pers).sort().forEach(function(per) {
+            if ((viejo.mesesBonificados || []).indexOf(per) !== -1) return;   // un mes bonificado no se cobra: no hay nada que actualizar
+            var cOld = _alqCanonDe(viejo, per), cNew = _alqCanonDe(nuevo, per);
+            if (Math.abs(cOld - cNew) <= 0.004) return;
+            var cobrado = _alqCobradoPeriodo(viejo, per); if (!(cobrado > 0)) return;
+            var eOld = _alqCanonEsperado(viejo, per), eNew = _alqCanonEsperado(nuevo, per);
+            if (Math.abs(eNew - eOld) <= 0.004) return;   // p. ej. un mes con importe acordado: el canon no cambia lo que se espera
+            out.push({ periodo: per, cobrado: cobrado, canonOld: cOld, canonNew: cNew, espOld: eOld, espNew: eNew, saldo: _r2(eNew - cobrado) });
+        });
+        return out;
+    }
+    // Historial de ajustes que deja los meses `congelar` con el canon que tenían y el resto con el nuevo. Se arma mes a mes desde el principio
+    // del contrato y sólo se anota un ajuste cuando el canon CAMBIA respecto del mes anterior (una corrida de meses cobrados da un solo corte).
+    function _alqCongelarMeses(viejo, nuevo, congelar) {
+        var cong = {}; congelar.forEach(function(x) { cong[x.periodo] = true; });
+        var per = Object.keys(cong).sort(); if (!per.length) return (nuevo.ajustesCanon || []).slice();
+        var aj = (nuevo.ajustesCanon || []).filter(function(x) { return x && x.periodo; }).map(function(x) { return x.periodo; }).sort();
+        var desde = [String(nuevo.inicio || '').slice(0, 7), per[0], aj[0]].filter(function(x) { return /^\d{4}-\d{2}$/.test(x || ''); }).sort()[0];
+        var hasta = [_alqMesSig(per[per.length - 1]), aj[aj.length - 1]].filter(Boolean).sort().pop();
+        var out = [], prev = nuevo.canon || 0;   // antes del primer ajuste rige el canon inicial
+        for (var p = desde, tope = 1200; p <= hasta && tope-- > 0; p = _alqMesSig(p)) {
+            var v = cong[p] ? _alqCanonDe(viejo, p) : _alqCanonDe(nuevo, p);
+            if (Math.abs(v - prev) > 0.004) { out.push({ periodo: p, monto: v }); prev = v; }
+        }
+        return out;
+    }
+    // Pregunta qué hacer con esos meses. Devuelve 'actualizar' | 'mantener' | 'cancelar'. Modal propio (no `abrirModalGenerico`): su ✕ y el fondo
+    // cerraban sin resolver y el guardado quedaba colgado para siempre.
+    function _alqPreguntarActualizarCobrados(afectados, a) {
+        return new Promise(function(resolve) {
+            var fmt = function(n) { return _alqFmtMon(a, n); };
+            var filas = afectados.map(function(x) {
+                var lbl = _MESES_NOM[parseInt(x.periodo.slice(5, 7), 10) - 1] + ' ' + x.periodo.slice(0, 4);
+                var dif = _r2(x.espNew - x.cobrado), tol = x.cobrado >= x.espNew * 0.98 && dif > 0.004;
+                var res = dif > 0.004 ? (tol ? '<span style="color:var(--text-3);">' + fmt(dif) + '<br><small>(menos del 2 %: el plan lo da por pagado)</small></span>' : '<strong style="color:var(--warn);">saldo ' + fmt(dif) + '</strong>')
+                        : (dif < -0.004 ? '<span style="color:var(--text-3);">cobrado de más ' + fmt(-dif) + '</span>' : 'sin saldo');
+                return '<tr><td style="padding:5px 6px;">' + escHtml(lbl) + '</td><td style="padding:5px 6px;text-align:right;">' + fmt(x.cobrado) + '</td>'
+                    + '<td style="padding:5px 6px;text-align:right;">' + fmt(x.espOld) + ' → <strong>' + fmt(x.espNew) + '</strong></td><td style="padding:5px 6px;text-align:right;">' + res + '</td></tr>';
+            }).join('');
+            var m = document.createElement('div');
+            m.id = 'modalActCobrados';
+            m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9600;display:flex;align-items:center;justify-content:center;padding:16px;';
+            m.innerHTML = '<div role="dialog" aria-modal="true" aria-labelledby="actCobTit" style="background:var(--surface,#fff);border-radius:16px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,.25);">'
+                + '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-soft,#e0e0e0);"><strong id="actCobTit" style="font-size:14px;">💲 Actualización del canon: ' + (afectados.length === 1 ? 'hay un mes ya cobrado' : 'hay ' + afectados.length + ' meses ya cobrados') + '</strong>'
+                + '<button type="button" id="alqActCobX" aria-label="Cancelar" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-2,#888);line-height:1;">✕</button></div>'
+                + '<div style="padding:18px 20px;font-size:13px;line-height:1.5;">'
+                + '<p style="margin:0 0 10px;">El canon nuevo alcanza a ' + (afectados.length === 1 ? 'un mes que ya tiene cobros' : 'meses que ya tienen cobros') + '. ¿' + (afectados.length === 1 ? 'Lo actualizás' : 'Los actualizás') + ' también?</p>'
+                + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;"><thead><tr style="text-align:left;color:var(--text-3);border-bottom:1px solid var(--border-soft,#e0e0e0);"><th style="padding:4px 6px;">Mes</th><th style="padding:4px 6px;text-align:right;">Cobrado</th><th style="padding:4px 6px;text-align:right;">Se espera</th><th style="padding:4px 6px;text-align:right;">Si se actualiza</th></tr></thead><tbody>' + filas + '</tbody></table>'
+                + '<div style="font-size:12px;color:var(--text-3);margin-bottom:14px;"><strong>Sí:</strong> lo cobrado queda como <strong>pago a cuenta</strong> y el mes pasa a «Parcial» con el saldo que figura arriba.<br><strong>No:</strong> ' + (afectados.length === 1 ? 'ese mes se queda' : 'esos meses se quedan') + ' con el canon que tenía' + (afectados.length === 1 ? '' : 'n') + ' y el nuevo rige en los demás.</div>'
+                + '<div style="display:flex;flex-direction:column;gap:8px;">'
+                + '<button type="button" class="btn btn-gold" id="alqActCobSi">✅ Sí, actualizar ' + (afectados.length === 1 ? 'ese mes' : 'esos meses') + ' (queda un saldo)</button>'
+                + '<button type="button" class="btn btn-outline" id="alqActCobNo">🔒 No, dejar ' + (afectados.length === 1 ? 'ese mes' : 'esos meses') + ' como ' + (afectados.length === 1 ? 'está' : 'están') + '</button>'
+                + '<button type="button" class="btn btn-outline" id="alqActCobCancel" style="color:var(--text-3);">Cancelar y volver al contrato</button></div></div></div>';
+            var cerrar = function(r) { if (m.parentNode) m.parentNode.removeChild(m); resolve(r); };
+            document.body.appendChild(m);
+            document.getElementById('alqActCobSi').onclick = function() { cerrar('actualizar'); };
+            document.getElementById('alqActCobNo').onclick = function() { cerrar('mantener'); };
+            document.getElementById('alqActCobCancel').onclick = function() { cerrar('cancelar'); };
+            document.getElementById('alqActCobX').onclick = function() { cerrar('cancelar'); };
+            try { document.getElementById('alqActCobSi').focus(); } catch (e) {}
+        });
+    }
+
     // Consulta al backend (que a su vez proxea el CSV oficial de INDEC) la variación de
     // IPC Nacional Nivel General entre el período base y el período actual del contrato.
     // El redondeo replica el de ikiwi.net.ar/calculadoras/inflacion-ipc: primero se redondea
@@ -36565,7 +36641,14 @@
         // cobrados no se tocan, el Plan de pagos los muestra congelados con lo que se cobró.
         var masReciente = _alqAjustesCanonWorking.slice().sort(function(a,b){ return a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0; }).pop();
         if (masReciente) document.getElementById('alqCanonActual').value = masReciente.monto;
-        alert('Canon actualizado a $' + _alqIPCNuevoCanon.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' a partir de ' + periodo + '. Los meses ya cobrados no se modifican.');
+        // ¿Alcanza a meses que ya tienen cobros? (sólo se puede saber al editar un contrato existente.) La pregunta de qué hacer con ellos se hace al guardar.
+        var _exAp = (editandoAlqIdx >= 0) ? alquileres[editandoAlqIdx] : null, _txtCob = '';
+        if (_exAp) {
+            var _likeAp = Object.assign({}, _exAp, { canon: parseFloat(document.getElementById('alqCanon').value) || 0, canonActual: parseFloat(document.getElementById('alqCanonActual').value) || 0, ajustesCanon: _alqAjustesCanonWorking.slice() });
+            var _afAp = _alqMesesCobradosAfectados(_exAp, _likeAp);
+            if (_afAp.length) _txtCob = '\n\n⚠️ Alcanza a ' + (_afAp.length === 1 ? 'un mes que ya se cobró' : _afAp.length + ' meses que ya se cobraron') + ' (' + _afAp.map(function(x) { return _MESES_NOM[parseInt(x.periodo.slice(5, 7), 10) - 1].slice(0, 3) + ' ' + x.periodo.slice(0, 4); }).join(', ') + '). Al guardar el contrato te pregunto si ' + (_afAp.length === 1 ? 'lo actualizás' : 'los actualizás') + ' (lo cobrado queda a cuenta y queda un saldo) o ' + (_afAp.length === 1 ? 'lo dejás' : 'los dejás') + ' como ' + (_afAp.length === 1 ? 'está' : 'están') + '.';
+        }
+        alert('Canon actualizado a $' + _alqIPCNuevoCanon.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' a partir de ' + periodo + '. Los meses anteriores no se modifican.' + _txtCob);
     }
 
 
@@ -36633,6 +36716,26 @@
         };
         if (_otroI) nuevo.importeInicio = _r2(_impI);   // sin «otro importe» la clave NO se escribe (y al editar se saca: abajo no se conserva la anterior)
         if (_otroF) nuevo.importeFin = _r2(_impF);
+        // Si el canon cambió y alcanza a meses que YA se cobraron (una actualización que rige desde un mes cobrado, o editar el «Canon actual»), se
+        // pregunta ANTES de subir nada: actualizarlos (lo cobrado queda a cuenta y queda un saldo) o dejarlos como estaban.
+        if (existente) {
+            var _nuevoLike = Object.assign({}, existente, nuevo);
+            if (!('importeInicio' in nuevo)) delete _nuevoLike.importeInicio;
+            if (!('importeFin' in nuevo)) delete _nuevoLike.importeFin;
+            var _afectCob = _alqMesesCobradosAfectados(existente, _nuevoLike);
+            if (_afectCob.length) {
+                var _decCob = await _alqPreguntarActualizarCobrados(_afectCob, existente);
+                if (_decCob === 'cancelar') return;
+                if (_decCob === 'mantener') {
+                    nuevo.ajustesCanon = _alqCongelarMeses(existente, _nuevoLike, _afectCob);
+                    _alqAjustesCanonWorking = nuevo.ajustesCanon.slice();
+                    _renderAjustesCanonLista();
+                }
+                // el listener de Firebase pudo traer un cobro nuevo mientras se contestaba: se toma la lista al día
+                var _latCob = alquileres.find(function(x) { return x && x.id === existente.id; });
+                if (_latCob) nuevo.cobrosHistorial = _latCob.cobrosHistorial || [];
+            }
+        }
         var archivos = Array.prototype.slice.call(document.getElementById('alqArchivo').files || []);
         var btnAlq = document.getElementById('alqGuardarBtn');
         var estAlq = document.getElementById('alqArchivoEstado');
