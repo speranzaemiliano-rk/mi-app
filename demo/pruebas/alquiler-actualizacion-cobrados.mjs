@@ -143,6 +143,140 @@ for (const id of ['ac2', 'ac6', 'ac8', 'ac1']) {
 }
 ok('E3: el backend (server.js) calcula el mismo canon por mes que la app en los contratos congelados (' + 4 * 24 + ' meses)', dif.length === 0, JSON.stringify(dif.slice(0, 3)));
 
+
+// ═════════ F: retoques de la v584 (revisión independiente de la v583) ═════════
+const canonDe = (id, per) => p.evaluate(({ id, per }) => { const a = alquileres.find(x => x.id === id); return _alqCanonDe(a, per); }, { id, per });
+const sinDlg = () => p.evaluate(() => document.querySelectorAll('#modalActCobrados').length);
+// F1: lista de ajustes que se vaciaría (todo vale el canon inicial) con un «Canon actual» tipeado distinto → no debe subir todo al plano
+await crear('af1', [['2026-02', 300000]], { canonActual: 0 });
+await abrir('af1');
+await ajustar([{ periodo: '2026-02', monto: 330000 }, { periodo: '2026-03', monto: 300000 }], 330000);
+v = await guardar('no');
+c = await get('af1');
+const fv = {}; for (const per of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-12', '2027-06']) fv[per] = await canonDe('af1', per);
+ok('F1: «No» con una lista que daría vacía deja un ancla: todos los meses siguen en 300.000 (antes subían a 330.000) y febrero queda pagado', v && (c.ajustesCanon || []).length >= 1 && Object.values(fv).every(x => cerca(x, 300000)) && (await esp('af1', '2026-02')).sp.pagada, JSON.stringify({ aj: c.ajustesCanon, fv }));
+
+// F2: un cobro ANTERIOR al primer mes afectado (o al inicio) no cambia de canon en silencio con «No»
+await crear('af2', [['2025-10', 300000], ['2026-09', 360000]], { canon: 300000, canonActual: 330000, ajustesCanon: [{ periodo: '2025-07', monto: 330000 }, { periodo: '2026-02', monto: 360000 }] });
+await abrir('af2');
+await ajustar([], 330000);
+v = await guardar('no');
+c = await get('af2');
+const e25 = await esp('af2', '2025-10'), e09 = await esp('af2', '2026-09'), e10 = await esp('af2', '2026-10');
+const resto = await p.evaluate(() => { const a = alquileres.find(x => x.id === 'af2'); return _alqMesesCobradosAfectados(Object.assign({}, a, { ajustesCanon: [{ periodo: '2025-07', monto: 330000 }, { periodo: '2026-02', monto: 360000 }] }), a).length; });
+ok('F2: el diálogo lista sólo septiembre (360.000 → 330.000); con «No» octubre 2025 sigue esperando 330.000 (Parcial, falta 30.000), septiembre 360.000 pagado y octubre 2026 330.000',
+  v && v.filas.length === 1 && /Septiembre 2026/.test(v.filas[0]) && cerca(e25.esp, 330000) && e25.sp.parcial && cerca(e25.sp.saldo, 30000) && cerca(e09.esp, 360000) && e09.sp.pagada && cerca(e10.esp, 330000), JSON.stringify({ v: v && v.filas, aj: c.ajustesCanon, e25: e25.sp, e09: e09.esp, e10: e10.esp }));
+ok('F2b: con el historial resultante ya no queda ningún mes afectado (el congelado es exacto)', resto === 0, resto);
+await crear('af2b', [['0202-03', 300000], ['2026-01', 300000]]);
+await abrir('af2b'); await poner('alqCanonActual', '330000');
+v = await guardar('no');
+c = await get('af2b');
+ok('F2c: un cobro con período mal tipeado (0202-03) se ignora: no cuelga el guardado ni mete un ajuste en el año 202', v && v.filas.length === 1 && (c.ajustesCanon || []).every(x => /^20/.test(x.periodo)), JSON.stringify({ v: v && v.filas, aj: c.ajustesCanon }));
+
+// F3: «Aplicar al canon» busca el contrato por id aunque el listener cambie la lista
+await crear('af3', meses(1, 10));
+await abrir('af3');
+await p.evaluate(() => { alquileres.unshift({ id: 'otro_af3', unidad: 'OTRO', inquilino: 'Otro', moneda: 'ARS', canon: 100, canonActual: 100, inicio: '2026-01-01', fin: '2027-12-31', diaPago: 5, cobrosHistorial: [], tipo: 'local' }); });
+await p.evaluate(() => { window.__alerts.length = 0; _alqIPCNuevoCanon = 330000; document.getElementById('alqIPCVigDesdeMes').value = '10'; document.getElementById('alqIPCVigDesdeAnio').value = '2026'; aplicarIPCAlCanon(); });
+al = await p.evaluate(() => window.__alerts.slice());
+ok('F3: aunque otro contrato se haya colado antes en la lista, el aviso habla del contrato en edición (octubre cobrado)', al.length === 1 && /ya se cobró/.test(al[0]) && /Oct 2026/.test(al[0]), JSON.stringify(al));
+await p.evaluate(() => { alquileres = alquileres.filter(x => x.id !== 'otro_af3'); cerrarModalAlquiler(); });
+
+// F4: el texto dice lo que realmente pasa (cobrado de más ≠ saldo, y «anteriores» sí se tocan)
+await crear('af4', meses(1, 9, 330000), { canon: 300000, canonActual: 330000 });
+await abrir('af4');
+await p.evaluate(() => { window.__alerts.length = 0; _alqIPCNuevoCanon = 360000; document.getElementById('alqIPCVigDesdeMes').value = '10'; document.getElementById('alqIPCVigDesdeAnio').value = '2026'; aplicarIPCAlCanon(); });
+al = await p.evaluate(() => window.__alerts.slice());
+ok('F4: cuando el cambio alcanza a meses ANTERIORES no dice que no se modifican, y si hay cobrado de más no promete «queda un saldo»', al.length === 1 && !/Los meses anteriores no se modifican/.test(al[0]) && /cobrado de más/.test(al[0]) && !/queda un saldo/.test(al[0]), JSON.stringify(al));
+v = await guardar('cancel');
+ok('F4b: el diálogo con todo «cobrado de más» no dice «(queda un saldo)» ni «Parcial»: dice que no queda ningún saldo', v && !/queda un saldo/.test(v.txt) && /no queda ningún saldo/.test(v.txt) && !/Parcial/.test(v.txt), v && v.txt.slice(0, 600));
+await p.evaluate(() => cerrarModalAlquiler());
+
+// F5: un cobro que entra MIENTRAS el diálogo está abierto también se mantiene con «No»
+await crear('af5', meses(1, 3));
+await abrir('af5'); await poner('alqCanonActual', '330000');
+await p.evaluate(() => { window.__g = guardarAlquiler(); window.__gFin = false; window.__g.then(() => { window.__gFin = true; }); });
+await p.waitForSelector('#modalActCobrados');
+await p.evaluate(() => { const i = alquileres.findIndex(x => x.id === 'af5'), a = alquileres[i]; alquileres[i] = Object.assign({}, a, { cobrosHistorial: a.cobrosHistorial.concat([{ id: 'af5_nuevo', periodo: '2026-04', concepto: 'alquiler', monto: 300000, fecha: '2026-04-05' }]) }); });
+await p.evaluate(() => document.getElementById('alqActCobNo').click());
+await p.evaluate(() => window.__g); await p.waitForTimeout(250);
+const e4 = await esp('af5', '2026-04'); c = await get('af5');
+ok('F5: abril se cobró mientras se contestaba: con «No» queda en 300.000 y pagado (antes quedaba Parcial sin haberlo preguntado) y el nuevo canon rige desde mayo', e4.sp.pagada && cerca(e4.esp, 300000) && JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-05', monto: 330000 }]), JSON.stringify({ e4: e4.sp, aj: c.ajustesCanon }));
+
+// F6: un segundo «Guardar» con el diálogo abierto no apila otro diálogo
+await crear('af6', meses(1, 3));
+await abrir('af6'); await poner('alqCanonActual', '330000');
+await p.evaluate(() => { window.__g = guardarAlquiler(); window.__gFin = false; window.__g.then(() => { window.__gFin = true; }); });
+await p.waitForSelector('#modalActCobrados');
+await p.evaluate(() => { window.__g2 = guardarAlquiler(); });
+await p.waitForTimeout(250);
+const nD = await sinDlg();
+await p.evaluate(() => document.getElementById('alqActCobCancel').click());
+await p.evaluate(() => Promise.all([window.__g, window.__g2])); await p.waitForTimeout(150);
+ok('F6: el segundo guardado (Enter sobre el botón de atrás) no abre otro diálogo; Cancelar cierra todo y no queda nada colgado', nD === 1 && (await sinDlg()) === 0 && await p.evaluate(() => window._alqPreguntandoCob === false), nD);
+await p.evaluate(() => cerrarModalAlquiler());
+
+// F7: foco y scroll del diálogo con muchos meses; un Enter doble no confirma nada
+await crear('af7', (() => { const o = []; for (let y = 2025; y <= 2026; y++) for (let m = 1; m <= 12; m++) o.push([y + '-' + String(m).padStart(2, '0'), 300000]); return o; })(), { inicio: '2025-01-01' });
+await abrir('af7'); await poner('alqCanonActual', '330000');
+await p.evaluate(() => { document.getElementById('alqGuardarBtn').focus(); });
+await p.keyboard.press('Enter'); await p.waitForSelector('#modalActCobrados'); await p.keyboard.press('Enter'); await p.waitForTimeout(250);
+const st = await p.evaluate(() => { const d = document.querySelector('#modalActCobrados [role=dialog]'); const r = document.getElementById('actCobTit').getBoundingClientRect(); return { sc: d ? d.scrollTop : -1, foco: document.activeElement === d, tit: r.top >= 0, abierto: !!document.getElementById('modalActCobrados') }; });
+ok('F7: con 24 meses el diálogo abre arriba (título a la vista), el foco queda en el cuadro y un segundo Enter no confirma «Sí»', st.sc === 0 && st.foco && st.tit && st.abierto && (await get('af7')).canonActual === 300000, JSON.stringify(st));
+
+// F8: Esc cancela, el Tab queda adentro y el foco vuelve a «Guardar»
+await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab');
+const dentro = await p.evaluate(() => document.getElementById('modalActCobrados').contains(document.activeElement));
+await p.keyboard.press('Escape'); await p.evaluate(() => window.__g || 0); await p.waitForTimeout(250);
+const f8 = await p.evaluate(() => ({ dlg: !!document.getElementById('modalActCobrados'), modalAlq: document.getElementById('modalAlquiler').classList.contains('active'), foco: document.activeElement && document.activeElement.id }));
+ok('F8: Tab no se escapa del diálogo, Esc cancela sin cerrar el contrato de atrás y el foco vuelve a «Guardar Contrato»', dentro && !f8.dlg && f8.modalAlq && f8.foco === 'alqGuardarBtn' && (await get('af7')).canonActual === 300000, JSON.stringify({ dentro, f8 }));
+await p.evaluate(() => cerrarModalAlquiler());
+
+// F9: celular (390 px): la tabla no desborda, el saldo se ve y los botones flotantes no tapan el diálogo
+await p.setViewportSize({ width: 390, height: 844 });
+await crear('af9', meses(1, 3));
+await abrir('af9'); await poner('alqCanonActual', '330000');
+await p.evaluate(() => { window.__g = guardarAlquiler(); window.__gFin = false; window.__g.then(() => { window.__gFin = true; }); });
+await p.waitForSelector('#modalActCobrados'); await p.waitForTimeout(250);
+const mv = await p.evaluate(() => {
+  const d = document.querySelector('#modalActCobrados [role=dialog]'), dr = d.getBoundingClientRect();
+  const sal = Array.from(d.querySelectorAll('td[data-l="Si se actualiza"]')).map(t => { const r = t.getBoundingClientRect(); return r.left >= dr.left - 1 && r.right <= dr.right + 1 && r.width > 0; });
+  const b = document.getElementById('alqActCobSi').getBoundingClientRect(), el = document.elementFromPoint(b.right - 6, b.top + b.height / 2);
+  const z = parseInt(getComputedStyle(document.getElementById('modalActCobrados')).zIndex, 10);
+  const fabs = ['fabStack', 'rk-agente-btn', 'rkCalcFab'].map(i => { const e = document.getElementById(i); return e ? parseInt(getComputedStyle(e).zIndex, 10) || 0 : 0; });
+  return { sw: d.scrollWidth, cw: d.clientWidth, sal, enBoton: !!(el && document.getElementById('alqActCobSi').contains(el)), z, maxFab: Math.max.apply(null, fabs) };
+});
+ok('F9: a 390 px la tabla no desborda (se apila por mes), los tres saldos se ven dentro del cuadro y el toque en el borde del botón cae en el botón', mv.sw <= mv.cw && mv.sal.length === 3 && mv.sal.every(Boolean) && mv.enBoton, JSON.stringify(mv));
+ok('F9b: el diálogo queda por encima de los botones flotantes (z-index)', mv.z > mv.maxFab, JSON.stringify(mv));
+await p.evaluate(() => document.getElementById('alqActCobCancel').click());
+await p.evaluate(() => window.__g); await p.waitForTimeout(150);
+await p.evaluate(() => cerrarModalAlquiler());
+await p.setViewportSize({ width: 1400, height: 900 });
+
+// F10: tras «No» en un contrato que no es de IPC, editar el «Canon actual» sigue teniendo efecto y la lista de ajustes se ve
+await crear('af10', meses(1, 10), { indice: 'LIBRE' });
+await abrir('af10'); await poner('alqCanonActual', '330000');
+await guardar('no');
+c = await get('af10');
+ok('F10a: «No» deja un solo ajuste desde noviembre', JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-11', monto: 330000 }]), JSON.stringify(c.ajustesCanon));
+await abrir('af10');
+const vis = await p.evaluate(() => { const l = document.getElementById('alqAjustesLista'), sec = document.getElementById('alqIPCSector'); return { fuera: !sec.contains(l), txt: l.innerText, visible: l.offsetParent !== null }; });
+ok('F10b: la lista «Ajustes de canon cargados» se ve aunque el índice no sea IPC (no está dentro del sector escondido)', vis.fuera && vis.visible && /Desde Nov 2026/.test(vis.txt), JSON.stringify(vis));
+await poner('alqCanonActual', '360000');
+v = await guardar(null);
+c = await get('af10');
+const d10 = await esp('af10', '2026-12'), n10 = await esp('af10', '2026-10');
+ok('F10c: subir el «Canon actual» a 360.000 lleva el último ajuste a 360.000 (antes se ignoraba en silencio); diciembre espera 360.000 y octubre (cobrado) sigue en 300.000, sin diálogo', v === null && JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-11', monto: 360000 }]) && cerca(d10.esp, 360000) && cerca(n10.esp, 300000), JSON.stringify({ v, aj: c.ajustesCanon, d10: d10.esp, n10: n10.esp }));
+await abrir('af10');
+await ajustar([{ periodo: '2026-11', monto: 360000 }, { periodo: '2026-12', monto: 380000 }], 400000);
+v = await guardar(null);
+c = await get('af10');
+ok('F10d: si se tocó la lista Y el «Canon actual», manda la lista (no se pisa lo que se cargó a mano)', JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-11', monto: 360000 }, { periodo: '2026-12', monto: 380000 }]), JSON.stringify(c.ajustesCanon));
+
+// F11: la leyenda del formulario ya no promete que los meses cobrados no se tocan
+const leyenda = await p.evaluate(() => document.getElementById('alqIPCAplicarWrap').innerText);
+ok('F11: la leyenda junto a «Aplicar» dice que se pregunta al guardar (ya no «los meses ya cobrados no se tocan»)', /al guardar el contrato te pregunto/.test(leyenda) && !/no se tocan/.test(leyenda), leyenda);
+
 console.log(res.map(x => x.join(' · ')).join('\n'));
 const mal = res.filter(x => x[0] === 'FALLA').length;
 console.log(`\n${res.length - mal}/${res.length} OK`);
