@@ -277,6 +277,90 @@ ok('F10d: si se tocó la lista Y el «Canon actual», manda la lista (no se pisa
 const leyenda = await p.evaluate(() => document.getElementById('alqIPCAplicarWrap').innerText);
 ok('F11: la leyenda junto a «Aplicar» dice que se pregunta al guardar (ya no «los meses ya cobrados no se tocan»)', /al guardar el contrato te pregunto/.test(leyenda) && !/no se tocan/.test(leyenda), leyenda);
 
+
+// ═════════ G: retoques de la v585 (segunda revisión independiente) ═════════
+const aplicarIPC = (monto, mes, anio) => p.evaluate(({ monto, mes, anio }) => { window.__alerts.length = 0; _alqIPCNuevoCanon = monto; document.getElementById('alqIPCVigDesdeMes').value = String(mes); document.getElementById('alqIPCVigDesdeAnio').value = String(anio); aplicarIPCAlCanon(); return window.__alerts.slice(); }, { monto, mes, anio });
+const campo = () => p.evaluate(() => parseFloat(document.getElementById('alqCanonActual').value) || 0);
+const lista = () => p.evaluate(() => _alqAjustesCanonWorking.map(x => ({ periodo: x.periodo, monto: x.monto })));
+
+// G1: aplicar un IPC y arrepentirse con la ✕ no reescribe en silencio el ajuste anterior (con y sin cobros en esos meses)
+for (const [id, cobrados] of [['ag1a', meses(1, 3)], ['ag1b', meses(1, 10, 330000)]]) {
+  await crear(id, cobrados, { canon: 300000, canonActual: 330000, ajustesCanon: [{ periodo: '2026-04', monto: 330000 }] });
+  await abrir(id);
+  await aplicarIPC(363000, 11, 2026);
+  const antes = await campo();
+  await p.evaluate(() => _quitarAjusteCanon('2026-11'));
+  const despues = await campo();
+  v = await guardar(null);
+  c = await get(id);
+  ok('G1 (' + id + '): tras aplicar 363.000 y quitarlo con la ✕ el campo vuelve a 330.000, no pregunta nada y el ajuste anterior queda en 330.000',
+    antes === 363000 && despues === 330000 && v === null && JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-04', monto: 330000 }]) && c.canonActual === 330000, JSON.stringify({ antes, despues, v, aj: c.ajustesCanon, ca: c.canonActual }));
+}
+// G2: quitar con ✕ el único ajuste deja el campo en un valor que el plan usa
+await crear('ag2a', meses(1, 3), { canon: 300000, canonActual: 330000 });
+await abrir('ag2a');
+await aplicarIPC(363000, 11, 2026); await p.evaluate(() => _quitarAjusteCanon('2026-11'));
+const g2a = await campo();
+await p.evaluate(() => cerrarModalAlquiler());
+await crear('ag2b', meses(1, 3), { canon: 300000, canonActual: 330000, ajustesCanon: [{ periodo: '2026-04', monto: 330000 }] });
+await abrir('ag2b'); await p.evaluate(() => _quitarAjusteCanon('2026-04'));
+const g2b = await campo();
+await p.evaluate(() => cerrarModalAlquiler());
+ok('G2: deshacer un «Aplicar» en un contrato sin ajustes devuelve el «Canon actual» guardado (330.000); quitar el único ajuste de un contrato que los tenía lo lleva al canon inicial (300.000), no deja el monto quitado', g2a === 330000 && g2b === 300000, JSON.stringify({ g2a, g2b }));
+
+// G3: cancelar el diálogo no deja el formulario mutado ni arrastra una lista rancia
+await crear('ag3', meses(4, 10, 330000), { canon: 300000, canonActual: 330000, ajustesCanon: [{ periodo: '2026-04', monto: 330000 }] });
+await abrir('ag3'); await poner('alqCanonActual', '340000');
+v = await guardar('cancel');
+const l3 = await lista();
+await poner('alqCanonActual', '330000');
+v = await guardar(null);
+c = await get('ag3');
+ok('G3: tras «Cancelar» la lista del formulario sigue en 330.000 y, al volver el campo a 330.000, se guarda sin preguntar y sin tocar el ajuste (antes quedaba en 340.000 y preguntaba de nuevo)',
+  v === null && JSON.stringify(l3) === JSON.stringify([{ periodo: '2026-04', monto: 330000 }]) && JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-04', monto: 330000 }]), JSON.stringify({ l3, aj: c.ajustesCanon }));
+
+// G4: un «Canon actual» desactualizado: sin tocarlo no se reescribe nada; volver a tipear el mismo valor SÍ tiene efecto
+await crear('ag4a', meses(1, 3), { canon: 300000, canonActual: 300000, ajustesCanon: [{ periodo: '2026-04', monto: 330000 }] });
+await abrir('ag4a'); await poner('alqObs', 'sin tocar el canon');
+v = await guardar(null); c = await get('ag4a');
+const sinTocar = JSON.stringify(c.ajustesCanon) === JSON.stringify([{ periodo: '2026-04', monto: 330000 }]);
+await crear('ag4b', meses(1, 3), { canon: 300000, canonActual: 300000, ajustesCanon: [{ periodo: '2026-04', monto: 330000 }] });
+await abrir('ag4b'); await poner('alqCanonActual', '300000');
+v = await guardar(null); const c4b = await get('ag4b');
+ok('G4: con el campo desactualizado, guardar sin tocarlo no cambia los ajustes; tipear (aunque sea el mismo valor guardado) lleva el último ajuste a ese monto', sinTocar && JSON.stringify(c4b.ajustesCanon) === JSON.stringify([{ periodo: '2026-04', monto: 300000 }]), JSON.stringify({ sinTocar, aj: c4b.ajustesCanon }));
+
+// G5: año fuera de rango
+await crear('ag5', meses(1, 3));
+await abrir('ag5');
+al = await aplicarIPC(330000, 3, 1925);
+const l5 = await lista();
+ok('G5: «Aplicar a partir de» un año como 1925 se rechaza (no se carga un ajuste que cortaría el recorrido) y _alqPerOk no acepta 19xx', al.length === 1 && /2000 y 2099/.test(al[0]) && l5.length === 0 && await p.evaluate(() => !_alqPerOk('1925-03') && _alqPerOk('2026-03') && !_alqPerOk('2026-13')), JSON.stringify({ al, l5 }));
+await p.evaluate(() => cerrarModalAlquiler());
+
+// G6: Shift+Tab desde el cuadro (foco inicial) no se escapa del diálogo
+await crear('ag6', meses(1, 3));
+await abrir('ag6'); await poner('alqCanonActual', '330000');
+await p.evaluate(() => { window.__g = guardarAlquiler(); window.__gFin = false; window.__g.then(() => { window.__gFin = true; }); });
+await p.waitForSelector('#modalActCobrados');
+await p.keyboard.press('Shift+Tab');
+const f6 = await p.evaluate(() => ({ dentro: document.getElementById('modalActCobrados').contains(document.activeElement), id: document.activeElement && document.activeElement.id }));
+ok('G6: Shift+Tab desde el cuadro lleva al último botón («Cancelar y volver al contrato») y no escapa a la página de atrás', f6.dentro && f6.id === 'alqActCobCancel', JSON.stringify(f6));
+// G7: con la calculadora flotante abierta, Enter sobre un botón del diálogo funciona
+await p.evaluate(() => { if (!document.getElementById('rkCalc').classList.contains('active')) rkCalcToggle(); });
+await p.keyboard.press('Enter'); await p.waitForTimeout(250);
+const f7 = await p.evaluate(() => ({ dlg: !!document.getElementById('modalActCobrados'), fin: window.__gFin }));
+ok('G7: con la calculadora abierta, Enter sobre «Cancelar» del diálogo lo cancela (antes la calculadora le hacía preventDefault y no pasaba nada)', !f7.dlg && f7.fin === true, JSON.stringify(f7));
+await p.evaluate(() => { if (document.getElementById('rkCalc').classList.contains('active')) rkCalcToggle(); cerrarModalAlquiler(); });
+
+// G8: la tolerancia del 2 % es la misma en el aviso y en el diálogo
+await crear('ag8', meses(1, 2));
+await abrir('ag8');
+al = await aplicarIPC(304500, 1, 2026);
+ok('G8: una suba del 1,5 % (lo cobrado ya alcanza al 98 %) no promete «queda un saldo» en el aviso, igual que el diálogo («no queda ningún saldo»)', al.length === 1 && !/queda un saldo/.test(al[0]) && /no queda saldo/.test(al[0]), JSON.stringify(al));
+v = await guardar('cancel');
+ok('G8b: y el diálogo de ese caso dice «no queda ningún saldo»', v && /no queda ningún saldo/.test(v.txt), v && v.txt.slice(0, 400));
+await p.evaluate(() => cerrarModalAlquiler());
+
 console.log(res.map(x => x.join(' · ')).join('\n'));
 const mal = res.filter(x => x[0] === 'FALLA').length;
 console.log(`\n${res.length - mal}/${res.length} OK`);
