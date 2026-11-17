@@ -47,7 +47,8 @@ ok('A5: el estado no cambió: la tolerancia sigue dando «pagada» con saldo 0 (
 
 // ═════════ B: el panel «Lo que se debe» ═════════
 const esperado = await p.evaluate(() => { const a = alquileres.find(x => x.id === 'pd1'), out = []; let fav = 0;
-  for (let off = 0; off <= 14; off++) { const pe = window.__mk(off), s = _alqSaldoPeriodo(a, pe); if (s.dif > 0.004) out.push({ off, debe: s.dif }); else fav += s.aFavor; }
+  for (let off = 0; off <= 14; off++) { const pe = window.__mk(off), s = _alqSaldoPeriodo(a, pe); if (off === 14 && new Date().getDate() <= 1) continue;   // día de pago 1: el 1 la cuota «vence hoy», todavía no está vencida
+    if (s.dif > 0.004) out.push({ off, debe: s.dif }); else fav += s.aFavor; }
   return { meses: out, total: Math.round(out.reduce((t, x) => t + x.debe, 0) * 100) / 100, fav }; });
 const as1 = await aside();
 ok('B1: el panel lista un renglón por mes vencido con diferencia (' + esperado.meses.length + ' meses: ' + esperado.meses.map(x => x.off).join(', ') + ')', as1.filas.length === esperado.meses.length, JSON.stringify({ n: as1.filas.length, esp: esperado.meses.length, filas: as1.filas }));
@@ -77,16 +78,17 @@ await p.evaluate(() => { const a = alquileres.find(x => x.id === 'pd2'); a.meses
 await abrirPlan('pd2');
 const as3 = await aside();
 const hoyDia = await p.evaluate(() => new Date().getDate());
-const incluyeActual = hoyDia >= 28;   // con día de pago 28, el mes en curso sólo cuenta desde ese día
+const incluyeActual = hoyDia > 28;   // con día de pago 28 el mes en curso cuenta desde el 29 (el 28 la cuota «vence hoy»)
 const esp3 = await p.evaluate((incl) => { const a = alquileres.find(x => x.id === 'pd2'); let n = 0; for (let off = 0; off <= 14; off++) { const pe = window.__mk(off); if ((a.mesesBonificados || []).indexOf(pe) !== -1) continue; const s = _alqSaldoPeriodo(a, pe); if (s.dif > 0.004 && (off < 14 || incl)) n++; } return n; }, incluyeActual);
 const lblBonif = await p.evaluate(() => { const [y, m] = window.__mk(10).split('-'); return new Date(+y, +m - 1, 1).toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }); });
-ok('D1: un mes bonificado no se debe y el mes en curso sólo cuenta desde su día de pago (día 28; hoy es ' + hoyDia + ')', as3.filas.length === esp3 && !as3.filas.some(x => x.toLowerCase().includes(lblBonif.toLowerCase())), JSON.stringify({ n: as3.filas.length, esp3, lblBonif, filas: as3.filas }));
+ok('D1: un mes bonificado no se debe y el mes en curso sólo cuenta cuando su día de pago ya pasó (día 28; hoy es ' + hoyDia + ')', as3.filas.length === esp3 && !as3.filas.some(x => x.toLowerCase().includes(lblBonif.toLowerCase())), JSON.stringify({ n: as3.filas.length, esp3, lblBonif, filas: as3.filas }));
 await cerrarPlan();
 
 await crear('pd3', { diaPago: null, deposito: 0 });
 await abrirPlan('pd3');
 const as4 = await aside();
-ok('D2: sin día de pago la cuota cuenta desde el día 1 (el mes en curso figura) y sin depósito no hay renglón de depósito', as4.filas.length === esperado.meses.length && !/Depósito de garantía pendiente/.test(as4.txt), JSON.stringify({ n: as4.filas.length, esp: esperado.meses.length }));
+const esperadoSinDia = (await p.evaluate(() => { const a = alquileres.find(x => x.id === 'pd3'); let n = 0; for (let off = 0; off <= 14; off++) if (_alqSaldoPeriodo(a, window.__mk(off)).dif > 0.004) n++; return n; }));
+ok('D2: sin día de pago la cuota cuenta desde el día 1 (el mes en curso figura) y sin depósito no hay renglón de depósito', as4.filas.length === esperadoSinDia && !/Depósito de garantía pendiente/.test(as4.txt), JSON.stringify({ n: as4.filas.length, esp: esperadoSinDia }));
 await cerrarPlan();
 
 // un contrato al día no debe nada
