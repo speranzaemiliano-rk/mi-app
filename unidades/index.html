@@ -505,6 +505,7 @@ function totNativo(k){                         // total del edificio en la moned
   var m = P.modo[k];
   if (m === 'unidad' || m === 'unidadusd') return sumaCV(k);
   if (m === 'monto' || m === 'montousd') return P.pct[k];
+  if (P.base === 'vir') return U.reduce(function(t, r){ return aplicaA(k, r) ? t + r.vf * P.pct[k] / 100 : t; }, 0);   // valor cargado a mano: el % se aplica sobre el valor de CADA unidad
   return valorTotArs() * P.pct[k] / 100;
 }
 function totConcepto(k){ return totNativo(k) * (monedaConc(k) === 'USD' ? P.tc : 1); }   // equivalente en pesos (sólo para USD por m²)
@@ -523,7 +524,7 @@ function calc(r){
   var o = {usd:usd, ars:ars, alt:P.tc2 ? usd * P.tc2 : null, vf:r.vf || 0, tot:0, totp:0, totu:0, sc:r.sc || 0, ss:r.ss || 0};
   CONC.forEach(function(c){
     var k = c[0], m = P.modo[k], dol = monedaConc(k) === 'USD';
-    o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) : (aplicaA(k, r) && m2Aplica(k) ? totNativo(k) * r.s / m2Aplica(k) : 0);     // en la moneda del concepto
+    o[k] = esModoUnidad(m) ? (+r.cv[k] || 0) : (vir && m === 'pct') ? (aplicaA(k, r) ? r.vf * P.pct[k] / 100 : 0) : (aplicaA(k, r) && m2Aplica(k) ? totNativo(k) * r.s / m2Aplica(k) : 0);     // en la moneda del concepto
     if (!P.nosuma[k]) { if (dol) o.totu += o[k]; else o.totp += o[k];
       o.tot += o[k] * (dol ? P.tc : 1); }      // «no sumar»: el concepto se ve pero no entra en los totales                                                      // equivalente en pesos (para USD por m²)
     if (esModoUnidad(m)) { o['cb_' + k] = +r.cb[k] || 0; o['sd_' + k] = o[k] - o['cb_' + k]; }   // cobrado / saldo, también en su moneda
@@ -585,8 +586,8 @@ function renderParams(){
   var d = puedeAdmin ? '' : ' disabled';
   function f(l, k, v){ return '<label class="f">' + l + '<input type="number" step="any" data-k="' + k + '" value="' + v + '"' + d + '></label>'; }
   var h = '<h3>Valuación</h3><div class="f"><span>Valuar las unidades con</span><span class="dual"><button class="btn' + (P.base !== 'vir' ? ' on' : '') + '" type="button" data-base="m2"' + d + '>Valor por m² (USD)</button>' +
-    '<button class="btn' + (P.base === 'vir' ? ' on' : '') + '" type="button" data-base="vir"' + d + '>VIR / valuación fiscal</button></span>' +
-    '<small>' + (P.base === 'vir' ? 'Usa el VIR / valuación fiscal ($) cargado en cada unidad; el valor por m² queda de referencia.' : 'Usa m² × valor por m². Podés alternar al VIR cuando lo tengas cargado.') + '</small></div>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) + cotHTML() +
+    '<button class="btn' + (P.base === 'vir' ? ' on' : '') + '" type="button" data-base="vir"' + d + '>Valor manual por unidad (VIR)</button></span>' +
+    '<small>' + (P.base === 'vir' ? 'Usa el valor en $ que cargues a mano en cada unidad (✏️ → «VIR / valuación fiscal»); los conceptos en % se calculan sobre el valor de cada unidad. El valor por m² queda de referencia.' : 'Usa m² × valor por m². Podés alternar al VIR cuando lo tengas cargado.') + '</small></div>' + f('Valor m² (USD)', 'usd', P.usd) + f('TC base', 'tc', P.tc) + f('TC alternativo (comparar)', 'tc2', P.tc2) + cotHTML() +
     '<h3>Conceptos del edificio — se reparten según los m² de cada unidad (salvo «por unidad»)</h3>';
   CONC.forEach(function(c){
     var k = c[0];
@@ -1243,6 +1244,7 @@ function bajarExcel(){
     if (key === 'usd') return vir ? (vf ? conv('usd', vf + '/' + VAL.tc) : null) : s ? conv('usd', s + '*' + VAL.usd) : null;
     if (key === 'ars') return vir ? (vf ? conv('ars', vf) : null) : s ? conv('ars', s + '*' + VAL.usd + '*' + VAL.tc) : null;
     if (key === 'alt') return vir ? (vf ? conv('alt', vf + '/' + VAL.tc + '*' + VAL.tc2) : null) : s ? conv('alt', s + '*' + VAL.usd + '*' + VAL.tc2) : null;
+    if (ci >= 0 && vir && P.modo[key] === 'pct') return (!vf || P.sel[key]) ? null : conv(key, 'IFERROR(' + V + '$C$' + (H0 + 1 + ci) + '*' + vf + '/100,0)');
     if (ci >= 0) return (esModoUnidad(P.modo[key]) || !s || P.sel[key]) ? null : conv(key, 'IFERROR(' + V + '$D$' + (H0 + 1 + ci) + '*' + s + '/' + VAL.tots + ',0)');
     if (key === 'totp' || key === 'totu') { var t = sumaConc(key === 'totp' ? '$' : 'USD', r); return t ? conv(key, t) : null; }
     if (key === 'usdm2') {
@@ -1336,7 +1338,7 @@ function bajarExcel(){
       cell.numFmt = j === 2 ? (md === 'monto' || md === 'unidad' ? '"$" #,##0.00' : md === 'montousd' || md === 'unidadusd' ? '"USD" #,##0.00' : '0.00"%"') : j === 3 ? fmtC(kk) : '@';
       cell.alignment = {horizontal:j < 2 ? 'left' : 'right', vertical:'middle'};
       if (k % 2) cell.fill = {type:'pattern', pattern:'solid', fgColor:{argb:XL.zebra}};
-      if (j === 3 && !esModoUnidad(md)) cell.value = {formula:md === 'pct' ? '$B$9*C' + r + '/100' : 'C' + r, result:cs[3]};
+      if (j === 3 && !esModoUnidad(md) && !(P.base === 'vir' && md === 'pct' && P.sel[kk])) cell.value = {formula:md === 'pct' ? '$B$9*C' + r + '/100' : 'C' + r, result:cs[3]};
       if (j === 2 && !esModoUnidad(md)) entrada(cell);
       xlBorde(cell);
     });
@@ -1833,7 +1835,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v29';
+var UNID_VER = 'unidades-v30';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
