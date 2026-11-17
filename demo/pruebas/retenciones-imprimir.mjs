@@ -90,6 +90,33 @@ const vence = await p.evaluate(() => {
 });
 ok('E2: el helper de vencimiento: el día de pago coincide con hoy (el panel no lo cuenta todavía) y el día anterior ya pasó', vence.hoyEsDiaDePago.vence && (vence.ayer === null || vence.ayer.pasado), JSON.stringify(vence));
 
+
+// ═════════ F: retoques de la v588 (revisión independiente de la v587) ═════════
+// F1: al volver a Reportes se repinta (antes quedaba la foto de la primera visita y «Imprimir lo tildado» la sacaba)
+await p.evaluate(() => { document.getElementById('rptQuincena').value = '0'; rptActualizar(); rptRetSelQuincena(1); });
+const antes = await p.evaluate(() => ({ filas: _rptRetFilas.length, btn: document.getElementById('btnRptRetImprimir').textContent }));
+await p.evaluate(() => {
+  const anio = new Date().getFullYear();
+  facturas.push({ id: 'rt_c', proveedor: 'Proveedor Nuevo', numero: '0003-3', fecha: anio + '-01-11', importe: 1000, pagado: 1000, pagosHistorial: [{ id: 'p9', fecha: anio + '-01-12', monto: 7000, retenciones: [{ codigo: '78', monto: 700, desc: 'Ret. 78' }] }] });
+  mostrarTab('Inicio'); mostrarTab('Reportes');
+});
+await p.waitForTimeout(200);
+const desp = await p.evaluate(() => ({ filas: _rptRetFilas.length, tildadas: _rptRetSeleccionadas().length, btn: document.getElementById('btnRptRetImprimir').textContent.trim(), hayNuevo: document.getElementById('rptRetencionesBody').innerText.includes('Proveedor Nuevo') }));
+ok('F1: al volver a Reportes la tabla se repinta con los datos nuevos (6 filas, con el pago cargado mientras tanto), las tildes se limpian y el botón vuelve a «Imprimir» (antes: foto vieja con la tilde puesta)', antes.filas === 5 && desp.filas === 6 && desp.hayNuevo && desp.tildadas === 0 && desp.btn === '🖨️ Imprimir', JSON.stringify({ antes, desp }));
+// F2: con las ventanas emergentes bloqueadas se imprime igual (por un iframe), sin TypeError
+await p.evaluate(() => { window.__iframe = []; window.__abierto = window.open; window.open = () => null; window.__origImp = window._imprimirDocHTML; window._imprimirDocHTML = h => window.__iframe.push(String(h)); rptRetSelTodas(true); });
+const errs0 = errores.length;
+await p.evaluate(() => rptImprimir('retenciones'));
+await p.evaluate(() => { rptRetSelTodas(false); rptImprimir('retenciones'); });
+const ifr = await p.evaluate(() => window.__iframe.slice());
+ok('F2: con window.open bloqueado (null) «Imprimir» imprime por un iframe (lo tildado y también todo el período) y no revienta', ifr.length === 2 && /Retenciones seleccionadas/.test(ifr[0]) && /Retenciones AFIP\/ARCA/.test(ifr[1]) && errores.length === errs0, JSON.stringify({ n: ifr.length, errs: errores.slice(errs0) }));
+await p.evaluate(() => { window.open = window.__abierto; window._imprimirDocHTML = window.__origImp; });
+// F3: el botón de una quincena sin filas avisa en vez de no hacer nada
+await p.evaluate(() => { document.getElementById('rptQuincena').value = '2'; rptActualizar(); rptRetSelQuincena(1); });
+const av = await p.evaluate(() => ({ tild: _rptRetSeleccionadas().length, txt: document.getElementById('rptRetSelResumen').textContent }));
+ok('F3: con el selector de arriba en «2ª quincena», «1ª quincena (pago a cuenta)» no tilda nada y lo dice («No hay retenciones de la 1ª quincena en este período…»)', av.tild === 0 && /No hay retenciones de la 1ª quincena/.test(av.txt), JSON.stringify(av));
+await p.evaluate(() => { document.getElementById('rptQuincena').value = '0'; rptActualizar(); });
+
 console.log(res.map(x => x.join(' · ')).join('\n'));
 const mal = res.filter(x => x[0] === 'FALLA').length;
 console.log(`\n${res.length - mal}/${res.length} OK`);

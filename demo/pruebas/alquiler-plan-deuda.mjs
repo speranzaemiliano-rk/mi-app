@@ -115,7 +115,7 @@ const medir = async (w, h) => {
   return p.evaluate(() => {
     const t = document.querySelector('.plan-alq-tabla'), d = document.getElementById('planAlqDeuda'), tr = t.getBoundingClientRect(), dr = d.getBoundingClientRect();
     const btnFuera = Array.from(t.querySelectorAll('tbody button')).filter(x => { const r = x.getBoundingClientRect(); return r.width > 0 && r.right > tr.right + 1; }).length;
-    return { sw: t.scrollWidth, cw: t.clientWidth, alLado: dr.left >= tr.right - 1 && Math.abs(dr.top - tr.top) < 40, debajo: dr.top >= tr.bottom - 2, btnFuera, boxW: document.querySelector('#modalPlanAlquiler .modal-box').getBoundingClientRect().width };
+    return { sw: t.scrollWidth, cw: t.clientWidth, alLado: dr.left >= tr.right - 1 && Math.abs(dr.top - tr.top) < 40, debajo: dr.top >= tr.bottom - 2, arriba: dr.bottom <= tr.top + 2, anchoPanel: Math.round(dr.width), anchoTabla: Math.round(tr.width), btnFuera, boxW: document.querySelector('#modalPlanAlquiler .modal-box').getBoundingClientRect().width };
   });
 };
 for (const [w, h] of [[1920, 1080], [1400, 900]]) {
@@ -124,8 +124,81 @@ for (const [w, h] of [[1920, 1080], [1400, 900]]) {
   await cerrarPlan();
 }
 const mm = await medir(390, 844);
-ok('F (390 px): en el celular el panel pasa DEBAJO de la tabla, y ningún botón queda cortado', mm.debajo && mm.btnFuera === 0 && mm.sw <= mm.cw + 4, JSON.stringify(mm));
+const tot390 = await p.evaluate(() => { const t = document.querySelector('.plan-alq-deuda-total'); const r = t.getBoundingClientRect(); const tab = document.querySelector('.plan-alq-tabla'); return { top: r.top, bottom: r.bottom, vh: window.innerHeight, tablaScroll: getComputedStyle(tab).overflowY, tablaMax: getComputedStyle(tab).maxHeight }; });
+ok('F (390 px): en el celular el panel va ARRIBA de la tabla (el total adeudado se ve al abrir, sin deslizar), la tabla no tiene scroll propio (un solo scroll) y ningún botón queda cortado', mm.arriba && mm.btnFuera === 0 && mm.sw <= mm.cw + 4 && tot390.bottom <= tot390.vh && tot390.tablaScroll === 'visible' && tot390.tablaMax === 'none', JSON.stringify({ mm, tot390 }));
 await cerrarPlan();
+
+// ═════════ G: retoques de la v588 (revisión independiente de la v586) ═════════
+// G1: el panel pasa debajo (a todo el ancho y ARRIBA de la tabla) hasta ~980 px y va al costado desde 981
+for (const [w, lado] of [[1024, true], [981, true], [960, false], [930, false], [901, false], [768, false]]) {
+  const m = await medir(w, 800);
+  const okLayout = lado ? (m.alLado && m.btnFuera === 0) : (m.arriba && m.anchoPanel >= m.anchoTabla - 2);
+  ok('G1 (' + w + ' px): ' + (lado ? 'panel al costado de la tabla' : 'panel apilado ARRIBA y a todo el ancho (no solo y pegado a la izquierda)'), okLayout, JSON.stringify(m));
+  await cerrarPlan();
+}
+// G2: los flotantes no tapan el plan mientras está abierto y vuelven al cerrarlo
+await p.setViewportSize({ width: 1280, height: 720 });
+const disp = async () => p.evaluate(() => ({ fab: getComputedStyle(document.getElementById('fabStack')).display, ag: (document.getElementById('rk-agente-btn') ? getComputedStyle(document.getElementById('rk-agente-btn')).display : 'n/a') }));
+const antesFab = await disp();
+await abrirPlan('pd1'); const durFab = await disp(); await cerrarPlan(); const despFab = await disp();
+ok('G2: con el plan abierto los atajos flotantes y el asistente se esconden (no tapan el total ni «Cerrar») y al cerrarlo vuelven', antesFab.fab !== 'none' && durFab.fab === 'none' && (durFab.ag === 'none' || durFab.ag === 'n/a') && despFab.fab === antesFab.fab && despFab.ag === antesFab.ag, JSON.stringify({ antesFab, durFab, despFab }));
+// G3: en una pantalla baja la lista de meses conserva un alto útil
+await p.setViewportSize({ width: 812, height: 375 });
+await abrirPlan('pd1');
+const alto = await p.evaluate(() => { const l = document.querySelector('.plan-alq-deuda-lista'); return { ch: l.clientHeight, sh: l.scrollHeight, boxMax: getComputedStyle(document.querySelector('.plan-alq-deuda-box')).maxHeight }; });
+ok('G3: a 812×375 la lista de meses del panel mide al menos ~150 px (antes 8 px: sólo se veían el título y el total)', alto.ch >= 140, JSON.stringify(alto));
+await cerrarPlan();
+await p.setViewportSize({ width: 1400, height: 900 });
+// G4: contrato sin fecha de inicio: el panel no afirma «al día»
+await p.evaluate(async () => { alquileres.push({ id: 'pd_si', unidad: 'SI', inquilino: 'Sin inicio', moneda: 'ARS', canon: 1000, canonActual: 1000, inicio: '', fin: '', diaPago: 5, cobrosHistorial: [], tipo: 'local', direccion: 'x' }); await persistirAlquileres(); });
+await abrirPlan('pd_si');
+const sinI = await p.evaluate(() => document.getElementById('planAlqDeuda').innerText.replace(/\s+/g, ' '));
+ok('G4: sin fecha de inicio el panel dice que hay que cargarla (no «están al día»)', /Cargá la fecha de inicio/.test(sinI) && !/al día/.test(sinI), sinI);
+await cerrarPlan();
+// G5: un mes con DOS cobros + «Cobrar diferencia» no agranda la tabla de costado (el tooltip propio se salía por la derecha)
+await p.evaluate(async () => {
+  const hoy = new Date(), mk = off => { const d = new Date(hoy.getFullYear(), hoy.getMonth() - 14 + off, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const per = mk(10), canon = 1500000.5;
+  alquileres.push({ id: 'pd5', unidad: 'PD5', inquilino: 'Dos cobros', moneda: 'ARS', canon, canonActual: canon, inicio: mk(0) + '-01', fin: '2099-12-31', diaPago: 1, tipo: 'depto', direccion: 'z',
+    cobrosHistorial: [{ id: 'pd5a', periodo: per, concepto: 'alquiler', monto: Math.round(canon * 0.4 * 100) / 100, fecha: per + '-03' }, { id: 'pd5b', periodo: per, concepto: 'alquiler', monto: Math.round(canon * 0.59 * 100) / 100, fecha: per + '-20' }] });
+  await persistirAlquileres();
+});
+const sobran = [];
+for (const w of [700, 768, 800, 1024, 1100]) {
+  await p.setViewportSize({ width: w, height: 900 });
+  await abrirPlan('pd5');
+  sobran.push([w, await p.evaluate(() => { const t = document.querySelector('.plan-alq-tabla'); return t.scrollWidth - t.clientWidth; })]);
+  await cerrarPlan();
+}
+ok('G5: con un mes de dos cobros (✏️1 ✏️2, Desaplicar todo, Cobrar diferencia) la tabla no scrollea de costado entre 700 y 1100 px', sobran.every(x => x[1] <= 1), JSON.stringify(sobran));
+await p.setViewportSize({ width: 1400, height: 900 });
+// G6: Finalizar locación suma las diferencias dentro del 2 % igual que el plan
+const fin = await p.evaluate(() => { const a = alquileres.find(x => x.id === 'pd1'); const sp = _alqSaldoPendiente(a, ''); const tol = sp.meses.filter(m => m.tolerada); let esp = 0; for (let off = 0; off <= 14; off++) { const s = _alqSaldoPeriodo(a, window.__mk(off)); if (s.esperado > 0 && !s.pagada) esp += s.saldo; else if (s.tolerada) esp += s.dif; } return { total: sp.total, esp: Math.round(esp * 100) / 100, nTol: tol.length }; });
+await p.evaluate(() => abrirFinalizarAlq(alquileres.findIndex(a => a.id === 'pd1')));
+await p.waitForTimeout(200);
+const avisos = await p.evaluate(() => document.getElementById('finAlqAvisos').innerText.replace(/\s+/g, ' '));
+await p.evaluate(() => cerrarFinalizarAlq());
+ok('G6: Finalizar locación cuenta las diferencias dentro del 2 % (' + fin.nTol + ' meses) y su total coincide con la suma del plan; el aviso las rotula', fin.nTol >= 2 && cerca(fin.total, fin.esp) && /diferencia dentro del 2 %/.test(avisos), JSON.stringify({ fin, avisos: avisos.slice(0, 300) }));
+// G7: los centavos de redondeo no son una diferencia
+const cent = await p.evaluate(() => { const r = (canon, cobrado) => { const a = { id: 'x', moneda: 'ARS', canon, canonActual: canon, inicio: '2020-01-01', fin: '2099-12-31', cobrosHistorial: [{ periodo: '2026-02', concepto: 'alquiler', monto: cobrado }] }; const s = _alqSaldoPeriodo(a, '2026-02'); return { tol: s.tolerada, fav: s.aFavor, pagada: s.pagada, dif: s.dif }; };
+  return { c33: r(384633.33, 384633), u99: r(1000000, 999999.01), u100: r(1000000, 999999), mas33: r(1000000, 1000000.33), mas100: r(1000000, 1000001), chico: r(500, 499.6) }; });
+ok('G7: $0,33 de redondeo (cobrado $384.633 de $384.633,33) no es diferencia ni se ofrece cobrar; $0,99 tampoco; desde $1,00 sí; cobrado de más $0,33 no es «a favor»', cent.c33.pagada && !cent.c33.tol && !cent.u99.tol && cent.u100.tol && !cent.mas33.fav && cent.mas100.fav === 1 && !cent.chico.tol, JSON.stringify(cent));
+const sugC = await p.evaluate(() => { const a = { id: 'x', moneda: 'ARS', canon: 384633.33, canonActual: 384633.33, inicio: '2020-01-01', fin: '2099-12-31', cobrosHistorial: [{ periodo: '2026-02', concepto: 'alquiler', monto: 384633 }] }; return { sug: _alqMontoSugerido(a, '2026-02'), est: (function() { const h = new Date(), pe = h.getFullYear() + '-' + String(h.getMonth() + 1).padStart(2, '0'); const b = Object.assign({}, a, { diaPago: 1, cobrosHistorial: [{ periodo: pe, concepto: 'alquiler', monto: 384633 }] }); const e = _alqEstadoPago(b); return e && e.label; })() }; });
+ok('G7b: con $0,33 de redondeo el estado del mes en curso dice «Cuota del mes cobrada» sin «diferencia»', sugC.est === null || !/diferencia/.test(sugC.est || ''), JSON.stringify(sugC));
+// G8: temas «oscuro» y «medio»: las filas toman los tokens del tema (texto claro sobre pastel fijo daba 1,1:1)
+const lum = (rgb) => { const m = rgb.match(/[\d.]+/g).map(Number); const c = m.slice(0, 3).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contraste = (a, b) => { const x = lum(a), y = lum(b), hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
+const temas = {};
+for (const tema of ['', 'oscuro', 'medio']) {
+  await p.evaluate((t) => { if (t) document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); }, tema);
+  await abrirPlan('pd1');
+  temas[tema || 'claro'] = await p.evaluate(() => { const fila = Array.from(document.querySelectorAll('#planAlqBody tr')).find(t => /Pagada/.test(t.innerText)); const dep = document.querySelector('#planAlqBody tr.pa-r-dep'); const th = document.querySelector('.plan-alq-tabla thead th'); const thead = document.querySelector('.plan-alq-tabla thead'); const cs = el => getComputedStyle(el);
+    return { fila: [cs(fila).backgroundColor, cs(fila.cells[0]).color], dep: [cs(dep).backgroundColor, cs(dep.cells[0]).color], th: [cs(thead).backgroundColor, cs(th).color] }; });
+  await cerrarPlan();
+}
+await p.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+const cts = {}; Object.keys(temas).forEach(t => { cts[t] = { fila: contraste(temas[t].fila[0], temas[t].fila[1]), dep: contraste(temas[t].dep[0], temas[t].dep[1]), th: contraste(temas[t].th[0], temas[t].th[1]) }; });
+ok('G8: el texto de las filas (Pagada, depósito) y el encabezado se leen en los tres temas (contraste ≥ 4,5:1; antes 1,1:1 en «oscuro» y «medio»)', Object.values(cts).every(c => c.fila >= 4.5 && c.dep >= 4.5 && c.th >= 4.5), JSON.stringify(cts));
 await p.setViewportSize({ width: 1400, height: 900 });
 
 console.log(res.map(x => x.join(' · ')).join('\n'));
