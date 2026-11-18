@@ -348,7 +348,9 @@ await p.evaluate(async () => { document.getElementById('leerFactClase').value = 
 await p.waitForTimeout(300);
 const gm = await p.evaluate(() => ({ clase: document.getElementById('leerFactClase').value, computa: document.getElementById('leerFactComputaARCA').value, alic: _impEst.lf.filas[0].alic, vis: document.getElementById('lfImpGrupo').style.display !== 'none' }));
 ok('H15: importar desde Gmail una Factura C: la clase pasa a «fact|C» (no hereda la NC A anterior), computa ARCA y el panel propone 0 %', gm.clase === 'fact|C' && gm.computa === 'true' && gm.alic === 0 && gm.vis, JSON.stringify(gm));
-ok('H16: el pedido de Gmail y el del Asistente RK piden ivaDetalle y percepciones', await p.evaluate(() => { const src = String(procesarFacturaPDFDesdeBase64) + String(rkCargarFactura || ''); return /_IA_IMP_PROMPT/.test(String(procesarFacturaPDFDesdeBase64)); }));
+// El Asistente RK está reemplazado en la demo (demo-post.js: contesta un aviso fijo), así que su pedido se lee del código fuente del sitio, no de la función en memoria.
+const _srcIndex = (await import('fs')).readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+ok('H16: el pedido de Gmail (_IA_IMP_PROMPT) y el del Asistente RK (extractPayload de rkAgenteEnviar) piden ivaDetalle y percepciones', await p.evaluate(() => { const g = String(procesarFacturaPDFDesdeBase64); return /_IA_IMP_PROMPT/.test(g) && /ivaDetalle/.test(_IA_IMP_PROMPT) && /percepciones/.test(_IA_IMP_PROMPT); }) && /"tipo":"factura"[^\n]*"ivaDetalle"[^\n]*"importeNoGravado"[^\n]*"importeExento"[^\n]*"percepciones"/.test(_srcIndex));
 await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
 
 // H17: pantalla angosta: cada campo con su rótulo, y «Exento» / «Importe» con ancho útil

@@ -298,7 +298,7 @@ await p.evaluate(() => { const m = document.getElementById('factMontoPago'); m.v
 await poner('factImpN0', '1000.01');
 ok('I5: vaciado, el «importe a pagar» vuelve a seguir al importe y conserva los centavos (1.657,51, no el entero 1.658)', parseFloat(await val('factMontoPago')) === 1657.51 && parseFloat(await val('factImporte')) === 1657.51, await val('factMontoPago') + ' / ' + await val('factImporte'));
 await p.evaluate(() => cerrarFactura());
-ok('I6: el texto de ayuda del detalle en «Leer PDF» ya no dice que el total completa el importe', await p.evaluate(() => { const t = document.documentElement.innerHTML; return !/El total completa el importe\./.test(t.slice(t.indexOf('lfItemsLista') - 900, t.indexOf('lfItemsLista') + 100)); }));
+ok('I6: el texto de ayuda del detalle en «Leer PDF» ya no dice que el total completa el importe (y nombra el cuadro de IVA)', await p.evaluate(() => { const h = document.getElementById('lfItemsLista').closest('.form-group').querySelector('.form-hint').textContent; return !/El total completa el importe\./.test(h) && /neto gravado/.test(h) && /Comprobante X/.test(h); }));
 
 // ═════════ J: tipeo real (teclado), con el foco y el valor intactos ═════════
 await p.evaluate(() => { agregarFactura(); });
@@ -312,9 +312,242 @@ const t2 = await p.evaluate(() => ({ v: document.getElementById('factImpN0').val
 ok('J2: reemplazando el neto por 300 queda 300, con el foco, e importe 363', t2.v === '300' && t2.foco === 'factImpN0' && parseFloat(t2.imp) === 363, JSON.stringify(t2));
 await p.evaluate(() => cerrarFactura());
 
+// ═════════ K: retoques de la revisión de la v590 (v591) ═════════
+await p.evaluate(() => {
+  proveedores.push({ id: 'pv_k', razonSocial: 'Cementos K SA', cuit: '30-50000002-7', ret78: true });
+  window.open = () => null;   // la Orden de Pago imprime: sin ventanas
+  facturas.push({ id: 'fc_k1', proveedor: 'Cementos K SA', numero: '0002-00000001', fecha: '2026-10-09', importe: 1210, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0,
+    netoGravado: 1000, importeIVA: 210, ivaDetalle: [{ alic: 21, neto: 1000, iva: 210 }], items: [{ detalle: 'Cemento', cantidad: 10, precioUnit: 100, signo: 1, subtotal: 1000 }] });
+  facturas.push({ id: 'fc_k2', proveedor: 'Cementos K SA', numero: '0002-00000002', fecha: '2026-10-10', importe: 5000, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0 });
+  facturas.push({ id: 'fc_k8', proveedor: 'Cementos K SA', numero: '0002-00000008', fecha: '2026-10-11', importe: 1210.5, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, ivaDetalle: [{ alic: 21, neto: 1000, iva: 210.5 }] });
+  facturas.push({ id: 'fc_k13', proveedor: 'Cementos K SA', numero: '0002-00000013', fecha: '2026-10-12', importe: 1210, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, netoGravado: 1000, importeIVA: 210, ivaDetalle: [{ alic: 21, neto: 1000, iva: 210 }] });
+  facturas.push({ id: 'fc_k14a', proveedor: 'Cementos K SA', numero: '0002-00000014', fecha: '2026-10-13', importe: 3, moneda: 'USD', tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, items: [{ detalle: 'Suscripción', cantidad: 1, precioUnit: 3, signo: 1, subtotal: 3 }] });
+  facturas.push({ id: 'fc_k14c', proveedor: 'Cementos K SA', numero: '0002-00000016', fecha: '2026-10-13', importe: 1210, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, items: [{ detalle: 'Obra', cantidad: 1, precioUnit: 1210, signo: 1, subtotal: 1210 }] });
+  facturas.push({ id: 'fc_k14b', proveedor: 'Cementos K SA', numero: '0002-00000015', fecha: '2026-10-13', importe: 3.63, moneda: 'USD', tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, netoGravado: 3, importeIVA: 0.63, ivaDetalle: [{ alic: 21, neto: 3, iva: 0.63 }], items: [{ detalle: 'Suscripción', cantidad: 1, precioUnit: 3, signo: 1, subtotal: 3 }] });
+  return persistirProveedores();
+});
+await p.waitForTimeout(200);
+const sobre = (id, sel) => p.evaluate(({ id, sel }) => { const e = document.getElementById(id); const o = sel ? e.querySelector(sel) : e; return !!o; }, { id, sel });
+
+// K1/K2: «Monto a pagar» al EDITAR arranca en el saldo (la suma de los ítems —el neto— o lo de la apertura anterior hacían que «Pagar ahora» pagara de menos)
+await p.evaluate((i) => editarFactura(i), await idx('fc_k1'));
+await p.waitForTimeout(150);
+ok('K1: editar una factura con ítems (importe 1.210, ítem 1.000 neto): «Monto a pagar» = 1.210 (no el 1.000 del neto)', parseFloat(await val('factMontoPago')) === 1210, await val('factMontoPago'));
+await p.evaluate(() => cerrarFactura());
+await p.evaluate(() => { agregarFactura(); });
+await poner('factImpN0', '777');
+await p.evaluate(() => cerrarFactura());
+await p.evaluate((i) => editarFactura(i), await idx('fc_k2'));
+await p.waitForTimeout(150);
+ok('K2: editar una factura de 5.000 sin ítems tras un alta: «Monto a pagar» = 5.000 (no el 940,17 del alta)', parseFloat(await val('factMontoPago')) === 5000, await val('factMontoPago'));
+await p.evaluate(() => cerrarFactura());
+// K3: y «Pagar ahora: Sí» sin tocar nada paga el saldo completo
+await p.evaluate((i) => editarFactura(i), await idx('fc_k1'));
+await p.waitForTimeout(100);
+await p.evaluate(() => { selFactPagoInmediato(true); selFactModalidad('B'); });
+await guardarForm();
+const k3 = await p.evaluate(() => { const f = facturas.find(x => x.id === 'fc_k1'); return { pagado: f.pagado, estado: f.estado, importe: f.importe }; });
+ok('K3: «Pagar ahora: Sí» al editar paga el saldo completo (1.210), no el neto: la factura queda pagada', k3.pagado === 1210 && k3.estado === 'pagada', JSON.stringify([k3, await p.evaluate(() => window.__alerts)]));
+await p.evaluate(() => { const m = document.getElementById('modalFact'); if (m) m.classList.remove('active'); });
+
+// K4: Gmail: cada lectura arranca limpia (importe e ítems de la anterior no se heredan)
+const gmail = (resp) => p.evaluate(async (resp) => {
+  window._geminiProxy = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(resp) }] } }] }) });
+  document.getElementById('leerFactClase').value = 'fact|A'; lfClaseChange();
+  window._leerFactArchivoDB64 = 'AAAA'; window._leerFactArchivoTipo = 'application/pdf';
+  await procesarFacturaPDFDesdeBase64();
+  return { imp: document.getElementById('leerFactImporte').value, modo: _impEst.lf.modo, items: Array.from(document.querySelectorAll('#lfItemsLista .fi-detalle')).map(e => e.value), perc: _impEst.lf.perc.map(x => x.desc || x.tipo), aviso: _impEst.lf.aviso, venc: document.getElementById('leerFactVenc').value };
+}, resp);
+await p.evaluate(() => { abrirLeerFacturaPDF(); _mostrarPreviewFactura({ proveedor: 'Cementos K SA', numero: '0009-00000001', fecha: '2026-11-01', vencimiento: '2026-12-01', importe: 9999, items: [{ detalle: 'Previo', cantidad: 1, precioUnitario: 9999, importe: 9999 }] }); });
+const gm1 = await gmail({ proveedor: 'Cementos K SA', tipoComprobante: 'A', receptor: 'Constructora Los Álamos S.A.', numero: '0009-00000002', fecha: '2026-11-02', netoGravado: 1000, importeIVA: 210, importe: null, moneda: 'ARS' });
+ok('K4: importar de Gmail una factura sin importe tras otra leída: el importe sale del neto + IVA (1.210), sin ítems ni percepción inventada de la anterior', parseFloat(gm1.imp) === 1210 && gm1.items.length === 0 && gm1.perc.length === 0 && gm1.venc === '', JSON.stringify(gm1));
+await p.evaluate(() => { document.getElementById('lfMontoPago').value = '300'; cerrarLeerFactPDF && cerrarLeerFactPDF(); });
+await p.evaluate(() => { abrirLeerFacturaPDF(); _mostrarPreviewFactura({ proveedor: 'Cementos K SA', numero: '0009-00000003', fecha: '2026-11-03', importe: 7777, items: [{ detalle: 'Otro previo', cantidad: 1, precioUnitario: 7777, importe: 7777 }] }); });
+const gm2 = await gmail({ proveedor: 'Cementos K SA', tipoComprobante: 'A', receptor: 'Constructora Los Álamos S.A.', numero: '0009-00000004', fecha: '2026-11-04', importe: 1210, netoGravado: 1000, importeIVA: 210, items: [{ detalle: 'Real', cantidad: 1, precioUnitario: 1000, importe: 1000 }] });
+ok('K4b: con importe e ítems propios la lectura de Gmail usa ESOS (importe 1.210, ítem «Real») y no el «Otro previo»', parseFloat(gm2.imp) === 1210 && gm2.items.length === 1 && gm2.items[0] === 'Real', JSON.stringify(gm2));
+ok('K4c: y el «Monto a pagar» de la lectura anterior (300) no se hereda', (await val('lfMontoPago')) === '', await val('lfMontoPago'));
+await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
+
+// K5: la segunda factura de una tanda de «leer PDF» no hereda el «Monto a pagar» tipeado en la anterior
+await p.evaluate(() => { abrirLeerFacturaPDF(); document.getElementById('leerFactPaso1').style.display = 'none'; document.getElementById('leerFactPaso2').style.display = ''; document.getElementById('lfMontoPago').value = '300'; lfInicializarPaso2('Cementos K SA', { importe: 1210, ivaDetalle: [{ alicuota: 21, neto: 1000, iva: 210 }] }); });
+ok('K5: lfInicializarPaso2 vacía «Monto a pagar» (no paga la nueva factura con el monto de la anterior)', (await val('lfMontoPago')) === '', await val('lfMontoPago'));
+// K5b: base de retención de «leer PDF» con pago parcial: proporcional al monto a pagar (1.000 × 500 / 1.210 = 413)
+await p.evaluate(() => { document.getElementById('lfProveedor') ; lfSelMod('A'); });
+await poner('lfMontoPago', '500');
+const k5b = await val('lfRetBase');
+ok('K5b: pagando sólo 500 de 1.210 la base de retención propuesta es 413 (no el neto completo de 1.000)', Math.abs(parseFloat(k5b) - 413) <= 1, k5b);
+await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
+
+// K6: un comprobante que abre con el panel oculto no deja las filas del anterior a la vista
+await p.evaluate(() => { agregarFactura(); });
+await poner('factImpN0', '1000');
+await p.evaluate(() => { _impAgregarFila('fact'); _impPercAgregar('fact', 'iibb_caba'); });
+await p.evaluate(() => cerrarFactura());
+await p.evaluate(() => { facturas.push({ id: 'fc_k6', proveedor: 'Cementos K SA', numero: '0002-00000006', fecha: '2026-10-14', importe: 500, tipoComprobante: 'X', computaARCA: false, estado: 'pendiente', pagado: 0 }); });
+await p.evaluate((i) => editarFactura(i), await idx('fc_k6'));
+await poner('factClase', 'fact|A', 'change');
+const k6 = await p.evaluate(() => ({ filasDOM: document.querySelectorAll('#factImpGrupo .imp-fila:not(.imp-perc):not(.imp-ngex)').length, filasEst: _impEst.fact.filas.length, percDOM: document.querySelectorAll('#factImpGrupo .imp-perc').length, percEst: _impEst.fact.perc.length }));
+ok('K6: pasar un Comprobante X a factura A muestra las filas del estado actual (1 fila, sin percepción), no las de un alta anterior', k6.filasDOM === k6.filasEst && k6.percDOM === k6.percEst, JSON.stringify(k6));
+await p.evaluate(() => cerrarFactura());
+
+// K7: «leer PDF» con panel oculto (Comprobante X) y la IA sin importe: al pasar a «computa» el importe se completa solo
+await p.evaluate(() => { abrirLeerFacturaPDF(); document.getElementById('leerFactPaso1').style.display = 'none'; document.getElementById('leerFactPaso2').style.display = ''; document.getElementById('leerFactImporte').value = ''; document.getElementById('leerFactClase').value = 'factx|X'; lfClaseChange(); _impIniciar('lf', null); _impCargarIA('lf', { netoGravado: 1000, importeIVA: 210 }); });
+await p.evaluate(() => { document.getElementById('leerFactClase').value = 'fact|A'; lfClaseChange(); document.getElementById('leerFactComputaARCA').value = 'true'; _impSync('lf'); });   // el toggle «¿Computa ARCA?» no vuelve solo a «Sí»
+ok('K7: al mostrarse el panel (X → factura A) con el neto que leyó la IA, el importe queda en 1.210 y no vacío', parseFloat(await val('leerFactImporte')) === 1210, await val('leerFactImporte'));
+await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
+
+// K8: cambiar la letra suelta el IVA fijado a mano (era el de otra alícuota)
+await p.evaluate((i) => editarFactura(i), await idx('fc_k8'));
+await poner('factClase', 'fact|C', 'change');
+const k8 = await p.evaluate(() => ({ f: _impEst.fact.filas[0], r: _impResolver(_impEst.fact, parseFloat(document.getElementById('factImporte').value) || 0) }));
+ok('K8: pasar de A a C (0 %) con un IVA fijo de 210,50 lo suelta: la línea queda 0 % sin IVA (no «0 % con IVA 210,50»)', k8.f.alic === 0 && k8.f.iva == null && k8.r.filas[0].iva === 0, JSON.stringify(k8));
+await p.evaluate(() => cerrarFactura());
+// K8b: NC: elegir otra factura suelta el IVA fijo y no pisa un detalle de varias alícuotas
+await p.evaluate(() => { facturas.push({ id: 'fc_k8b', proveedor: 'Cementos K SA', numero: '0002-00000088', fecha: '2026-10-15', importe: 1105, tipoComprobante: 'A', computaARCA: true, estado: 'pendiente', pagado: 0, ivaDetalle: [{ alic: 10.5, neto: 1000, iva: 105 }] }); abrirNotaCredito('Cementos K SA'); });
+await p.waitForTimeout(100);
+const k8b = await p.evaluate(() => {
+  const sel = document.getElementById('ncFactura'); const o = document.createElement('option'); o.value = 'fact:fc_k8b'; o.textContent = 'x'; sel.appendChild(o); sel.value = 'fact:fc_k8b';
+  _impEst.nc.filas[0].iva = 210.5; _impEst.nc.tocado = false; _impPrecargarNC('nc');
+  const a = { alic: _impEst.nc.filas[0].alic, iva: _impEst.nc.filas[0].iva };
+  _impEst.nc.filas = [{ alic: 21, neto: 1000, iva: null }, { alic: 10.5, neto: 500, iva: null }]; _impEst.nc.tocado = false; _impPrecargarNC('nc');
+  return { a, n: _impEst.nc.filas.length, alic1: _impEst.nc.filas[0].alic };
+});
+ok('K8b: nota de crédito sobre una factura al 10,5 %: propone 10,5 % y suelta el IVA fijo; con dos líneas no las pisa', k8b.a.alic === 10.5 && k8b.a.iva == null && k8b.n === 2 && k8b.alic1 === 21, JSON.stringify(k8b));
+
+// K9: la base de retención no se elige en una nota de crédito (no se retiene) y no queda `sinRet` inerte
+await p.evaluate(() => { _impIniciar('nc', null); });
+await p.evaluate(() => { const n = document.getElementById('ncImpN0'); n.value = '1000'; n.dispatchEvent(new Event('input', { bubbles: true })); _impAgregarFila('nc'); });
+await p.evaluate(() => { const n = document.getElementById('ncImpN1'); n.value = '500'; n.dispatchEvent(new Event('input', { bubbles: true })); _impEst.nc.retSolo = 1; _impRefrescar('nc', true); });
+const k9 = await p.evaluate(() => ({ sel: !!document.getElementById('ncImpRetSel'), vis: (() => { const e = document.getElementById('ncImpRet'); return !!e && e.style.display !== 'none'; })(), sinRet: (_impLeer('nc').ivaDetalle || []).some(x => x.sinRet) }));
+ok('K9: en una nota de crédito con dos alícuotas no hay selector de base de retención visible ni se guarda `sinRet`', !k9.vis && !k9.sinRet, JSON.stringify(k9));
+await p.evaluate(() => { const m = document.getElementById('modalNotaCredito'); if (m) m.classList.remove('active'); });
+
+// K10/K11: base de retención del pago directo: editable y proporcional al monto a pagar
+await p.evaluate(() => { agregarFactura(); });
+await poner('factProveedor', 'Cementos K SA');
+await p.evaluate(() => { selFactPagoInmediato(true); });
+await poner('factModalidadPago', 'A', 'change');
+await poner('factImpN0', '1000');
+ok('K10a: pago directo por banco: la base propuesta es el neto (1.000)', Math.abs(parseFloat(await val('factRetBase')) - 1000) <= 1, await val('factRetBase'));
+await poner('factRetBase', '777');
+ok('K10: la base de retención se puede corregir a mano (777) y no se pisa', (await val('factRetBase')) === '777', await val('factRetBase'));
+await poner('factImpN0', '1200');
+ok('K10b: y una base tipeada a mano tampoco se pisa cuando cambia el neto', (await val('factRetBase')) === '777', await val('factRetBase'));
+await p.evaluate(() => { agregarFactura(); });
+ok('K10c: abrir otra alta devuelve la base al cálculo (no arrastra lo tipeado)', (await val('factRetBase')) === '', await val('factRetBase'));
+await poner('factProveedor', 'Cementos K SA');
+await p.evaluate(() => { selFactPagoInmediato(true); });
+await poner('factModalidadPago', 'A', 'change');
+await poner('factImpN0', '10000000');
+await poner('factMontoPago', '6050000');
+ok('K11: pagando 6.050.000 de 12.100.000 la base de retención propuesta es 5.000.000 (la mitad del neto), no 10.000.000', Math.abs(parseFloat(await val('factRetBase')) - 5000000) <= 1, await val('factRetBase'));
+await p.evaluate(() => cerrarFactura());
+
+// K12: reclasificar a Comprobante X con otro importe descarta el neto gravado viejo; y el ratio nunca pasa de 1
+ok('K12: _facRatioNeto con un neto mayor que el importe devuelve a lo sumo 1', await p.evaluate(() => _facRatioNeto({ importe: 500, netoGravado: 1000 }) <= 1));
+await p.evaluate((i) => editarFactura(i), await idx('fc_k13'));
+await poner('factClase', 'factx|X', 'change');
+await poner('factImporte', '500');
+await guardarForm();
+const k12 = await p.evaluate(() => { const f = facturas.find(x => x.id === 'fc_k13'); return { importe: f.importe, neto: f.netoGravado, computa: f.computaARCA }; });
+ok('K12b: la factura A reclasificada a X con otro importe (500) no queda con el neto 1.000 de antes', k12.importe === 500 && !k12.neto && k12.computa === false, JSON.stringify([k12, await p.evaluate(() => window.__alerts)]));
+await p.evaluate(() => { const m = document.getElementById('modalFact'); if (m) m.classList.remove('active'); });
+
+// K13: ítems de un comprobante ANTERIOR de pocos dólares (sumaban el total) no se toman por netos
+await p.evaluate((i) => editarFactura(i), await idx('fc_k14a'));
+await p.waitForTimeout(100);
+ok('K13: un comprobante anterior de 3 USD con un ítem de 3: los ítems NO son netos (siguen completando el importe)', (await p.evaluate(() => _impEst.fact.itemsNeto)) === false, String(await p.evaluate(() => _impEst.fact.itemsNeto)));
+await p.evaluate(() => cerrarFactura());
+await p.evaluate((i) => editarFactura(i), await idx('fc_k14b'));
+await p.waitForTimeout(100);
+ok('K13b: uno de la v589 en adelante (neto 3 + IVA 0,63 = 3,63) sí tiene ítems netos', (await p.evaluate(() => _impEst.fact.itemsNeto)) === true, String(await p.evaluate(() => _impEst.fact.itemsNeto)));
+await p.evaluate(() => cerrarFactura());
+
+// K13c: y los ítems de un comprobante anterior que sumaban el TOTAL siguen completando el importe cuando se edita uno (sin sumarle IVA otra vez)
+await p.evaluate((i) => editarFactura(i), await idx('fc_k14c'));
+await p.waitForTimeout(100);
+await p.evaluate(() => { const c = document.querySelector('#factItemsLista .fi-precio'); c.value = '1310'; c.dispatchEvent(new Event('input', { bubbles: true })); });
+ok('K13c: un comprobante anterior con ítems por el total (1.210): editar el ítem a 1.310 deja el importe en 1.310 (no 1.585,10)', parseFloat(await val('factImporte')) === 1310, await val('factImporte'));
+await p.evaluate(() => cerrarFactura());
+
+// K14: el «Monto a pagar» tipeado no puede pasar del importe: se repone si el importe baja y se frena al guardar
+await p.evaluate(() => { agregarFactura(); });
+await poner('factProveedor', 'Cementos K SA');
+await poner('factImpN0', '1000');
+await p.evaluate(() => { selFactPagoInmediato(true); selFactModalidad('B'); });
+await poner('factMontoPago', '1210');
+await poner('factImpN0', '500');
+ok('K14: tipeado 1.210 y bajado el neto a 500 (importe 605), el monto a pagar vuelve a 605 (no queda un pago mayor que la factura)', parseFloat(await val('factMontoPago')) === 605, await val('factMontoPago'));
+await p.evaluate(() => { document.getElementById('factMontoPago').value = '9999'; });
+const cantAntes = await p.evaluate(() => facturas.length);
+await guardarForm();
+const k14 = await p.evaluate(() => ({ n: facturas.length, al: window.__alerts.join(' | ') }));
+ok('K14b: un monto a pagar mayor que el saldo (9.999 contra 605) se frena al guardar con un aviso y no carga la factura', k14.n === cantAntes && /supera el saldo/.test(k14.al), JSON.stringify(k14));
+await p.evaluate(() => cerrarFactura());
+
+// K15: un panel oculto no bloquea el «Guardar» (neto con 3 decimales + Comprobante X): CLICK REAL, con la validación nativa
+await p.evaluate(() => { agregarFactura(); });
+await poner('factProveedor', 'Cementos K SA');
+await poner('factNumero', '0002-00000099');
+await poner('factImpN0', '826.4463');
+await poner('factClase', 'factx|X', 'change');
+const nAntes = await p.evaluate(() => facturas.length);
+await p.evaluate(() => { window.__alerts.length = 0; });
+await p.click('#factSubmitBtn');
+await p.waitForTimeout(500);
+const k15 = await p.evaluate(() => ({ n: facturas.length, abierto: document.getElementById('modalFact').classList.contains('active'), al: window.__alerts.join(' | '), inv: Array.from(document.getElementById('formFact').querySelectorAll(':invalid')).map(e => e.id || e.className) }));
+ok('K15: con un neto de 3 decimales y el panel oculto (Comprobante X) el click real en «Guardar» carga la factura', k15.n === nAntes + 1, JSON.stringify(k15));
+await p.evaluate(() => { const m = document.getElementById('modalFact'); if (m) m.classList.remove('active'); });
+// K15b: el neto con muchos decimales ya no bloquea ni con el panel visible (step «any»): lo redondea el panel
+await p.evaluate(() => { agregarFactura(); });
+await poner('factProveedor', 'Cementos K SA');
+await poner('factNumero', '0002-00000098');
+await poner('factImpN0', '826.4463');
+const n2 = await p.evaluate(() => facturas.length);
+await p.click('#factSubmitBtn');
+await p.waitForTimeout(500);
+ok('K15b: con el panel visible un neto de 3 decimales (826,4463) se redondea y guarda (importe 1.000,00)', await p.evaluate((n) => facturas.length === n + 1 && facturas[facturas.length - 1].importe === 1000, n2), JSON.stringify(await p.evaluate(() => facturas[facturas.length - 1].importe)));
+await p.evaluate(() => { const m = document.getElementById('modalFact'); if (m) m.classList.remove('active'); });
+
+// K16: cada manejador que cambia un importe del panel escribe el importe total (modo neto); se mide el campo, no sólo el resolvedor
+await p.evaluate(() => { agregarFactura(); });
+await poner('factImpN0', '1000');
+await p.evaluate(() => { _impPercAgregar('fact', 'iibb_caba'); });
+await p.evaluate(() => { const i = document.querySelector('#factImpGrupo .imp-perc input[type=number]'); i.value = '30'; i.dispatchEvent(new Event('input', { bubbles: true })); });
+ok('K16a: neto 1.000 + percepción 30 → importe 1.240', parseFloat(await val('factImporte')) === 1240, await val('factImporte'));
+await p.evaluate(() => _impPercQuitar('fact', 0));
+ok('K16b: quitar la percepción lleva el importe a 1.210 (sin tipear nada más)', parseFloat(await val('factImporte')) === 1210, await val('factImporte'));
+await p.evaluate(() => _impVerNGEX('fact'));
+await p.evaluate(() => { const i = document.querySelectorAll('#factImpGrupo .imp-ngex input')[0]; i.value = '100'; i.dispatchEvent(new Event('input', { bubbles: true })); });
+ok('K16c: un no gravado de 100 se suma al importe (1.310)', parseFloat(await val('factImporte')) === 1310, await val('factImporte'));
+await p.evaluate(() => { const i = document.querySelectorAll('#factImpGrupo .imp-ngex input')[1]; i.value = '50'; i.dispatchEvent(new Event('input', { bubbles: true })); });
+ok('K16d: y un exento de 50 también (1.360)', parseFloat(await val('factImporte')) === 1360, await val('factImporte'));
+await p.evaluate(() => { _impIniciar('fact', null); document.getElementById('factImporte').value = ''; });
+await poner('factImpN0', '1000');
+await p.evaluate(() => { _impAgregarFila('fact'); });
+await alic(1, '10.5');
+await poner('factImpN1', '500');
+ok('K16e: neto 1.000 al 21 % + 500 al 10,5 % → importe 1.762,50 (1.210 + 552,50)', parseFloat(await val('factImporte')) === 1762.5, await val('factImporte'));
+await p.evaluate(() => _impQuitarFila('fact', 1));
+ok('K16f: quitar la segunda alícuota lleva el importe a 1.210', parseFloat(await val('factImporte')) === 1210, await val('factImporte'));
+// ítems: sumar, quitar y cambiar el signo siguen al neto
+await p.evaluate(() => { _impIniciar('fact', null); document.getElementById('factImporte').value = ''; _renderFactItems([]); factAgregarItem({ detalle: 'A', cantidad: 1, precioUnit: 1000, signo: 1 }); factAgregarItem({ detalle: 'B', cantidad: 1, precioUnit: 200, signo: 1 }); });
+ok('K16g: dos ítems (1.000 + 200) → neto 1.200, importe 1.452', parseFloat(await val('factImporte')) === 1452, await val('factImporte'));
+await p.evaluate(() => factToggleSigno(document.querySelectorAll('#factItemsLista .fi-signo')[1]));
+ok('K16h: invertir el signo del segundo ítem (1.000 − 200) lleva el importe a 968', parseFloat(await val('factImporte')) === 968, await val('factImporte'));
+await p.evaluate(() => factQuitarItem(document.querySelectorAll('#factItemsLista .fi-quitar')[1]));
+ok('K16i: quitar ese ítem deja el importe en 1.210', parseFloat(await val('factImporte')) === 1210, await val('factImporte'));
+// «leer PDF» con ítems netos (importe 1.105 al 10,5 %): editar la cantidad suma el IVA (los ítems son netos)
+await p.evaluate(() => { abrirLeerFacturaPDF(); document.getElementById('leerFactPaso1').style.display = 'none'; document.getElementById('leerFactPaso2').style.display = ''; _renderFactItems([{ detalle: 'X', cantidad: 10, precioUnit: 100, signo: 1 }], 'lf'); document.getElementById('leerFactImporte').value = '1105'; document.getElementById('leerFactClase').value = 'fact|A'; lfClaseChange(); document.getElementById('leerFactComputaARCA').value = 'true'; lfInicializarPaso2('Cementos K SA', { importe: 1105, ivaDetalle: [{ alicuota: 10.5, neto: 1000, iva: 105 }] }); });
+const k16j0 = await p.evaluate(() => _impEst.lf.itemsNeto);
+await p.evaluate(() => { const c = document.querySelector('#lfItemsLista .fi-cant'); c.value = '20'; c.dispatchEvent(new Event('input', { bubbles: true })); });
+ok('K16j: «leer PDF» con ítems netos: editar la cantidad (20 × 100) da importe 2.210 y los ítems siguen siendo netos', k16j0 === true && parseFloat(await val('leerFactImporte')) === 2210, JSON.stringify([k16j0, await val('leerFactImporte')]));
+await p.evaluate(() => cerrarLeerFactPDF && cerrarLeerFactPDF());
+await p.evaluate(() => { const m = document.getElementById('modalFact'); if (m) m.classList.remove('active'); });
+
 const falla = res.filter(x => x[0] === 'FALLA').length;
 res.forEach(x => console.log(x.join(' · ')));
 console.log('\n' + (res.length - falla) + '/' + res.length + ' OK');
 if (errores && errores.length) console.log('ERRORES DE PÁGINA:', errores.slice(0, 5));
 await b.close();
-process.exit(falla ? 1 : 0);
+process.exit(falla || (errores && errores.length) ? 1 : 0);
