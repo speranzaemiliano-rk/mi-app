@@ -1528,6 +1528,9 @@
         .imp-fila input[readonly] { background: transparent; color: var(--text-2); cursor: default; }
         .imp-x { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 15px; padding: 4px; }
         .imp-acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 6px; }
+        .imp-ret { margin: 10px 0 2px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+        .imp-ret > label { margin: 0 0 4px; font-size: 12px; }
+        .imp-ret select { width: 100%; }
         .imp-resumen { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; line-height: 1.6; }
         .imp-error { color: var(--danger); font-size: 12px; font-weight: 600; margin-top: 4px; }
         @media (max-width: 760px) {
@@ -3714,7 +3717,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v588</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v589</div>
         </div>
     </nav>
 
@@ -7799,7 +7802,7 @@
                 </div>
                 <div class="form-group">
                     <label>Detalle del comprobante (opcional)</label>
-                    <div class="form-hint" style="margin-bottom:6px;">Cargá los ítems del comprobante. Con el botón ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong> (descuentos, bonificaciones, anticipos ya entregados). El total completa el importe. En <strong>Cuota</strong> indicá a qué cuota del presupuesto se imputa cada ítem (ej: <em>1/3</em>, <em>Anticipo</em>); es opcional y sale impresa en el comprobante.</div>
+                    <div class="form-hint" style="margin-bottom:6px;">Cargá los ítems del comprobante. Con el botón ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong> (descuentos, bonificaciones, anticipos ya entregados). El total del detalle es el <strong>neto gravado</strong>: el IVA y el importe total se calculan solos. En <strong>Cuota</strong> indicá a qué cuota del presupuesto se imputa cada ítem (ej: <em>1/3</em>, <em>Anticipo</em>); es opcional y sale impresa en el comprobante.</div>
                     <div id="factItemsCabecera" class="fact-items-cab" style="display:none; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
                         <span>Detalle</span><span title="A qué cuota del presupuesto se imputa este ítem">Cuota</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Suma o resta">±</span><span></span>
                     </div>
@@ -7814,7 +7817,7 @@
                 <div class="form-group">
                     <label>Importe total *</label>
                     <input type="number" id="factImporte" step="0.01" min="0" required oninput="onFactImporteChange()">
-                    <div class="form-hint">Si cargás ítems arriba, este monto se completa solo con el total neto. Si no, ingresalo a mano.</div>
+                    <div class="form-hint">Se completa solo con <strong>neto + IVA + percepciones</strong> del cuadro «IVA y percepciones» de más abajo (el total de los ítems de arriba es el neto). Si preferís cargar el total de la factura, escribilo acá y se despeja el neto. En Comprobante X / VEP / sin ARCA ingresalo a mano.</div>
                 </div>
                 <div class="form-group">
                     <label>Moneda</label>
@@ -9628,7 +9631,9 @@
             aviso.style.display = aviso.textContent ? '' : 'none';
         }
         // Sólo pisa el importe si realmente hay ítems: si no, manda lo que se tipeó a mano.
-        if (filas.length > 0) {
+        if (filas.length > 0 && typeof _impDesdeItems === 'function' && _impDesdeItems(ctx, total)) {
+            // el detalle (netos) pasó al neto gravado del panel «IVA y percepciones»; el importe total lo escribe el panel
+        } else if (filas.length > 0) {
             var imp = document.getElementById(cfg.importe);
             if (imp) {
                 imp.value = Math.round(total * 100) / 100;
@@ -17652,7 +17657,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v588';
+    var APP_VER = 'v589';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -22795,7 +22800,14 @@
     function _impTipoPerc(id) { return IMP_PERC_TIPOS.filter(function(t) { return t.id === id; })[0] || IMP_PERC_TIPOS[IMP_PERC_TIPOS.length - 1]; }
     // Alícuota que se propone según la letra: la C (monotributista) no discrimina IVA; A y B sí.
     function _impAlicDefecto(letra) { return String(letra || 'A').toUpperCase() === 'C' ? 0 : 21; }
-    function _impEstadoNuevo(letra) { return { filas: [{ alic: _impAlicDefecto(letra), neto: null, iva: null }], ng: 0, ex: 0, verNGEX: false, perc: [], tocado: false, legacy: false, visible: true, letra: letra || 'A', aviso: '' }; }
+    // `modo` = QUÉ MANDA en la cuenta: 'neto' (se tipeó el neto gravado; el IVA y el importe total salen de ahí) o 'total' (se tipeó el importe
+    // total de la factura; el neto de la primera línea se despeja). Una carga nueva arranca en 'neto' salvo que el importe ya venga cargado
+    // (lo que leyó la IA): entonces el total de ese papel es el que manda. `retSolo` = índice de la única línea de IVA que es base de retención
+    // (null = todas).
+    function _impEstadoNuevo(letra, p) {
+        var yaHayTotal = p && _IMP_CTX[p] && (parseFloat(_impVal(_IMP_CTX[p].importe)) || 0) > 0;
+        return { modo: yaHayTotal ? 'total' : 'neto', retSolo: null, filas: [{ alic: _impAlicDefecto(letra), neto: null, iva: null }], ng: 0, ex: 0, verNGEX: false, perc: [], tocado: false, legacy: false, visible: true, letra: letra || 'A', aviso: '' };
+    }
     // Alícuota estándar más cercana a un porcentaje (dentro de `tol` puntos), o null.
     function _impAlicCercana(pct, tol) {
         var mejor = null, dif = (tol == null ? 0.6 : tol);
@@ -22805,7 +22817,7 @@
 
     // ── Lectura de un comprobante guardado: lo que usan el Libro de Compras, la base de retención y las listas ──
     function _facImp(f) {
-        var g = _impArr(f && f.ivaDetalle).filter(Boolean).map(function(x) { return { alic: Number(x.alic) || 0, neto: Number(x.neto) || 0, iva: Number(x.iva) || 0 }; });
+        var g = _impArr(f && f.ivaDetalle).filter(Boolean).map(function(x) { return { alic: Number(x.alic) || 0, neto: Number(x.neto) || 0, iva: Number(x.iva) || 0, sinRet: !!x.sinRet }; });
         var p = _impArr(f && f.percepciones).filter(Boolean).map(function(x) { return { tipo: x.tipo || 'otra', monto: Number(x.monto) || 0, desc: x.desc || '' }; });
         var ng = Number(f && f.netoNoGravado) || 0, ex = Number(f && f.netoExento) || 0;
         var neto = 0, iva = 0, percTot = 0;
@@ -22816,7 +22828,15 @@
     // Qué parte del importe es base de retención (importe − IVA − percepciones). null = no hay detalle y se usa lo de siempre.
     function _facRatioNeto(f) {
         var d = _facImp(f), imp = Number(f && f.importe) || 0;
-        if (d.tiene && imp > 0) { var r = (imp - d.iva - d.percTot) / imp; return r > 0 ? Math.min(1, r) : null; }
+        if (d.tiene && imp > 0) {
+            // Con varias alícuotas se puede haber elegido que sólo una (`sinRet` en las otras líneas) sea base de retención: neto de las
+            // líneas que cuentan + no gravado + exento (las percepciones y el IVA nunca).
+            if (d.gravados.some(function(g) { return g.sinRet; })) {
+                var base = d.ng + d.ex; d.gravados.forEach(function(g) { if (!g.sinRet) base += g.neto; });
+                var rb = base / imp; return rb > 0 ? Math.min(1, rb) : null;
+            }
+            var r = (imp - d.iva - d.percTot) / imp; return r > 0 ? Math.min(1, r) : null;
+        }
         return (f && f.netoGravado > 0 && imp > 0) ? f.netoGravado / imp : null;
     }
     // Textos cortos para listas: «IVA 10,5 %», «IVA 21 % + 10,5 %», «Perc. IIBB CABA».
@@ -22833,29 +22853,43 @@
     }
 
     // ── Cuenta del panel ──
+    // Dos modos (ver `_impEstadoNuevo`): en 'neto' el importe total SALE de la cuenta (neto + IVA + sin IVA + percepciones) y el argumento `total`
+    // se ignora; en 'total' manda el importe de la factura y el neto de la primera línea se despeja (la línea «cierra»).
+    // En los dos el IVA de cada línea es neto × alícuota (o el que se tipeó a mano, para copiar el de la factura) y NUNCA mueve el neto.
     function _impResolver(est, total) {
-        total = _impR2(total);
+        var modoNeto = est.modo === 'neto';
         var percTot = 0; est.perc.forEach(function(x) { percTot += _impPos(x.monto); });
         var ng = _impPos(est.ng), ex = _impPos(est.ex), otros = 0;
         var filas = est.filas.map(function(f, i) {
             var a = Number(f.alic) || 0;
-            if (i === 0) return { alic: a, neto: 0, iva: 0 };
+            if (i === 0 && !modoNeto) return { alic: a, neto: 0, iva: 0 };
             var neto = _impPos(f.neto);
             var iva = (f.iva != null && f.iva !== '') ? _impPos(f.iva) : _impR2(neto * a / 100);
             otros += neto + iva;
             return { alic: a, neto: neto, iva: iva };
         });
-        var resto0 = _impR2(total - percTot - ng - ex - otros), f0 = filas[0], a0 = f0.alic;
-        if (est.filas[0].iva != null && est.filas[0].iva !== '') { f0.iva = _impPos(est.filas[0].iva); f0.neto = _impR2(resto0 - f0.iva); }
-        else { f0.neto = _impR2(resto0 / (1 + a0 / 100)); f0.iva = _impR2(resto0 - f0.neto); }
+        var resto0 = 0, f0 = filas[0];
+        if (modoNeto) total = _impR2(otros + ng + ex + percTot);
+        else {
+            total = _impR2(total);
+            var a0 = f0.alic;
+            resto0 = _impR2(total - percTot - ng - ex - otros);
+            if (est.filas[0].iva != null && est.filas[0].iva !== '') { f0.iva = _impPos(est.filas[0].iva); f0.neto = _impR2(resto0 - f0.iva); }
+            else { f0.neto = _impR2(resto0 / (1 + a0 / 100)); f0.iva = _impR2(resto0 - f0.neto); }
+        }
         var neto = 0, iva = 0; filas.forEach(function(f) { neto += f.neto; iva += f.iva; });
-        return { total: total, filas: filas, ng: ng, ex: ex, percTot: _impR2(percTot), neto: _impR2(neto), iva: _impR2(iva), resto0: resto0, ok: total <= 0 || (resto0 >= -0.005 && f0.neto >= -0.005) };
+        // Base de retención: el neto de las líneas que cuentan (todas, o sólo la elegida) + lo no gravado y exento; nunca el IVA ni las percepciones.
+        var solo = (est.retSolo != null && filas[est.retSolo] && filas.length > 1 && filas[est.retSolo].neto > 0.004) ? est.retSolo : null;
+        var baseRet = ng + ex; filas.forEach(function(f, i) { if (solo == null || solo === i) baseRet += f.neto; });
+        return { modo: modoNeto ? 'neto' : 'total', total: total, filas: filas, ng: ng, ex: ex, percTot: _impR2(percTot), neto: _impR2(neto), iva: _impR2(iva), resto0: resto0, solo: solo, baseRet: _impR2(baseRet),
+                 ok: modoNeto || total <= 0 || (resto0 >= -0.005 && f0.neto >= -0.005) };
     }
 
     // ── Estado inicial / de un comprobante guardado ──
     function _impDesdeRegistro(rec) {
         var d = _facImp(rec), letra = (rec && rec.tipoComprobante) || 'A';
         var est = _impEstadoNuevo(letra), total = Number(rec && rec.importe) || 0;
+        est.modo = 'total';   // un comprobante ya cargado: su importe total es el que manda hasta que se toque el neto
         if (!d.tiene) {
             // Comprobante ANTERIOR (sin detalle): se propone lo más parecido a lo que ya tenía, sin tocarlo mientras no se edite el panel.
             est.legacy = true; est.importeOrig = total;
@@ -22870,6 +22904,9 @@
         var r = _impResolver({ filas: est.filas, ng: d.ng, ex: d.ex, perc: d.perc }, total);
         d.gravados.forEach(function(x, i) { if (r.filas[i] && Math.abs(r.filas[i].iva - x.iva) > 0.005) est.filas[i].iva = x.iva; });
         est.ng = d.ng; est.ex = d.ex; est.verNGEX = d.ng > 0 || d.ex > 0;
+        // Base de retención elegida: las líneas marcadas `sinRet` quedaron afuera; si sólo una cuenta, el selector vuelve a mostrarla.
+        var cuentan = []; d.gravados.forEach(function(x, i) { if (!x.sinRet) cuentan.push(i); });
+        if (d.gravados.length > 1 && cuentan.length === 1) est.retSolo = cuentan[0];
         est.perc = d.perc.map(function(x) { return { tipo: x.tipo, monto: x.monto, desc: x.desc || '' }; });
         return est;
     }
@@ -22879,13 +22916,13 @@
     }
     // Abre el panel de un formulario: con los datos de un comprobante guardado (`rec`) o vacío (nueva carga).
     function _impIniciar(p, rec, letra) {
-        _impEst[p] = rec ? _impDesdeRegistro(rec) : _impEstadoNuevo(letra || _impVal(p === 'nc' ? 'ncLetra' : (p === 'lf' ? 'leerFactLetraVal' : 'factLetraVal')) || 'A');
+        _impEst[p] = rec ? _impDesdeRegistro(rec) : _impEstadoNuevo(letra || _impVal(p === 'nc' ? 'ncLetra' : (p === 'lf' ? 'leerFactLetraVal' : 'factLetraVal')) || 'A', p);
         _impSync(p, true);
     }
     // Se llama cuando cambia la clase, la letra o «¿computa ARCA?»: muestra u oculta el panel y, si nadie lo tocó, ajusta la alícuota por defecto.
     function _impSync(p, forzar) {
         var cfg = _IMP_CTX[p], box = document.getElementById(cfg.grupo); if (!box) return;
-        var est = _impEst[p] || (_impEst[p] = _impEstadoNuevo());
+        var est = _impEst[p] || (_impEst[p] = _impEstadoNuevo(null, p));
         est.visible = _impVisible(p);
         box.style.display = est.visible ? '' : 'none';
         if (!est.visible) return;
@@ -22900,16 +22937,16 @@
         var cfg = _IMP_CTX[p], box = document.getElementById(cfg.grupo), est = _impEst[p]; if (!box || !est) return;
         var q = "'" + p + "'";
         var optAlic = function(sel) { return IMP_ALICUOTAS.map(function(a) { return '<option value="' + a + '"' + (Number(a) === Number(sel) ? ' selected' : '') + '>' + (a === 0 ? '0 % (sin IVA)' : _impTxtAlic(a)) + '</option>'; }).join(''); };
-        var h = '<label>🧮 IVA y percepciones <span class="imp-sub">— elegí la alícuota y cargá las percepciones si las hay</span></label>'
+        var h = '<label>🧮 IVA y percepciones <span class="imp-sub">— cargá el neto gravado y elegí la alícuota: el IVA y el importe total se calculan solos</span></label>'
             + '<div class="imp-aviso" id="' + p + 'ImpAviso"' + (est.aviso ? '' : ' style="display:none;"') + '>' + escHtml(est.aviso || '') + '</div>'
-            + '<div class="imp-cab"><span>Alícuota de IVA</span><span>Neto gravado</span><span>IVA</span><span></span></div>';
+            + '<div class="imp-cab"><span>Alícuota de IVA</span><span>Neto gravado</span><span>IVA (se calcula)</span><span></span></div>';
         est.filas.forEach(function(f, i) {
             h += '<div class="imp-fila">'
                 + '<select aria-label="Alícuota de IVA" onchange="_impAlic(' + q + ',' + i + ',this.value)">' + optAlic(f.alic) + '</select>'
                 + '<label class="imp-c"><span class="imp-cl">Neto gravado</span>' + (i === 0
-                    ? '<input type="number" id="' + p + 'ImpN0" readonly tabindex="-1" aria-label="Neto gravado" title="Se calcula: importe total menos percepciones, IVA y las otras líneas">'
+                    ? '<input type="number" step="0.01" min="0" id="' + p + 'ImpN0" aria-label="Neto gravado" placeholder="Neto gravado" title="Escribí el neto gravado: el IVA y el importe total se calculan solos. Si preferís cargar el total de la factura, escribilo en «Importe total» y el neto se despeja." oninput="_impNeto(' + q + ',0,this.value)">'
                     : '<input type="number" step="0.01" min="0" id="' + p + 'ImpN' + i + '" aria-label="Neto gravado" value="' + (f.neto != null && f.neto !== '' ? f.neto : '') + '" oninput="_impNeto(' + q + ',' + i + ',this.value)">') + '</label>'
-                + '<label class="imp-c"><span class="imp-cl">IVA</span><input type="number" step="0.01" min="0" id="' + p + 'ImpI' + i + '" aria-label="IVA" value="' + (f.iva != null && f.iva !== '' ? f.iva : '') + '" oninput="_impIva(' + q + ',' + i + ',this.value)" title="Se calcula solo; escribilo si el de la factura difiere por redondeo"></label>'
+                + '<label class="imp-c"><span class="imp-cl">IVA</span><input type="number" step="0.01" min="0" id="' + p + 'ImpI' + i + '" aria-label="IVA" value="' + (f.iva != null && f.iva !== '' ? f.iva : '') + '" oninput="_impIva(' + q + ',' + i + ',this.value)" title="Se calcula solo (neto × alícuota). Escribilo sólo si el de la factura difiere por redondeo: el neto no se mueve, cambia el total."></label>'
                 + (i > 0 ? '<button type="button" class="imp-x" onclick="_impQuitarFila(' + q + ',' + i + ')" title="Quitar esta alícuota" aria-label="Quitar esta alícuota">✕</button>' : '<span></span>')
                 + '</div>';
         });
@@ -22933,28 +22970,60 @@
         h += '<div class="imp-acciones"><button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'iibb_caba\')">➕ IIBB CABA</button>'
             + '<button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'iibb_pba\')">➕ IIBB Bs. As.</button>'
             + '<button type="button" class="btn btn-outline btn-sm" onclick="_impPercAgregar(' + q + ',\'otra\')">➕ Otra percepción / tributo</button></div>'
+            + (est.filas.length > 1
+                ? '<div class="imp-ret" id="' + p + 'ImpRet"><label for="' + p + 'ImpRetSel">🏛️ Base para la retención <span class="imp-sub">— con varias alícuotas, ¿sobre qué neto se calcula Ganancias / SUSS?</span></label>'
+                    + '<select id="' + p + 'ImpRetSel" onchange="_impRetSolo(' + q + ',this.value)"></select></div>'
+                : '')
             + '<div class="imp-resumen" id="' + p + 'ImpResumen" aria-live="polite"></div>';
         box.innerHTML = h;
         _impRefrescar(p);
     }
     // Actualiza lo calculado SIN repintar (si no, se perdería el foco al tipear).
+    var _impEscribiendo = false;   // true mientras el panel mismo escribe el importe total: ese `input` no es una persona tipeando
+    // El panel escribió el importe total (modo 'neto'): avisa a quien escucha ese campo (importe a pagar, retenciones, duplicados) como si se hubiera tipeado.
+    function _impImporteEscrito(p) {
+        var el = document.getElementById(_IMP_CTX[p].importe); if (!el) return;
+        _impEscribiendo = true;
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+        _impEscribiendo = false;
+    }
     function _impRefrescar(p) {
         var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est || !est.visible) return;
-        var total = parseFloat(_impVal(cfg.importe)) || 0, r = _impResolver(est, total), usd = _impVal(cfg.moneda) === 'USD', sim = usd ? 'USD ' : '$ ';
+        var impEl = document.getElementById(cfg.importe);
+        var r = _impResolver(est, parseFloat(_impVal(cfg.importe)) || 0), total = r.total, usd = _impVal(cfg.moneda) === 'USD', sim = usd ? 'USD ' : '$ ';
+        // En modo 'neto' el importe total es una SALIDA de la cuenta (neto + IVA + sin IVA + percepciones): se escribe en su campo.
+        if (r.modo === 'neto' && impEl && document.activeElement !== impEl && (parseFloat(impEl.value) || 0) !== total) {
+            impEl.value = total > 0 ? total : '';
+            _impImporteEscrito(p);
+        }
         r.filas.forEach(function(f, i) {
             var n = document.getElementById(p + 'ImpN' + i), iv = document.getElementById(p + 'ImpI' + i);
-            if (n && i === 0) n.value = total > 0 ? f.neto : '';
+            if (n && i === 0 && document.activeElement !== n) {
+                if (r.modo === 'neto') n.value = (est.filas[0].neto != null && est.filas[0].neto !== '') ? est.filas[0].neto : '';
+                else n.value = total > 0 ? f.neto : '';
+            }
             var manual = est.filas[i].iva != null && est.filas[i].iva !== '';
             if (iv && !manual && document.activeElement !== iv) iv.value = (total > 0 || f.iva) ? f.iva : '';
         });
+        // Selector de base de retención (sólo con varias alícuotas): los textos llevan el neto de cada línea y se actualizan sin repintar.
+        var sel = document.getElementById(p + 'ImpRetSel');
+        if (sel) {
+            var cuenta = {}; r.filas.forEach(function(f) { cuenta[f.alic] = (cuenta[f.alic] || 0) + 1; });
+            var opts = [{ v: 'todas', t: 'Todas las alícuotas — neto $ ' + _impNum(r.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }];
+            r.filas.forEach(function(f, i) { opts.push({ v: String(i), t: 'Sólo la de ' + _impTxtAlic(f.alic) + (cuenta[f.alic] > 1 ? ' (línea ' + (i + 1) + ')' : '') + ' — neto $ ' + _impNum(f.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }); });
+            if (sel.options.length !== opts.length) { sel.innerHTML = opts.map(function(o) { return '<option value="' + o.v + '"></option>'; }).join(''); }
+            opts.forEach(function(o, k) { sel.options[k].value = o.v; sel.options[k].textContent = o.t; });
+            sel.value = r.solo == null ? 'todas' : String(r.solo);
+        }
         var rs = document.getElementById(p + 'ImpResumen');
         if (rs) {
-            if (!(total > 0)) rs.innerHTML = '<span class="imp-sub">Cargá el importe total y se calculan el neto y el IVA.</span>';
+            if (!(total > 0)) rs.innerHTML = '<span class="imp-sub">Cargá el neto gravado (o el importe total) y se calculan el IVA y el resto.</span>';
             else {
                 var partes = ['Neto gravado <strong>' + sim + _impNum(r.neto) + '</strong>', 'IVA <strong>' + sim + _impNum(r.iva) + '</strong>'];
                 if (r.ng + r.ex > 0) partes.push('Sin IVA <strong>' + sim + _impNum(r.ng + r.ex) + '</strong>');
                 if (r.percTot > 0) partes.push('Percepciones <strong>' + sim + _impNum(r.percTot) + '</strong>');
                 rs.innerHTML = partes.join(' + ') + ' = <strong>' + sim + _impNum(total) + '</strong>'
+                    + (est.filas.length > 1 ? '<div class="imp-sub">Base para la retención: <strong>' + sim + _impNum(r.baseRet) + '</strong> — ' + (r.solo == null ? 'todas las alícuotas' : 'sólo la de ' + _impTxtAlic(r.filas[r.solo].alic)) + '</div>' : '')
                     + (r.ok ? '' : '<div class="imp-error">⚠️ Lo cargado supera el importe total: revisá los netos, el IVA o las percepciones.</div>');
             }
         }
@@ -22972,7 +23041,10 @@
     // Cambió el IMPORTE TOTAL: un IVA tipeado a mano era el de aquel importe, así que se suelta (vuelve al cálculo). Y un comprobante ANTERIOR sin detalle
     // pasa a «tocado» si se le cambia el importe: el panel ya muestra un desglose nuevo y eso es lo que tiene que guardarse (si no, quedaba el neto viejo).
     function _impImporteCambio(p) {
+        if (_impEscribiendo) return;   // lo escribió el panel (modo 'neto'), no una persona
         var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est) return;
+        // Se tipeó el importe total de la factura: ese total manda y el neto de la primera línea se despeja.
+        est.modo = 'total'; est.filas[0].neto = null;
         est.filas.forEach(function(f) { f.iva = null; });
         if (est.legacy && !est.tocado && est.importeOrig != null && Math.abs((parseFloat(_impVal(cfg.importe)) || 0) - est.importeOrig) > 0.005) _impTocar(p);
         _impRefrescar(p);
@@ -22990,15 +23062,61 @@
         if (a == null) return;
         est.filas[0].alic = a; est.tocado = true; _impRender(p);
     }
-    function _impNeto(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].neto = v === '' ? null : Math.max(0, parseFloat(v) || 0); _impRefrescar(p); }
-    function _impIva(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].iva = v === '' ? null : Math.max(0, parseFloat(v) || 0); _impRefrescar(p); }
+    // Se tipeó un neto gravado. En la PRIMERA línea eso pasa el mando al neto: el IVA y el importe total salen de ahí (antes el total tipeado
+    // despejaba el neto y un neto tipeado no tenía dónde ir). En las otras líneas el neto es un dato más (con el total fijo le quita a la primera).
+    function _impNeto(p, i, v) {
+        var e = _impTocar(p); if (!e || !e.filas[i]) return;
+        var val = v === '' ? null : Math.max(0, parseFloat(v) || 0);
+        if (i === 0) { e.modo = 'neto'; e.filas[0].iva = null; }
+        e.filas[i].neto = val;
+        if (i > 0 && _impConItems(p)) factRecalcItems(p);   // con detalle de ítems, su total es el neto de TODAS las alícuotas: la primera línea se queda con lo que sobra
+        else _impRefrescar(p);
+    }
+    // ¿El formulario tiene ítems en el detalle? (entonces el total del detalle es el neto gravado total)
+    function _impConItems(p) { var c = _ITEMS_CTX[p], el = c && document.getElementById(c.lista); return !!(el && el.querySelector('.fact-item-fila')); }
+    // El IVA es una SALIDA (neto × alícuota): se puede tipear para copiar el de la factura cuando difiere por redondeo, pero NUNCA mueve el neto.
+    // Si mandaba el importe total, pasa a mandar el neto tal como estaba y es el total el que absorbe esa diferencia.
+    function _impIva(p, i, v) {
+        var e = _impTocar(p); if (!e || !e.filas[i]) return;
+        if (v !== '' && e.modo !== 'neto') {
+            var r = _impResolver(e, parseFloat(_impVal(_IMP_CTX[p].importe)) || 0);
+            e.modo = 'neto'; e.filas[0].neto = r.filas[0].neto > 0 ? r.filas[0].neto : null; e.filas[0].iva = null;
+        }
+        e.filas[i].iva = v === '' ? null : Math.max(0, parseFloat(v) || 0);
+        _impRefrescar(p);
+    }
+    // Elige sobre qué neto se calcula la retención cuando hay varias alícuotas: 'todas' o el índice de la única línea que cuenta.
+    function _impRetSolo(p, v) {
+        var e = _impTocar(p); if (!e) return;
+        e.retSolo = (v === 'todas' || v === '' || v == null) ? null : parseInt(v, 10);
+        if (e.retSolo != null && !e.filas[e.retSolo]) e.retSolo = null;
+        _impRefrescar(p);
+    }
+    // El total del detalle de ítems (que son netos) alimenta el NETO gravado, no el importe total: antes se volcaba al importe y el panel lo
+    // tomaba por un total con IVA y le sacaba el IVA de nuevo (1.000 de ítems daban «neto 826,45 + IVA 173,55»). Devuelve false si el panel no
+    // corresponde (Comprobante X, VEP, no computa ARCA): ahí el total del detalle sigue completando el importe.
+    function _impDesdeItems(p, totalItems) {
+        var cfg = _IMP_CTX[p], e = _impEst[p]; if (!cfg || !e || !_impVisible(p)) return false;
+        e.visible = true; _impTocar(p);
+        var otros = 0; e.filas.forEach(function(f, i) { if (i > 0) otros += _impPos(f.neto); });   // con varias alícuotas el detalle es el neto de TODAS
+        e.modo = 'neto'; e.filas[0].iva = null; e.filas[0].neto = Math.max(0, _impR2(totalItems - otros));
+        _impRefrescar(p);
+        return true;
+    }
     function _impAgregarFila(p) {
         var e = _impTocar(p); if (!e) return;
         var usadas = e.filas.map(function(f) { return Number(f.alic); }), a = [10.5, 21, 27, 5, 2.5, 0].filter(function(x) { return usadas.indexOf(x) === -1; })[0];
         e.filas.push({ alic: a != null ? a : 10.5, neto: null, iva: null });
         _impRender(p);
     }
-    function _impQuitarFila(p, i) { var e = _impTocar(p); if (!e || i < 1) return; e.filas.splice(i, 1); _impRender(p); }
+    function _impQuitarFila(p, i) {
+        var e = _impTocar(p); if (!e || i < 1) return;
+        e.filas.splice(i, 1);
+        if (e.retSolo != null) { if (e.retSolo === i) e.retSolo = null; else if (e.retSolo > i) e.retSolo--; }
+        if (e.filas.length < 2) e.retSolo = null;
+        _impRender(p);
+        if (_impConItems(p)) factRecalcItems(p);   // el neto de la línea quitada vuelve a la primera
+    }
     function _impVerNGEX(p) { var e = _impTocar(p); if (!e) return; e.verNGEX = true; _impRender(p); }
     function _impNGEX(p, k, v) { var e = _impTocar(p); if (!e) return; e[k] = Math.max(0, parseFloat(v) || 0); _impRefrescar(p); }
     function _impPercAgregar(p, tipo) { var e = _impTocar(p); if (!e) return; e.perc.push({ tipo: tipo || 'iibb_caba', monto: 0, desc: '' }); _impRender(p); var inp = document.querySelectorAll('#' + _IMP_CTX[p].grupo + ' .imp-perc input[type=number]'); if (inp.length) inp[inp.length - 1].focus(); }
@@ -23019,10 +23137,16 @@
         var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est) return null;
         if (!_impVisible(p)) return { vacio: true };
         if (est.legacy && !est.tocado) return null;
-        var total = parseFloat(_impVal(cfg.importe)) || 0, r = _impResolver(est, total), out = { ivaDetalle: [], percepciones: [] };
+        var r = _impResolver(est, parseFloat(_impVal(cfg.importe)) || 0), out = { ivaDetalle: [], percepciones: [] };
         if (!r.ok) out.error = 'Lo cargado en «IVA y percepciones» supera el importe total: revisá los netos, el IVA o las percepciones.';
-        r.filas.forEach(function(f) { if (Math.abs(f.neto) > 0.004 || Math.abs(f.iva) > 0.004) out.ivaDetalle.push({ alic: f.alic, neto: f.neto, iva: f.iva }); });
-        out.netoGravado = r.neto; out.importeIVA = r.iva;
+        r.filas.forEach(function(f, i) {
+            if (Math.abs(f.neto) <= 0.004 && Math.abs(f.iva) <= 0.004) return;
+            var o = { alic: f.alic, neto: f.neto, iva: f.iva };
+            if (r.solo != null && r.solo !== i) o.sinRet = true;   // base de retención: sólo la otra línea cuenta
+            out.ivaDetalle.push(o);
+        });
+        if (out.ivaDetalle.length < 2) out.ivaDetalle.forEach(function(o) { delete o.sinRet; });   // con una sola línea no hay nada que elegir
+        out.netoGravado = r.neto; out.importeIVA = r.iva; out.total = r.total;
         if (r.ng > 0) out.netoNoGravado = r.ng;
         if (r.ex > 0) out.netoExento = r.ex;
         est.perc.forEach(function(x) {
@@ -23049,8 +23173,9 @@
     // Base de retención según el panel (importe − IVA − percepciones), o null si hay que usar lo de siempre.
     function _impBaseRet(p) {
         var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est || !est.visible || (est.legacy && !est.tocado)) return null;
-        var total = parseFloat(_impVal(cfg.importe)) || 0; if (!(total > 0)) return null;
-        var r = _impResolver(est, total), b = total - r.iva - r.percTot;
+        var r = _impResolver(est, parseFloat(_impVal(cfg.importe)) || 0), total = r.total; if (!(total > 0)) return null;
+        // Con varias alícuotas, si se eligió una sola como base de retención cuenta su neto (+ lo no gravado / exento); si no, importe − IVA − percepciones.
+        var b = r.solo != null ? r.baseRet : total - r.iva - r.percTot;
         return b > 0 ? b : null;
     }
 
@@ -23082,7 +23207,9 @@
         }
         if (filasIA.length) {
             filasIA.sort(function(x, y) { return y.neto - x.neto; });   // la de mayor neto cierra el total
-            est.filas = filasIA.map(function(x, i) { return { alic: x.alic, neto: i === 0 ? null : x.neto, iva: null }; });
+            // Con el total del papel, ese total manda (la de mayor neto cierra); si la IA no trajo el total, manda el neto que leyó.
+            est.modo = total > 0 ? 'total' : 'neto'; est.retSolo = null;
+            est.filas = filasIA.map(function(x, i) { return { alic: x.alic, neto: (i === 0 && est.modo === 'total') ? null : x.neto, iva: null }; });
             est.perc = [];
             _impArr(d.percepciones).filter(Boolean).forEach(function(x) {
                 var m = _impPos(x.importe != null ? x.importe : x.monto); if (!(m > 0)) return;
