@@ -3717,7 +3717,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v589</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v590</div>
         </div>
     </nav>
 
@@ -7920,7 +7920,7 @@
                         </div>
                         <div class="form-group" style="margin-bottom:10px;">
                             <label>Monto a pagar (ARS)</label>
-                            <input type="number" id="factMontoPago" step="0.01" min="0" placeholder="Por defecto: importe total">
+                            <input type="number" id="factMontoPago" step="0.01" min="0" placeholder="Por defecto: importe total" oninput="this._editado = this.value !== ''">
                         </div>
                         <!-- Panel retenciones para pago A de factura -->
                         <div id="factPanelRetenciones" style="display:block;">
@@ -9600,7 +9600,10 @@
         btn.textContent = neg ? '➕' : '➖';
         factRecalcItems(_itemsCtxDe(btn));
     };
-    window.factRecalcItems = function(ctx) {
+    // `silencioso` = se están CARGANDO ítems ya hechos (un comprobante guardado, lo que leyó la IA): sólo se recalculan los subtotales y el importe queda
+    // como siempre (total de los ítems). Cuando una PERSONA agrega, quita o edita un ítem, el total del detalle es el NETO gravado y lo toma el panel.
+    var _impItemsCarga = {};   // ctx → suma de los ítems tal como se cargaron (0 = no había): sirve para saber si eran netos (`_impCalcItemsNeto`)
+    window.factRecalcItems = function(ctx, silencioso) {
         ctx = ctx || 'fact';
         var cfg = _ITEMS_CTX[ctx]; if (!cfg) return;
         var cont = document.getElementById(cfg.lista); if (!cont) return;
@@ -9630,8 +9633,9 @@
                 : '';
             aviso.style.display = aviso.textContent ? '' : 'none';
         }
+        if (silencioso) _impItemsCarga[ctx] = filas.length ? total : 0;
         // Sólo pisa el importe si realmente hay ítems: si no, manda lo que se tipeó a mano.
-        if (filas.length > 0 && typeof _impDesdeItems === 'function' && _impDesdeItems(ctx, total)) {
+        if (!silencioso && filas.length > 0 && typeof _impDesdeItems === 'function' && _impDesdeItems(ctx, total)) {
             // el detalle (netos) pasó al neto gravado del panel «IVA y percepciones»; el importe total lo escribe el panel
         } else if (filas.length > 0) {
             var imp = document.getElementById(cfg.importe);
@@ -9669,7 +9673,7 @@
         var cont = cfg && document.getElementById(cfg.lista);
         if (!cont) return;
         cont.innerHTML = (items && items.length) ? items.map(function(it){ return _factItemHTML(it, ctx); }).join('') : '';
-        factRecalcItems(ctx);
+        factRecalcItems(ctx, true);   // carga, no edición: no toca el panel de IVA
     }
     // Los ítems que devuelve la IA vienen con nombres variables y a veces sin precio unitario.
     // Se normalizan al formato de la app; un importe negativo es un ítem que RESTA.
@@ -17657,7 +17661,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v589';
+    var APP_VER = 'v590';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -21141,6 +21145,8 @@
 
 
     function _mostrarPreviewFactura(datos) {
+        // Cada lectura arranca sin el importe de la anterior (en una tanda quedaba el del papel previo si éste no traía importe).
+        var _ie = document.getElementById('leerFactImporte'); if (_ie) _ie.value = '';
         // Detalle línea por línea que leyó la IA (queda editable antes de guardar).
         _renderFactItems(_normItemsIA(datos.items), 'lf');
         // Poblar datalist de proveedores (input libre + sugerencias)
@@ -21580,6 +21586,7 @@
             var _fc = document.getElementById('factClase'); if (_fc) _fc.value = 'fact|A';
             factClaseChange();
             _impIniciar('fact', null);   // IVA (21 % por defecto) y percepciones: panel limpio para el comprobante nuevo
+            var _mpN = document.getElementById('factMontoPago'); if (_mpN) _mpN._editado = false;   // la propiedad sobrevive al reset() del formulario
             renderCheckboxesCompartir('checkboxesCompartirFact', 'panelCompartirFact');
             if (typeof onFactPresupChange === 'function') onFactPresupChange();
         } catch (e) { console.error('agregarFactura (preparación):', e); }
@@ -21678,6 +21685,7 @@
         selFactModalidad('A');
         selFactComputaARCA(f.computaARCA !== false); // legado sin el campo → computa ARCA
         _impIniciar('fact', f);   // IVA y percepciones tal cual se cargaron (uno anterior sin detalle se muestra sin tocarlo)
+        var _mpE = document.getElementById('factMontoPago'); if (_mpE) _mpE._editado = false;
         var _pendienteEdit = _saldoFactDoc(f);
         var _avisoPagada = document.getElementById('factYaPagadaAviso');
         var _panelInmediato = document.getElementById('factPagoInmediatoPanel');
@@ -22633,7 +22641,7 @@
         _impImporteCambio('fact');   // el neto y el IVA siguen al importe total
         const imp = parseFloat(document.getElementById('factImporte').value) || 0;
         const monto = document.getElementById('factMontoPago');
-        if (monto && !monto._editado) monto.value = Math.round(imp) || '';
+        if (monto && !monto._editado) monto.value = Math.round(imp * 100) / 100 || '';   // con centavos (el importe sale ahora de neto + IVA): redondear a entero lo pasaba del importe
         recalcularRetencionesFactura();
         _factRevisarDuplicado();
     }
@@ -22918,6 +22926,15 @@
     function _impIniciar(p, rec, letra) {
         _impEst[p] = rec ? _impDesdeRegistro(rec) : _impEstadoNuevo(letra || _impVal(p === 'nc' ? 'ncLetra' : (p === 'lf' ? 'leerFactLetraVal' : 'factLetraVal')) || 'A', p);
         _impSync(p, true);
+        _impEst[p].itemsNeto = _impCalcItemsNeto(p);
+    }
+    // ¿Los ítems cargados con el formulario son NETOS? Los de antes de la v589 sumaban el importe TOTAL (el detalle completaba «Importe total»): si el total
+    // de esos ítems es lo que el panel tiene por neto (±1), lo son; si no (o no hay ítems) se devuelve false/null. Con `false`, editar un ítem sigue completando el importe
+    // (como siempre) en vez de tratarlo como neto, que inflaba el comprobante con un IVA de más.
+    function _impCalcItemsNeto(p) {
+        var est = _impEst[p], sum = _impItemsCarga[p] || 0; if (!est || !(sum > 0)) return null;
+        var r = _impResolver(est, parseFloat(_impVal(_IMP_CTX[p].importe)) || 0);
+        return Math.abs(sum - r.neto) <= Math.max(1, sum * 0.002);
     }
     // Se llama cuando cambia la clase, la letra o «¿computa ARCA?»: muestra u oculta el panel y, si nadie lo tocó, ajusta la alícuota por defecto.
     function _impSync(p, forzar) {
@@ -22929,11 +22946,11 @@
         var letra = cfg.info().letra;
         if (!est.tocado && !est.legacy && est.filas.length === 1 && est.letra !== letra) { est.filas[0].alic = _impAlicDefecto(letra); forzar = true; }
         est.letra = letra;
-        if (forzar || !box.firstChild) _impRender(p); else _impRefrescar(p);
+        if (forzar || !box.firstChild) _impRender(p); else _impRefrescar(p);   // abrir/sincronizar un formulario NUNCA escribe el importe (el estado puede ser el de otro comprobante)
     }
 
     // ── Pantalla ──
-    function _impRender(p) {
+    function _impRender(p, escribir) {
         var cfg = _IMP_CTX[p], box = document.getElementById(cfg.grupo), est = _impEst[p]; if (!box || !est) return;
         var q = "'" + p + "'";
         var optAlic = function(sel) { return IMP_ALICUOTAS.map(function(a) { return '<option value="' + a + '"' + (Number(a) === Number(sel) ? ' selected' : '') + '>' + (a === 0 ? '0 % (sin IVA)' : _impTxtAlic(a)) + '</option>'; }).join(''); };
@@ -22976,9 +22993,13 @@
                 : '')
             + '<div class="imp-resumen" id="' + p + 'ImpResumen" aria-live="polite"></div>';
         box.innerHTML = h;
-        _impRefrescar(p);
+        _impRefrescar(p, escribir);
     }
     // Actualiza lo calculado SIN repintar (si no, se perdería el foco al tipear).
+    // ⚠️ `escribir`: SÓLO los manejadores que cambian un importe del panel (neto, IVA, alícuota, no gravado/exento, percepciones, líneas, detalle de
+    // ítems, lo que leyó la IA sin total) piden escribir el importe total. Abrir o sincronizar un formulario (`_impSync`, `_impIniciar`, cambiar la clase
+    // o la moneda) no escribe NADA: el estado del panel puede ser el de otro comprobante y pisaba el importe cargado (editar una factura, abrir un alta, leer
+    // la segunda factura de una tanda).
     var _impEscribiendo = false;   // true mientras el panel mismo escribe el importe total: ese `input` no es una persona tipeando
     // El panel escribió el importe total (modo 'neto'): avisa a quien escucha ese campo (importe a pagar, retenciones, duplicados) como si se hubiera tipeado.
     function _impImporteEscrito(p) {
@@ -22987,12 +23008,12 @@
         try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
         _impEscribiendo = false;
     }
-    function _impRefrescar(p) {
+    function _impRefrescar(p, escribir) {
         var cfg = _IMP_CTX[p], est = _impEst[p]; if (!est || !est.visible) return;
         var impEl = document.getElementById(cfg.importe);
         var r = _impResolver(est, parseFloat(_impVal(cfg.importe)) || 0), total = r.total, usd = _impVal(cfg.moneda) === 'USD', sim = usd ? 'USD ' : '$ ';
         // En modo 'neto' el importe total es una SALIDA de la cuenta (neto + IVA + sin IVA + percepciones): se escribe en su campo.
-        if (r.modo === 'neto' && impEl && document.activeElement !== impEl && (parseFloat(impEl.value) || 0) !== total) {
+        if (escribir && r.modo === 'neto' && impEl && document.activeElement !== impEl && (parseFloat(impEl.value) || 0) !== total) {
             impEl.value = total > 0 ? total : '';
             _impImporteEscrito(p);
         }
@@ -23009,8 +23030,8 @@
         var sel = document.getElementById(p + 'ImpRetSel');
         if (sel) {
             var cuenta = {}; r.filas.forEach(function(f) { cuenta[f.alic] = (cuenta[f.alic] || 0) + 1; });
-            var opts = [{ v: 'todas', t: 'Todas las alícuotas — neto $ ' + _impNum(r.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }];
-            r.filas.forEach(function(f, i) { opts.push({ v: String(i), t: 'Sólo la de ' + _impTxtAlic(f.alic) + (cuenta[f.alic] > 1 ? ' (línea ' + (i + 1) + ')' : '') + ' — neto $ ' + _impNum(f.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }); });
+            var opts = [{ v: 'todas', t: 'Todas las alícuotas — neto ' + sim + _impNum(r.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }];
+            r.filas.forEach(function(f, i) { opts.push({ v: String(i), t: 'Sólo la de ' + _impTxtAlic(f.alic) + (cuenta[f.alic] > 1 ? ' (línea ' + (i + 1) + ')' : '') + ' — neto ' + sim + _impNum(f.neto + r.ng + r.ex) + (r.ng + r.ex > 0 ? ' (con lo no gravado / exento)' : '') }); });
             if (sel.options.length !== opts.length) { sel.innerHTML = opts.map(function(o) { return '<option value="' + o.v + '"></option>'; }).join(''); }
             opts.forEach(function(o, k) { sel.options[k].value = o.v; sel.options[k].textContent = o.t; });
             sel.value = r.solo == null ? 'todas' : String(r.solo);
@@ -23037,7 +23058,7 @@
     }
     function _impTocar(p) { var est = _impEst[p]; if (est) { est.tocado = true; est.aviso = ''; var av = document.getElementById(p + 'ImpAviso'); if (av) av.style.display = 'none'; } return est; }
     // Cambiar la alícuota suelta el IVA tipeado a mano de esa fila (era el de OTRA alícuota); el neto se vuelve a calcular.
-    function _impAlic(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].alic = parseFloat(v) || 0; e.filas[i].iva = null; _impRefrescar(p); }
+    function _impAlic(p, i, v) { var e = _impTocar(p); if (!e || !e.filas[i]) return; e.filas[i].alic = parseFloat(v) || 0; e.filas[i].iva = null; _impRefrescar(p, true); }
     // Cambió el IMPORTE TOTAL: un IVA tipeado a mano era el de aquel importe, así que se suelta (vuelve al cálculo). Y un comprobante ANTERIOR sin detalle
     // pasa a «tocado» si se le cambia el importe: el panel ya muestra un desglose nuevo y eso es lo que tiene que guardarse (si no, quedaba el neto viejo).
     function _impImporteCambio(p) {
@@ -23070,37 +23091,40 @@
         if (i === 0) { e.modo = 'neto'; e.filas[0].iva = null; }
         e.filas[i].neto = val;
         if (i > 0 && _impConItems(p)) factRecalcItems(p);   // con detalle de ítems, su total es el neto de TODAS las alícuotas: la primera línea se queda con lo que sobra
-        else _impRefrescar(p);
+        else _impRefrescar(p, true);
     }
     // ¿El formulario tiene ítems en el detalle? (entonces el total del detalle es el neto gravado total)
-    function _impConItems(p) { var c = _ITEMS_CTX[p], el = c && document.getElementById(c.lista); return !!(el && el.querySelector('.fact-item-fila')); }
+    // (salvo que sean de un comprobante cuyos ítems NO eran netos —los de antes de la v589 sumaban el importe total—: ahí siguen completando el importe)
+    function _impConItems(p) { var c = _ITEMS_CTX[p], el = c && document.getElementById(c.lista), e = _impEst[p]; return !!(el && el.querySelector('.fact-item-fila') && !(e && e.itemsNeto === false)); }
     // El IVA es una SALIDA (neto × alícuota): se puede tipear para copiar el de la factura cuando difiere por redondeo, pero NUNCA mueve el neto.
     // Si mandaba el importe total, pasa a mandar el neto tal como estaba y es el total el que absorbe esa diferencia.
     function _impIva(p, i, v) {
         var e = _impTocar(p); if (!e || !e.filas[i]) return;
         if (v !== '' && e.modo !== 'neto') {
             var r = _impResolver(e, parseFloat(_impVal(_IMP_CTX[p].importe)) || 0);
-            e.modo = 'neto'; e.filas[0].neto = r.filas[0].neto > 0 ? r.filas[0].neto : null; e.filas[0].iva = null;
+            e.modo = 'neto'; e.filas[0].neto = r.filas[0].neto > 0 ? r.filas[0].neto : null;   // el IVA fijo de la línea 1 (si lo tenía) se conserva: ya entró en esa cuenta
         }
         e.filas[i].iva = v === '' ? null : Math.max(0, parseFloat(v) || 0);
-        _impRefrescar(p);
+        _impRefrescar(p, true);
     }
     // Elige sobre qué neto se calcula la retención cuando hay varias alícuotas: 'todas' o el índice de la única línea que cuenta.
     function _impRetSolo(p, v) {
         var e = _impTocar(p); if (!e) return;
         e.retSolo = (v === 'todas' || v === '' || v == null) ? null : parseInt(v, 10);
         if (e.retSolo != null && !e.filas[e.retSolo]) e.retSolo = null;
+        // una línea que todavía no tiene neto no puede ser la base: el selector vuelve a «Todas» y el estado interno también
+        if (e.retSolo != null) { var rr = _impResolver(e, parseFloat(_impVal(_IMP_CTX[p].importe)) || 0); if (!(rr.filas[e.retSolo] && rr.filas[e.retSolo].neto > 0.004)) e.retSolo = null; }
         _impRefrescar(p);
     }
     // El total del detalle de ítems (que son netos) alimenta el NETO gravado, no el importe total: antes se volcaba al importe y el panel lo
     // tomaba por un total con IVA y le sacaba el IVA de nuevo (1.000 de ítems daban «neto 826,45 + IVA 173,55»). Devuelve false si el panel no
     // corresponde (Comprobante X, VEP, no computa ARCA): ahí el total del detalle sigue completando el importe.
     function _impDesdeItems(p, totalItems) {
-        var cfg = _IMP_CTX[p], e = _impEst[p]; if (!cfg || !e || !_impVisible(p)) return false;
+        var cfg = _IMP_CTX[p], e = _impEst[p]; if (!cfg || !e || !_impVisible(p) || e.itemsNeto === false) return false;
         e.visible = true; _impTocar(p);
         var otros = 0; e.filas.forEach(function(f, i) { if (i > 0) otros += _impPos(f.neto); });   // con varias alícuotas el detalle es el neto de TODAS
         e.modo = 'neto'; e.filas[0].iva = null; e.filas[0].neto = Math.max(0, _impR2(totalItems - otros));
-        _impRefrescar(p);
+        _impRefrescar(p, true);
         return true;
     }
     function _impAgregarFila(p) {
@@ -23114,13 +23138,13 @@
         e.filas.splice(i, 1);
         if (e.retSolo != null) { if (e.retSolo === i) e.retSolo = null; else if (e.retSolo > i) e.retSolo--; }
         if (e.filas.length < 2) e.retSolo = null;
-        _impRender(p);
+        _impRender(p, true);
         if (_impConItems(p)) factRecalcItems(p);   // el neto de la línea quitada vuelve a la primera
     }
     function _impVerNGEX(p) { var e = _impTocar(p); if (!e) return; e.verNGEX = true; _impRender(p); }
-    function _impNGEX(p, k, v) { var e = _impTocar(p); if (!e) return; e[k] = Math.max(0, parseFloat(v) || 0); _impRefrescar(p); }
+    function _impNGEX(p, k, v) { var e = _impTocar(p); if (!e) return; e[k] = Math.max(0, parseFloat(v) || 0); _impRefrescar(p, true); }
     function _impPercAgregar(p, tipo) { var e = _impTocar(p); if (!e) return; e.perc.push({ tipo: tipo || 'iibb_caba', monto: 0, desc: '' }); _impRender(p); var inp = document.querySelectorAll('#' + _IMP_CTX[p].grupo + ' .imp-perc input[type=number]'); if (inp.length) inp[inp.length - 1].focus(); }
-    function _impPercQuitar(p, j) { var e = _impTocar(p); if (!e) return; e.perc.splice(j, 1); _impRender(p); }
+    function _impPercQuitar(p, j) { var e = _impTocar(p); if (!e) return; e.perc.splice(j, 1); _impRender(p, true); }
     function _impPercTipo(p, j, v) {
         var e = _impTocar(p); if (!e || !e.perc[j]) return; e.perc[j].tipo = v;
         var t = _impTipoPerc(v), d = document.getElementById(p + 'ImpPD' + j);
@@ -23128,7 +23152,7 @@
         _impRefrescar(p);
     }
     function _impPercDesc(p, j, v) { var e = _impTocar(p); if (e && e.perc[j]) e.perc[j].desc = String(v || '').slice(0, 60); }
-    function _impPercMonto(p, j, v) { var e = _impTocar(p); if (e && e.perc[j]) { e.perc[j].monto = Math.max(0, parseFloat(v) || 0); _impRefrescar(p); } }
+    function _impPercMonto(p, j, v) { var e = _impTocar(p); if (e && e.perc[j]) { e.perc[j].monto = Math.max(0, parseFloat(v) || 0); _impRefrescar(p, true); } }
 
     // ── Lo que se guarda ──
     // null = no tocar el comprobante (uno anterior sin detalle que no se editó en el panel); {vacio:true} = el panel no corresponde
@@ -23229,8 +23253,13 @@
             var r = _impResolver(est, total);
             filasIA.forEach(function(x, i) { if (x.iva != null && r.filas[i] && Math.abs(r.filas[i].iva - x.iva) > 0.005) est.filas[i].iva = x.iva; });
             est.tocado = true; est.legacy = false; est.aviso = aviso;
+        } else if (total > 0) {
+            // La IA leyó el importe pero no el desglose (p. ej. una nota de crédito C): ese importe manda y el neto se despeja; no se lo borra.
+            est.modo = 'total'; est.filas[0].neto = null; est.filas.forEach(function(f) { f.iva = null; });
         }
         _impSync(p, true);
+        est.itemsNeto = _impCalcItemsNeto(p);
+        if (est.modo === 'neto') _impRefrescar(p, true);   // sin total pero con neto: el importe sale del neto que leyó
     }
 
     // Retenciones para pago directo de factura
@@ -51165,7 +51194,7 @@
 
           <div class="form-group" style="grid-column:1/-1;">
             <label>Detalle del comprobante</label>
-            <div class="form-hint" style="margin-bottom:6px;">Los ítems que leyó la IA. Corregilos o agregá los que falten; con ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong>. El total completa el importe.</div>
+            <div class="form-hint" style="margin-bottom:6px;">Los ítems que leyó la IA. Corregilos o agregá los que falten; con ➕/➖ elegís si cada uno <strong>suma</strong> o <strong>resta</strong>. Si los editás, el total del detalle es el <strong>neto gravado</strong>: el IVA y el importe total se calculan solos.</div>
             <div id="lfItemsCabecera" class="fact-items-cab" style="display:none; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">
               <span>Detalle</span><span title="A qué cuota del presupuesto se imputa este ítem">Cuota</span><span>Cant.</span><span>P. unit.</span><span style="text-align:right;">Subtotal</span><span style="text-align:center;" title="Suma o resta">±</span><span></span>
             </div>
