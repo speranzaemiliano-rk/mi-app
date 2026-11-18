@@ -63,10 +63,11 @@ await poner('factImporte', '1210');
 await p.evaluate(() => { const s = document.querySelector('#factImpGrupo .imp-fila select'); s.value = '21'; s.dispatchEvent(new Event('change', { bubbles: true })); });
 await poner('factImpI0', '210.01');
 r = await resolver('fact');
-ok('A13: un IVA tipeado a mano (210,01) queda fijo y el neto lo absorbe (999,99): sigue cerrando 1.210', cerca(r.iva, 210.01) && cerca(r.neto, 999.99) && cerca(r.neto + r.iva, 1210), JSON.stringify(r));
+ok('A13: un IVA tipeado a mano (210,01) queda fijo y el neto NO se mueve (1.000): el que absorbe es el total (1.210,01)', cerca(r.iva, 210.01, 0.001) && cerca(r.neto, 1000, 0.001) && cerca(r.neto + r.iva, 1210.01, 0.001) && parseFloat(await num('factImporte')) === 1210.01, JSON.stringify(r) + ' / ' + await num('factImporte'));
 await poner('factImpI0', '');
 r = await resolver('fact');
-ok('A14: vaciar el IVA vuelve al cálculo automático', cerca(r.iva, 210) && cerca(r.neto, 1000), JSON.stringify(r));
+ok('A14: vaciar el IVA vuelve al cálculo automático', cerca(r.iva, 210, 0.001) && cerca(r.neto, 1000, 0.001), JSON.stringify(r));
+await poner('factImporte', '1210');   // se vuelve a tipear el total de la factura: ese total manda de nuevo
 
 // guardar una factura al 10,5 % con percepciones de CABA y de Buenos Aires
 await p.evaluate(() => { const s = document.querySelector('#factImpGrupo .imp-fila select'); s.value = '10.5'; s.dispatchEvent(new Event('change', { bubbles: true })); _impPercAgregar('fact', 'iibb_caba'); _impPercAgregar('fact', 'iibb_pba'); });
@@ -322,7 +323,7 @@ await poner('factImpI0', '210.01');
 ok('H11a: (control) el IVA a mano queda fijo', cerca((await resolver('fact')).iva, 210.01));
 await p.evaluate(() => { const s = document.querySelector('#factImpGrupo .imp-fila select'); s.value = '10.5'; s.dispatchEvent(new Event('change', { bubbles: true })); });
 r = await resolver('fact');
-ok('H11: al cambiar la alícuota a 10,5 % el IVA a mano se suelta (114,98, no 210,01)', cerca(r.iva, 114.98) && cerca(r.neto, 1095.02), JSON.stringify(r));
+ok('H11: al cambiar la alícuota a 10,5 % el IVA a mano se suelta (105, no 210,01) y el neto sigue en 1.000 (el IVA nunca lo mueve)', cerca(r.iva, 105, 0.001) && cerca(r.neto, 1000, 0.001), JSON.stringify(r));
 await poner('factImpI0', '115');
 await poner('factImporte', '2210');
 r = await resolver('fact');
