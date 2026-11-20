@@ -3717,7 +3717,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v591</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v592</div>
         </div>
     </nav>
 
@@ -4574,6 +4574,11 @@
                             <option value="pagada">Pagada</option>
                             <option value="parcial">Parcialmente pagada</option>
                         </select>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-3); white-space:nowrap;">📅 Fecha desde:
+                            <input type="date" id="factFiltroDesde" onchange="renderFacturas()" style="padding:7px 10px; font-size:12px; width:auto;" title="Fecha de la factura: desde (inclusive)"></label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-3); white-space:nowrap;">hasta:
+                            <input type="date" id="factFiltroHasta" onchange="renderFacturas()" style="padding:7px 10px; font-size:12px; width:auto;" title="Fecha de la factura: hasta (inclusive)"></label>
+                        <button class="btn btn-outline btn-sm" id="btnFactLimpiarFiltros" onclick="factLimpiarFiltros()" style="display:none;" title="Quitar la búsqueda, el estado y las fechas">✕ Limpiar filtros</button>
                     </div>
                     <div class="table-wrap">
                         <table>
@@ -4631,6 +4636,11 @@
                             <option value="pagado">Pagado</option>
                             <option value="parcial">Parcialmente pagado</option>
                         </select>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-3); white-space:nowrap;">📅 Fecha desde:
+                            <input type="date" id="docFiltroDesde" onchange="renderDocumentos()" style="padding:7px 10px; font-size:12px; width:auto;" title="Fecha del comprobante: desde (inclusive)"></label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-3); white-space:nowrap;">hasta:
+                            <input type="date" id="docFiltroHasta" onchange="renderDocumentos()" style="padding:7px 10px; font-size:12px; width:auto;" title="Fecha del comprobante: hasta (inclusive)"></label>
+                        <button class="btn btn-outline btn-sm" id="btnDocLimpiarFiltros" onclick="docLimpiarFiltros()" style="display:none;" title="Quitar la búsqueda, el origen, el estado y las fechas">✕ Limpiar filtros</button>
                         <button class="btn btn-outline btn-sm" id="btnDocsSel" onclick="toggleDocsSelMode()" title="Seleccionar facturas para marcarlas como que NO computan ARCA (o para volver a computarlas)">☑️ Seleccionar facturas</button>
                     </div>
                     <div id="docsSelBar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 6px;padding:8px 12px;background:var(--warn-bg);border:1px solid rgba(107,78,0,.15);border-radius:8px;">
@@ -17661,7 +17671,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v591';
+    var APP_VER = 'v592';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -23942,14 +23952,30 @@
         tbody.innerHTML = '';
         const q = (document.getElementById('buscadorFact')?.value || '').toLowerCase().trim();
         const estadoFiltro = document.getElementById('filtroFactEstado')?.value || '';
+        // Filtro por FECHA de la factura (inclusive en los dos extremos); una sin fecha legible no entra mientras el filtro esté puesto.
+        const fDesde = document.getElementById('factFiltroDesde')?.value || '';
+        const fHasta = document.getElementById('factFiltroHasta')?.value || '';
+        const hayFecha = !!(fDesde || fHasta);
+        let sinFecha = 0;
         const visibles = facturas.filter((f,i) => {
             if (q && ![f.proveedor,f.numero,f.descripcion].map(x=>(x||'').toLowerCase()).join(' ').includes(q)) return false;
             if (estadoFiltro && (f.estado||'pendiente') !== estadoFiltro) return false;
+            if (hayFecha) {
+                const fi = _docFechaISO(f.fecha);
+                if (!fi) { sinFecha++; return false; }
+                if ((fDesde && fi < fDesde) || (fHasta && fi > fHasta)) return false;
+            }
             return true;
         });
+        const hayFiltro = !!(q || estadoFiltro || hayFecha);
+        const _btnLimpF = document.getElementById('btnFactLimpiarFiltros'); if (_btnLimpF) _btnLimpF.style.display = hayFiltro ? '' : 'none';
 
         if (visibles.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">No hay facturas para mostrar.</td></tr>';
+            let _vacioF = 'No hay facturas para mostrar.';
+            if (hayFecha && fDesde && fHasta && fDesde > fHasta) _vacioF = '«Desde» (' + _docFechaTxt(fDesde) + ') es posterior a «Hasta» (' + _docFechaTxt(fHasta) + '): no hay fechas posibles.';
+            else if (hayFiltro && facturas.length) _vacioF = 'No hay facturas que coincidan con los filtros' + (hayFecha ? ' (fecha ' + _docPeriodoTxt(fDesde, fHasta) + ')' : '') + '.'
+                + (sinFecha ? ' ' + sinFecha + ' sin fecha no entra' + (sinFecha === 1 ? '' : 'n') + ' en el filtro de fechas.' : '');
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">' + _vacioF + '</td></tr>';
         } else {
             visibles.forEach(f => {
                 const idx = facturas.indexOf(f);
@@ -26891,6 +26917,34 @@
         renderDocumentos();
     }
 
+    // Fecha de un comprobante como 'AAAA-MM-DD' (para comparar con los filtros «Desde / Hasta»). Los comprobantes cargados la guardan ISO, pero los
+    // importados de ARCA o los viejos pueden traerla como dd/mm/aaaa; si no se puede leer devuelve ''.
+    function _docFechaISO(v) {
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+        m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+        if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+        return '';
+    }
+    // «15/10/2026» a partir de 'AAAA-MM-DD' (sin ceros a la izquierda, como `formatearFecha`).
+    function _docFechaTxt(iso) { var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? (parseInt(m[3], 10) + '/' + parseInt(m[2], 10) + '/' + m[1]) : ''; }
+    // Texto del período filtrado: «del 1/10/2026 al 31/10/2026», «desde el …», «hasta el …» o ''.
+    function _docPeriodoTxt(desde, hasta) {
+        if (desde && hasta) return 'del ' + _docFechaTxt(desde) + ' al ' + _docFechaTxt(hasta);
+        if (desde) return 'desde el ' + _docFechaTxt(desde);
+        if (hasta) return 'hasta el ' + _docFechaTxt(hasta);
+        return '';
+    }
+    function docLimpiarFiltros() {
+        ['buscadorDoc', 'filtroDocOrigen', 'filtroDocEstado', 'docFiltroDesde', 'docFiltroHasta'].forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
+        renderDocumentos();
+    }
+    function factLimpiarFiltros() {
+        ['buscadorFact', 'filtroFactEstado', 'factFiltroDesde', 'factFiltroHasta'].forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
+        renderFacturas();
+    }
+
     function renderDocumentos() {
         if (!documentos) return;
         if (typeof _migrarNotasCreditoViejas === 'function') { try { _migrarNotasCreditoViejas(); } catch(e){} }
@@ -26898,6 +26952,18 @@
         const est  = document.getElementById('filtroDocEstado')?.value || '';
         const origen = document.getElementById('filtroDocOrigen')?.value || ''; // '' | 'x' | 'arca'
         const editable = (typeof puedeEditar !== 'undefined') ? puedeEditar : true;
+        // Filtro por FECHA del comprobante (la columna «Fecha»), inclusive en los dos extremos. Con el filtro puesto, un comprobante sin fecha
+        // legible no entra (no se sabe si cae en el período): se cuenta aparte para avisarlo.
+        const fDesde = document.getElementById('docFiltroDesde')?.value || '';
+        const fHasta = document.getElementById('docFiltroHasta')?.value || '';
+        const hayFecha = !!(fDesde || fHasta);
+        let sinFecha = 0;
+        function _fechaPasa(v) {
+            if (!hayFecha) return true;
+            const f = _docFechaISO(v);
+            if (!f) { sinFecha++; return false; }
+            return !((fDesde && f < fDesde) || (fHasta && f > fHasta));
+        }
 
         function estadoDoc(d) {
             const pag = d.pagado || 0;
@@ -26909,7 +26975,7 @@
             const txt = ((d.proveedor||'') + (d.descripcion||'') + (d.numero||'')).toLowerCase();
             if (busq && !txt.includes(busq)) return false;
             if (est && estadoDoc(d) !== est) return false;
-            return true;
+            return _fechaPasa(d.fecha);
         }).map(d => ({ _o:'x', item:d, fecha:d.fecha||'' }));
 
         // Facturas de proveedores — a ARCA solo las OFICIALES (con CAE); el resto va a X.
@@ -26930,7 +26996,7 @@
                 const norm = e2 === 'pagada' ? 'pagado' : e2;
                 if (norm !== est) return false;
             }
-            return true;
+            return _fechaPasa(f.fecha);
         }
         let facsA  = (origen === 'x')    ? [] : (facturas||[]).filter(f => _facEsArca(f) && _factPasa(f)).map(f => ({ _o:'arca',  item:f, fecha:f.fecha||'' }));
         let facsXf = (origen === 'arca') ? [] : (facturas||[]).filter(f => !_facEsArca(f) && _factPasa(f)).map(f => ({ _o:'factx', item:f, fecha:f.fecha||'' }));
@@ -26950,16 +27016,16 @@
             if (_factKeys.has(_keyComp(c.numero, c.ptoVta, c.total))) return false;
             const txt = ((c.proveedor||'') + (c.tipo||'') + (c.numero||'') + (c.cuit||'')).toLowerCase();
             if (busq && !txt.includes(busq)) return false;
-            return true;
-        }).map(c => ({ _o:'arcaimp', item:c, fecha:String(c.fecha||'') }));
+            return _fechaPasa(c.fecha);
+        }).map(c => ({ _o:'arcaimp', item:c, fecha:_docFechaISO(c.fecha) || String(c.fecha||'') }));
 
         // Comprobantes X no oficiales emitidos como egreso (Emitir Comprobante X o Egreso)
         let emitX = (origen === 'arca' || est) ? [] : (comprobantesEmitidos||[]).filter(e => {
             if (!e || e.movTipo !== 'egreso') return false;
             const txt = ((e.cliente||'') + (e.proveedorNombre||'') + (e.nro||'') + (e.concepto||'')).toLowerCase();
             if (busq && !txt.includes(busq)) return false;
-            return true;
-        }).map(e => ({ _o:'emitx', item:e, fecha:String(e.fecha||'') }));
+            return _fechaPasa(e.fecha);
+        }).map(e => ({ _o:'emitx', item:e, fecha:_docFechaISO(e.fecha) || String(e.fecha||'') }));
 
         let list = docsX.concat(facsA, facsXf, arcaImp, emitX);
         list.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')); // más nuevo primero
@@ -26983,11 +27049,17 @@
         if (el('docsTotal')) el('docsTotal').innerHTML = _htmlTM(totalAmt);
         if (el('docsPendientes')) el('docsPendientes').textContent = pendientes;
 
+        const hayFiltro = !!(busq || est || origen || hayFecha);
+        const _btnLimp = document.getElementById('btnDocLimpiarFiltros'); if (_btnLimp) _btnLimp.style.display = hayFiltro ? '' : 'none';
         if (list.length === 0) {
             // Los comprobantes se enganchan después de lo liviano (ver _engancharPesados):
             // mientras no llegaron, "no hay comprobantes" sería mentira.
+            let _vacio = 'No hay comprobantes cargados.';
+            if (hayFecha && fDesde && fHasta && fDesde > fHasta) _vacio = '«Desde» (' + _docFechaTxt(fDesde) + ') es posterior a «Hasta» (' + _docFechaTxt(fHasta) + '): no hay fechas posibles.';
+            else if (hayFiltro && (nDocs + nFacs + nArca + nEmit) > 0) _vacio = 'No hay comprobantes que coincidan con los filtros' + (hayFecha ? ' (fecha ' + _docPeriodoTxt(fDesde, fHasta) + ')' : '') + '.'
+                + (sinFecha ? ' ' + sinFecha + ' sin fecha no entra' + (sinFecha === 1 ? '' : 'n') + ' en el filtro de fechas.' : '');
             tbody.innerHTML = _docsCargados
-                ? '<tr><td colspan="9" class="empty-msg">No hay comprobantes cargados.</td></tr>'
+                ? '<tr><td colspan="9" class="empty-msg">' + _vacio + '</td></tr>'
                 : '<tr><td colspan="9" class="empty-msg">Cargando comprobantes…</td></tr>';
             var _foot0 = document.getElementById('documentosFoot'); if (_foot0) _foot0.innerHTML = '';
             return;
@@ -27155,10 +27227,11 @@
                 return s;
             };
             _foot.innerHTML = '<tr style="font-weight:700;background:var(--surface-2);border-top:2px solid var(--border);">'
-                + '<td colspan="5" style="text-align:right;">TOTAL (' + list.length + ' comprobante' + (list.length === 1 ? '' : 's') + ')</td>'
+                + '<td colspan="5" style="text-align:right;">TOTAL (' + list.length + ' comprobante' + (list.length === 1 ? '' : 's') + (hayFecha ? ' · ' + _docPeriodoTxt(fDesde, fHasta) : '') + ')</td>'
                 + '<td style="text-align:right;">' + _fm(_tImpARS, _tImpUSD) + '</td>'
                 + '<td style="text-align:right;color:var(--success);">' + _fm(_tPagARS, _tPagUSD) + '</td>'
-                + '<td colspan="2"></td></tr>';
+                + '<td colspan="2"></td></tr>'
+                + ((hayFecha && sinFecha) ? '<tr><td colspan="9" style="font-size:11px;color:var(--text-3);text-align:right;">' + sinFecha + ' comprobante' + (sinFecha === 1 ? '' : 's') + ' sin fecha no entra' + (sinFecha === 1 ? '' : 'n') + ' en el filtro de fechas.</td></tr>' : '');
         }
         _docsActualizarSelBar();
         if (typeof renderProvPendientes === 'function') renderProvPendientes();
