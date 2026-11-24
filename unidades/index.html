@@ -187,6 +187,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
       <button class="nav-item active" data-v="planilla"><span class="nav-icon">table_view</span>Planilla</button>
       <button class="nav-item" data-v="valuacion"><span class="nav-icon">calculate</span>Valuación y conceptos</button>
       <button class="nav-item" data-v="posesion"><span class="nav-icon">event_available</span>Posesión y firma</button>
+      <button class="nav-item" data-v="escribania"><span class="nav-icon">send</span>Enviadas a escribanía</button>
       <div class="nav-label">Datos</div>
       <button class="nav-item" id="btnNuevoEd"><span class="nav-icon">add_business</span>Nuevo edificio</button>
       <button class="nav-item" id="btnImp"><span class="nav-icon">upload_file</span>Importar Excel</button>
@@ -233,6 +234,7 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
           <button class="btn" id="pd">👁 Datos personales</button>
           <button class="btn" id="grp">Agrupar por propietario</button>
           <button class="btn" id="btnNuevaU">＋ Nueva unidad</button>
+          <button class="btn" id="btnEsc" title="Tildá unidades en la primera columna y marcalas como enviadas a la escribanía">📨 Enviar a escribanía</button>
           <button class="btn pri" id="xls">⬇ Bajar a Excel</button>
           <button class="btn" id="mails">✉ Copiar mails visibles</button>
         </div>
@@ -250,6 +252,18 @@ td input[type=date],td input[type=time]{padding:3px 8px;font-size:13px}
         <div class="tw"><table><thead><tr><th class="l">Concepto</th><th class="l">Se carga como</th><th>Valor cargado</th><th>Total del edificio</th></tr></thead><tbody id="resBody"></tbody></table></div>
         <div id="cobrosBox"></div>
         <p class="nota">Los cambios se guardan solos. El reparto entre unidades se ve en la pantalla Planilla.</p>
+      </section>
+
+      <!-- ENVIADAS A ESCRIBANÍA -->
+      <section class="vista" id="v_escribania">
+        <div class="kpis" id="ekpis"></div>
+        <div class="bar">
+          <input type="search" id="eq" placeholder="Buscar unidad o propietario…">
+          <button class="btn on" data-ef="enviadas">Enviadas</button>
+          <button class="btn" data-ef="pendientes">Pendientes de enviar</button>
+        </div>
+        <div class="tw"><table><thead><tr><th class="l">Unidad</th><th class="l">Propietario</th><th>m²</th><th class="l">Fecha de envío</th><th class="l"></th></tr></thead><tbody id="etb"></tbody></table></div>
+        <p class="nota">Para marcar unidades: en la <b>Planilla</b> tildá las casillas de la primera columna y tocá «📨 Enviar a escribanía». Acá queda el listado con la fecha (se puede corregir) y podés quitar una unidad si fue un error.</p>
       </section>
 
       <!-- POSESIÓN Y FIRMA -->
@@ -298,7 +312,7 @@ var edId = '';                // edificio activo
 var U = [];                   // unidades del edificio activo (array, con c = cálculo)
 var TOTS = 0;                 // m² totales del edificio
 var P = null;                 // parámetros del edificio activo (copia de trabajo)
-var S = {sel:null, selEd:'', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:''};
+var S = {chk:{}, ef:'enviadas', eq:'', sel:null, selEd:'', q:'', g:false, pd:false, k:'u', d:1, v:'planilla', pf:'todas', pq:''};
 var CONC = [['gan','Retención Ganancias'],['iibb','Ingresos Brutos'],['adm','Fondo de Administración'],
             ['res','Reserva'],['alh','Fondo de Alhajamiento'],['rec','Recupero Bs. Personales (acciones y part.)'],
             ['cdi','Recupero CDI Edenor']];
@@ -403,7 +417,7 @@ function cargarEdificio(){
   var us = e.unidades || {};
   U = Object.keys(us).map(function(k){ var u = us[k]; return {
     k:k, u:String(u.n == null ? k : u.n), o:+u.o || 0, p:u.p || '', rk:!!u.rk, i:u.i || '', t:u.t || '',
-    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0, vf:+u.vf || 0 }; });
+    m:u.m ? [].concat(u.m) : [], im:u.im ? [].concat(u.im) : [], s:+u.s || 0, fp:u.fp || '', hf:u.hf || '', cv:u.cv || {}, cb:u.cb || {}, pr:u.pr || {}, tp:u.tp || '', sc:+u.sc || 0, ss:+u.ss || 0, vf:+u.vf || 0, esc:u.esc || '' }; });
   TOTS = U.reduce(function(s, r){ return s + r.s; }, 0);
   if (!enfocado) renderParams();
   render();
@@ -566,11 +580,12 @@ var SUMAR = ['usd','ars','vf','tot','totp','totu','tusd','sc','ss'].concat(CONC.
 var COLS = {oc:{}, w:{}};
 try { var _cs = JSON.parse(localStorage.getItem('unid_cols') || '{}'); if (_cs.oc) COLS.oc = _cs.oc; if (_cs.w) COLS.w = _cs.w; } catch(x) {}
 function guardarCols(){ try { localStorage.setItem('unid_cols', JSON.stringify(COLS)); } catch(x) {} }
-var ANCHO = {u:100, p:200, i:170, t:140, m:220, s:78, pc:62, usd:135, ars:155, alt:155, tusd:145, usdm2:125, tot:155, totp:165, totu:165, fp:150, hf:115, acc:90};
+var ANCHO = {chk:38, esc:130, u:100, p:200, i:170, t:140, m:220, s:78, pc:62, usd:135, ars:155, alt:155, tusd:145, usdm2:125, tot:155, totp:165, totu:165, fp:150, hf:115, acc:90};
 function anchoCol(k){ return COLS.w[k] || ANCHO[k] || (k.indexOf('es_') === 0 ? 95 : 150); }   // «Estado · …» es una etiqueta corta: angosta
 // Definición única de las columnas de la planilla: título, alineación, y cómo se pinta cada celda y el total.
 function defCols(){
   var d = [
+    {k:'chk', t:'', cls:'l', solo:'lista', fijo:true},
     {k:'u', t:'Unidad', cls:'l sticky', fijo:true},
     {k:'p', t:'Propietario', cls:'l'},
     {k:'i', t:'Inquilino/a', cls:'l', solo:'lista'},
@@ -592,7 +607,7 @@ function defCols(){
       var n = c[1].replace(' (acciones y part.)', '');
       return a.concat([{k:'es_' + c[0], t:'Estado · ' + n, cls:'l'}, {k:'cb_' + c[0], t:'Cobrado · ' + n, cls:''}, {k:'sd_' + c[0], t:'Saldo · ' + n, cls:''}]);
    }, []))
-   .concat([ {k:'fp', t:'Fecha posesión', cls:'l', solo:'lista'}, {k:'hf', t:'Hora firma', cls:'l', solo:'lista'}, {k:'acc', t:'', cls:'l', solo:'lista', fijo:true}]);
+   .concat([ {k:'fp', t:'Fecha posesión', cls:'l', solo:'lista'}, {k:'hf', t:'Hora firma', cls:'l', solo:'lista'}, {k:'esc', t:'Escribanía', cls:'l', solo:'lista'}, {k:'acc', t:'', cls:'l', solo:'lista', fijo:true}]);
   return d.filter(function(c){
     if (c.solo === 'pd' && (!S.pd || S.g)) return false;
     if (c.solo === 'dato' && S.g && c.k === 'tp') return false;
@@ -634,6 +649,8 @@ function cambiarMon(k){
 }
 function celdaPlanilla(k, r, c, dis){
   switch (k) {
+    case 'chk': return '<td class="l"><input type="checkbox" data-chk="' + esc(r.k) + '"' + (S.chk[r.k] ? ' checked' : '') + '></td>';
+    case 'esc': return '<td class="l sm">' + (r.esc ? '<span class="tag ok">📨 ' + esc(fechaAR(r.esc)) + '</span>' : '') + '</td>';
     case 'u': return '<td class="l sticky"><b>' + esc(r.u) + '</b></td>';
     case 'p': return '<td class="l">' + esc(r.p) + (r.rk ? ' <span class="tag rk">RK</span>' : '') + '</td>';
     case 'i': return '<td class="l sm">' + esc(S.pd ? r.i : nombreInq(r.i)) + '</td>';
@@ -676,7 +693,7 @@ function celdaTotal(k, T, n){
     case 'usdm2': return '<td>' + fm('usdm2', T.s ? T.tusd / T.s : 0) + '</td>';
     case 'totp': return '<td>' + fm('totp', T.totp || 0) + '</td>';
     case 'totu': return '<td>' + fm('totu', T.totu || 0) + '</td>';
-    case 'p': case 'i': case 't': case 'm': case 'pc': case 'fp': case 'hf': case 'acc': return '<td></td>';
+    case 'p': case 'i': case 't': case 'm': case 'pc': case 'fp': case 'hf': case 'acc': case 'chk': case 'esc': return '<td></td>';
     default: return k.indexOf('es_') === 0 ? '<td></td>' : '<td>' + fm(k, T[k] || 0) + '</td>';
   }
 }
@@ -693,6 +710,7 @@ function render(){
     // Los íconos van ANTES del título: con la columna angosta el título se corta con «…» y lo que va al final desaparece (y no se podía tocar).
     var ico = nat ? '<span class="mon-sw" title="Ver en ' + (vista === 'USD' ? 'pesos' : 'dólares') + '">⇄</span><span class="sort-sw" title="Ordenar por esta columna">' + (S.k === c.k ? (S.d > 0 ? '▲' : '▼') : '↕') + '</span> ' : '';
     var flecha = nat ? '' : (S.k === c.k || (S.k === 's' && c.k === 'pc') ? (S.d > 0 ? ' ▲' : ' ▼') : '');
+    if (c.k === 'chk') return '<th class="l" data-k="chk"><input type="checkbox" id="chkAll" title="Tildar / destildar todas las unidades que se ven"></th>';
     return '<th class="' + c.cls + '" data-k="' + c.k + '" title="' + esc(tit) + '">' + ico + esc(tit) + flecha +
       (c.k === 'acc' ? '' : '<span class="rz" data-k="' + c.k + '" title="Arrastrá para cambiar el ancho"></span>') + '</th>'; }).join('') + '</tr>';
   var list = a;
@@ -728,14 +746,15 @@ function render(){
     ['Valor total $ (TC ' + P.tc + ')', N(valorTotArs())], ['Con fecha de posesión', conF + ' de ' + U.length]]
     .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
   $('kpis').innerHTML = kpiHtml; $('kpis2').innerHTML = kpiHtml;
-  renderResumen(); renderCobros(); renderPosesion(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
+  renderResumen(); renderCobros(); renderPosesion(); renderEscribania(); estadoBtnEsc(); pintarVmBar(); if (!($('params').contains(document.activeElement))) renderParams(); setVista(S.v, true);
 }
 
 /* ── Pantallas (menú lateral) ──────────────────────────────────────── */
 var VISTAS = {
   planilla:  ['Planilla', 'Unidades, propietarios, valuación y conceptos por unidad'],
   valuacion: ['Valuación y conceptos', 'Valor por m², tipo de cambio y conceptos del edificio'],
-  posesion:  ['Posesión y firma', 'Fecha de posesión y hora de firma de cada unidad']
+  posesion:  ['Posesión y firma', 'Fecha de posesión y hora de firma de cada unidad'],
+  escribania:['Enviadas a escribanía', 'Control de las unidades que ya se mandaron a la escribanía']
 };
 function setVista(v, sinGuardar){
   if (!VISTAS[v]) v = 'planilla';
@@ -771,6 +790,43 @@ function renderResumen(){
     return '<tr><td class="l">' + esc(c[1]) + '</td><td class="l">' + modoTexto(k) + '</td><td>' +
       valorCargadoTexto(k) + '</td><td><b>' + Nv(totNativo(k), monedaConc(k), k) + '</b></td></tr>';
   }).join('');
+}
+/* ── Envío a escribanía: unidades/<k>/esc = fecha de envío (yyyy-mm-dd); sin valor = todavía no se mandó ── */
+function hoyISO(){ var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function fechaAR(iso){ var p = String(iso || '').split('-'); return p.length === 3 ? +p[2] + '/' + +p[1] + '/' + p[0] : String(iso || ''); }
+function tildadasEsc(){ return U.filter(function(r){ return S.chk[r.k] && !r.esc; }); }       // las ya enviadas no se vuelven a marcar
+function estadoBtnEsc(){
+  var b = $('btnEsc'); if (!b) return;
+  var n = tildadasEsc().length;
+  b.textContent = '📨 Enviar a escribanía' + (n ? ' (' + n + ')' : ''); b.classList.toggle('on', n > 0); b.disabled = !puedeEditar;
+}
+function marcarEscribania(lista, fecha){
+  if (!puedeEditar || !lista.length) return;
+  var upd = {}; lista.forEach(function(r){ upd['global/edificios/' + edId + '/unidades/' + r.k + '/esc'] = fecha; });
+  db.ref().update(upd).then(function(){
+    lista.forEach(function(r){ delete S.chk[r.k]; });
+    toast('✔ ' + lista.length + (lista.length === 1 ? ' unidad enviada' : ' unidades enviadas') + ' a la escribanía (' + fechaAR(fecha) + ')');
+  }, function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+}
+function renderEscribania(){
+  var dis = puedeEditar ? '' : ' disabled', q = S.eq.toLowerCase();
+  var env = U.filter(function(r){ return r.esc; }), pend = U.length - env.length;
+  var ult = env.reduce(function(m, r){ return r.esc > m ? r.esc : m; }, '');
+  $('ekpis').innerHTML = [['Enviadas a escribanía', env.length + ' de ' + U.length], ['Pendientes de enviar', pend], ['Último envío', ult ? fechaAR(ult) : '—']]
+    .map(function(k){ return '<div class="card kpi"><small>' + k[0] + '</small><b>' + esc(k[1]) + '</b></div>'; }).join('');
+  [].forEach.call(document.querySelectorAll('button[data-ef]'), function(b){ b.classList.toggle('on', b.dataset.ef === S.ef); });
+  var a = U.filter(function(r){
+    if (S.ef === 'enviadas' ? !r.esc : !!r.esc) return false;
+    return !q || [r.u, r.p].join(' ').toLowerCase().indexOf(q) >= 0;
+  });
+  if (S.ef === 'enviadas') a.sort(function(x, y){ return x.esc < y.esc ? 1 : x.esc > y.esc ? -1 : x.o - y.o; });   // las más recientes primero
+  else a.sort(function(x, y){ return x.o - y.o; });
+  $('etb').innerHTML = a.map(function(r){
+    return '<tr><td class="l"><b>' + esc(r.u) + '</b></td><td class="l">' + esc(r.p) + (r.rk ? ' <span class="tag rk">RK</span>' : '') + '</td><td>' + r.s.toFixed(2) + '</td>' +
+      (r.esc ? '<td class="l"><input type="date" data-k="' + esc(r.k) + '" data-f="esc" value="' + esc(r.esc) + '"' + dis + '></td>' +
+               '<td class="l"><button class="btn ico" data-quitar="' + esc(r.k) + '" title="Quitar del listado (no se envió)"' + dis + '>↩ Quitar</button></td>'
+             : '<td class="l sm">—</td><td class="l"><button class="btn" data-envk="' + esc(r.k) + '"' + dis + '>📨 Enviar</button></td>') + '</tr>';
+  }).join('') || '<tr><td class="l sm" colspan="5">' + (S.ef === 'enviadas' ? 'Todavía no marcaste ninguna unidad como enviada.' : 'No hay unidades pendientes.') + '</td></tr>';
 }
 function renderPosesion(){
   var q = S.pq.toLowerCase(), dis = puedeEditar ? '' : ' disabled';
@@ -823,7 +879,7 @@ $('th').addEventListener('click', function(e){
   // En una columna de importes, tocar el título (o el ⇄) cambia la moneda; para ordenarla está la flechita ↕ aparte.
   if (monNativa(t.dataset.k) && !e.target.classList.contains('sort-sw')) { cambiarMon(t.dataset.k); return; }
   var k = t.dataset.k; if (k === 'pc') k = 's';
-  if (['fp','hf','t','m','i','acc'].indexOf(k) >= 0 || !k) return;
+  if (['fp','hf','t','m','i','acc','chk','esc'].indexOf(k) >= 0 || !k) return;
   S.d = S.k === k ? -S.d : 1; S.k = k; render();
 });
 function guardarCampo(e){
@@ -837,6 +893,32 @@ $('tb').addEventListener('click', function(e){
   cambiarMon(td.dataset.mk);
 });
 $('ptb').addEventListener('change', guardarCampo);
+$('etb').addEventListener('change', guardarCampo);
+$('etb').addEventListener('click', function(e){
+  var b = e.target.closest('button'); if (!b || !puedeEditar) return;
+  var r = U.filter(function(x){ return x.k === (b.dataset.quitar || b.dataset.envk); })[0]; if (!r) return;
+  if (b.dataset.envk) { marcarEscribania([r], hoyISO()); return; }
+  if (!confirm('¿Quitar la unidad ' + r.u + ' del listado de enviadas a la escribanía?')) return;
+  db.ref('global/edificios/' + edId + '/unidades/' + r.k + '/esc').remove().catch(function(){ toast('⚠️ No se pudo guardar (¿permiso?)'); });
+});
+$('eq').oninput = function(e){ S.eq = e.target.value; renderEscribania(); };
+[].forEach.call(document.querySelectorAll('button[data-ef]'), function(b){ b.onclick = function(){ S.ef = b.dataset.ef; renderEscribania(); }; });
+$('tb').addEventListener('change', function(e){
+  var i = e.target; if (!i.dataset.chk) return;
+  if (i.checked) S.chk[i.dataset.chk] = 1; else delete S.chk[i.dataset.chk];
+  estadoBtnEsc();
+});
+$('th').addEventListener('change', function(e){
+  if (e.target.id !== 'chkAll') return;
+  filas().forEach(function(r){ if (e.target.checked) S.chk[r.k] = 1; else delete S.chk[r.k]; });
+  render();
+});
+$('btnEsc').onclick = function(){
+  if (!puedeEditar || !edId) return;
+  var l = tildadasEsc();
+  if (!l.length) { toast('Tildá primero las unidades en la primera columna de la Planilla.'); return; }
+  if (confirm('¿Marcar ' + l.length + (l.length === 1 ? ' unidad' : ' unidades') + ' como enviadas a la escribanía con fecha de hoy (' + fechaAR(hoyISO()) + ')?\n\n' + l.map(function(r){ return r.u; }).join(', '))) marcarEscribania(l, hoyISO());
+};
 [].forEach.call(document.querySelectorAll('.nav-item[data-v]'), function(b){ b.onclick = function(){ setVista(b.dataset.v); }; });
 $('hamb').onclick = function(){ document.body.classList.toggle('menu-abierto'); };
 $('btnImp2').onclick = function(){ if (puedeAdmin) $('fileImp').click(); };
@@ -1613,7 +1695,7 @@ $('btnDel').onclick = function(){
    La ventana instalada puede quedar abierta días con una versión vieja y el usuario no se entera (no veía los botones
    nuevos). Se compara la constante de abajo con la de `sw.js` (que se bumpea en cada cambio) al abrir, al volver a la
    ventana y cada 10 minutos. ⚠️ Al cambiar el módulo hay que subir las DOS: UNID_VER acá y CACHE en sw.js. */
-var UNID_VER = 'unidades-v28';
+var UNID_VER = 'unidades-v29';
 $('verTxt').textContent = 'Planilla posesiones · ' + UNID_VER.replace('unidades-', '');   // para saber qué versión está corriendo
 function chequearVersion(){
   fetch('sw.js', {cache:'no-store'}).then(function(r){ return r.ok ? r.text() : ''; }).then(function(t){
