@@ -1456,6 +1456,10 @@
         .plan-alq-tabla td.pa-acc [title]::after { left:auto; right:0; transform:none; }
         /* Con el plan abierto los atajos flotantes y el asistente (por encima de todo) caían sobre el total adeudado, el depósito y «Cerrar». Se esconden mientras está abierto. */
         body:has(#modalPlanAlquiler.active) #fabStack, body:has(#modalPlanAlquiler.active) #rk-agente-btn { display:none !important; }
+        /* Recibos de conceptos de la unidad (v596): los flotantes tapaban la columna de importes y «Emitir» en el celular; un importe deshabilitado se veía igual que uno editable. */
+        body:has(#modalCufEmitir.active) #fabStack, body:has(#modalCufEmitir.active) #rk-agente-btn,
+        body:has(#modalCufEdificio.active) #fabStack, body:has(#modalCufEdificio.active) #rk-agente-btn { display:none !important; }
+        #ventaConcFilas input:disabled { opacity:.45; cursor:not-allowed; }
         /* Fondos de las filas: pasteles en el tema claro; en «oscuro» / «medio» salen de los tokens del tema (antes el texto claro caía sobre un pastel fijo: 1,1:1). */
         .plan-alq-tabla tr.pa-r-pagada { background:#F8FFF8; }
         .plan-alq-tabla tr.pa-r-vencida { background:#FFF8F8; }
@@ -3717,7 +3721,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v595</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v596</div>
         </div>
     </nav>
 
@@ -14703,7 +14707,7 @@
             if (itEmit.length >= MAXG || (e.confidencial && !esSuperAdmin) || !_gsMatch([e.cliente, e.proveedorNombre, e.nro, e.concepto], q)) return;
             var id = e.id;
             itEmit.push({ icon:'🧾', titulo:(e.proveedorNombre||e.cliente||'—')+(e.nro?' · N°'+e.nro:''),
-                sub:'Comprobante emitido · $'+(e.total||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}),
+                sub:'Comprobante emitido · '+_fmtMonto(e.total||0, _monDe(e)),
                 accion: function(){ _gsIrA('Documentos', function(){ abrirModalEmitir(id); }); } });
         });
         if (itEmit.length) grupos.push({ titulo:'Comprobantes Emitidos', items: itEmit });
@@ -17681,7 +17685,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v595';
+    var APP_VER = 'v596';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -25860,7 +25864,8 @@
     var REF_ENTREGAS_DOC = null;
     // Sin .catch: quien guarda decide qué avisar (así no salen dos carteles ni queda un rechazo sin atender).
     function persistirEntregasDoc() { return _colPersist('entregasDoc', REF_ENTREGAS_DOC, entregasDoc); }
-    function persistirEmitidos() { return _colPersist('emitidos', REF_EMITIDOS, comprobantesEmitidos).catch(function(e){ console.error(e); alert('Error al guardar el comprobante. Revisá la conexión e intentá de nuevo.'); }); }
+    // Devuelve true si la base confirmó el guardado y false si falló (el aviso ya se mostró): quien necesite saberlo lo espera.
+    function persistirEmitidos() { return _colPersist('emitidos', REF_EMITIDOS, comprobantesEmitidos).then(function(){ return true; }).catch(function(e){ console.error(e); alert('Error al guardar el comprobante. Revisá la conexión e intentá de nuevo.'); return false; }); }
 
     var _emitItems = []; // ítems para el documento tipo factura
 
@@ -26167,10 +26172,9 @@
             }
             document.getElementById('emitAfectaCaja').value = e.afectaCaja ? 'si' : (e.estadoPago === 'pendiente' ? 'pend' : 'no');
             emitToggleAfectaCaja();
-            if (e.afectaCaja) {
-                document.getElementById('emitMovTipo').value = e.movTipo || 'egreso';
-                if (e.cuentaId) document.getElementById('emitCuentaBancaria').value = e.cuentaId;
-            }
+            // El sentido se propone SIEMPRE (antes sólo si ya afectaba caja): un recibo «no mueve caja» que se pasa a «Sí» debe entrar como INGRESO, no como egreso.
+            document.getElementById('emitMovTipo').value = e.movTipo || ((!e.afectaCaja && e.tipoDoc === 'recibo') ? 'ingreso' : 'egreso');
+            if (e.afectaCaja && e.cuentaId) document.getElementById('emitCuentaBancaria').value = e.cuentaId;
             document.getElementById('emitArchivo').value = '';
             _renderEstadoAdjunto('emitArchivoEstado', e.adjuntoNombre, e.adjuntoId);
         } else {
@@ -26194,6 +26198,10 @@
         }
         // "Emitir recibo" (alta nueva): recibo puro por dinero recibido (sin Comprobante X ni egreso).
         _emitConfigRecibo(contexto === 'recibo' && !e);
+        // Recibo de conceptos de una unidad: el papel sale de sus líneas, así que el texto del concepto no se edita acá (si no, papel y caja dirían cosas distintas).
+        var _conL = !!(e && _emitLineasConcepto(e).length);
+        var _ecI = document.getElementById('emitConcepto'); if (_ecI) _ecI.readOnly = _conL;
+        var _ecH = document.getElementById('emitConceptoHint'); if (_ecH) _ecH.style.display = _conL ? '' : 'none';
         // Atajo al recibo SIN dinero (entrega de documentación): sólo en altas del lado de ingresos y para quien puede cargar.
         var _lkEd = document.getElementById('emitLinkEntregaDoc');
         if (_lkEd) _lkEd.style.display = (!e && (contexto === 'recibo' || contexto === 'ingreso') && _entDocPuede()) ? '' : 'none';
@@ -26225,6 +26233,10 @@
         if (afectaCaja && tipoAB === 'A') {
             cuentaId = document.getElementById('emitCuentaBancaria').value;
             if (!cuentaId) { alert('Seleccioná la cuenta bancaria del movimiento.'); return; }
+            // La cuenta tiene que ser de la moneda del recibo: el movimiento de banco toma la de la CUENTA y un recibo en USD sobre una cuenta en pesos quedaba anotado en pesos.
+            var _cbE = (cuentasBancarias || []).find(function(cu) { return (cu.id || cu.banco) === cuentaId; });
+            var _monE = document.getElementById('emitMoneda').value;
+            if (_cbE && (_cbE.moneda || 'ARS') !== _monE) { alert('La cuenta elegida es en ' + (_cbE.moneda || 'ARS') + ' y el recibo en ' + _monE + '. Elegí una cuenta en la misma moneda o cambiá la moneda del recibo.'); return; }
         }
         var provObj = provId ? proveedores.find(function(p){ return p.id === provId; }) : null;
         var prev = editandoEmitidoId ? comprobantesEmitidos.find(function(x){ return x.id === editandoEmitidoId; }) : null;
@@ -26257,12 +26269,24 @@
             adjuntoTipo:   prev ? (prev.adjuntoTipo || '')   : ''
         };
         // Recibo de conceptos de una unidad (v594): el formulario no maneja estos campos, así que al editar se conservan.
-        // Las líneas por concepto sólo siguen valiendo si el total no cambió (si no, el papel mostraría filas que no suman).
+        // Las líneas por concepto se CONSERVAN siempre —de ellas sale el papel y el «ya emitido» de cada concepto— y, si el total cambió,
+        // se reparten en proporción para que el papel siga sumando (v596: antes se soltaban y el concepto volvía a figurar como no emitido).
         if (prev && prev.ventaId) {
             reg.ventaId = prev.ventaId; reg.ventaUF = prev.ventaUF || '';
-            var _lin = _emitLineasConcepto(prev);
-            var _sumLin = _lin.reduce(function(sm, c){ return sm + (parseFloat(c.monto) || 0); }, 0);
-            if (_lin.length && Math.abs(_sumLin - total) < 0.005) reg.conceptosUF = _lin.map(function(c){ return { k: c.k || '', desc: c.desc || '', monto: parseFloat(c.monto) || 0 }; });
+            var _lin = _emitLineasConcepto(prev).map(function(c){ return { k: c.k || '', desc: c.desc || '', monto: parseFloat(c.monto) || 0 }; });
+            if (_lin.length) {
+                reg.concepto = prev.concepto || reg.concepto;   // el papel sale de las líneas: el texto del concepto no se cambia desde acá
+                var _sumLin = _lin.reduce(function(sm, c){ return sm + c.monto; }, 0);
+                if (Math.abs(_sumLin - total) >= 0.005 && _sumLin > 0) {
+                    var _acum = 0;
+                    _lin.forEach(function(c, i) {
+                        c.monto = (i === _lin.length - 1) ? Math.round((total - _acum) * 100) / 100 : Math.round(c.monto * total / _sumLin * 100) / 100;
+                        _acum += c.monto;
+                    });
+                }
+                if (_lin.every(function(c){ return c.monto > 0; })) reg.conceptosUF = _lin;
+            }
+            if (prev.sinCaja && !afectaCaja) reg.sinCaja = true;   // sigue siendo «sólo el recibo»
         }
         // Presupuesto al que se imputa este comprobante (opcional, de cualquier proveedor).
         var _emitPresupVal = (document.getElementById('emitPresupuesto') || {}).value || '';
@@ -26546,7 +26570,7 @@
         var etiqueta = tipo === 'egreso' ? 'EGRESO (sale plata)' : 'INGRESO (entra plata)';
         var eraAlReves = e.afectaCaja && e.movTipo && e.movTipo !== tipo;
         if (!confirm((eraAlReves ? 'Cambiar' : 'Marcar') + ' el comprobante ' + (e.nro||'') + ' en la caja como ' + etiqueta + '?')) return;
-        e.afectaCaja = true; e.movTipo = tipo;
+        e.afectaCaja = true; e.movTipo = tipo; e.sinCaja = false;   // reflejarlo a mano es una decisión: ya no es «sólo el recibo»
         _emitSincronizarMovCaja(e); // borra el movimiento anterior y crea el nuevo con el signo correcto
         persistirEmitidos();
         renderEmitidos();
@@ -26573,7 +26597,7 @@
         if (typeof puedeEditar !== 'undefined' && !puedeEditar) { alert('No tenés permisos para esta acción.'); return; }
         tipo = (tipo === 'egreso') ? 'egreso' : 'ingreso';
         var etiqueta = tipo === 'egreso' ? 'EGRESO' : 'INGRESO';
-        var pendientes = (comprobantesEmitidos||[]).filter(function(e){ return e && !e.afectaCaja; });
+        var pendientes = (comprobantesEmitidos||[]).filter(function(e){ return e && !e.afectaCaja && !e.sinCaja; });   // los «📄 No mueve caja» (sinCaja) se emitieron así a propósito
         if (!pendientes.length) { alert('No hay comprobantes emitidos sin reflejar: todos ya generan su movimiento en la caja.'); return; }
         if (!confirm('Se van a reflejar ' + pendientes.length + ' comprobante(s) emitido(s) como ' + etiqueta + ' en la caja (los que hoy figuran "sin afectar caja").\n\n¿Continuar?\n\n(Si algunos son al revés, cancelá y usá los botones ⬆️/⬇️ de cada fila.)')) return;
         pendientes.forEach(function(e){
@@ -26595,14 +26619,14 @@
         var fmtM = function(n){ return (moneda==='USD'?'USD ':'$ ') + Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2}); };
         var titulo = e.tipoDoc === 'factura' ? 'Documento no válido como factura' : 'Recibo de Cobro';
         var _rh = buildReciboHeader(titulo, e.nro || null, e.fecha ? formatearFecha(e.fecha) : emision, {
-            label: 'Cliente', nombre: e.cliente || '—', detalle: e.clienteDetalle || ''
+            label: 'Cliente', nombre: e.cliente || '—', detalle: escHtml(e.clienteDetalle || '')   // texto libre (y, en los recibos de una unidad, UF y nombre del proyecto): el encabezado no lo escapa
         });
         var tabla;
         if (e.tipoDoc === 'factura' && e.items && e.items.length) {
             var filas = '';
             e.items.forEach(function(it){
                 var sub = (it.cant||0) * (it.precio||0);
-                filas += '<tr><td>' + (it.desc||'—') + '</td><td class="tr">' + (it.cant||0) + '</td><td class="tr">' + fmtM(it.precio) + '</td><td class="tr">' + fmtM(sub) + '</td></tr>';
+                filas += '<tr><td>' + escHtml(it.desc||'—') + '</td><td class="tr">' + (it.cant||0) + '</td><td class="tr">' + fmtM(it.precio) + '</td><td class="tr">' + fmtM(sub) + '</td></tr>';
             });
             tabla = '<table class="tbl"><thead><tr><th>Descripción</th><th class="tr">Cant.</th><th class="tr">P. unit.</th><th class="tr">Subtotal</th></tr></thead>' +
                 '<tbody>' + filas + '</tbody>' +
@@ -26616,17 +26640,17 @@
                 '<tfoot><tr><td>Total</td><td class="tr">' + fmtM(e.total) + '</td></tr></tfoot></table>';
         } else {
             tabla = '<table class="tbl"><thead><tr><th>Concepto</th><th class="tr">Monto</th></tr></thead>' +
-                '<tbody><tr><td>' + (e.concepto||'—') + '</td><td class="tr">' + fmtM(e.monto||e.total) + '</td></tr></tbody>' +
+                '<tbody><tr><td>' + escHtml(e.concepto||'—') + '</td><td class="tr">' + fmtM(e.monto||e.total) + '</td></tr></tbody>' +
                 '<tfoot><tr><td>Total</td><td class="tr">' + fmtM(e.total) + '</td></tr></tfoot></table>';
         }
         var pagina = '<div class="pg">' + _rh +
             tabla +
             '<div class="bottom">' +
-            '<div class="instrucciones"><div class="instr-titulo">Detalle</div><div class="instr-body">' + (e.obs ? e.obs.replace(/</g,'&lt;') : 'Documento no fiscal emitido por ' + emp.nombre + '.') + '</div></div>' +
+            '<div class="instrucciones"><div class="instr-titulo">Detalle</div><div class="instr-body">' + (e.obs ? escHtml(e.obs) : 'Documento no fiscal emitido por ' + escHtml(emp.nombre) + '.') + '</div></div>' +
             '<div class="totales"><div class="tot-final"><span>Total</span><span>' + fmtM(e.total) + '</span></div></div>' +
             '</div>' +
             _emitFirmas(e, emp) +
-            '<div class="pie">' + (e.nro ? e.nro + ' · ' : '') + 'Documento no fiscal · Generado el ' + emision + ' · ' + emp.nombre + '</div>' +
+            '<div class="pie">' + (e.nro ? escHtml(e.nro) + ' · ' : '') + 'Documento no fiscal · Generado el ' + emision + ' · ' + escHtml(emp.nombre) + '</div>' +
             '</div>';
         return { titulo: titulo, pagina: pagina };
     }
@@ -28307,6 +28331,8 @@
         REF_ENTREGAS_DOC = db.ref(base + '/entregasDoc');
         REF_REMUN       = db.ref(base + '/remuneraciones');
         REF_CONC_UF     = db.ref(base + '/conceptosUF');   // qué retenciones/fondos/recuperos aplican por defecto en este edificio
+        // El edificio es POR PROYECTO: al apuntar a otro, lo del anterior no vale hasta que llegue el nuevo (v596: se arrastraba en homeCambiarProyecto, onboarding y initEmpresas).
+        _cufEdificio = {}; _cufEdificioCargado = false;
     }
 
     // Helper: carga con listener .on() reactivo
@@ -29457,6 +29483,17 @@
             await _registrarCanjeVenta(nuevo, _cvk);
         }
 
+        // Moneda de los importes de retenciones/fondos: en una UF nueva (o sin moneda guardada) la decide el PRECIO que se está cargando —antes quedaba en USD
+        // aunque se vendiera en pesos—, salvo que se haya elegido a mano en el selector.
+        if (nuevo.conceptosUF && nuevo.conceptosUF.montos) {
+            var _selCM = document.getElementById('ventaConcMoneda');
+            var _cufPrevC = (editandoVentaIdx >= 0 && ventas[editandoVentaIdx] && ventas[editandoVentaIdx].conceptosUF) || null;
+            if (!(_selCM && _selCM.dataset.manual) && !(_cufPrevC && _cufPrevC.moneda)) {
+                var _cufSinC = Object.assign({}, nuevo); delete _cufSinC.conceptosUF;
+                nuevo.conceptosUF.moneda = _cufMonedaDe(_cufSinC);
+            }
+        }
+
         if (editandoVentaIdx >= 0) {
             var _iv = _resolverEdicion(ventas, _edicionEnCurso.venta && _edicionEnCurso.venta.id, _edicionEnCurso.venta && _edicionEnCurso.venta.snap, 'venta UF');
             if (_iv < 0) return;
@@ -29537,15 +29574,17 @@
         var cont = document.getElementById('ventaConcFilas');
         if (!cont) return;
         var moneda = _cufMonedaDe(v);
-        var sm = document.getElementById('ventaConcMoneda'); if (sm) sm.value = moneda;
+        var sm = document.getElementById('ventaConcMoneda'); if (sm) { sm.value = moneda; delete sm.dataset.manual; }
         cont.innerHTML = CUF_CONCEPTOS.map(function(c) {
             var ap = v ? _cufAplica(v, c.k) : _cufEdAplica(c.k);
             var m = v ? _cufMontoGuardado(v, c.k) : 0;
+            // «Heredada» = la unidad no tiene excepción propia: sigue al edificio aunque éste cambie con la ficha abierta (v596).
+            var propia = !!(v && v.conceptosUF && v.conceptosUF.aplica && typeof v.conceptosUF.aplica[c.k] === 'boolean');
             return '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,190px);gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);">' +
-                '<div><label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:0;"><input type="checkbox" id="cufAp_' + c.k + '"' + (ap ? ' checked' : '') + ' onchange="_cufFilaCambio(\'' + c.k + '\')"> <span>' + escHtml(c.nombre) + '</span></label>' +
+                '<div><label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:0;"><input type="checkbox" id="cufAp_' + c.k + '"' + (ap ? ' checked' : '') + (propia ? '' : ' data-her="1"') + ' onchange="_cufTocar(\'' + c.k + '\')"> <span>' + escHtml(c.nombre) + '</span></label>' +
                 '<div id="cufTag_' + c.k + '" class="form-hint" style="margin:0 0 0 26px;"></div></div>' +
-                '<div style="display:flex;gap:6px;align-items:center;"><input type="number" id="cufMonto_' + c.k + '" step="0.01" min="0" value="' + (m || '') + '" placeholder="Importe" style="width:100%;">' +
-                (c.k === 'gan' ? '<button type="button" class="btn btn-outline btn-sm" id="cufGanBtn" title="Proponer el ' + CUF_PCT_GAN + ' % del precio de la unidad" onclick="_cufSugerirGan()">' + CUF_PCT_GAN + ' %</button>' : '') +
+                '<div style="display:flex;gap:6px;align-items:center;"><input type="number" id="cufMonto_' + c.k + '" step="0.01" min="0" value="' + (m || '') + '" placeholder="Importe" aria-label="Importe de ' + escHtml(c.nombre) + '" style="width:100%;">' +
+                (c.k === 'gan' ? '<button type="button" class="btn btn-outline btn-sm" id="cufGanBtn" title="Proponer el ' + CUF_PCT_GAN + ' % del precio GUARDADO de la unidad" onclick="_cufSugerirGan()">' + CUF_PCT_GAN + ' %</button>' : '') +
                 '</div></div>';
         }).join('');
         CUF_CONCEPTOS.forEach(function(c) { _cufFilaCambio(c.k); });
@@ -29569,15 +29608,41 @@
         CUF_CONCEPTOS.forEach(function(c) { var x = document.getElementById('cufAp_' + c.k); if (x) { tot++; if (x.checked) n++; } });
         var r = document.getElementById('ventaConcResumen'); if (r) r.textContent = tot ? ('· aplican ' + n + ' de ' + tot) : '';
     }
-    function _cufRefrescarTags() { CUF_CONCEPTOS.forEach(function(c) { _cufFilaCambio(c.k); }); }
+    // La persona tocó la casilla: deja de seguir al edificio y pasa a ser una excepción propia de la unidad.
+    function _cufTocar(k) {
+        var chk = document.getElementById('cufAp_' + k); if (chk) delete chk.dataset.her;
+        _cufFilaCambio(k);
+    }
+    // El edificio cambió (desde el botón de la ficha o por otra persona): las casillas heredadas lo siguen; las tocadas no.
+    function _cufRefrescarTags() {
+        CUF_CONCEPTOS.forEach(function(c) {
+            var chk = document.getElementById('cufAp_' + c.k);
+            if (chk && chk.dataset.her === '1') chk.checked = _cufEdAplica(c.k);
+            _cufFilaCambio(c.k);
+        });
+    }
+    // La unidad que se está editando en la ficha, buscada POR ID (el listener de Firebase reemplaza el arreglo y los índices se corren
+    // si otra persona borra una unidad anterior). null = alta sin guardar o la unidad ya no existe.
+    function _cufVentaDeFicha() {
+        var id = _edicionEnCurso.venta && _edicionEnCurso.venta.id;
+        if (!id) return null;
+        var i = ventas.findIndex(function(x) { return x && x.id === id; });
+        if (i < 0) return null;
+        editandoVentaIdx = i;
+        return ventas[i];
+    }
+    function _cufAvisoSinVenta(para) {
+        var id = _edicionEnCurso.venta && _edicionEnCurso.venta.id;
+        alert(id ? 'La unidad ya no existe (¿otro usuario la borró mientras la editabas?). Cerrá la ficha y volvé a abrirla.' : 'Guardá primero la unidad' + (para || '') + '.');
+    }
     function _cufSugerirGan() {
-        var v = ventas[editandoVentaIdx];
-        if (!v) { alert('Guardá primero la unidad.'); return; }
+        var v = _cufVentaDeFicha();
+        if (!v) { _cufAvisoSinVenta(); return; }
         var moneda = (document.getElementById('ventaConcMoneda') || {}).value === 'ARS' ? 'ARS' : 'USD';
         var pr = _cufPrecio(v, moneda);
         if (!(pr > 0)) { alert('La unidad no tiene precio en ' + (moneda === 'ARS' ? 'pesos' : 'dólares') + ' para calcular el ' + CUF_PCT_GAN + ' %.'); return; }
         var chk = document.getElementById('cufAp_gan'), inp = document.getElementById('cufMonto_gan');
-        if (chk) { chk.checked = true; _cufFilaCambio('gan'); }
+        if (chk) { chk.checked = true; _cufTocar('gan'); }
         if (inp) inp.value = _cufR2(pr * CUF_PCT_GAN / 100);
     }
     // Lo que queda guardado en la unidad: sólo lo que se aparta del edificio y los importes de lo que aplica (null = nada).
@@ -29585,8 +29650,10 @@
         var aplica = {}, montos = {}, nA = 0, nM = 0;
         CUF_CONCEPTOS.forEach(function(c) {
             var chk = document.getElementById('cufAp_' + c.k); if (!chk) return;
-            if (chk.checked !== _cufEdAplica(c.k)) { aplica[c.k] = chk.checked; nA++; }
-            if (chk.checked) { var m = _cufR2((document.getElementById('cufMonto_' + c.k) || {}).value); if (m > 0) { montos[c.k] = m; nM++; } }
+            // Una casilla heredada no escribe nada (sigue al edificio); una tocada se guarda sólo si se aparta de él.
+            if (chk.dataset.her !== '1' && chk.checked !== _cufEdAplica(c.k)) { aplica[c.k] = chk.checked; nA++; }
+            // El importe se conserva aunque el concepto no aplique hoy: el input sólo está deshabilitado y el edificio puede volver a cambiar.
+            var m = _cufR2((document.getElementById('cufMonto_' + c.k) || {}).value); if (m > 0) { montos[c.k] = m; nM++; }
         });
         if (!nA && !nM) return null;
         var out = {};
@@ -29596,9 +29663,12 @@
     }
 
     // ── Qué aplica por defecto en el edificio ────────────────────────────────────
+    var _cufEdAbierto = {};   // lo que decía el edificio al abrir el cuadro: sólo se escribe lo que la persona cambió
     function cufAbrirEdificio() {
         if (!REF_CONC_UF) { alert('Primero elegí una empresa y un proyecto.'); return; }
         if (!puedeEditar) { alert('No tenés permiso para cambiar esto.'); return; }
+        if (!_cufEdificioCargado) { alert('Todavía se están cargando los conceptos de este edificio. Esperá un instante y volvé a intentar.'); return; }
+        _cufEdAbierto = Object.assign({}, _cufEdificio);
         document.getElementById('cufEdNombre').textContent = (proyectoActual && proyectoActual.nombre) || '';
         document.getElementById('cufEdFilas').innerHTML = CUF_CONCEPTOS.map(function(c) {
             return '<label style="display:flex;gap:10px;align-items:center;font-weight:400;padding:6px 0;border-bottom:1px solid var(--border);"><input type="checkbox" id="cufEdChk_' + c.k + '"' + (_cufEdAplica(c.k) ? ' checked' : '') + '> <span>' + escHtml(c.nombre) + '</span></label>';
@@ -29611,17 +29681,23 @@
     function cufCerrarEdificio() { document.getElementById('modalCufEdificio').classList.remove('active'); }
     async function cufGuardarEdificio() {
         if (!REF_CONC_UF) return;
-        var mapa = {};
-        CUF_CONCEPTOS.forEach(function(c) { var x = document.getElementById('cufEdChk_' + c.k); mapa[c.k] = !!(x && x.checked); });
+        // Sólo las casillas que la persona cambió respecto de lo que vio al abrir: no pisa lo que otra persona tocó en otras ni escribe el mapa de otro proyecto.
+        var cambios = {}, nCamb = 0;
+        CUF_CONCEPTOS.forEach(function(c) {
+            var x = document.getElementById('cufEdChk_' + c.k); if (!x) return;
+            var antes = _cufEdAbierto[c.k] !== false;
+            if (x.checked !== antes) { cambios[c.k] = x.checked; nCamb++; }
+        });
+        if (!nCamb) { cufCerrarEdificio(); return; }
         var b = document.getElementById('cufEdGuardar'); if (b) { b.disabled = true; b.textContent = 'Guardando…'; }
-        try { await REF_CONC_UF.set(mapa); }
+        try { await REF_CONC_UF.update(cambios); }
         catch (e) {
             console.error(e);
             alert('No se pudo guardar. Revisá la conexión (y que tengas permiso de edición) e intentá de nuevo.');
             if (b) { b.disabled = false; b.textContent = 'Guardar'; }
             return;
         }
-        _cufEdificio = mapa; _cufEdificioCargado = true;
+        _cufEdificio = Object.assign({}, _cufEdificio, cambios); _cufEdificioCargado = true;
         cufCerrarEdificio();
         _cufRefrescarTags();
     }
@@ -29642,11 +29718,18 @@
     function _cufFmt(n, mon) { return (mon === 'USD' ? 'USD ' : '$ ') + (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
     function cufAbrirEmitir(idx) {
+        if (_cufEmitiendo) { alert('Hay una emisión en curso: esperá a que termine.'); return; }
         var desdeForm = (idx === undefined);
-        if (desdeForm) idx = editandoVentaIdx;
-        var base = ventas[idx];
-        if (!base || !base.id) { alert('Guardá primero la unidad para poder emitir recibos.'); return; }
+        var base;
+        if (desdeForm) {   // la unidad de la ficha, por id: el índice se corre si otra persona borra una anterior
+            base = _cufVentaDeFicha();
+            if (!base) { _cufAvisoSinVenta(' para poder emitir recibos'); return; }
+        } else {
+            base = ventas[idx];
+            if (!base || !base.id) { alert('Guardá primero la unidad para poder emitir recibos.'); return; }
+        }
         if (!puedeEditar) { alert('No tenés permiso para emitir recibos.'); return; }
+        if (!_cufEdificioCargado) { alert('Todavía se están cargando los conceptos de este edificio. Esperá un instante y volvé a intentar.'); return; }
         var v = base;
         if (desdeForm) {   // lo que se ve en la ficha (tildes e importes todavía sin guardar) es lo que se emite
             v = Object.assign({}, base);
@@ -29655,7 +29738,7 @@
         }
         var aplican = CUF_CONCEPTOS.filter(function(x) { return _cufAplica(v, x.k); });
         if (!aplican.length) { alert('Ningún concepto aplica a esta unidad. Tildá los que correspondan en «🧾 Conceptos del edificio» o en la ficha de la unidad (✏).'); return; }
-        _cufEmit = { ventaId: base.id, venta: v };
+        _cufEmit = { ventaId: base.id, venta: v, desdeForm: desdeForm };
         var proy = (proyectoActual && proyectoActual.nombre) || '';
         document.getElementById('cufEUF').textContent = 'UF ' + (v.uf || '—');
         document.getElementById('cufEInfo').textContent = (v.comprador ? 'Comprador: ' + v.comprador + '. ' : 'La unidad no tiene comprador cargado: el recibo sale a nombre de la UF. ') + (proy ? 'Edificio: ' + proy + '.' : '');
@@ -29665,13 +29748,15 @@
         document.getElementById('cufEModoCada').checked = true;
         document.getElementById('cufEDestino').value = 'efvo';
         document.getElementById('cufEResultado').innerHTML = '';
-        _cufEmitiendo = false;
         var bt = document.getElementById('cufEBtn'); if (bt) { bt.disabled = false; bt.textContent = '🧾 Emitir'; }
         _cufPintarEmitir();
         cufEDestinoCambio();
         document.getElementById('modalCufEmitir').classList.add('active');
     }
-    function cufCerrarEmitir() { document.getElementById('modalCufEmitir').classList.remove('active'); _cufEmit = null; }
+    function cufCerrarEmitir() {
+        if (_cufEmitiendo) { alert('Hay una emisión en curso: esperá a que termine.'); return; }
+        document.getElementById('modalCufEmitir').classList.remove('active'); _cufEmit = null;
+    }
 
     function _cufPintarEmitir() {
         var st = _cufEmit; if (!st) return;
@@ -29681,10 +29766,17 @@
         document.getElementById('cufEFilas').innerHTML = st.filas.map(function(c) {
             var m = _cufSugerido(v, c.k, moneda), prev = ya[c.k] || [];
             var est = prev.length ? ('✔ ya emitido: ' + prev.map(function(p) { return escHtml(p.nro) + ' (' + _cufFmt(p.monto, p.moneda) + ')'; }).join(', ')) : '';
+            // De qué sale el 3 %: el precio de la unidad en esa moneda (en cuotas CAC o mixto no es el total) — así se ve antes de emitir.
+            var baseTxt = '';
+            if (c.k === 'gan' && m > 0 && !_cufMontoGuardado(v, 'gan', moneda)) {
+                var otra = moneda === 'ARS' ? 'USD' : 'ARS', po = _cufPrecio(v, otra);
+                baseTxt = CUF_PCT_GAN + ' % de ' + _cufFmt(_cufPrecio(v, moneda), moneda) + ' (precio ' + (st.desdeForm ? 'guardado ' : '') + 'de la unidad)' +
+                    (po > 0 ? ' · la unidad también tiene ' + _cufFmt(po, otra) + ': cambiá la moneda para emitir esa parte' : '');
+            }
             return '<div style="display:grid;grid-template-columns:auto minmax(0,1fr) minmax(120px,170px);gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">' +
-                '<input type="checkbox" id="cufEChk_' + c.k + '"' + ((m > 0 && !prev.length) ? ' checked' : '') + ' onchange="cufEResumen()">' +
-                '<div><div>' + escHtml(c.nombre) + '</div>' + (est ? '<div class="form-hint" style="margin:0;color:var(--success);">' + est + '</div>' : '') + '</div>' +
-                '<input type="number" id="cufEMonto_' + c.k + '" step="0.01" min="0" value="' + (m || '') + '" placeholder="Importe" oninput="cufEMontoInput(\'' + c.k + '\', this)"></div>';
+                '<input type="checkbox" id="cufEChk_' + c.k + '"' + ((m > 0 && !prev.length) ? ' checked' : '') + ' aria-label="Emitir recibo de ' + escHtml(c.nombre) + '" onchange="cufEResumen()">' +
+                '<label for="cufEChk_' + c.k + '" style="font-weight:400;margin:0;cursor:pointer;"><div>' + escHtml(c.nombre) + '</div>' + (est ? '<div class="form-hint" style="margin:0;color:var(--success);">' + est + '</div>' : '') + (baseTxt ? '<div class="form-hint" style="margin:0;">' + escHtml(baseTxt) + '</div>' : '') + '</label>' +
+                '<input type="number" id="cufEMonto_' + c.k + '" step="0.01" min="0" value="' + (m || '') + '" placeholder="Importe" aria-label="Importe de ' + escHtml(c.nombre) + '" oninput="cufEMontoInput(\'' + c.k + '\', this)"></div>';
         }).join('');
         var no = CUF_CONCEPTOS.filter(function(c) { return !_cufAplica(v, c.k); }).map(function(c) { return c.corto; });
         document.getElementById('cufENoAplican').textContent = no.length ? ('No aplican a esta unidad: ' + no.join(', ') + '. Se cambia desde su ficha (✏).') : '';
@@ -29774,7 +29866,7 @@
         var bt = document.getElementById('cufEBtn');
         _cufEmitiendo = true;
         if (bt) { bt.disabled = true; bt.textContent = 'Emitiendo…'; }
-        var nuevos = [];
+        var nuevos = [], guardado = false;
         try {
             for (var gi = 0; gi < grupos.length; gi++) {
                 var g = grupos[gi];
@@ -29791,35 +29883,45 @@
                     monto: total, items: [], obs: obs, total: total, nro: nro,
                     proveedorId: '', proveedorNombre: '', confidencial: false,
                     afectaCaja: afectaCaja, movTipo: afectaCaja ? 'ingreso' : '', cuentaId: cuentaId,
+                    sinCaja: !afectaCaja,   // «sólo el recibo»: los botones masivos «Reflejar todos…» no lo meten a la caja
                     estadoPago: afectaCaja ? 'pagado' : 'documento', importe: total, pagado: afectaCaja ? total : 0,
                     adjuntoId: '', adjuntoNombre: '', adjuntoTipo: '', presupuestoIdx: null,
                     ventaId: v0.id, ventaUF: v0.uf,
                     conceptosUF: g.map(function(x) { return { k: x.k, desc: x.desc, monto: x.monto }; })
                 });
             }
+            // Todo junto y de una vez, DESPUÉS de los await: el listener de Firebase reemplaza el arreglo mientras se numera.
+            nuevos.forEach(function(reg) { comprobantesEmitidos.push(reg); _emitSincronizarMovCaja(reg); });
+            guardado = (await persistirEmitidos()) !== false;
+            renderEmitidos();
         } catch (err) {
             console.error(err);
             alert('No se pudieron emitir los recibos: ' + (err && err.message || err));
+            return;
+        } finally {
             _cufEmitiendo = false;
             if (bt) { bt.disabled = false; bt.textContent = '🧾 Emitir'; }
+        }
+        // El modal pudo cerrarse o pasar a otra unidad mientras se numeraba: los recibos ya quedaron guardados, pero el panel es de ESA unidad.
+        if (_cufEmit !== st) return;
+        var rp = document.getElementById('cufEResultado');
+        if (!guardado) {
+            rp.innerHTML = '<div style="border:1px solid var(--danger);border-radius:10px;padding:10px 14px;color:var(--danger);">⚠️ <strong>No se pudo guardar.</strong> Los números ' +
+                nuevos.map(function(r) { return escHtml(r.nro); }).join(', ') + ' quedaron usados pero el recibo no se registró en la base. Revisá la conexión y buscá estos recibos en «Documentos emitidos» antes de volver a emitir.</div>';
+            rp.focus({ preventScroll: true }); rp.scrollIntoView({ block: 'nearest' });
             return;
         }
-        // Todo junto y de una vez, DESPUÉS de los await: el listener de Firebase reemplaza el arreglo mientras se numera.
-        nuevos.forEach(function(reg) { comprobantesEmitidos.push(reg); _emitSincronizarMovCaja(reg); });
-        persistirEmitidos();
-        renderEmitidos();
-        _cufEmitiendo = false;
-        if (bt) { bt.disabled = false; bt.textContent = '🧾 Emitir'; }
         _cufUltimosIds = nuevos.map(function(r) { return r.id; });
-        document.getElementById('cufEResultado').innerHTML =
+        rp.innerHTML =
             '<div style="border:1px solid var(--success);border-radius:10px;padding:10px 14px;">' +
             '<div style="font-weight:600;margin-bottom:6px;">✅ ' + (nuevos.length === 1 ? 'Se emitió 1 recibo' : 'Se emitieron ' + nuevos.length + ' recibos') + (afectaCaja ? ' y entró a ' + (tipoAB === 'A' ? 'el banco' : 'la caja') + '.' : ' (no mueve caja).') + '</div>' +
             nuevos.map(function(r) {
                 return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:3px 0;"><span><strong>' + escHtml(r.nro) + '</strong> — ' + escHtml(r.concepto) + ' · ' + _cufFmt(r.total, r.moneda) + '</span>' +
-                    '<button type="button" class="btn btn-outline btn-sm" onclick="imprimirComprobanteEmitido(\'' + _jsq(r.id) + '\')">🖨️</button></div>';
+                    '<button type="button" class="btn btn-outline btn-sm" title="Imprimir el recibo ' + escHtml(r.nro) + '" aria-label="Imprimir el recibo ' + escHtml(r.nro) + '" onclick="imprimirComprobanteEmitido(\'' + _jsq(r.id) + '\')">🖨️</button></div>';
             }).join('') +
             (nuevos.length > 1 ? '<div style="margin-top:8px;"><button type="button" class="btn btn-gold btn-sm" onclick="cufImprimirUltimos()">🖨️ Imprimir los ' + nuevos.length + '</button></div>' : '') +
             '</div>';
+        rp.focus({ preventScroll: true }); rp.scrollIntoView({ block: 'nearest' });   // en el celular el resultado quedaba debajo del pliegue
         _cufPintarEmitir();   // los conceptos recién emitidos ya figuran como emitidos
     }
     function cufImprimirUltimos() { cufImprimirLote(_cufUltimosIds); }
@@ -30674,7 +30776,7 @@
         const emp = getEmpresaParaRecibo();
         const r = resumenVenta(v);
         var _rh = buildReciboHeader('Orden de Recibo', nroRecibo, emision, {
-            label: 'Recibido de / Cliente', nombre: v.comprador||'Comprador', detalle: (v.uf||'') + (v.tipo?' — '+v.tipo:'')
+            label: 'Recibido de / Cliente', nombre: v.comprador||'Comprador', detalle: escHtml((v.uf||'') + (v.tipo?' — '+v.tipo:''))
         });
         var saldoRows = '';
         if (r.precioUSD>0) saldoRows += '<div class="tot-row"><span>Precio USD total</span><span>USD ' + r.precioUSD.toLocaleString(undefined,{maximumFractionDigits:2}) + '</span></div><div class="tot-row neto"><span>Cobrado USD</span><span>USD ' + r.cobradoUSD.toLocaleString(undefined,{maximumFractionDigits:2}) + '</span></div><div class="tot-row ret"><span>Saldo USD</span><span>USD ' + Math.max(r.precioUSD-r.cobradoUSD,0).toLocaleString(undefined,{maximumFractionDigits:2}) + '</span></div>';
@@ -30682,7 +30784,7 @@
         var _html = '<html><head><meta charset="UTF-8"><title>Orden de Recibo ' + nroRecibo + '</title>' + _rCSS() + '</head><body><div class="pg">' + _rh +
         '<table class="tbl">' +
         '<thead><tr><th>Unidad</th><th>Componente</th><th class="tr">Monto cobrado</th></tr></thead>' +
-        '<tbody><tr><td><strong>' + (v.uf||'—') + '</strong>' + (v.tipo?'<br><span style="font-size:11px;color:#666;">'+v.tipo+'</span>':'') + '</td>' +
+        '<tbody><tr><td><strong>' + escHtml(v.uf||'—') + '</strong>' + (v.tipo?'<br><span style="font-size:11px;color:#666;">'+escHtml(v.tipo)+'</span>':'') + '</td>' +
         '<td>' + (compLabels[comp]||comp) + (nroCuota?' · Cuota N°'+nroCuota:'') + (cac>0?'<br><span style="font-size:11px;color:#666;">CAC: '+cac+'</span>':'') + '</td>' +
         '<td class="tr"><strong>' + fmtM(monto) + '</strong></td></tr></tbody>' +
         '<tfoot><tr><td colspan="2">Fecha del cobro: ' + (fecha?formatearFecha(fecha):emision) + (ref?' · Ref: '+ref:'') + (facturaNro?' · Factura: '+escHtml(facturaNro):'') + '</td><td class="tr">' + fmtM(monto) + '</td></tr></tfoot>' +
@@ -31039,10 +31141,10 @@
                 const tr = document.createElement('tr');
                 _filaMovClickeable(tr, 'venta', idx);
                 tr.innerHTML =
-                    '<td><strong>' + (v.uf||'—') + '</strong>' + desVinc + '</td>' +
-                    '<td>' + (tipos[v.tipo]||v.tipo||'—') + '</td>' +
-                    '<td>' + (v.comprador||'—') + '</td>' +
-                    '<td><span class="pill pill-A">' + (modLabels[v.modalidad]||v.modalidad) + '</span></td>' +
+                    '<td><strong>' + escHtml(v.uf||'—') + '</strong>' + desVinc + '</td>' +
+                    '<td>' + escHtml(tipos[v.tipo]||v.tipo||'—') + '</td>' +
+                    '<td>' + escHtml(v.comprador||'—') + '</td>' +
+                    '<td><span class="pill pill-A">' + escHtml(modLabels[v.modalidad]||v.modalidad||'—') + '</span></td>' +
                     '<td>' + cuotasCell + '</td>' +
                     '<td style="text-align:right;">' + precioStr + '</td>' +
                     '<td style="text-align:right; color:var(--success);">' + cobradoStr + '</td>' +
@@ -31151,9 +31253,9 @@
             var badge=completa?'<span style="color:var(--success);font-weight:600;">Completa</span>':'<span style="color:var(--gold);font-weight:600;">En curso</span>';
             var tr=document.createElement('tr');
             tr.style.cssText='border-bottom:1px solid var(--border);';
-            tr.innerHTML='<td style="padding:7px 12px;font-weight:600;">'+(v.uf||'—')+'</td>'+
-                '<td style="padding:7px 12px;">'+(tipos[v.tipo]||v.tipo||'—')+'</td>'+
-                '<td style="padding:7px 12px;">'+(v.comprador||'—')+'</td>'+
+            tr.innerHTML='<td style="padding:7px 12px;font-weight:600;">'+escHtml(v.uf||'—')+'</td>'+
+                '<td style="padding:7px 12px;">'+escHtml(tipos[v.tipo]||v.tipo||'—')+'</td>'+
+                '<td style="padding:7px 12px;">'+escHtml(v.comprador||'—')+'</td>'+
                 '<td style="padding:7px 12px;">'+(modLabels[v.modalidad]||v.modalidad||'—')+'</td>'+
                 '<td style="padding:7px 12px;text-align:right;font-family:monospace;">'+(r.precioUSD>0?fmtUSD(r.precioUSD):'—')+'</td>'+
                 '<td style="padding:7px 12px;text-align:right;color:var(--success);font-family:monospace;">'+(r.cobradoUSD>0?fmtUSD(r.cobradoUSD):'—')+'</td>'+
@@ -48102,6 +48204,7 @@
                         <div class="form-group">
                             <label>Concepto *</label>
                             <input type="text" id="emitConcepto" placeholder="Ej: Seña, honorarios, alquiler…">
+                            <div class="form-hint" id="emitConceptoHint" style="display:none;margin-top:4px;">🔒 Este recibo lista cada concepto de la unidad: el papel sale de ahí. Para corregirlo se borra y se vuelve a emitir; el importe sí se puede cambiar (se reparte entre los conceptos).</div>
                         </div>
                         <div class="form-group">
                             <label>Monto *</label>
@@ -48956,7 +49059,7 @@
             <div class="form-hint" style="margin:8px 0;">Tildá lo que <strong>aplica</strong> a esta unidad. El tilde arranca con lo configurado para el edificio (🧾 Conceptos del edificio); si lo cambiás acá queda <strong>sólo para esta unidad</strong>. El importe es opcional: se puede cargar acá o al emitir el recibo.</div>
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
               <label for="ventaConcMoneda" style="font-size:12px;margin:0;">Importes en</label>
-              <select id="ventaConcMoneda" style="width:auto;padding:5px 8px;font-size:12px;"><option value="USD">USD</option><option value="ARS">$ ARS</option></select>
+              <select id="ventaConcMoneda" onchange="this.dataset.manual='1'" style="width:auto;padding:5px 8px;font-size:12px;"><option value="USD">USD</option><option value="ARS">$ ARS</option></select>
             </div>
             <div id="ventaConcFilas"></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
@@ -49005,10 +49108,10 @@
       <div class="form-hint" style="margin-bottom:10px;">Tildá lo que <strong>aplica</strong> a las unidades de este edificio. Es el valor de partida de cada unidad: después se puede cambiar unidad por unidad desde su ficha (✏ → 🧾 Retenciones, fondos y recuperos). Ej.: en un consorcio dejá tildados sólo los fondos.</div>
       <div id="cufEdFilas"></div>
       <div class="form-hint" id="cufEdAviso" style="margin-top:8px;"></div>
-    </div>
-    <div class="modal-footer">
-      <button type="button" class="btn btn-outline" onclick="cufCerrarEdificio()">Cancelar</button>
-      <button type="button" id="cufEdGuardar" class="btn btn-gold" onclick="cufGuardarEdificio()">Guardar</button>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cufCerrarEdificio()">Cancelar</button>
+        <button type="button" id="cufEdGuardar" class="btn btn-gold" onclick="cufGuardarEdificio()">Guardar</button>
+      </div>
     </div>
   </div>
 </div>
@@ -49045,11 +49148,11 @@
       </div>
       <div class="form-group"><label>Observaciones del recibo</label><input type="text" id="cufEObs" placeholder="Opcional"></div>
       <div id="cufEResumen" style="border:1px solid var(--border);border-radius:10px;padding:8px 14px;"></div>
-      <div id="cufEResultado" style="margin-top:12px;"></div>
-    </div>
-    <div class="modal-footer">
-      <button type="button" class="btn btn-outline" onclick="cufCerrarEmitir()">Cerrar</button>
-      <button type="button" id="cufEBtn" class="btn btn-gold" onclick="cufEmitir()">🧾 Emitir</button>
+      <div id="cufEResultado" role="status" tabindex="-1" style="margin-top:12px;outline:none;"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="cufCerrarEmitir()">Cerrar</button>
+        <button type="button" id="cufEBtn" class="btn btn-gold" onclick="cufEmitir()">🧾 Emitir</button>
+      </div>
     </div>
   </div>
 </div>
