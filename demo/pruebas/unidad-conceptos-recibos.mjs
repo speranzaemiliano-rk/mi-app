@@ -5,11 +5,15 @@ import { abrirDemo, entrarAlSistema, irA } from './demo-lib.mjs';
 const { b, p, red, errores } = await abrirDemo();
 const res = [];
 const ok = (n, c, x) => { res.push([c ? 'OK ' : 'FALLA', n, c ? '' : x]); };
+// Si algo revienta (un clic que ya no encuentra el botón, por ejemplo), se muestra lo que se llegó a verificar antes de salir.
+const _volcar = e => { console.log(res.map(r => r.join(' ')).join('\n')); console.log('ABORTÓ:', String((e && e.message) || e).split('\n')[0]); process.exit(1); };
+process.on('uncaughtException', _volcar); process.on('unhandledRejection', _volcar);
 await entrarAlSistema(p);
 await p.evaluate(() => {
   window.__alerts = []; window.__confirms = []; window.__html = []; window.__open = [];
   window.alert = m => window.__alerts.push(String(m));
-  window.confirm = m => { window.__confirms.push(String(m)); return true; };
+  window.__confirmRet = true;
+  window.confirm = m => { window.__confirms.push(String(m)); return window.__confirmRet !== false; };
   window._imprimirDocHTML = h => window.__html.push(h);
   window.open = () => ({ document: { write: h => window.__open.push(h), close() {} } });
 });
@@ -32,7 +36,9 @@ ok('A5 el título nombra el edificio', /Los Álamos/.test(await p.innerText('#cu
 for (const k of ['gan', 'iibb', 'rec', 'cdi']) await p.uncheck('#cufEdChk_' + k);
 await p.click('#cufEdGuardar'); await p.waitForTimeout(500);
 ok('A6 guardar cierra el modal', !(await p.isVisible('#modalCufEdificio')));
-ok('A7 queda en la base por proyecto', JS(await p.evaluate(() => new Promise(r => REF_CONC_UF.once('value', s => r(s.val()))))) === JS({ adm: true, alh: true, cdi: false, gan: false, iibb: false, rec: false, res: true }) || (await p.evaluate(() => new Promise(r => REF_CONC_UF.once('value', s => r(s.val()))))).gan === false);
+const ed7 = await p.evaluate(() => new Promise(r => db.ref('empresas/emp_demo_1/proyectos/proy_alamos/conceptosUF').once('value', s => r(s.val()))));
+ok('A7 queda en la base POR PROYECTO, sólo con lo que se cambió (las 4 casillas destildadas)', JS(Object.keys(ed7 || {}).sort()) === JS(['cdi', 'gan', 'iibb', 'rec']) && ['cdi', 'gan', 'iibb', 'rec'].every(k => ed7[k] === false), JS(ed7));
+ok('A7b no se escribe en ninguna otra parte', await p.evaluate(() => new Promise(r => db.ref('global/conceptosUF').once('value', s => r(s.val() === null)))) && await p.evaluate(() => new Promise(r => db.ref('empresas/emp_demo_2/proyectos/proy_plata/conceptosUF').once('value', s => r(s.val() === null)))));
 ok('A8 «consorcio»: sólo aplican los fondos', await p.evaluate(() => CUF_CONCEPTOS.filter(c => _cufEdAplica(c.k)).map(c => c.k).join()) === 'adm,res,alh');
 
 // ── B. Ficha de la unidad ────────────────────────────────────────────────────
@@ -66,7 +72,7 @@ await p.evaluate(i => abrirModalVenta(i), await idxDe('3A')); await p.waitForTim
 await p.uncheck('#cufAp_gan');
 await p.evaluate(() => guardarVenta()); await p.waitForTimeout(500);
 v3a = await venta('3A');
-ok('B13 destildar lo que coincide con el edificio saca el override y su importe', JS(v3a.conceptosUF) === JS({ montos: { adm: 150000 }, moneda: 'ARS' }), JS(v3a.conceptosUF));
+ok('B13 destildar lo que coincide con el edificio saca el override; los importes se conservan (el input sólo queda deshabilitado)', JS(v3a.conceptosUF) === JS({ montos: { gan: 3564000, adm: 150000 }, moneda: 'ARS' }), JS(v3a.conceptosUF));
 // dejar la UF como la usan los pasos siguientes (gan aplica, con importe)
 await p.evaluate(i => abrirModalVenta(i), await idxDe('3A')); await p.waitForTimeout(300);
 await p.check('#cufAp_gan'); await p.click('#cufGanBtn');
@@ -79,6 +85,12 @@ await p.evaluate(() => cerrarModalVenta());
 
 // ── C. Un recibo por concepto ────────────────────────────────────────────────
 ok('C0 la lista de Ventas tiene el botón «Conceptos» por fila', (await p.innerHTML('#ventasBody')).split('🧾 Conceptos').length - 1 >= 5);
+// click REAL en el botón de cada fila (primera, del medio, última): cada uno abre SU unidad
+const clickFila = uf => p.evaluate(u => { const tr = [...document.querySelectorAll('#ventasBody tr')].find(t => ((t.querySelector('td strong') || {}).textContent || '').trim() === u); const b = tr && tr.querySelector('button[onclick^="cufAbrirEmitir"]'); if (!b) return false; b.click(); return true; }, uf);
+const ufsLista = await p.evaluate(() => [...document.querySelectorAll('#ventasBody tr')].map(t => ((t.querySelector('td strong') || {}).textContent || '').trim()).filter(Boolean));
+let filasOk = true;
+for (const u of [ufsLista[0], ufsLista[Math.floor(ufsLista.length / 2)], ufsLista[ufsLista.length - 1]]) { await clickFila(u); await p.waitForTimeout(150); if (!(await p.isVisible('#modalCufEmitir')) || (await p.innerText('#cufEUF')).trim() !== 'UF ' + u) filasOk = false; await p.evaluate(() => cufCerrarEmitir()); }
+ok('C0b el botón «🧾 Conceptos» de cada fila abre la emisión de ESA unidad', filasOk && ufsLista.length >= 5, JS(ufsLista));
 await limpiar();
 const e0 = (await emit()).length;
 const mov0 = await p.evaluate(() => ingGeneral.length);
@@ -98,6 +110,7 @@ await p.click('#cufEBtn'); await p.waitForTimeout(900);
 let em = await emit();
 let nuevos = em.slice(e0);
 ok('C10 emitió 3 recibos', nuevos.length === 3, JS(nuevos.map(x => x.concepto)));
+ok('C10b la primera emisión no pregunta nada', (await p.evaluate(() => window.__confirms)).length === 0, JS(await p.evaluate(() => window.__confirms)));
 ok('C11 cada uno con un solo concepto y su importe', nuevos.every(r => r.conceptosUF.length === 1 && r.total === r.conceptosUF[0].monto && r.tipoDoc === 'recibo') && nuevos.map(r => r.conceptosUF[0].k).join() === 'gan,adm,res');
 ok('C12 números correlativos y distintos', new Set(nuevos.map(r => r.nro)).size === 3 && nroNum(nuevos[1].nro) === nroNum(nuevos[0].nro) + 1 && nroNum(nuevos[2].nro) === nroNum(nuevos[1].nro) + 1, JS(nuevos.map(r => r.nro)));
 ok('C13 a nombre del comprador, con la UF y el edificio', nuevos.every(r => r.cliente === 'Nicolás Echeverría' && /UF 3A — Edificio Los Álamos/.test(r.clienteDetalle) && r.ventaId === 'vta_3a' && r.ventaUF === '3A'));
@@ -142,7 +155,8 @@ await limpiar();
 await p.evaluate(id => imprimirComprobanteEmitido(id), rj.id);
 const hj = (await p.evaluate(() => window.__open))[0] || '';
 ok('D8 el papel lista las dos líneas y el total', /Fondo de administración<\/td><td class="tr">\$ 150\.000/.test(hj) && /Fondo de alhajamiento<\/td><td class="tr">\$ 20\.000/.test(hj) && /<td>Total<\/td><td class="tr">\$ 170\.000/.test(hj), hj.slice(hj.indexOf('<table'), hj.indexOf('<table') + 400));
-ok('D9 las observaciones del recibo no inyectan HTML', /Pago &lt;b>en término&lt;\/b>/.test(hj) && !/<b>en término/.test(hj));
+ok('D9 las observaciones del recibo no inyectan HTML', /Pago &lt;b&gt;en término&lt;\/b&gt;/.test(hj) && !/<b>en término/.test(hj));
+ok('D9b el recibo individual abre el diálogo de impresión', /window\.print\(\)/.test(hj));
 ok('D10 el cliente y la UF van en el encabezado', /Nicolás Echeverría/.test(hj) && /UF 3A/.test(hj));
 // el texto de una línea se escapa
 await p.evaluate(id => { const e = comprobantesEmitidos.find(x => x.id === id); e.conceptosUF[0].desc = 'Fondo <i>x</i> & "y"'; }, rj.id);
@@ -200,10 +214,23 @@ await p.evaluate(id => abrirModalEmitir(id), rj.id); await p.waitForTimeout(400)
 await p.fill('#emitMonto', '180000');
 await p.click('#modalEmitir .btn-gold'); await p.waitForTimeout(700);
 rj2 = (await emit()).find(x => x.id === rj.id);
-ok('F2 si cambia el total, las líneas se sueltan (no sumarían) pero queda el vínculo con la UF', rj2.total === 180000 && rj2.conceptosUF === undefined && rj2.ventaId === 'vta_3a' && rj2.ventaUF === '3A', JS(rj2));
+const lin2 = rj2.conceptosUF || [];
+ok('F2 si cambia el total, las líneas se CONSERVAN repartidas en proporción y suman el total (queda el vínculo con la UF)', rj2.total === 180000 && lin2.length === 2 && lin2.map(c => c.k).join() === 'adm,alh' && Math.abs(lin2.reduce((a, c) => a + c.monto, 0) - 180000) < 0.005 && lin2[0].monto === 158823.53 && rj2.ventaId === 'vta_3a' && rj2.ventaUF === '3A', JS(rj2));
 await limpiar();
 await p.evaluate(id => imprimirComprobanteEmitido(id), rj.id);
-ok('F3 sin líneas, el papel vuelve a mostrar un solo concepto con el total', /<td>Total<\/td><td class="tr">\$ 180\.000/.test((await p.evaluate(() => window.__open))[0] || ''));
+const hF3 = (await p.evaluate(() => window.__open))[0] || '';
+ok('F3 el papel sigue listando cada concepto y el total nuevo', /<td>Total<\/td><td class="tr">\$ 180\.000/.test(hF3) && /Fondo de administración<\/td><td class="tr">\$ 158\.823,53/.test(hF3) && /Fondo de alhajamiento<\/td><td class="tr">\$ 21\.176,47/.test(hF3), hF3.slice(hF3.indexOf('<tbody>'), hF3.indexOf('<tbody>') + 300));
+await p.evaluate(i => cufAbrirEmitir(i), await idxDe('3A')); await p.waitForTimeout(300);
+ok('F4 tras editar el importe los conceptos SIGUEN figurando «ya emitido» (no se puede repetir sin aviso)', (await p.innerText('#cufEFilas')).split('ya emitido').length - 1 >= 3 && /Fondo de alhajamiento[\s\S]*ya emitido/.test(await p.innerText('#cufEFilas')));
+await p.evaluate(() => cufCerrarEmitir());
+await limpiar();
+await p.evaluate(id => abrirModalEmitir(id), rj.id); await p.waitForTimeout(300);
+ok('F5 el concepto de un recibo con líneas no se edita (el papel sale de las líneas) y avisa por qué', await p.evaluate(() => document.getElementById('emitConcepto').readOnly) && await p.isVisible('#emitConceptoHint'));
+await p.evaluate(() => { document.getElementById('emitConcepto').readOnly = false; document.getElementById('emitConcepto').value = 'Otro texto'; });
+await p.click('#modalEmitir .btn-gold'); await p.waitForTimeout(600);
+rj2 = (await emit()).find(x => x.id === rj.id);
+ok('F6 aunque se fuerce el campo, el concepto guardado sigue siendo el de las líneas (papel y caja no se separan)', rj2.concepto === 'Fondo de administración, Fondo de alhajamiento — UF 3A', rj2.concepto);
+await limpiar();
 
 // ── G. Un recibo común no cambia ─────────────────────────────────────────────
 await limpiar();
@@ -256,6 +283,192 @@ const fEsc = await imprimirCon(rIng.id, {});
 ok('L6 el nombre de la otra parte sale escapado en la firma', /Entregó — Pérez &lt;b&gt;&amp;&lt;\/b&gt; Hijos/.test(fEsc) && !/Entregó — Pérez <b>/.test(fEsc));
 const lote2 = await p.evaluate(ids => { window.__html = []; cufImprimirLote(ids); return window.__html[0] || ''; }, [rIng.id]);
 ok('L7 la impresión en lote usa las mismas firmas', lote2.includes('Recibí conforme — ' + emp));
+
+// ── M. Retoques de la v596 (revisión independiente de la v594) ──────────────────
+// M1. La ficha opera sobre SU unidad aunque otra persona borre una anterior (el índice se corre)
+await limpiar();
+const v1a = await venta('1A');
+await p.evaluate(i => abrirModalVenta(i), await idxDe('3A')); await p.waitForTimeout(300);
+await p.evaluate(() => { document.getElementById('ventaConcDet').open = true; });
+await p.evaluate(async id => { await REF_VENTAS.child(id).remove(); }, v1a.id); await p.waitForTimeout(400);
+await p.evaluate(() => { document.getElementById('cufMonto_gan').value = ''; });
+await p.click('#cufGanBtn'); await p.waitForTimeout(150);
+ok('M1 con una unidad anterior borrada, el «3 %» sigue siendo el de la UF de la ficha', Number(await p.inputValue('#cufMonto_gan')) === 3564000, await p.inputValue('#cufMonto_gan') + ' ' + JS(await alertas()));
+await p.click('#ventaConcEmitirBtn'); await p.waitForTimeout(300);
+ok('M1b «Emitir recibos…» abre la UF de la ficha y no la de al lado', await p.isVisible('#modalCufEmitir') && (await p.innerText('#cufEUF')).trim() === 'UF 3A' && /Nicolás Echeverría/.test(await p.innerText('#cufEInfo')), await p.innerText('#cufEUF'));
+await p.evaluate(() => { cufCerrarEmitir(); cerrarModalVenta(); });
+await p.evaluate(async v => { await REF_VENTAS.child(v.id).set(v); }, v1a); await p.waitForTimeout(400);
+// si la que se borra es la propia UF de la ficha, avisa y no emite
+await limpiar();
+await p.evaluate(i => abrirModalVenta(i), await idxDe('1B')); await p.waitForTimeout(300);
+const v1b = await venta('1B');
+await p.evaluate(async id => { await REF_VENTAS.child(id).remove(); }, v1b.id); await p.waitForTimeout(400);
+await p.evaluate(() => cufAbrirEmitir());
+ok('M1c si borraron la propia unidad avisa que ya no existe y no abre la emisión', (await alertas()).some(m => /ya no existe/.test(m)) && !(await p.isVisible('#modalCufEmitir')), JS(await alertas()));
+await p.evaluate(() => { cufCerrarEmitir(); cerrarModalVenta(); });
+await p.evaluate(async v => { await REF_VENTAS.child(v.id).set(v); }, v1b); await p.waitForTimeout(400);
+
+// M2. Lo heredado SIGUE al edificio aunque cambie con la ficha abierta; lo tocado a mano no
+await limpiar();
+await p.evaluate(i => abrirModalVenta(i), await idxDe('1B')); await p.waitForTimeout(300);
+await p.evaluate(() => { document.getElementById('ventaConcDet').open = true; });
+await p.uncheck('#cufAp_res');   // excepción propia de la unidad (el edificio dice que aplica)
+await p.click('#ventaConcBox button[onclick*="cufAbrirEdificio"]'); await p.waitForTimeout(250);
+await p.uncheck('#cufEdChk_adm'); await p.click('#cufEdGuardar'); await p.waitForTimeout(500);
+ok('M2 al cambiar el edificio desde la ficha, la casilla heredada lo sigue y el resumen se actualiza', !(await p.isChecked('#cufAp_adm')) && /aplican 1 de 7/.test(await p.innerText('#ventaConcResumen')) && !/sólo esta unidad/.test(await p.innerText('#cufTag_adm')), await p.innerText('#ventaConcResumen') + ' / ' + await p.innerText('#cufTag_adm'));
+ok('M2b la que se destildó a mano no se mueve', !(await p.isChecked('#cufAp_res')) && /sólo esta unidad/.test(await p.innerText('#cufTag_res')));
+await p.evaluate(() => guardarVenta()); await p.waitForTimeout(500);
+ok('M2c al guardar sólo queda la excepción propia (res:false), no lo heredado', JS((await venta('1B')).conceptosUF) === JS({ aplica: { res: false } }), JS((await venta('1B')).conceptosUF));
+ok('M2d el edificio sólo cambió la casilla tocada', JS(await p.evaluate(() => Object.assign({}, _cufEdificio))) === JS({ gan: false, iibb: false, rec: false, cdi: false, adm: false }) || (await p.evaluate(() => _cufEdificio.adm)) === false);
+// otra persona cambia el edificio con la ficha abierta
+await p.evaluate(i => abrirModalVenta(i), await idxDe('1B')); await p.waitForTimeout(300);
+await p.evaluate(async () => { await REF_CONC_UF.update({ adm: true }); }); await p.waitForTimeout(400);
+ok('M2e si el cambio lo hace otra persona, la ficha abierta también lo sigue', await p.isChecked('#cufAp_adm'), '');
+await p.check('#cufAp_res');   // volver a lo del edificio: no deja excepción
+await p.evaluate(() => guardarVenta()); await p.waitForTimeout(500);
+ok('M2f volver a lo del edificio deja la unidad sin datos propios', (await venta('1B')).conceptosUF === undefined, JS((await venta('1B')).conceptosUF));
+
+// M3. Cerrar / reabrir mientras se numera no deja emitir dos veces ni cambia de unidad el resultado
+await limpiar();
+const eM = (await emit()).length;
+await p.evaluate(() => { window.__opc = obtenerProximoComprobante; window.obtenerProximoComprobante = async (...a) => { await new Promise(r => setTimeout(r, 700)); return window.__opc(...a); }; });
+await p.evaluate(i => cufAbrirEmitir(i), await idxDe('1B')); await p.waitForTimeout(300);
+await p.fill('#cufEMonto_adm', '100'); await p.selectOption('#cufEDestino', 'no');
+await p.click('#cufEBtn'); await p.waitForTimeout(150);
+await p.evaluate(() => { cufCerrarEmitir(); cufAbrirEmitir(0); cufEmitir(); });
+ok('M3 con una emisión en curso no deja cerrar, cambiar de unidad ni emitir de nuevo', (await alertas()).filter(m => /emisión en curso/.test(m)).length === 2 && await p.isVisible('#modalCufEmitir') && (await p.innerText('#cufEUF')).trim() === 'UF 1B', JS(await alertas()));
+await p.waitForTimeout(1200);
+ok('M3b se emitió UN solo recibo y el resultado quedó en SU unidad', (await emit()).length === eM + 1 && /Se emitió 1 recibo/.test(await p.innerText('#cufEResultado')), String((await emit()).length - eM));
+await p.evaluate(() => { window.obtenerProximoComprobante = window.__opc; cufCerrarEmitir(); });
+
+// M4. Si no se pudo guardar, el panel NO dice «Se emitió»
+await limpiar();
+await p.evaluate(() => { window.__pe = persistirEmitidos; window.persistirEmitidos = () => Promise.resolve(false); });
+await p.evaluate(i => cufAbrirEmitir(i), await idxDe('1B')); await p.waitForTimeout(300);
+await p.fill('#cufEMonto_res', '55'); await p.selectOption('#cufEDestino', 'no');
+await p.click('#cufEBtn'); await p.waitForTimeout(600);
+ok('M4 un guardado fallido se avisa en rojo y no se muestra «Se emitió»', /No se pudo guardar/.test(await p.innerText('#cufEResultado')) && !/Se emitió/.test(await p.innerText('#cufEResultado')) && !(await p.isDisabled('#cufEBtn')), await p.innerText('#cufEResultado'));
+await p.evaluate(() => { window.persistirEmitidos = window.__pe; cufCerrarEmitir(); });
+// ese recibo quedó sólo en memoria: se saca para no ensuciar lo que sigue
+await p.evaluate(() => { comprobantesEmitidos = comprobantesEmitidos.filter(e => !(e.ventaId && /Fondo de reserva/.test(e.concepto || '') && e.total === 55)); });
+
+// M5. «No mueve caja» es una decisión: los botones masivos no lo meten en la caja
+await limpiar();
+ok('M5 el recibo emitido «no mueve caja» queda marcado (sinCaja)', rj.id && (await emit()).find(x => x.id === rj.id).sinCaja === true);
+await p.evaluate(() => { window.__confirmRet = false; });
+const nSinRef = await p.evaluate(() => comprobantesEmitidos.filter(e => e && !e.afectaCaja && !e.sinCaja).length);
+const nTodos = await p.evaluate(() => comprobantesEmitidos.filter(e => e && !e.afectaCaja).length);
+await p.evaluate(() => reflejarEmitidosEnIngresos('ingreso'));
+const msgRef = (await p.evaluate(() => window.__confirms)).join('|');
+ok('M5b «Reflejar todos como ingreso» no cuenta los «sólo el recibo»', nTodos > nSinRef && new RegExp('reflejar ' + nSinRef + ' comprobante').test(msgRef), nSinRef + '/' + nTodos + ' ' + msgRef.slice(0, 80));
+await p.evaluate(() => { window.__confirmRet = true; });
+
+// M6. Pasar un recibo «no mueve caja» a «Sí» propone INGRESO (antes: egreso)
+await limpiar();
+await p.evaluate(id => abrirModalEmitir(id), rj.id); await p.waitForTimeout(300);
+await p.selectOption('#emitAfectaCaja', 'si'); await p.evaluate(() => emitToggleAfectaCaja());
+ok('M6 al pasar a «Sí» el movimiento propuesto es ingreso', await p.inputValue('#emitMovTipo') === 'ingreso', await p.inputValue('#emitMovTipo'));
+await p.evaluate(() => cerrarModalEmitir());
+
+// M7. Editar un recibo no deja la cuenta en otra moneda que el recibo
+await limpiar();
+await p.evaluate(id => abrirModalEmitir(id), rb.id); await p.waitForTimeout(300);
+await p.selectOption('#emitMoneda', 'ARS');
+await p.click('#modalEmitir .btn-gold'); await p.waitForTimeout(400);
+ok('M7 cambiar la moneda del recibo con una cuenta en otra moneda frena', (await alertas()).some(m => /es en USD y el recibo en ARS/.test(m)) && (await emit()).find(x => x.id === rb.id).moneda === 'USD', JS(await alertas()));
+await p.evaluate(() => cerrarModalEmitir());
+
+// M8. Texto libre escapado: papel, tabla de Ventas
+await limpiar();
+const hostil = '<img src=x onerror="window.__PWNED=1">';
+await p.evaluate(h => { const e = comprobantesEmitidos.find(x => x.ventaId === 'vta_3a'); window.__bk8 = { d: e.clienteDetalle, c: e.concepto, ls: e.conceptosUF }; e.clienteDetalle = 'UF ' + h + ' — ' + h; e.concepto = h; e.conceptosUF = null; }, hostil);
+const idH = await p.evaluate(() => comprobantesEmitidos.find(x => x.ventaId === 'vta_3a').id);
+await p.evaluate(id => imprimirComprobanteEmitido(id), idH);
+const hh = (await p.evaluate(() => window.__open))[0] || '';
+ok('M8 el encabezado y el concepto del papel salen escapados (nada vivo)', !/<img/i.test(hh) && /&lt;img/.test(hh) && (await p.evaluate(() => window.__PWNED)) === undefined, hh.slice(hh.indexOf('parte-dato'), hh.indexOf('parte-dato') + 160));
+await p.evaluate(() => { const e = comprobantesEmitidos.find(x => x.ventaId === 'vta_3a'); e.clienteDetalle = window.__bk8.d; e.concepto = window.__bk8.c; e.conceptosUF = window.__bk8.ls; });
+await p.evaluate(h => { const v = ventas.find(x => x.uf === '3A'); window.__bk8v = { uf: v.uf, c: v.comprador }; v.uf = h; v.comprador = h; renderVentas(); }, hostil);
+ok('M8b la tabla de Ventas escapa UF y comprador', !(await p.evaluate(() => /<img/i.test(document.getElementById('ventasBody').innerHTML))) && (await p.evaluate(() => window.__PWNED)) === undefined);
+await p.evaluate(() => { const v = ventas.find(x => x.uf && /^<img/.test(x.uf)); v.uf = window.__bk8v.uf; v.comprador = window.__bk8v.c; renderVentas(); });
+
+// M9. UF nueva vendida en pesos: los importes se guardan y se proponen en pesos
+await limpiar();
+await p.evaluate(() => abrirModalVenta()); await p.waitForTimeout(300);
+await p.evaluate(() => selModalidadVenta('total_ars'));
+await p.fill('#ventaUF', 'ZZ9'); await p.fill('#ventaComprador', 'Prueba v596'); await p.fill('#ventaPrecioARSTotal', '10000000');
+await p.evaluate(() => { document.getElementById('ventaConcDet').open = true; });
+await p.fill('#cufMonto_adm', '500000');
+await p.evaluate(() => guardarVenta()); await p.waitForTimeout(600);
+const vz = await venta('ZZ9');
+ok('M9 UF nueva en pesos: la moneda de los importes es ARS (no USD fijo)', !!vz && vz.conceptosUF && vz.conceptosUF.moneda === 'ARS' && vz.conceptosUF.montos.adm === 500000, JS(vz && vz.conceptosUF));
+if (vz) {
+  await p.evaluate(i => cufAbrirEmitir(i), await idxDe('ZZ9')); await p.waitForTimeout(300);
+  ok('M9b y al emitir se propone en pesos', await p.inputValue('#cufEMoneda') === 'ARS' && await p.inputValue('#cufEMonto_adm') === '500000');
+  await p.evaluate(() => cufCerrarEmitir());
+  await p.evaluate(async id => { await REF_VENTAS.child(id).remove(); }, vz.id); await p.waitForTimeout(300);
+}
+
+// M10. El edificio es POR PROYECTO: al apuntar a otro no se arrastra el del anterior y no se abre hasta que llegue
+await limpiar();
+const edAntes = await p.evaluate(() => Object.assign({}, _cufEdificio));
+await p.evaluate(() => actualizarRefsIngresos());
+ok('M10 al cambiar de proyecto el edificio anterior se descarta hasta que llegue el nuevo', await p.evaluate(() => Object.keys(_cufEdificio).length === 0 && _cufEdificioCargado === false));
+await p.evaluate(() => { cufAbrirEdificio(); cufAbrirEmitir(0); });
+ok('M10b y mientras tanto no se abre el cuadro del edificio ni la emisión', (await alertas()).filter(m => /cargando los conceptos/.test(m)).length === 2 && !(await p.isVisible('#modalCufEdificio')) && !(await p.isVisible('#modalCufEmitir')), JS(await alertas()));
+await p.evaluate(() => new Promise(r => REF_CONC_UF.once('value', s => { _cufEdificio = s.val() || {}; _cufEdificioCargado = true; r(); })));
+ok('M10c al llegar vuelve el del proyecto', JS(await p.evaluate(() => Object.assign({}, _cufEdificio))) === JS(edAntes));
+// guardar el edificio sin tocar nada no escribe nada
+await p.evaluate(() => cufAbrirEdificio()); await p.waitForTimeout(200);
+const antesRaw = await p.evaluate(() => new Promise(r => REF_CONC_UF.once('value', s => r(JSON.stringify(s.val())))));
+await p.click('#cufEdGuardar'); await p.waitForTimeout(300);
+ok('M10d guardar el edificio sin cambiar nada cierra y no escribe', !(await p.isVisible('#modalCufEdificio')) && antesRaw === await p.evaluate(() => new Promise(r => REF_CONC_UF.once('value', s => r(JSON.stringify(s.val()))))));
+
+// M11. Validaciones del modal de emisión y fecha
+await limpiar();
+const eV = (await emit()).length;
+await p.evaluate(i => cufAbrirEmitir(i), await idxDe('1B')); await p.waitForTimeout(300);
+await p.check('#cufEChk_adm'); await p.fill('#cufEMonto_adm', '');
+await p.check('#cufEChk_adm');
+await p.click('#cufEBtn'); await p.waitForTimeout(200);
+ok('M11 un concepto tildado sin importe frena y dice cuál', (await alertas()).some(m => /Cargá el importe de: Fondo de administración/.test(m)) && (await emit()).length === eV, JS(await alertas()));
+await limpiar();
+for (const k of ['adm', 'res', 'alh']) await p.uncheck('#cufEChk_' + k);
+await p.click('#cufEBtn'); await p.waitForTimeout(200);
+ok('M11b sin nada tildado frena', (await alertas()).some(m => /Tildá al menos un concepto/.test(m)) && (await emit()).length === eV);
+await limpiar();
+await p.fill('#cufEMonto_adm', '1234.567'); await p.fill('#cufEFecha', '');
+await p.click('#cufEBtn'); await p.waitForTimeout(200);
+ok('M11c sin fecha frena', (await alertas()).some(m => /Ingresá la fecha/.test(m)) && (await emit()).length === eV);
+await limpiar();
+await p.fill('#cufEFecha', '2026-03-15'); await p.selectOption('#cufEDestino', 'efvo');
+await p.click('#cufEBtn'); await p.waitForTimeout(700);
+const rF = (await emit())[eV] || {};
+const mF = await p.evaluate(id => ingGeneral.filter(m => m.origenEmitidoId === id).map(m => m.fecha), rF.id);
+ok('M11d la fecha elegida va al recibo y al movimiento de caja', rF.fecha === '2026-03-15' && mF.length === 1 && mF[0] === '2026-03-15', JS(rF.fecha) + JS(mF));
+ok('M11e el importe se redondea a centavos (1234,567 → 1234,57)', rF.total === 1234.57 && rF.conceptosUF[0].monto === 1234.57, JS(rF.total));
+// repetir un concepto: «No» no emite y deja el botón libre
+await limpiar();
+await p.evaluate(() => { window.__confirmRet = false; });
+await p.check('#cufEChk_adm'); await p.fill('#cufEMonto_adm', '10');
+await p.click('#cufEBtn'); await p.waitForTimeout(400);
+ok('M11f «No» a «¿Emitir otro igual?» no emite y deja el botón libre', (await emit()).length === eV + 1 && !(await p.isDisabled('#cufEBtn')) && (await p.innerText('#cufEBtn')).includes('Emitir') && (await p.evaluate(() => window.__confirms)).length === 1, JS(await p.evaluate(() => window.__confirms)));
+await p.evaluate(() => { window.__confirmRet = true; cufCerrarEmitir(); });
+// ningún concepto aplica / alta sin guardar
+await limpiar();
+await p.evaluate(() => { const v = ventas.find(x => x.uf === '1B'); window.__aplica1b = v.conceptosUF; v.conceptosUF = { aplica: { gan: false, iibb: false, adm: false, res: false, alh: false, rec: false, cdi: false } }; cufAbrirEmitir(ventas.indexOf(v)); v.conceptosUF = window.__aplica1b; if (v.conceptosUF === undefined) delete v.conceptosUF; });
+ok('M11g si ningún concepto aplica avisa y no abre el modal', (await alertas()).some(m => /Ningún concepto aplica/.test(m)) && !(await p.isVisible('#modalCufEmitir')), JS(await alertas()));
+await limpiar();
+await p.evaluate(() => abrirModalVenta()); await p.waitForTimeout(200);
+await p.evaluate(() => cufAbrirEmitir());
+ok('M11h una UF sin guardar no emite', (await alertas()).some(m => /Guardá primero la unidad/.test(m)) && !(await p.isVisible('#modalCufEmitir')), JS(await alertas()));
+await p.evaluate(() => cerrarModalVenta());
+
+// M12. Impresión en lote: estilos, título y recibos confidenciales
+await limpiar();
+const idsLote = (await emit()).filter(x => x.ventaId === 'vta_3a').slice(0, 3).map(x => x.id);
+await p.evaluate(ids => { const e = comprobantesEmitidos.find(x => x.id === ids[1]); e.confidencial = true; window.__esSA = esSuperAdmin; esSuperAdmin = false; cufImprimirLote(ids); esSuperAdmin = window.__esSA; e.confidencial = false; }, idsLote);
+const lt = (await p.evaluate(() => window.__html))[0] || '';
+ok('M12 el lote lleva estilos, título «(+1)» y deja afuera el recibo confidencial a quien no es superadmin', /<style>/.test(lt) && /\(\+1\)<\/title>/.test(lt) && (lt.match(/class="pg"/g) || []).length === 2 && !/window\.print\(\)/.test(lt), (lt.match(/class="pg"/g) || []).length + '');
 
 // ── J. Permisos ──────────────────────────────────────────────────────────────
 await limpiar();
