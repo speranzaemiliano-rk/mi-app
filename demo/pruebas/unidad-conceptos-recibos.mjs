@@ -234,6 +234,29 @@ ok('I3 queda por encima de la ficha', await p.evaluate(() => +getComputedStyle(d
 ok('I4 sin guardar, la unidad no cambió', (await venta('1B')).conceptosUF === undefined);
 await p.evaluate(() => { cufCerrarEmitir(); cerrarModalVenta(); });
 
+// ── L. Quién firma «Recibí conforme»: el que RECIBE la plata ─────────────────
+await limpiar();
+const emp = await p.evaluate(() => getEmpresaParaRecibo().nombre);
+const firmas = h => { const m = h.match(/<div class="firmas">(.*?)<\/div><\/div>/s); return m ? m[1].replace(/<[^>]+>/g, '|').replace(/\|+/g, '|') : ''; };
+const imprimirCon = async (id, cambios) => { await limpiar(); await p.evaluate(([i, c]) => { const e = comprobantesEmitidos.find(x => x.id === i); window.__bak = JSON.parse(JSON.stringify(e)); Object.assign(e, c); imprimirComprobanteEmitido(i); Object.keys(c).forEach(k => { if (window.__bak[k] === undefined) delete e[k]; else e[k] = window.__bak[k]; }); }, [id, cambios]); return (await p.evaluate(() => window.__open))[0] || ''; };
+const rIng = nuevos[1];   // recibo de la UF 3A que entró a caja (ingreso)
+const fIng = firmas(await imprimirCon(rIng.id, {}));
+ok('L1 ingreso: «Recibí conforme» lo firma la empresa y el comprador «Entregó»', fIng.includes('Recibí conforme — ' + emp) && fIng.includes('Entregó — Nicolás Echeverría') && !fIng.includes('Recibí conforme — Nicolás'), fIng);
+const fSin = firmas(await imprimirCon(rj.id, {}));   // «no mueve caja»: movTipo vacío, sigue siendo un recibo de cobro
+ok('L2 recibo que no mueve caja: también lo recibe la empresa', fSin.includes('Recibí conforme — ' + emp) && fSin.includes('Entregó — Nicolás Echeverría'), fSin);
+const fEgr = firmas(await imprimirCon(rIng.id, { movTipo: 'egreso' }));
+ok('L3 egreso: recibe la otra parte y la empresa figura como quien emitió', fEgr.includes('Recibí conforme — Nicolás Echeverría') && fEgr.includes('Emitió — ' + emp) && !fEgr.includes('Recibí conforme — ' + emp), fEgr);
+const fFac = firmas(await imprimirCon(rIng.id, { tipoDoc: 'factura', items: [{ desc: 'Algo', cant: 1, precio: 10 }] }));
+ok('L4 un comprobante tipo factura conserva su redacción de siempre', fFac.includes('Recibí conforme — Nicolás Echeverría') && fFac.includes('Emitió — ' + emp), fFac);
+const comunId = comun.id;
+const fCom = firmas(await imprimirCon(comunId, {}));
+ok('L5 un recibo común de cobro también lo firma la empresa al recibir', fCom.includes('Recibí conforme — ' + emp), fCom);
+await p.evaluate(() => { const e = comprobantesEmitidos.find(x => x.ventaId === 'vta_3a'); e.cliente = 'Pérez <b>&</b> Hijos'; });
+const fEsc = await imprimirCon(rIng.id, {});
+ok('L6 el nombre de la otra parte sale escapado en la firma', /Entregó — Pérez &lt;b&gt;&amp;&lt;\/b&gt; Hijos/.test(fEsc) && !/Entregó — Pérez <b>/.test(fEsc));
+const lote2 = await p.evaluate(ids => { window.__html = []; cufImprimirLote(ids); return window.__html[0] || ''; }, [rIng.id]);
+ok('L7 la impresión en lote usa las mismas firmas', lote2.includes('Recibí conforme — ' + emp));
+
 // ── J. Permisos ──────────────────────────────────────────────────────────────
 await limpiar();
 await p.evaluate(() => { puedeEditar = false; aplicarPermisos(); renderVentas(); });
