@@ -376,7 +376,18 @@ function detalleError(e) {
     return detalle;
 }
 
-app.get('/', (req, res) => res.json({ status: 'ok', service: 'RK AFIP Backend' }));
+// Es la ÚNICA ruta que se abre desde el navegador sin token, así que dice qué modelo
+// de IA está usando: es la forma de saber de un vistazo si Railway ya redesplegó la
+// versión nueva. No lleva ningún dato secreto (ni la key, ni datos de nadie).
+app.get('/', (req, res) => res.json({
+    status: 'ok',
+    service: 'RK AFIP Backend',
+    ia: {
+        modelo: String(process.env.GEMINI_MODEL || '').trim() || IA_MODELO_LECTURA,
+        razonamiento: _iaPensarTxt(_iaPensarMinimo(String(process.env.GEMINI_MODEL || '').trim() || IA_MODELO_LECTURA)),
+        modeloFijadoEnRailway: !!String(process.env.GEMINI_MODEL || '').trim()
+    }
+}));
 
 // Diagnóstico de Firebase Admin (protegido por el token). NO devuelve secretos:
 // solo qué variables están presentes, el método usado, si el private key tiene la
