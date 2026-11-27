@@ -4,7 +4,12 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 const _req = createRequire(import.meta.url);
 // Playwright: el de la carpeta de módulos global (PLAYWRIGHT_MODULE) o el que resuelva Node
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || (() => { try { return _req.resolve('playwright'); } catch (e) { return '/opt/node22/lib/node_modules/playwright/index.mjs'; } })());
+// Playwright: el de PLAYWRIGHT_MODULE o el que resuelva Node. Ojo que hay que entrar por el
+// `index.mjs`: importar el `index.js` (CommonJS) deja `chromium` en undefined y la prueba
+// muere con «Cannot read properties of undefined (reading 'launch')».
+const _pwRuta = process.env.PLAYWRIGHT_MODULE || (() => { try { return _req.resolve('playwright'); } catch (e) { return '/opt/node22/lib/node_modules/playwright/index.mjs'; } })();
+const _pw = await import(_pwRuta.replace(/index\.js$/, 'index.mjs'));
+const { chromium } = _pw.chromium ? _pw : (_pw.default || {});
 import fs from 'fs';
 import path from 'path';
 const AQUI = path.dirname(fileURLToPath(import.meta.url));

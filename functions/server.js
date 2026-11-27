@@ -4,6 +4,84 @@ const crypto  = require('crypto');
 const Afip    = require('@afipsdk/afip.js');
 const admin   = require('firebase-admin');
 
+// ═══════════════════════════════════════════════════════════════════════
+//  MODELOS DE IA — la misma tabla que el frontend (index.html → _iaPensarMinimo)
+// ═══════════════════════════════════════════════════════════════════════
+// El backend decide dos cosas: qué modelo usan los asistentes que viven acá
+// (WhatsApp y mail, que no pasan por el navegador) y cuánto «piensa» CUALQUIER
+// pedido que entre por /gemini, incluso si el navegador que lo mandó es una
+// versión vieja guardada en la caché del celular.
+//
+// ⚠️ Bajas de Google: `gemini-2.5-flash` y `gemini-2.5-pro` se dan de baja el
+// 1/12/2026 y los pedidos se redirigen SOLOS a `gemini-3.5-flash-lite` y a
+// `gemini-3.8-flash`. El pedido no falla: el cambio sólo se nota en la velocidad
+// (el modelo nuevo piensa antes de contestar) y en la tarifa. Por eso no alcanza
+// con dejar el nombre viejo y confiar en el redirect.
+const IA_MODELO_LECTURA = 'gemini-3.6-flash';      // leer un PDF (default de /gemini)
+const IA_MODELO_BOT     = 'gemini-3.6-flash';      // asistente de WhatsApp y de mail
+
+// Pensamiento MÍNIMO que acepta cada familia. Mandar el campo de otra familia es
+// un error que deja al asistente sin responder, así que la tabla es explícita y
+// un modelo desconocido no recibe nada (decide Google).
+//   2.5                  → thinkingBudget: 0   (apagado)
+//   3.x flash/flash-lite → thinkingLevel 'minimal'
+//   3.8, 4.x y los pro   → thinkingLevel 'low' (no aceptan «minimal»)
+// GEMINI_THINKING (Railway) la pisa: un nivel ('minimal'|'low'|'medium'|'high')
+// para forzarlo, o 'default'/'off' para no mandar nada y dejar que decida Google.
+function _iaPensarMinimo(modelo) {
+    const forzado = String(process.env.GEMINI_THINKING || '').trim().toLowerCase();
+    const m = String(modelo || '').toLowerCase();
+    const es25 = /^gemini-2\.5/.test(m);
+    if (forzado === 'off' || forzado === 'default') return null;
+    if (forzado) return es25 ? { thinkingBudget: forzado === 'minimal' ? 0 : 1024 } : { thinkingLevel: forzado };
+    if (es25) return { thinkingBudget: 0 };
+    if (/^gemini-4/.test(m) || /^gemini-3\.8/.test(m) || /^gemini-3[^ ]*pro/.test(m)) return { thinkingLevel: 'low' };
+    if (/^gemini-3/.test(m)) return { thinkingLevel: 'minimal' };
+    return null;
+}
+
+// Deja el `generationConfig.thinkingConfig` que corresponda a ESE modelo y devuelve
+// un texto corto para el log. Respeta lo que mandó el navegador cuando es del campo
+// correcto; si mandó el de otra familia (un `thinkingBudget` a un Gemini 3, lo que
+// hacía la app hasta la v597) lo TRADUCE en vez de dejarlo pasar sin efecto.
+function _iaAjustarPensar(modelo, body) {
+    const minimo = _iaPensarMinimo(modelo);
+    const gc = body.generationConfig || (body.generation_config || null);
+    if (!gc) {
+        if (!minimo) return 'por defecto';
+        body.generationConfig = { thinkingConfig: minimo };
+        return _iaPensarTxt(minimo) + ' (lo puso el servidor)';
+    }
+    const pedido = gc.thinkingConfig || gc.thinking_config || null;
+    const es25 = /^gemini-2\.5/.test(String(modelo || '').toLowerCase());
+    if (pedido) {
+        const campoOk = es25 ? (pedido.thinkingBudget !== undefined) : (pedido.thinkingLevel !== undefined);
+        if (campoOk) return _iaPensarTxt(pedido) + ' (lo pidió la app)';
+        // Campo de otra familia: si pedía «nada de pensar» le damos el mínimo; si
+        // pedía un presupuesto de pensamiento, el nivel más bajo que igual piensa.
+        if (!minimo) { delete gc.thinkingConfig; delete gc.thinking_config; return 'por defecto'; }
+        const pedia = Number(pedido.thinkingBudget);
+        const trad = (!es25 && pedia > 0) ? { thinkingLevel: 'low' } : minimo;
+        delete gc.thinking_config;
+        gc.thinkingConfig = trad;
+        return _iaPensarTxt(trad) + ' (traducido: la app mandó el campo de otro modelo)';
+    }
+    if (!minimo) return 'por defecto';
+    gc.thinkingConfig = minimo;
+    return _iaPensarTxt(minimo) + ' (lo puso el servidor)';
+}
+function _iaPensarTxt(p) {
+    if (!p) return 'por defecto';
+    if (p.thinkingLevel) return 'nivel ' + p.thinkingLevel;
+    return Number(p.thinkingBudget) === 0 ? 'apagado' : ('presupuesto ' + p.thinkingBudget);
+}
+// ¿El error de Gemini es por el campo del pensamiento? Entonces se reintenta sin él:
+// lento es mejor que roto (y pasa si Google le cambia el nombre al campo).
+function _iaEsErrorDePensar(data) {
+    const msg = (data && data.error && data.error.message) || '';
+    return /thinking|thinking_?level|thinking_?budget|unknown name/i.test(msg);
+}
+
 // Firebase Admin — se inicializa con service account (base64 del JSON) o con las
 // variables individuales FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.
 var _fbInit = { metodo: 'ninguno', error: null }; // diagnóstico (sin secretos)
@@ -1278,14 +1356,16 @@ async function whatsappGenerarRespuesta(textoUsuario) {
         + 'por WhatsApp todavía no tenés acceso a esos datos en tiempo real, y sugerí consultarlo desde el ' + BRAND_ASISTENTE + ' dentro de la app. '
         + 'Para cualquier otra pregunta (general, cálculos, consejos, etc.) respondé con solvencia, como asistente de uso general.';
     try {
-        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+        const cuerpoWa = {
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: textoUsuario }] }],
+            generationConfig: { maxOutputTokens: 1024, temperature: 0.7 }
+        };
+        _iaAjustarPensar(IA_MODELO_BOT, cuerpoWa);
+        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + IA_MODELO_BOT + ':generateContent?key=' + apiKey, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: [{ role: 'user', parts: [{ text: textoUsuario }] }],
-                generationConfig: { maxOutputTokens: 1024, temperature: 0.7 }
-            })
+            body: JSON.stringify(cuerpoWa)
         });
         const data = await resp.json().catch(() => ({}));
         const texto = data.candidates && data.candidates[0] && data.candidates[0].content &&
@@ -1385,14 +1465,16 @@ async function mailGenerarRespuesta(asunto, cuerpo) {
         + 'Para cualquier otra consulta (general, cálculos, redacción, consejos) respondé con solvencia. Cerrá el mail con una firma breve tipo "— ' + BRAND_ASISTENTE + '".';
     const entrada = 'Asunto: ' + (asunto || '(sin asunto)') + '\n\nMensaje:\n' + (cuerpo || '');
     try {
-        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
+        const cuerpoMail = {
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: entrada }] }],
+            generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
+        };
+        _iaAjustarPensar(IA_MODELO_BOT, cuerpoMail);
+        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + IA_MODELO_BOT + ':generateContent?key=' + apiKey, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: [{ role: 'user', parts: [{ text: entrada }] }],
-                generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
-            })
+            body: JSON.stringify(cuerpoMail)
         });
         const data = await resp.json().catch(() => ({}));
         const texto = data.candidates && data.candidates[0] && data.candidates[0].content &&
@@ -2020,21 +2102,70 @@ app.get('/ipc/variacion', async (req, res) => {
 app.post('/gemini', async (req, res) => {
     var apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY no está configurada en el servidor.' });
-    var model = req.body.model || 'gemini-2.5-flash';
+    // GEMINI_MODEL (Railway) pisa el modelo que pida la app: sirve para apagar un
+    // modelo con problemas sin publicar el sitio, pero OJO que entonces el selector
+    // de Config → Modelo de Gemini no tiene efecto (/gemini/diag lo avisa).
+    var model = String(process.env.GEMINI_MODEL || '').trim() || req.body.model || IA_MODELO_LECTURA;
     var geminiBody = req.body.body;
     if (!geminiBody) return res.status(400).json({ error: 'Falta body con el request de Gemini.' });
-    try {
-        var resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + apiKey, {
+    // Cuánto piensa antes de contestar. Es lo que más tarda, y leer un dato escrito
+    // en un papel no lo necesita. Se ajusta ACÁ además de en el navegador para que
+    // también valga para una versión vieja de la app guardada en la caché del celu.
+    var pensar = _iaAjustarPensar(model, geminiBody);
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + apiKey;
+    var pedir = function() {
+        return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(geminiBody)
         });
+    };
+    try {
+        var t0 = Date.now();
+        var resp = await pedir();
         var data = await resp.json().catch(function() { return {}; });
+        // Si el rechazo es por el campo del pensamiento, una vuelta más sin él:
+        // responder lento es mejor que no responder.
+        if (!resp.ok && _iaEsErrorDePensar(data)) {
+            var gc = geminiBody.generationConfig || {};
+            delete gc.thinkingConfig; delete gc.thinking_config;
+            pensar = 'por defecto (Gemini rechazó el pedido de pensamiento mínimo)';
+            resp = await pedir();
+            data = await resp.json().catch(function() { return {}; });
+        }
+        var ms = Date.now() - t0;
+        console.log('[gemini] ' + model + ' · ' + pensar + ' · ' + ms + ' ms · ' + (resp.ok ? 'ok' : ('error ' + resp.status)));
+        // Datos para medir sin tocar la respuesta de Gemini (la app lee `candidates`).
+        res.set('X-Gemini-Modelo', model);
+        res.set('X-Gemini-Ms', String(ms));
         if (!resp.ok) return res.status(resp.status).json(data);
         return res.json(data);
     } catch (e) {
         return res.status(502).json({ error: 'Error al conectar con Gemini: ' + e.message });
     }
+});
+
+// Diagnóstico de la IA: qué modelo usa de verdad y cuánto piensa. Es lo primero que
+// hay que mirar cuando «la IA está muy lenta» o cuando cambiar el modelo en Config
+// no cambia nada (ahí casi siempre está seteada GEMINI_MODEL en Railway).
+app.get('/gemini/diag', (req, res) => {
+    var fijado = String(process.env.GEMINI_MODEL || '').trim();
+    var pensarEnv = String(process.env.GEMINI_THINKING || '').trim();
+    var muestra = {};
+    [IA_MODELO_LECTURA, IA_MODELO_BOT, 'gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash-lite'].forEach(function(m) {
+        muestra[m] = _iaPensarTxt(_iaPensarMinimo(m));
+    });
+    return res.json({
+        keyCargada: !!process.env.GEMINI_API_KEY,
+        modeloPorDefecto: IA_MODELO_LECTURA,
+        modeloDeLosBots: IA_MODELO_BOT,
+        modeloFijadoEnRailway: fijado || null,
+        avisoModeloFijado: fijado
+            ? 'GEMINI_MODEL está seteada: TODOS los pedidos usan ' + fijado + ' y el selector de Config → Modelo de Gemini no tiene efecto. Borrá la variable para que vuelva a decidir la app.'
+            : null,
+        pensamientoForzado: pensarEnv || null,
+        pensamientoPorModelo: muestra
+    });
 });
 
 // Asistente alternativo GRATIS con Groq (API compatible con OpenAI, modelos Llama).

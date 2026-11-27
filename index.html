@@ -3721,7 +3721,7 @@
             </div>
             <div id="atajosModulos"></div>
             <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
-            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v597</div>
+            <div id="appVersion" style="margin-top:8px;font-size:11px;color:var(--text-3);text-align:center;letter-spacing:.3px;">v598</div>
         </div>
     </nav>
 
@@ -5748,6 +5748,29 @@
                       <button class="btn btn-gold btn-sm" onclick="guardarIaCerebro()" style="margin-bottom:1px;">💾 Guardar</button>
                     </div>
                     <div id="cfgIaCerebroStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
+                    <h4 style="font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:4px;">⚡ Modelo de Gemini (velocidad)</h4>
+                    <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;line-height:1.6;">
+                      Qué modelo de Google lee los PDF y responde en el chat. <strong>Automático</strong> usa el de la app y, si está saturado, reintenta con los de respaldo: es lo recomendado.<br>
+                      Elegí uno a mano sólo para probar otro modelo —o para reemplazar uno que Google dio de baja— <strong>sin publicar el sitio</strong>. Los <em>flash-lite</em> son los más rápidos y baratos; los <em>flash</em>, los que leen mejor un papel difícil.<br>
+                      En todos se pide el <strong>mínimo razonamiento</strong> que cada modelo acepta: pensar antes de contestar es lo que hace lenta a la IA, y leer un dato escrito en un papel no lo necesita.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                      <div class="form-group" style="flex:1;min-width:260px;margin:0;">
+                        <label>Modelo</label>
+                        <select id="cfgIaModelo" style="font-size:13px;">
+                          <option value="auto">Automático (recomendado)</option>
+                          <option value="gemini-3.6-flash">gemini-3.6-flash — lee mejor</option>
+                          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite — el más rápido</option>
+                          <option value="gemini-3.8-flash">gemini-3.8-flash — el más nuevo</option>
+                          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite — viejo, sin razonamiento</option>
+                        </select>
+                      </div>
+                      <button class="btn btn-gold btn-sm" onclick="guardarIaModelo()" style="margin-bottom:1px;">💾 Guardar</button>
+                    </div>
+                    <div id="cfgIaModeloStatus" style="font-size:12px;margin-top:8px;color:var(--text-3);"></div>
                   </div>
 
                   <div style="border-top:1px solid var(--border);padding-top:20px;margin-top:4px;">
@@ -9170,17 +9193,16 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 1024 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS_PDF = _iaModelos(IA_MODELOS_LECTURA);
             var resp, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
                     estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '… (intento ' + (_mi + 1) + ' de ' + MODELOS_PDF.length + ')';
                     await new Promise(function(r){ setTimeout(r, 4000); });
                 }
-                // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
-                // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
-                if (MODELOS_PDF[_mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+                // Pensar demora y se come el presupuesto de salida (el JSON sale cortado):
+                // _iaGenConfig le deja el mínimo que acepta ESE modelo. Ver IA_MODELOS_LECTURA.
+                body.generationConfig = _iaGenConfig(MODELOS_PDF[_mi], { temperature: 0, maxOutputTokens: 2048 });
                 resp = await _geminiProxy(MODELOS_PDF[_mi], body);
                 if (resp.ok) { lastErrMsg = null; break; }
                 var _ed = await resp.json().catch(function(){ return {}; });
@@ -17037,12 +17059,11 @@
                 '}\n' +
                 'Si algún dato no está, usá null. Respondé SOLO el JSON.';
             var body = { contents:[{ parts:[ { inline_data:{ mime_type:(file.type||'application/pdf'), data:b64 } }, { text:prompt } ] }], generationConfig:{ temperature:0, maxOutputTokens:1024 } };
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS_PDF = _iaModelos(IA_MODELOS_LECTURA);
             var resp, lastErr = null;
             for (var i=0;i<MODELOS_PDF.length;i++){
                 if (i>0){ setSt('⚠️ Reintentando con ' + MODELOS_PDF[i] + '…'); await new Promise(function(r){ setTimeout(r,3000); }); }
-                body.generationConfig = { temperature:0, maxOutputTokens:1024 };
-                if (MODELOS_PDF[i].indexOf('gemini-2.5')===0) body.generationConfig.thinkingConfig = { thinkingBudget:0 };
+                body.generationConfig = _iaGenConfig(MODELOS_PDF[i], { temperature: 0, maxOutputTokens: 1024 });
                 resp = await _geminiProxy(MODELOS_PDF[i], body);
                 if (resp.ok){ lastErr = null; break; }
                 var ed = await resp.json().catch(function(){ return {}; });
@@ -17685,7 +17706,7 @@
     // APP_VER es literal: dice qué index.html tenés cargado AHORA (no lo que hay en el servidor).
     // Al arrancar se compara contra el CACHE de sw.js pedido sin caché; si el servidor tiene una
     // versión más nueva, el pie del menú lo avisa en rojo. Bumpear junto con sw.js.
-    var APP_VER = 'v597';
+    var APP_VER = 'v598';
     function _verChequear() {
         var el = document.getElementById('appVersion');
         if (!el) return;
@@ -19016,6 +19037,10 @@
                 cargarGeminiKeyDesdeFirebase();
                 cargarBrandDesdeFirebase();
                 try { db.ref('global/config/iaCerebro').once('value').then(function(s){ var v=s.val(); if (v) localStorage.setItem('rk_ia_cerebro', v); }).catch(function(){}); } catch(e){}
+                // El modelo elegido lo manda la NUBE, no el dispositivo: si allá no hay nada,
+                // acá se borra. Así volver a «Automático» en una computadora vale para todas
+                // (si no, un celular donde alguna vez se eligió un modelo seguiría con ese para siempre).
+                try { db.ref('global/config/iaModelo').once('value').then(function(s){ var v=s.val(); localStorage.setItem('rk_ia_modelo', v || ''); }).catch(function(){}); } catch(e){}
                 cargarGoogleClientIdDesdeFirebase();
                 cargarMsTenantDesdeFirebase();
                 cargarGmailFacturasDesdeFirebase();
@@ -19136,6 +19161,79 @@
             }
         }
         return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  MODELOS DE IA — UNA SOLA LISTA PARA TODA LA APP
+    // ═══════════════════════════════════════════════════════════════════
+    // Antes cada pantalla llevaba su propia copia de la lista de modelos y de la
+    // línea que apaga el «pensamiento»: ocho copias idénticas. Cuando Google da de
+    // baja un modelo —pasa cada pocos meses— hay que cambiarlo en UN solo lugar: acá.
+    //
+    //   IA_MODELOS_LECTURA → leer un PDF (factura, presupuesto, constancia de ARCA,
+    //                        VEP, nota de crédito, factura de un servicio)
+    //   IA_MODELOS_CHAT    → el Asistente dentro de la app
+    //
+    // En las dos, los que siguen al primero son el plan B: si el primero está
+    // saturado —o si Google le cambió el nombre— se reintenta con el siguiente. El
+    // ÚLTIMO es a propósito un modelo viejo pero que sigue andando, para que un
+    // nombre equivocado o un modelo recién dado de baja no deje la app sin IA.
+    //
+    // ⚠️ Bajas anunciadas por Google: `gemini-2.5-flash` y `gemini-2.5-pro` se dan
+    // de baja el 1/12/2026 y los pedidos se redirigen SOLOS a `gemini-3.5-flash-lite`
+    // y a `gemini-3.8-flash`, cobrados a esa tarifa (el pedido no falla, así que el
+    // cambio no se nota salvo por la velocidad y la factura). `gemini-2.5-flash-lite`
+    // NO está deprecado: por eso queda como último recurso.
+    var IA_MODELOS_LECTURA = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-2.5-flash-lite'];
+    var IA_MODELOS_CHAT    = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite'];
+
+    // Modelo elegido a mano en Config → 🤖 Asistente (IA). Si hay uno cargado va
+    // PRIMERO y el resto queda como plan B, así se puede probar un modelo nuevo —o
+    // reemplazar uno dado de baja— sin publicar el sitio.
+    function _iaModeloElegido() {
+        try {
+            var v = String(localStorage.getItem('rk_ia_modelo') || '').trim();
+            return (v && v !== 'auto') ? v : '';
+        } catch (e) { return ''; }
+    }
+    function _iaModelos(lista) {
+        var base = (lista || IA_MODELOS_LECTURA).slice();
+        var elegido = _iaModeloElegido();
+        if (!elegido) return base;
+        return [elegido].concat(base.filter(function(m) { return m !== elegido; }));
+    }
+
+    // Cuánto «piensa» el modelo antes de contestar. Leer un PDF no necesita
+    // razonamiento —el dato está escrito en el papel— y pensar cuesta dos cosas:
+    // tiempo (es el motivo de «la IA está muy lenta») y tokens de salida, que se
+    // comen el presupuesto y cortan el JSON por la mitad (finishReason MAX_TOKENS).
+    //
+    // Cada familia acepta un campo distinto, y mandarle uno que no conoce es un
+    // error que deja sin IA a la pantalla entera. De ahí la tabla:
+    //   2.5                  → thinkingConfig.thinkingBudget: 0   (apagado)
+    //   3.x flash/flash-lite → thinkingLevel 'minimal'
+    //   3.8, 4.x y los pro   → thinkingLevel 'low'  (no aceptan «minimal»)
+    //   desconocido          → no se manda nada (decide Google)
+    // El backend repite esta misma tabla (functions/server.js → _iaPensarMinimo) y
+    // reintenta una vez sin el campo si Gemini lo rechaza: si se cambia una, cambiar
+    // la otra.
+    function _iaPensarMinimo(modelo) {
+        var m = String(modelo || '').toLowerCase();
+        if (/^gemini-2\.5/.test(m)) return { thinkingBudget: 0 };
+        if (/^gemini-4/.test(m) || /^gemini-3\.8/.test(m) || /^gemini-3[^ ]*pro/.test(m)) return { thinkingLevel: 'low' };
+        if (/^gemini-3/.test(m)) return { thinkingLevel: 'minimal' };
+        return null;
+    }
+    // Los campos de siempre (temperature, maxOutputTokens, …) + el pensamiento
+    // mínimo de ESA familia. Es lo que va en `body.generationConfig`.
+    function _iaGenConfig(modelo, extra) {
+        var cfg = {};
+        for (var k in (extra || {})) {
+            if (Object.prototype.hasOwnProperty.call(extra, k)) cfg[k] = extra[k];
+        }
+        var p = _iaPensarMinimo(modelo);
+        if (p) cfg.thinkingConfig = p;
+        return cfg;
     }
 
     function _geminiProxy(model, body, timeoutMs) {
@@ -19339,6 +19437,56 @@
             : '✅ Guardado. El asistente ahora responde con Gemini (Google).';
     }
 
+    // ── Modelo de Gemini (velocidad) ──
+    // Nota: lo que se guarda es el modelo que va PRIMERO; la lista de respaldo
+    // (IA_MODELOS_LECTURA / IA_MODELOS_CHAT) sigue valiendo detrás, así que elegir mal
+    // acá no deja la app sin IA.
+    function _iaModeloTxt(m) {
+        var p = _iaPensarMinimo(m);
+        var nivel = !p ? 'el que decida Google'
+                       : (p.thinkingLevel ? ('nivel «' + p.thinkingLevel + '»') : 'apagado');
+        return m + ' · razonamiento ' + nivel;
+    }
+    function cargarIaModeloUI() {
+        var sel = document.getElementById('cfgIaModelo');
+        var st  = document.getElementById('cfgIaModeloStatus');
+        var pintar = function(val) {
+            if (sel) {
+                // Un modelo cargado a mano que no está en la lista igual se tiene que ver.
+                if (val && val !== 'auto' && !sel.querySelector('option[value="' + val.replace(/"/g, '') + '"]')) {
+                    var op = document.createElement('option');
+                    op.value = val; op.textContent = val + ' (cargado a mano)';
+                    sel.appendChild(op);
+                }
+                sel.value = val || 'auto';
+            }
+            if (st) {
+                st.textContent = (!val || val === 'auto')
+                    ? '✅ Automático: usa ' + _iaModeloTxt(IA_MODELOS_LECTURA[0]) + '.'
+                    : '✅ A mano: usa ' + _iaModeloTxt(val) + '. Si falla, reintenta con los de la app.';
+            }
+        };
+        pintar(_iaModeloElegido());
+        db.ref('global/config/iaModelo').once('value').then(function(snap) {
+            var val = snap.val();
+            if (val && val !== _iaModeloElegido()) {
+                try { localStorage.setItem('rk_ia_modelo', val); } catch (e) {}
+                pintar(val);
+            }
+        }).catch(function(){});
+    }
+    function guardarIaModelo() {
+        var sel = document.getElementById('cfgIaModelo');
+        var val = (sel && sel.value) ? sel.value : 'auto';
+        try { localStorage.setItem('rk_ia_modelo', val === 'auto' ? '' : val); } catch (e) {}
+        if (val === 'auto') db.ref('global/config/iaModelo').remove().catch(function(){});
+        else db.ref('global/config/iaModelo').set(val).catch(function(){});
+        var st = document.getElementById('cfgIaModeloStatus');
+        if (st) st.textContent = (val === 'auto')
+            ? '✅ Guardado. Vuelve al modelo de la app: ' + _iaModeloTxt(IA_MODELOS_LECTURA[0]) + '.'
+            : '✅ Guardado para todos los dispositivos. Ahora usa ' + _iaModeloTxt(val) + '.';
+    }
+
     // ── Marca del sistema (white-label) ──
     function cargarBrandUI() {
         var blk = document.getElementById('cfgBrandBlock');
@@ -19447,6 +19595,7 @@
         cargarGeminiKeyUI();
         if (typeof cargarYoutubeKeyUI === 'function') cargarYoutubeKeyUI();
         if (typeof cargarIaCerebroUI === 'function') cargarIaCerebroUI();
+        if (typeof cargarIaModeloUI === 'function') cargarIaModeloUI();
         if (typeof cargarBrandUI === 'function') cargarBrandUI();
         cargarEmailJsConfigUI();
         cargarGoogleClientIdUI();
@@ -21113,17 +21262,16 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 8192 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS_PDF = _iaModelos(IA_MODELOS_LECTURA);
             var resp, data, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
                     estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
                     await new Promise(function(r){ setTimeout(r, 4000); });
                 }
-                // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
-                // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 8192 };
-                if (MODELOS_PDF[_mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+                // Pensar demora y se come el presupuesto de salida (el JSON sale cortado):
+                // _iaGenConfig le deja el mínimo que acepta ESE modelo. Ver IA_MODELOS_LECTURA.
+                body.generationConfig = _iaGenConfig(MODELOS_PDF[_mi], { temperature: 0, maxOutputTokens: 8192 });
                 resp = await _geminiProxy(MODELOS_PDF[_mi], body);
                 if (resp.ok) { lastErrMsg = null; break; }
                 var _ed = await resp.json().catch(function(){ return {}; });
@@ -21965,12 +22113,11 @@
                 _IA_IMP_PROMPT +
                 '}\nSi algún dato no está, usá null. Respondé SOLO el JSON.';
             var body = { contents: [{ parts: [ { inline_data: { mime_type: file.type || 'application/pdf', data: b64 } }, { text: prompt } ] }], generationConfig: { temperature: 0, maxOutputTokens: 2048 } };
-            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS = _iaModelos(IA_MODELOS_LECTURA);
             var resp, lastErr = null;
             for (var i = 0; i < MODELOS.length; i++) {
                 if (i > 0) { est.textContent = '⚠️ Reintentando con ' + MODELOS[i] + '…'; await new Promise(function(r){ setTimeout(r, 3000); }); }
-                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
-                if (MODELOS[i].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+                body.generationConfig = _iaGenConfig(MODELOS[i], { temperature: 0, maxOutputTokens: 2048 });
                 resp = await _geminiProxy(MODELOS[i], body);
                 if (resp.ok) { lastErr = null; break; }
                 var ed = await resp.json().catch(function(){ return {}; });
@@ -24525,17 +24672,16 @@
                 ]}],
                 generationConfig: { temperature: 0, maxOutputTokens: 8192 }
             };
-            var MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS = _iaModelos(IA_MODELOS_LECTURA);
             var resp, errData, lastErr;
             for (var mi = 0; mi < MODELOS.length; mi++) {
                 if (mi > 0) {
                     if (estadoEl) estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS[mi] + '…';
                     await new Promise(function(r){ setTimeout(r, 4000); });
                 }
-                // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
-                // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 8192 };
-                if (MODELOS[mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+                // Pensar demora y se come el presupuesto de salida (el JSON sale cortado):
+                // _iaGenConfig le deja el mínimo que acepta ESE modelo. Ver IA_MODELOS_LECTURA.
+                body.generationConfig = _iaGenConfig(MODELOS[mi], { temperature: 0, maxOutputTokens: 8192 });
                 resp = await _geminiProxy(MODELOS[mi], body);
                 if (resp.ok) { lastErr = null; break; }
                 errData = await resp.json().catch(function(){ return {}; });
@@ -27621,17 +27767,16 @@
                 generationConfig: { temperature: 0, maxOutputTokens: 1024 }
             };
 
-            var MODELOS_PDF = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+            var MODELOS_PDF = _iaModelos(IA_MODELOS_LECTURA);
             var resp, lastErrMsg;
             for (var _mi = 0; _mi < MODELOS_PDF.length; _mi++) {
                 if (_mi > 0) {
                     estadoEl.textContent = '⚠️ Reintentando con ' + MODELOS_PDF[_mi] + '…';
                     await new Promise(function(r){ setTimeout(r, 4000); });
                 }
-                // gemini-2.5-* "piensa" antes de responder y esos tokens se comen el
-                // presupuesto de salida → el JSON sale cortado (MAX_TOKENS). Se apaga el thinking.
-                body.generationConfig = { temperature: 0, maxOutputTokens: 2048 };
-                if (MODELOS_PDF[_mi].indexOf('gemini-2.5') === 0) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+                // Pensar demora y se come el presupuesto de salida (el JSON sale cortado):
+                // _iaGenConfig le deja el mínimo que acepta ESE modelo. Ver IA_MODELOS_LECTURA.
+                body.generationConfig = _iaGenConfig(MODELOS_PDF[_mi], { temperature: 0, maxOutputTokens: 2048 });
                 resp = await _geminiProxy(MODELOS_PDF[_mi], body);
                 if (resp.ok) { lastErrMsg = null; break; }
                 var _ed = await resp.json().catch(function(){ return {}; });
@@ -54840,7 +54985,7 @@
     // Cerebro elegido: Groq (gratis) solo para texto; PDF/audio siguen con Gemini (multimodal).
     var _cerebro = (typeof _iaCerebro === 'function') ? _iaCerebro() : 'gemini';
     var _usarGroq = (_cerebro === 'groq') && !esPdf && !esAudio;
-    var MODELOS = _usarGroq ? ['groq'] : ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+    var MODELOS = _usarGroq ? ['groq'] : _iaModelos(IA_MODELOS_CHAT);
     var mi = 0;
 
     // Si es PDF, primero extraemos datos estructurados de factura (o constancia AFIP) en paralelo
@@ -54862,9 +55007,9 @@
               + 'Si no es ninguna de esas cosas, respondé: {"tipo":"otro"}\n'
               + 'Usá null en los campos que no encuentres.' }
         ]}],
-        generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
+        generationConfig: _iaGenConfig(_iaModelos(IA_MODELOS_LECTURA)[0], { maxOutputTokens: 1024, temperature: 0 })
       };
-      promesaFactura = _geminiProxy('gemini-2.5-flash', extractPayload)
+      promesaFactura = _geminiProxy(_iaModelos(IA_MODELOS_LECTURA)[0], extractPayload)
         .then(function(r){ return r.json(); }).catch(function(){ return null; });
     }
 
@@ -54876,18 +55021,19 @@
           { inlineData: { mimeType: audioMime, data: audioBase64 } },
           { text: 'Escuchá este audio (probablemente una nota de voz de WhatsApp). Identificá todas las tareas, pendientes o encargos que se mencionen y respondé SOLO con un JSON válido con esta estructura exacta:\n{"tareas":[{"titulo":"...","responsable":"...","fechaVencimiento":"YYYY-MM-DD o null"}]}\nEl campo "responsable" es la persona que tiene que hacer la tarea si se menciona; si no está claro dejalo como null. Si no hay ninguna tarea o pendiente identificable, respondé {"tareas":[]}. No agregues texto fuera del JSON.' }
         ]}],
-        generationConfig: { maxOutputTokens: 1024, temperature: 0, thinkingConfig: { thinkingBudget: 0 } }
+        generationConfig: _iaGenConfig(_iaModelos(IA_MODELOS_LECTURA)[0], { maxOutputTokens: 1024, temperature: 0 })
       };
-      promesaTareasAudio = _geminiProxy('gemini-2.5-flash', extractTareasPayload)
+      promesaTareasAudio = _geminiProxy(_iaModelos(IA_MODELOS_LECTURA)[0], extractTareasPayload)
         .then(function(r){ return r.json(); }).catch(function(){ return null; });
     }
 
     function intentar() {
-      var generationConfig = { maxOutputTokens: 4096, temperature: 0.7 };
-      // gemini-2.5-pro no permite desactivar el thinking (mínimo 128): le damos un presupuesto acotado
-      // para que razone sin demorar demasiado la respuesta del chat. Los flash sí aceptan 0 (sin thinking).
-      if (MODELOS[mi].indexOf('gemini-2.5-flash') === 0) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-      else if (MODELOS[mi] === 'gemini-2.5-pro') generationConfig.thinkingConfig = { thinkingBudget: 512 };
+      // Pensamiento al mínimo que acepta el modelo (ver IA_MODELOS_CHAT): lo que demora
+      // la respuesta del chat es, sobre todo, el razonamiento previo. Si algún día se quiere
+      // un asistente más «pensante», es acá —y sólo acá— donde se sube el nivel.
+      var generationConfig = (MODELOS[mi] === 'groq')
+          ? { maxOutputTokens: 4096, temperature: 0.7 }
+          : _iaGenConfig(MODELOS[mi], { maxOutputTokens: 4096, temperature: 0.7 });
       var payload = {
         system_instruction: { parts: [{ text: sistemaPrompt }] },
         contents: _rkHistorial,
