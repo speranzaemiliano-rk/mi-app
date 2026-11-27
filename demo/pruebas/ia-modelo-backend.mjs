@@ -119,6 +119,12 @@ const rAlto = await pedir({ model: 'gemini-3.6-flash', body: body1() });
 ok('F4 GEMINI_THINKING=high fuerza ese nivel', JSON.stringify(pensarDe(rAlto.pedidos[0])) === '{"thinkingLevel":"high"}', JSON.stringify(pensarDe(rAlto.pedidos[0])));
 delete process.env.GEMINI_THINKING;
 
+// ═════════ H: «¿ya redesplegó Railway?» desde el navegador, sin token ═════════
+const raiz = await (await fetchReal('http://127.0.0.1:' + PUERTO + '/')).json();
+ok('H1 la raíz (sin auth) dice qué modelo de IA usa el backend', raiz.ia && raiz.ia.modelo === diag.modeloPorDefecto, JSON.stringify(raiz));
+ok('H2 y cuánto piensa', raiz.ia && raiz.ia.razonamiento === 'nivel minimal', JSON.stringify(raiz.ia));
+ok('H3 no filtra nada secreto', !/AIza|key|token|secret/i.test(JSON.stringify(raiz)), JSON.stringify(raiz));
+
 // ═════════ G: los asistentes que viven en el backend (WhatsApp y mail) ═════════
 const srv = await import('fs');
 const fuente = srv.readFileSync(path.join(ROOT, 'functions/server.js'), 'utf8');
